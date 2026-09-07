@@ -11,7 +11,7 @@
 # Both are 0.x, where every minor is breaking, so a `tracing-subscriber` 0.4
 # would have forced a breaking release on every consumer, including the five
 # that never enabled `otel`. They left when the renderer did; that removal is
-# the measurable half of `docs/TELEMETRY_CRATE_SPEC.md`. Do not let them back
+# the measurable half of `docs/decisions/telemetry-crate.md`. Do not let them back
 # without deciding to accept that liability again.
 #
 # This tracks the public *dependency surface*, not every public item. Adding a

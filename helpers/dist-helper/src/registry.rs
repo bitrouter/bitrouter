@@ -2637,7 +2637,7 @@ enum AgentRouting {
     /// Render a config file into a per-launch scratch directory and point the
     /// harness at it. The file's fixed structure is `skeleton`; everything
     /// that varies structurally between harnesses is a knob below with a
-    /// closed set of values. See `docs/AGENT_REGISTRY_SPEC.md` D4 for why this
+    /// closed set of values. See `docs/work/agent-registry.md` D4 for why this
     /// is not a template language.
     ConfigFile {
         /// Subdirectory under the launch state dir, when the harness wants a

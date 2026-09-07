@@ -43,7 +43,8 @@ use crate::otel::exporter::OtelExporter;
 ///
 /// Switching to an API-crate handle is therefore not a signature change; it is
 /// a decision to install the global provider, with the silent-failure mode
-/// that implies. See `docs/OTEL_TIERING_SPEC.md` D4.
+/// that implies. See
+/// `docs/decisions/telemetry-crate.md#ingress-and-tracing-interoperability`.
 ///
 /// The return type is `impl Layer<S>` rather than the concrete
 /// `OpenTelemetryLayer<S, Tracer>` so that no `opentelemetry*` type appears

@@ -691,7 +691,7 @@ fn choose_auth_method(
 ///
 /// # Why this names a login command, when the ACP path may not
 ///
-/// `docs/ACP_AUTH_SPEC.md` §6.1 forbids writing a harness's login command in
+/// `docs/work/acp-auth.md` §6.1 forbids writing a harness's login command in
 /// BitRouter — the harness declares it, or it is not offered. That rule governs
 /// the **agent-authentication** axis, and the ACP paths obey it: they read
 /// `authMethods` and run what the harness declared.

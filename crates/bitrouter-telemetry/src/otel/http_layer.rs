@@ -30,7 +30,7 @@
 //! `bitrouter::observe::http` is still emitted on, and is still a pinned
 //! `RUST_LOG` selector, but what it now carries is **diagnostics only** —
 //! DEBUG events. Suppressing it no longer affects span export. See
-//! `docs/CLI.md`.
+//! `skills/bitrouter/references/cli.md`.
 //!
 //! Specs:
 //! - W3C Trace Context: <https://www.w3.org/TR/trace-context/>
@@ -70,8 +70,9 @@ impl<'a> Extractor for HeaderExtractor<'a> {
 /// deliberately does not install a global `TracerProvider` — doing so would
 /// clobber any other OpenTelemetry consumer in the process — so
 /// `global::tracer()` here would return a `NoopTracer` and drop every ingress
-/// span silently. See `docs/OTEL_TIERING_SPEC.md` D4 for the same constraint
-/// on the `tracing` bridge.
+/// span silently. See
+/// `docs/decisions/telemetry-crate.md#ingress-and-tracing-interoperability` for
+/// the same constraint on the `tracing` bridge.
 pub fn router_wrapper(
     exporter: &OtelExporter,
 ) -> impl Fn(Router) -> Router + Clone + Send + Sync + 'static {
@@ -145,7 +146,7 @@ async fn server_span(
     // The `target:` is pinned deliberately. Without it `tracing` derives the
     // target from `module_path!()`, so moving this file between crates or
     // modules would silently rename it, and `bitrouter::observe::http` is a
-    // documented operator-facing `RUST_LOG` selector (`docs/CLI.md`). Unlike
+    // documented operator-facing `RUST_LOG` selector (`skills/bitrouter/references/cli.md`). Unlike
     // the `tracing`-span implementation this replaced, suppressing it costs
     // only the diagnostic — never the span.
     tracing::debug!(

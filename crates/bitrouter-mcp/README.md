@@ -36,7 +36,7 @@ each (`actions::status::StatusReport`, `actions::models::ModelsReport`,
 `actions::route::RouteReport`) shared by the MCP tool and the CLI leaf
 (`bitrouter status` / `models` / `route`), listed in `actions::ACTIONS` and
 held there by a guard test in `apps/bitrouter`. See
-[`docs/ACTIONS_SPEC.md`](../../docs/ACTIONS_SPEC.md).
+[`docs/architecture/actions.md`](../../docs/architecture/actions.md).
 
 | Tool | Wired on | Description |
 |------|----------|-------------|
@@ -110,6 +110,6 @@ mcp/
 ## More
 
 The CLI reference carries the full flag/transport/backend/tool reference:
-see [`docs/CLI.md` → *Origin MCP server*](../../docs/CLI.md#origin-mcp-server).
+see the [`/bitrouter` CLI reference](../../skills/bitrouter/references/cli.md#origin-mcp-server).
 The `/bitrouter` Agent Skill (`skills/bitrouter/references/cli.md`) is the
 agent-facing summary of the same surface.

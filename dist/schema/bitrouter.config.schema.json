@@ -654,7 +654,7 @@
         },
         {
           "const": "2026-07-28",
-          "description": "Use `server/discover` and the modern `2026-07-28` lifecycle, falling\nback to legacy `initialize` only on `METHOD_NOT_FOUND`. Other discovery\nerrors fail the connection. Opting in also lets upstreams answer\n`tools/call` with MRTR `input_required` or a Tasks `task` handle;\nneither is a shape this gateway can carry, so both surface as explicit\nerrors (see `docs/MCP_2026_07_28_SPEC.md` D1).",
+          "description": "Use `server/discover` and the modern `2026-07-28` lifecycle, falling\nback to legacy `initialize` only on `METHOD_NOT_FOUND`. Other discovery\nerrors fail the connection. Opting in also lets upstreams answer\n`tools/call` with MRTR `input_required` or a Tasks `task` handle;\nneither is a shape this gateway can carry, so both surface as explicit\nerrors.",
           "type": "string"
         }
       ]

@@ -169,7 +169,7 @@ async fn prompt_ndjson() {
         "first NDJSON line must be the session line; got: {}",
         lines[0]
     );
-    // Contract break, `docs/ACP_CONTROLLER_AMENDMENT_1.md` §2: the minted
+    // Contract break, `docs/work/acp-controller-amendment-1.md` §2: the minted
     // `record_id` alias is gone from the wire. Session identity is
     // harness-native, so the correlation line carries the id the harness
     // itself minted plus the controller instance the daemon meters by — the

@@ -268,7 +268,7 @@ include!(concat!(env!("OUT_DIR"), "/catalog_generated.rs"));
 /// borrows as providers, so nothing about them is conformance-testable and
 /// there is no routing to describe. That they are also the only two entries
 /// with [`Routing::OwnAuth`] is why splitting them out duplicates nothing —
-/// see `docs/AGENT_REGISTRY_SPEC.md` §13.
+/// see `docs/work/agent-registry.md` §13.
 static INTERACTIVE_ONLY: &[Harness] = &[
     Harness {
         id: "grok",

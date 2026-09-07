@@ -21,7 +21,7 @@ picking good defaults for **agentic and coding** workloads.
   BitRouter drives and routes by default (Claude Code, Codex, opencode, …).
 - **`runtimes/`** — where those agents actually execute. Today that is `local`
   (a child process on this machine); container and remote-sandbox runtimes are
-  specified in `docs/AGENT_REGISTRY_SPEC.md` but not implemented.
+  specified in `docs/work/agent-registry.md` but not implemented.
 
 `agents` / `runtimes` is the same relationship as `models` / `providers`: a
 model is routable because an active **provider** serves it, and an agent is
@@ -216,7 +216,7 @@ of values**: `models.shape` (`map_of_empty` / `array_of_id` /
 `provider_prefixed`), and `mcp.entry` (`opencode_typed` /
 `command_args_or_url`). Nothing is evaluated — a registry entry selects among
 behaviours reviewed in this repo, which is why a fetched catalog cannot
-introduce new ones. See `docs/AGENT_REGISTRY_SPEC.md` §7 and D4.
+introduce new ones. See `docs/work/agent-registry.md` §7 and D4.
 
 Placeholders are context-specific, because they resolve at different moments:
 `{base_url_v1}` and `{auth}` in the skeleton's string leaves; `{dir}`,
@@ -274,7 +274,7 @@ An entry with no record is an advisory, not an error; that is how a newly
 contributed agent reads until someone runs the suite.
 
 The **lifecycle** tier (`session/new` → prompt → cancel) is specified in
-`docs/AGENT_REGISTRY_SPEC.md` §9 but not implemented, so no record carries it.
+`docs/work/agent-registry.md` §9 but not implemented, so no record carries it.
 
 ### Status lifecycle
 

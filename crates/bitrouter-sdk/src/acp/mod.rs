@@ -38,8 +38,8 @@
 //! It is gone, along with `turn::TurnController`,
 //! `permissions::PermissionRegistry`, `session::SessionState`,
 //! `config_routing::ConfigAcpRoutingTable`, and the down-facing endpoint.
-//! `docs/ACP_CONTROLLER_AMENDMENT_1.md` §2 records where each part went, and
-//! `docs/ACP_SAFETY_INVARIANTS.md` records which of its guarantees moved and
+//! `docs/work/acp-controller-amendment-1.md` §2 records where each part went, and
+//! `docs/invariants/acp.md` records which of its guarantees moved and
 //! what pins them now.
 
 pub mod transport;

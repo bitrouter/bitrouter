@@ -1,83 +1,68 @@
-# BitRouter docs
+# BitRouter engineering docs
 
-This folder holds **internal development docs** — the CLI reference, the
-workspace architecture guide, and design specs. It is *not* published anywhere.
+This directory contains internal engineering knowledge that is useful beyond a
+single implementation workflow. It is not the BitRouter product documentation.
+User-facing documentation is authored and published from
+[`bitrouter-docs`](https://github.com/bitrouter/bitrouter-docs).
 
-## Contents
+## What belongs here
 
-- [`CLI.md`](CLI.md) — full command reference, flags, and config resolution.
-- [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
-- `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
-  in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
-  skills over MCP, the observability TUI, the ACP TUI, the ACP controller,
-  the agent registry).
-- [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) — **phases 0–3 implemented, 4–5
-  proposed.** One actions table so the CLI leaf and the MCP tool that answer
-  the same question share one report type, one implementation, and a guard
-  test. Written for
-  [#868](https://github.com/bitrouter/bitrouter/issues/868); stands alone
-  from #863 and #866.
-- [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — authoritative boundary
-  for ACP controller topology, harness-owned sessions, endpoint configuration,
-  native identity, and session-scoped routing.
-- [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md) — **the live one.** Why
-  the OTLP renderer ships as `crates/bitrouter-telemetry` while `bitrouter-sdk`
-  keeps only the contract it renders (`observe::schema`, `SpanAttributes`).
-  Start here; the two documents below are its history. Read its *The arguments
-  that are dead* section before reopening anything — the crate-count and
-  build-cache cases were measured, withdrawn, and are not what decided this.
-- [`OTEL_SDK_MIGRATION_SPEC.md`](OTEL_SDK_MIGRATION_SPEC.md) — **D1 superseded.**
-  Recorded why the exporter moved *into* `bitrouter-sdk` behind an `otel`
-  feature. That placement was reversed before it reached a release. Still the
-  best record of the hard constraint, the feature shape, and which names,
-  targets and config keys are load-bearing.
-- [`OTEL_TIERING_SPEC.md`](OTEL_TIERING_SPEC.md) — proposed splitting that
-  module into schema / emission / export tiers. **Phases 0–2 landed and stand**
-  (the committed span-schema artifact, the `tracing` bridge kept, the
-  OTel-native ingress span); its D1 was withdrawn on measured benefit and then
-  reopened on the positioning grounds it had itself reserved. Read its *cloud
-  question* section before reopening any of it.
-- `*_PLAN.md` — ordered execution plans derived from a spec, with per-task
-  completion criteria. [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) is written to be
-  driven by `/goal`.
+Add a document only when the information cannot be expressed more reliably in
+code, types, schemas, tests, or generated output, and at least one of these is
+true:
 
-- [`CLI_TUI_PARITY_SPEC.md`](CLI_TUI_PARITY_SPEC.md) — **proposed, nothing
-  built.** Interrogates the goal "every headless CLI command has the same
-  interactive TUI command" and argues against it: 103 leaves rather than 29, a
-  quarter of them hostile in a session, no mature tool in the field achieving
-  parity, and a three-set topology rather than a subset with a gap. Proposes ~6
-  session commands dispatched through the same action ports the CLI uses, with
-  `ACTIONS` extended by `tui_command` / `effect` / `requires` and five guards.
-  Knowingly reverses [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §8.3 in a narrowed
-  form; read its §5 and §16 D1 before agreeing to anything.
-- [`CLI_TUI_PARITY_IMPL_SPEC.md`](CLI_TUI_PARITY_IMPL_SPEC.md) — **proposed,
-  nothing built.** The buildable form of the above: the Rust for the `ACTIONS`
-  extension, the resolver that replaces the TUI's string compares, five phases
-  with the files each touches, the guards as tests, and what each open decision
-  blocks. Written against the actions-table stack tip (#869 → #870 → #875),
-  not `main`; its Appendix A lists the research spec's `file:line` references
-  that have since moved.
-- [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md) — **ready to
-  execute.** The impl spec re-cut for an autonomous agent under `/loop`: a
-  one-task-per-iteration protocol, a resumable ledger
-  ([`CLI_TUI_PARITY_PROGRESS.md`](CLI_TUI_PARITY_PROGRESS.md)), ten tasks with
-  the impl-spec sections each reads, all fifteen open decisions collapsed into
-  instructions, four stop conditions, and fifteen prohibitions. It carries no
-  design of its own — every type and function body stays in the impl spec.
-- [`CLI_TUI_PARITY_PROGRESS.md`](CLI_TUI_PARITY_PROGRESS.md) — the build
-  plan's ledger: which task the loop is on and what has landed. Mutable; the
-  only state the loop keeps.
+- multiple components or development workflows need the same system model;
+- a security, protocol, or compatibility invariant is difficult to infer from
+  the implementation;
+- the rationale for a durable decision will matter when it is challenged; or
+- active multi-phase work needs a checked-in specification or execution state.
 
-## Where product docs live
+Do not add command tutorials, exhaustive CLI reference, user onboarding,
+copied upstream documentation, completed execution journals, or a second copy
+of facts already owned by a skill. Git history, issues, and pull requests are
+the archive for completed or superseded work.
 
-The **product** documentation that used to live here now lives in the
-**[bitrouter-docs](https://github.com/bitrouter/bitrouter-docs)** repository, under
-`content/docs/` — it is authored, reviewed, and published there.
+## Structure
 
-- Edit product docs in `bitrouter-docs`, not here.
-- The `supported-models` / `supported-providers` tables are generated on the docs
-  site from this repo's committed `dist/registry/{models,providers}.json`
-  (`scripts/generate-registry-tables.mjs`), so keep the registry catalog current
-  here as usual — the tables follow automatically.
-- On each release, an agent in `bitrouter-docs` drafts a docs update from the
-  changelog for human review.
+- [`architecture/`](architecture/) — current cross-cutting system models.
+- [`invariants/`](invariants/) — safety and compatibility constraints whose
+  violation may still compile.
+- [`decisions/`](decisions/) — durable decisions and rejected alternatives.
+- [`work/`](work/) — active specifications, plans, and progress ledgers. Remove
+  a work document when the work finishes after moving any lasting knowledge to
+  one of the three directories above.
+
+The workspace architecture entry point is
+[`architecture/overview.md`](architecture/overview.md). The active-work tree is
+intentionally discoverable from filenames and status headers rather than a
+manually duplicated status catalog in this file.
+
+## Relationship to agent skills
+
+Repository development workflows live under [`.agents/skills/`](../.agents/skills/).
+The skill is the agent's entry point: it says when the workflow applies, which
+context to load, what outcome to produce, and how to verify it.
+
+Shared engineering knowledge remains canonical here. A development skill names
+the exact `docs/` file to read when that context is relevant. Do not symlink
+files or directories between `docs/` and a skill's `references/`; keep
+skill-private material physically inside that skill instead.
+
+When an agent requires a client-specific discovery directory, symlink the
+complete skill folder to its canonical `.agents/skills/` location. Those
+discovery aliases do not change content ownership.
+
+Shippable user-agent skills live under [`skills/`](../skills/) and must remain
+self-contained because installers, plugin manifests, and BitRouter's skills
+server distribute that directory independently of these engineering docs.
+
+## Placement test
+
+1. If a fact can be checked mechanically, encode the check instead of prose.
+2. If every change must obey it, put the short rule in [`AGENTS.md`](../AGENTS.md).
+3. If it is a repeatable procedure, put it in a focused development skill.
+4. If only that procedure needs the detail, use the skill's `references/`.
+5. If several procedures need the same durable explanation, put it here and
+   have each skill load it explicitly.
+6. If it teaches users or user agents how to operate BitRouter, put it in
+   `bitrouter-docs` or a shippable skill instead.

@@ -172,7 +172,9 @@ bitrouter cloud billing balance         # check credits
 bitrouter cloud api /v1/models          # call Cloud APIs directly
 ```
 
-See [`docs/CLI.md`](docs/CLI.md) for the full command reference, flags, and config resolution.
+See the [CLI guide](https://bitrouter.ai/docs/usage/cli) for user-facing
+documentation. Agents should use the maintained
+[`/bitrouter` skill](skills/bitrouter/) for the complete operational workflow.
 
 ### Agent Skill
 
@@ -267,10 +269,11 @@ Want a first-party provider integration, or building an open-source agent/harnes
 
 ## Development
 
-- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — workspace architecture and SDK internals
+- [`docs/architecture/overview.md`](docs/architecture/overview.md) — workspace architecture and SDK internals
+- [`.agents/skills/`](.agents/skills/) — repository development workflows for coding agents
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
 - [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
-- [`skills/`](skills/) — the `/bitrouter` Agent Skill (source of truth)
+- [`skills/`](skills/) — shippable skills for agents using BitRouter
 
 ## Star History
 

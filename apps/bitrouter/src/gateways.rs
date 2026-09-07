@@ -21,8 +21,8 @@
 //!
 //! ## Do not retire the `bitrouter_skills` injection yet
 //!
-//! `docs/2026-08-03-skills-over-mcp-plan.md` originally scheduled this stdio
-//! injection for removal. The step is withdrawn: there is **no HTTP path to
+//! `docs/architecture/skills-mcp.md` records why the proposed removal of this
+//! stdio injection was withdrawn: there is **no HTTP path to
 //! the daemon's own installed skills**. The aggregate `/mcp` proxies
 //! configured `mcp_servers` upstreams; it does not serve origin content.
 //! Removing this injection removes skills from harnesses outright.
