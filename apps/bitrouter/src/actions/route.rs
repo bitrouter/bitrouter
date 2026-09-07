@@ -76,11 +76,7 @@ impl RouteAction {
     pub async fn report(&self, input: RouteInput) -> Result<RouteReport> {
         // A reachable daemon, if we have one; `None` (unset socket or daemon
         // down) skips straight to config resolution below.
-        let live = self
-            .socket
-            .as_ref()
-            .filter(|s| crate::daemon::endpoint_in_use(s));
-        if let Some(socket) = live
+        if let Some(socket) = self.socket.as_ref()
             && let Some(report) = self.via_daemon(socket, &input.model).await?
         {
             return Ok(report);
@@ -90,9 +86,9 @@ impl RouteAction {
 
     /// Ask the running daemon to resolve the model.
     ///
-    /// `Ok(None)` means "ask the config instead": the socket file exists but
-    /// this process could not get an answer out of it. Only the daemon
-    /// *refusing* the model is a real error — it resolved, and said no.
+    /// `Ok(None)` means "ask the config instead": this process could not get
+    /// an answer from the configured endpoint. Only the daemon *refusing* the
+    /// model is a real error — it resolved, and said no.
     async fn via_daemon(&self, socket: &Path, model: &str) -> Result<Option<RouteReport>> {
         match crate::daemon::send_command(
             socket,
