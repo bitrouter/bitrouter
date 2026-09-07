@@ -27,6 +27,7 @@ pub mod processes;
 mod recovery;
 mod roots;
 pub mod sdk_bindings;
+mod tasks;
 mod workspaces;
 
 #[derive(Clone)]
@@ -877,6 +878,34 @@ fn native_nodes(event: &Value, root: &NativeRoot) -> Result<BTreeSet<NodeKey>> {
 
 #[async_trait]
 impl SessionObserver for ControllerEvidence {
+    fn task_control_enabled(&self) -> bool {
+        true
+    }
+
+    async fn task_status(
+        &self,
+        request: bitrouter_sdk::acp::controller::tasks::TaskStatusRequest,
+    ) -> Result<
+        bitrouter_sdk::acp::controller::tasks::TaskStatusResponse,
+        agent_client_protocol::Error,
+    > {
+        self.control_task_status(request)
+            .await
+            .map_err(tasks::control_error)
+    }
+
+    async fn task_select(
+        &self,
+        request: bitrouter_sdk::acp::controller::tasks::TaskSelectRequest,
+    ) -> Result<
+        bitrouter_sdk::acp::controller::tasks::TaskStatusResponse,
+        agent_client_protocol::Error,
+    > {
+        self.control_task_select(request)
+            .await
+            .map_err(tasks::control_error)
+    }
+
     fn notification_fields(&self, method: &str, params: &Value) -> Option<Value> {
         if method == "session/update" {
             Some(params.clone())

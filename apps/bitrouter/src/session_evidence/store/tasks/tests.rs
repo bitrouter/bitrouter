@@ -3,7 +3,7 @@ use crate::session_evidence::journal::Journal;
 use crate::session_evidence::types::Harness;
 use serde_json::json;
 
-fn root(session: &str) -> AcpSessionKey {
+pub(super) fn root(session: &str) -> AcpSessionKey {
     AcpSessionKey {
         namespace: "native-profile".into(),
         harness: Harness::ClaudeCode,
@@ -440,7 +440,7 @@ async fn concurrent_prompts(workspace: bool) -> Result<()> {
     Ok(())
 }
 
-async fn store() -> Result<EvidenceStore> {
+pub(super) async fn store() -> Result<EvidenceStore> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
     EvidenceStore::new(db, "alice")
@@ -493,7 +493,11 @@ async fn postgres_task_reads_keep_one_snapshot_during_concurrent_completion() ->
     verify_concurrent_read_snapshot(&url).await
 }
 
-async fn journal(store: &EvidenceStore, controller: &str, root: &AcpSessionKey) -> Result<Journal> {
+pub(super) async fn journal(
+    store: &EvidenceStore,
+    controller: &str,
+    root: &AcpSessionKey,
+) -> Result<Journal> {
     Journal::new(
         store.clone(),
         SourceDescriptor {
@@ -508,13 +512,13 @@ async fn journal(store: &EvidenceStore, controller: &str, root: &AcpSessionKey) 
     .await
 }
 
-fn request(operation: &str, session: &str) -> Value {
+pub(super) fn request(operation: &str, session: &str) -> Value {
     json!({"method":"session/prompt","phase":"request","operation_id":operation,
         "native_scope":"session","observed_at":"2026-09-07T00:00:00Z",
         "payload":{"sessionId":session,"prompt":[{"type":"text","text":"same task"}]}})
 }
 
-fn response(operation: &str) -> Value {
+pub(super) fn response(operation: &str) -> Value {
     json!({"method":"session/prompt","phase":"response","operation_id":operation,
         "native_scope":"operation","observed_at":"2026-09-07T00:01:00Z",
         "payload":{"stopReason":"end_turn"}})

@@ -8,6 +8,8 @@ use serde_json::Value;
 use super::*;
 use crate::session_evidence::types::{AcpSessionKey, Harness, NodeKey, SourceFormat};
 
+mod selections;
+
 /// Read the pre-separation mutable task objects without carrying their assumed
 /// native membership forward. Their raw boundaries are still verified by the
 /// task reader. Immutable manifests and their serialized bytes are untouched.
@@ -91,6 +93,10 @@ struct ActiveTask {
     open_operations: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_response: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_origin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    selection: Option<String>,
 }
 
 impl ActiveTask {
@@ -100,6 +106,13 @@ impl ActiveTask {
             "active task session mismatch"
         );
         digest_identifier(&self.attempt_id)?;
+        for id in [&self.task_origin, &self.selection].into_iter().flatten() {
+            digest_identifier(id)?;
+        }
+        ensure!(
+            self.task_origin.is_none() || self.selection.is_some(),
+            "retry origin has no task selection"
+        );
         ensure!(
             self.operations.len() <= MAX_GRAPH_ITEMS
                 && self.operations.contains(&self.origin_operation)
@@ -270,12 +283,23 @@ impl EvidenceStore {
             source.descriptor.format == SourceFormat::Acp && source.descriptor.node.is_none(),
             "task observations require a controller journal"
         );
-        let transaction = self.db.begin().await?;
+        let transaction = match self.db.get_database_backend() {
+            DbBackend::Sqlite => self.db.begin().await?,
+            _ => {
+                self.db
+                    .begin_with_config(Some(IsolationLevel::ReadCommitted), None)
+                    .await?
+            }
+        };
         let next = self
             .append_on(&transaction, source, std::slice::from_ref(&record), cursor)
             .await?;
         self.index_lifecycle_record(&transaction, source, &record)
             .await?;
+        if record.raw.get("method").and_then(Value::as_str) == Some("_bitrouter/task/select") {
+            self.queue_task_selection(&transaction, source, &record)
+                .await?;
+        }
         // append_on acquires SQLite's writer lock before any reads. Starting
         // with artifact SELECTs would introduce a read-to-write upgrade race.
         if let Some(workspace) = record.raw.get("workspace_artifact") {
@@ -420,10 +444,16 @@ impl EvidenceStore {
             return Ok(());
         }
         let key = operation.session.id()?;
-        let active = self.active_task(db, &operation.session).await?;
+        let active = self.lock_active_task(db, &operation.session).await?;
         let (mut task, mut attempt) = match active {
             Some(task) => {
                 let attempt = self.task_attempt(db, &task).await?;
+                if self
+                    .consume_task_selection(db, &task, &attempt, &operation, started_at)
+                    .await?
+                {
+                    return Ok(());
+                }
                 (task, attempt)
             }
             None => {
@@ -448,6 +478,8 @@ impl EvidenceStore {
                     operations: BTreeSet::from([operation.id.clone()]),
                     open_operations: BTreeSet::from([operation.id.clone()]),
                     last_response: None,
+                    task_origin: None,
+                    selection: None,
                 };
                 task.validate()?;
                 operation.validate()?;
@@ -495,9 +527,22 @@ impl EvidenceStore {
             return Ok(());
         }
         let mut task = self
-            .active_task(db, &operation.session)
+            .lock_active_task(db, &operation.session)
             .await?
             .context("prompt task disappeared")?;
+        // Another controller can have committed an identical response while
+        // this transaction waited for the shared active-task row.
+        operation = self
+            .prompt_operation(db, key)
+            .await?
+            .context("prompt disappeared while locking")?;
+        if let Some(old) = &operation.response {
+            ensure!(
+                old.semantic_digest == response.semantic_digest,
+                "prompt operation has conflicting responses"
+            );
+            return Ok(());
+        }
         ensure!(
             task.attempt_id == operation.attempt_id && task.open_operations.contains(&operation.id),
             "prompt is outside the active attempt"
@@ -659,6 +704,46 @@ impl EvidenceStore {
     }
 
     async fn task_attempt(&self, db: &impl ConnectionTrait, task: &ActiveTask) -> Result<Attempt> {
+        self.task_attempt_with_capacity(db, task, 0).await
+    }
+
+    async fn task_attempt_with_capacity(
+        &self,
+        db: &impl ConnectionTrait,
+        task: &ActiveTask,
+        new_attempts: usize,
+    ) -> Result<Attempt> {
+        let mut current = task.clone();
+        let mut first = None;
+        let mut visited = BTreeSet::new();
+        loop {
+            ensure!(
+                visited.len().saturating_add(new_attempts) < MAX_GRAPH_ITEMS
+                    && visited.insert(current.attempt_id.clone()),
+                "task archive chain is cyclic or exceeds its limit"
+            );
+            // Each state independently bounds its operation set. There is no
+            // additional aggregate operation quota that a valid write could
+            // cross after checking only the active attempt's capacity.
+            current.validate()?;
+            let (origin, previous) = self.selected_task_origin(db, &current).await?;
+            let attempt = self.verify_task_attempt(db, &current, &origin).await?;
+            if first.is_none() {
+                first = Some(attempt);
+            }
+            match previous {
+                Some(previous) => current = previous,
+                None => return first.context("task proof has no attempt"),
+            }
+        }
+    }
+
+    async fn verify_task_attempt(
+        &self,
+        db: &impl ConnectionTrait,
+        task: &ActiveTask,
+        origin: &str,
+    ) -> Result<Attempt> {
         let attempt: Attempt = decode_task_object(
             self.object(db, "attempt", &task.attempt_id)
                 .await?
@@ -671,7 +756,7 @@ impl EvidenceStore {
         );
         ensure!(
             attempt.id == canonical_digest(&("attempt", &task.origin_operation))?
-                && attempt.task_id == canonical_digest(&("task", &task.origin_operation))?,
+                && attempt.task_id == canonical_digest(&("task", origin))?,
             "attempt origin identity mismatch"
         );
         let mut open = BTreeSet::new();

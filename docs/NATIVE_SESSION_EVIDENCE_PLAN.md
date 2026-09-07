@@ -10,7 +10,7 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
 | History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex bounded fork ancestry is immutable. | Complete Claude independent-fork UUID remapping and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and exact resumed-child execution ranges. |
-| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. | Explicit task/attempt switching, native execution membership and exact per-attempt execution ranges. |
+| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections reserve a new task or retry for the next prompt. | TUI task/attempt actions, native execution membership and exact per-attempt execution ranges. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
 | Evaluation | Manifest persistence/validation and request-set accounting primitives exist. | Production manifest construction, coding evaluation, authoritative Eval admission and human feedback. |
 | TUI | Collection state is available in an application snapshot. | User-facing evaluation status, checkpoint feedback and task/attempt actions. |
@@ -86,7 +86,7 @@ controller's outstanding RPC adds an explicit unobserved-response gap. It is not
 declared completed, cancelled or currently executing by the replacement controller.
 This does not recover native Query liveness or resolve a request committed before
 an interrupted forward. The application snapshot exposes these attempts, but
-native execution ranges, task switching and final settlement
+native execution ranges, TUI task switching and final settlement
 are still required. Operation membership is bounded per attempt; it is not an
 unlimited session-wide operation log.
 
@@ -397,13 +397,44 @@ formatting, doctests, rustdoc and distribution checks passed. These checks cover
 this source-frontier stage, not exact task execution attribution or the complete
 pinned native-runtime conformance matrix.
 
+The controller now advertises application-owned task status and selection
+extensions. A confirmed ACP conversation can reserve `new_task` or `retry` for
+its next prompt using an expected task/attempt/revision cursor and an idempotency
+key. New tasks replace the logical task id; retries retain it. The first new
+prompt consumes the reservation, archives the previous prompt membership and
+starts a new attempt and observation baseline in one transaction. This changes
+application identity without resetting native context or automatically rerunning
+work. Native background execution and old-attempt evaluation state remain separate.
+
+Status and replay validate each archived selection and original prompt boundary.
+Both controllers serialize prompt admission, response and selection on the same
+task row; a repeated key is rechecked after acquiring that lock. A different
+pending selection, stale cursor or outstanding prompt prevents selection. A chain
+supports at most 1,024 attempts, each with up to 1,024 prompt operations. Queueing
+and consumption reserve capacity before changing state, including recovery from
+an older over-capacity reservation. TUI actions, cancellation/replacement of a
+pending reservation and long-lived paged task history remain unfinished.
+
+Tests cover multi-generation retries and new tasks, archive corruption, atomic
+rollback, database reopen, competing SQLite controllers and the actual ACP
+channel's capability/gate/zero-forwarding contract. The opt-in PostgreSQL test
+`postgres_selection_and_prompt_wait_on_the_same_task_row` uses actual blocked
+transactions for selection versus prompt, prompt versus response, and concurrent
+same-key selection. The capacity fixture builds a durable 1,023-attempt prefix,
+then exercises production admission through 1,024 and rejects overflow without
+advancing the journal. These checks do not establish native execution membership.
+Independent review found no remaining stage blockers. The final workspace run
+passed 3,271 tests with 13 skipped; the opt-in PostgreSQL concurrency test was
+also run successfully against an isolated instance. Clippy with denied warnings,
+doctests, rustdoc, distribution, formatting and diff checks passed.
+
 Still required: complete execution-relation parsing, remaining native SDK
 rebinding cases without matching native events; complete native query-lifetime recovery;
 capability/version gates; task membership and settlement; final workspace
 checkpoints and deltas; authoritative
 Eval admission/compilation; stable experiment identity; TUI feedback; complete
 conformance, workspace checks, final review and PR delivery. Automatic first-attempt
-creation is wired; explicit task/attempt switching, exact native execution ranges,
+creation and backend task/attempt selection are wired; TUI actions, exact native execution ranges,
 final artifact selection, dangling-RPC resolution, final settlement and score submission
 are not. Manifest storage exists, but no application path yet compiles a complete
 evaluation manifest. The live collection snapshot exposes history, candidate

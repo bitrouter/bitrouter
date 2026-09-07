@@ -176,6 +176,67 @@ async fn controlled_prompts_create_durable_attempts_for_both_harnesses() -> Resu
             ))
             .await?;
         assert_eq!(service.store.attempts(None, 16).await?.len(), 1);
+        for (index, mode) in [
+            bitrouter_sdk::acp::controller::tasks::TaskSelectionMode::NewTask,
+            bitrouter_sdk::acp::controller::tasks::TaskSelectionMode::Retry,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            use bitrouter_sdk::acp::controller::tasks::{TaskSelectRequest, TaskStatusRequest};
+            let status = service
+                .task_status(TaskStatusRequest {
+                    session_id: root.session_id.clone(),
+                })
+                .await?;
+            let expected = status.current.context("task control cursor")?;
+            let selected = service
+                .task_select(TaskSelectRequest {
+                    session_id: root.session_id.clone(),
+                    request_id: format!("select-{index}"),
+                    expected: expected.clone(),
+                    mode,
+                })
+                .await?;
+            assert!(selected.pending.is_some());
+            let operation = format!("selected-prompt-{index}");
+            service
+                .observe(observation(
+                    &operation,
+                    "session/prompt",
+                    "request",
+                    json!({"sessionId":root.session_id,"prompt":[]}),
+                ))
+                .await?;
+            service
+                .observe(observation(
+                    &operation,
+                    "session/prompt",
+                    "response",
+                    json!({"stopReason":"end_turn"}),
+                ))
+                .await?;
+            let next = service
+                .task_status(TaskStatusRequest {
+                    session_id: root.session_id.clone(),
+                })
+                .await?;
+            assert!(next.pending.is_none());
+            let next = next.current.context("next attempt")?;
+            assert_ne!(next.attempt_id, expected.attempt_id);
+            assert_eq!(
+                next.task_id == expected.task_id,
+                mode == bitrouter_sdk::acp::controller::tasks::TaskSelectionMode::Retry
+            );
+            let snapshot = service.reconcile().await?;
+            assert_eq!(snapshot.attempts.len(), 1);
+            assert!(
+                snapshot.native_checkpoints[&next.attempt_id]
+                    .baseline
+                    .is_some()
+            );
+        }
+        assert_eq!(service.store.attempts(None, 16).await?.len(), 3);
         handle.shutdown().await?;
     }
     Ok(())

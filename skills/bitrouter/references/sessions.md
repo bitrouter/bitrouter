@@ -94,6 +94,44 @@ harness's figure and `_meta` exactly as sent, with no marker. Probe the
 capability; an absent or null `usage` means `cost` is whatever the harness
 reports.
 
+## Application task selection
+
+Maintained Codex and Claude controllers with evidence collection advertise
+`_meta["bitrouter.dev/controller"].taskControl` with `version: "1"`,
+`scope: "session"`, and these methods:
+
+```text
+_bitrouter/task/status { sessionId }
+_bitrouter/task/select { sessionId, requestId, expected: { taskId, attemptId, revision }, mode }
+```
+
+An absent or null capability means these controls are unavailable. Send
+`initialize` first and await success before using them. They operate in the
+controller's application evidence store and are never sent to the harness.
+`status` returns `current`, `phase`, and `pending`; `current` is null before
+the first confirmed prompt. An unknown or ambiguous session is an error.
+
+`select` reserves the next prompt as `new_task` (new task and attempt ids) or
+`retry` (same task id, new attempt id). Copy `expected` from `status.current`;
+its revision tracks prompt membership and selections, not evaluator revisions.
+The current attempt must have no outstanding prompt RPCs. No empty attempt
+is created: `pending` persists until the next new prompt consumes it atomically
+with that prompt's original observation. Native context and workspace are
+unchanged, and a retry does not automatically resend a prompt. The archived
+attempt keeps its evidence and evaluation state; switching is not proof that
+native or background work has finished.
+
+Keep the same `requestId` and payload when retrying an uncertain reply, including
+after reconnecting. An identical request is idempotent even after consumption;
+reusing the key with different data, a stale cursor, or another pending selection
+is a conflict. Refresh status after a conflict. There is currently no replacement
+or cancellation method for a pending selection. All controllers sharing this
+owner and native-root profile serialize selection and prompt transitions on the
+same task. History verification covers up to 1,024 attempts per ACP conversation
+and 1,024 prompt operations per attempt; exceeding either bound rejects the
+write without advancing its journal. TUI task controls and feedback are not yet
+wired to these methods.
+
 ## Pinned Claude and Codex adapters
 
 The maintained catalog commands are exact pins:

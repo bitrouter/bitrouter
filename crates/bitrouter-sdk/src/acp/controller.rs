@@ -1,5 +1,7 @@
 //! Connection-level ACP controller.
 
+pub mod tasks;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -39,6 +41,28 @@ pub struct SessionObservation {
 /// observed operation visibly; an implementation must not silently drop data.
 #[async_trait]
 pub trait SessionObserver: Send + Sync {
+    /// Whether this application implements the task status/selection contract.
+    fn task_control_enabled(&self) -> bool {
+        false
+    }
+
+    /// Read application task state without consulting the native harness.
+    async fn task_status(
+        &self,
+        _request: tasks::TaskStatusRequest,
+    ) -> Result<tasks::TaskStatusResponse, agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::method_not_found())
+    }
+
+    /// Reserve a new task or retry for the next prompt, using the caller's
+    /// observed cursor and stable idempotency key.
+    async fn task_select(
+        &self,
+        _request: tasks::TaskSelectRequest,
+    ) -> Result<tasks::TaskStatusResponse, agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::method_not_found())
+    }
+
     /// Select durable fields from a notification. The default observes ACP
     /// session updates; applications may opt into native lifecycle extensions
     /// without coupling the controller to a particular harness protocol.
@@ -509,6 +533,11 @@ impl ConnectTo<Conductor> for ControllerProxy {
         let initialize_observer = session_observer.clone();
         let close_observer = session_observer.clone();
         let delete_observer = session_observer.clone();
+        let task_status_observer = session_observer.clone();
+        let task_select_observer = session_observer.clone();
+        let task_control_enabled = session_observer
+            .as_ref()
+            .is_some_and(|observer| observer.task_control_enabled());
         let session_cost_enabled = session_cost.is_some();
         let list_control = route_control.clone();
         let set_control = route_control.clone();
@@ -522,6 +551,8 @@ impl ConnectTo<Conductor> for ControllerProxy {
         let reset_initialize_state = Arc::clone(&initialize_state);
         let close_initialize_state = Arc::clone(&initialize_state);
         let delete_initialize_state = Arc::clone(&initialize_state);
+        let task_status_state = Arc::clone(&initialize_state);
+        let task_select_state = Arc::clone(&initialize_state);
         Proxy
             .builder()
             .name("bitrouter-controller-gate")
@@ -584,6 +615,7 @@ impl ConnectTo<Conductor> for ControllerProxy {
                                 &config,
                                 route_control_enabled,
                                 session_cost_enabled,
+                                task_control_enabled,
                             );
                             initialize_state.store(INITIALIZE_READY, Ordering::SeqCst);
                             responder.respond(response)
@@ -802,6 +834,44 @@ impl ConnectTo<Conductor> for ControllerProxy {
                 },
                 agent_client_protocol::on_receive_request!(),
             )
+            .on_receive_request_from(
+                Client,
+                move |request: tasks::TaskStatusRequest, responder: Responder<tasks::TaskStatusResponse>, _connection| {
+                    let observer = task_status_observer.clone();
+                    let state = task_status_state.clone();
+                    async move {
+                        if state.load(Ordering::SeqCst) != INITIALIZE_READY {
+                            return responder.respond_with_error(initialization_incomplete());
+                        }
+                        let Some(observer) = observer.filter(|observer| observer.task_control_enabled()) else {
+                            return responder.respond_with_error(agent_client_protocol::Error::method_not_found());
+                        };
+                        match observer.task_status(request).await {
+                            Ok(status) => responder.respond(status),
+                            Err(error) => responder.respond_with_error(error),
+                        }
+                    }
+                }, agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request_from(
+                Client,
+                move |request: tasks::TaskSelectRequest, responder: Responder<tasks::TaskStatusResponse>, _connection| {
+                    let observer = task_select_observer.clone();
+                    let state = task_select_state.clone();
+                    async move {
+                        if state.load(Ordering::SeqCst) != INITIALIZE_READY {
+                            return responder.respond_with_error(initialization_incomplete());
+                        }
+                        let Some(observer) = observer.filter(|observer| observer.task_control_enabled()) else {
+                            return responder.respond_with_error(agent_client_protocol::Error::method_not_found());
+                        };
+                        match observer.task_select(request).await {
+                            Ok(status) => responder.respond(status),
+                            Err(error) => responder.respond_with_error(error),
+                        }
+                    }
+                }, agent_client_protocol::on_receive_request!(),
+            )
             .with_handler(ForwardMessages {
                 initialize_state: forwarding_state,
                 session_cost,
@@ -881,6 +951,7 @@ fn decorate_initialize_response(
     config: &ControllerConfig,
     route_control_enabled: bool,
     session_cost_enabled: bool,
+    task_control_enabled: bool,
 ) {
     let upstream_info = response.agent_info.as_ref().map(|info| {
         serde_json::json!({
@@ -925,6 +996,9 @@ fn decorate_initialize_response(
         "upstreamAgentInfo": upstream_info,
         "routeControl": route_control,
         "usage": usage,
+        "taskControl": task_control_enabled.then(|| serde_json::json!({
+            "version":"1", "scope":"session", "methods":["_bitrouter/task/status", "_bitrouter/task/select"]
+        })),
     });
     response
         .meta
