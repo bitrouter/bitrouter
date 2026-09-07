@@ -148,8 +148,9 @@ completions. Inference goes to the daemon's HTTP API.
 For a programmatic ACP manager, use `bitrouter spawn claude-acp --serve` or
 `bitrouter spawn codex-acp --serve`. Stable ACP v1 on exact adapter pins,
 initializing the harness with the manager's capabilities and transparently
-carrying multiple harness-native sessions on one connection; BitRouter owns
-none of their IDs, transcripts, or storage. Route leases
+carrying multiple harness-native sessions on one connection. Native IDs and
+session storage remain harness-owned; maintained Codex/Claude controllers
+retain a separate local evidence index for evaluation. Route leases
 (`_bitrouter/route/list|set|reset`) and session-attributed cost are
 capability-gated and need a local control binding, which an explicit remote
 `--base-url` does not provide. Read `references/sessions.md` — the pins and the

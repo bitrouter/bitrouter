@@ -17,8 +17,11 @@ One controller process owns one live harness connection, not one conversation.
 The manager may call `session/new` repeatedly and may list, load, resume, fork,
 close, or delete sessions when the harness advertises those capabilities.
 Every manager-visible `sessionId` is the opaque ID returned by the harness.
-BitRouter does not generate an alias, store a session catalog or transcript,
-or read Claude/Codex session files.
+BitRouter does not generate an alias or replace the harness's session catalog.
+Maintained Codex and Claude adapters also collect local evaluation evidence:
+original ACP session envelopes, native lifecycle observations, and explicitly
+related native transcript files. This evidence index never writes to the
+harness's native session files or implements its lifecycle methods.
 
 `bitrouter acp prompt` runs the **same controller**, in-process: it launches the
 harness behind a connection-level controller and drives it over an in-process
@@ -132,6 +135,46 @@ controller does not close or delete harness sessions. Whether a session is
 durable is entirely the harness's native behavior.
 
 ## Routing and observability boundary
+
+Native evidence collection runs on `chat`, `acp prompt`, and `acp serve`,
+including their `spawn` aliases. It uses the configured BitRouter database and
+private invocation spools under `<bitrouter-home>/native-evidence/controllers`.
+Codex transcript discovery follows `CODEX_HOME` (default `~/.codex`); Claude
+follows `CLAUDE_CONFIG_DIR` (default `~/.claude`). Agent environment overrides
+take precedence over inherited values. The collector reads only named sessions
+and their explicit dependencies under those roots.
+
+Claude session creation also follows `_meta.claudeCode.options.env`; relative
+native roots resolve against that session's `cwd`. Each profile has a separate
+evidence namespace and hook spool. Claude may reuse its loaded Query when
+load/resume supplies the same cwd and MCP configuration, ignoring new env or
+settings. A cached fingerprint cannot prove it survived an idle process exit;
+if reuse and recreation would select different profiles, scope stays unknown.
+Hooks preserve
+the adapter's `CLAUDE_MODEL_CONFIG` fallback when no session settings are given.
+Overlapping lifecycle transitions of one session are rejected; close/delete
+can still cancel an active prompt. Unknown scope remains an evidence gap until
+a successful close or a new controller connection resets it. A failed close
+does not prove reset; the adapter may already have removed the Query.
+
+The Codex controller temporarily sets `CODEX_PATH` to BitRouter's private
+`app-server` proxy. An existing `CODEX_PATH` is preserved in the child-only
+`BITROUTER_CODEX_EVIDENCE_UPSTREAM`; otherwise Node resolves Codex relative to
+the maintained adapter package, including nested dependencies. A custom adapter
+launcher can supply `BITROUTER_CODEX_ADAPTER_ENTRY` when its package entry is
+not discoverable from PATH. `BITROUTER_CODEX_EVIDENCE_SPOOL` is private launch
+wiring, not a user-facing model or provider setting.
+
+Claude collection adds invocation-local lifecycle hooks through the adapter's
+session settings, preserving existing hooks. `native-session-hook` and
+`app-server` are internal entry points; users do not run them to collect or
+rate a session. Neither entry point changes the user's global native config.
+
+Original records survive compaction and context rewind. Fork dependencies use
+native ordinal and byte cuts, and later parent work cannot enter the inherited
+prefix. Missing history, interrupted lines, unsupported dependencies and
+collection failures remain evidence gaps. A live collection snapshot is not a
+completed task evaluation or proof that the agent's code passed its tests.
 
 Routing is attempted by default for supported catalog adapters. Use `--direct`
 to opt out, `--model` to pin the logical model, `--base-url` to select a daemon,

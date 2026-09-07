@@ -20,6 +20,43 @@ use agent_client_protocol::{
 use agent_client_protocol_conductor::{ConductorImpl, ProxiesAndAgent};
 use async_trait::async_trait;
 
+/// A conversation observation before lossy client/UI subscriptions. Request
+/// parameters are deliberately scoped; initialization/auth/provider secrets
+/// are never included. Notifications preserve the complete session envelope.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionObservation {
+    /// Unique id for one controller-local operation, shared by its result.
+    pub operation_id: String,
+    /// ACP method, such as `session/prompt` or `session/update`.
+    pub method: String,
+    /// Whether this is a request, notification, response or disconnect.
+    pub phase: String,
+    /// Conversation fields or the complete native session notification.
+    pub payload: serde_json::Value,
+}
+
+/// Application-owned durable evidence ingress. Returning an error fails the
+/// observed operation visibly; an implementation must not silently drop data.
+#[async_trait]
+pub trait SessionObserver: Send + Sync {
+    /// Persist the observation before the controller forwards it.
+    async fn observe(
+        &self,
+        observation: SessionObservation,
+    ) -> Result<(), agent_client_protocol::Error>;
+
+    /// Attach application-owned native instrumentation to a session request.
+    /// Implementations preserve the manager's options; the default is a pass-through.
+    async fn prepare_session_request(
+        &self,
+        _operation_id: &str,
+        _method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, agent_client_protocol::Error> {
+        Ok(params)
+    }
+}
+
 // Provider configuration remains an unstable internal extension. Transparent
 // local wrappers supply its method binding; request and response bodies remain
 // the official typed schema values.
@@ -349,6 +386,7 @@ pub struct Controller<A> {
     config: ControllerConfig,
     route_control: Option<Arc<dyn RouteControl>>,
     session_cost: Option<Arc<dyn SessionCost>>,
+    session_observer: Option<Arc<dyn SessionObserver>>,
 }
 
 impl<A> Controller<A>
@@ -362,6 +400,7 @@ where
             config,
             route_control: None,
             session_cost: None,
+            session_observer: None,
         }
     }
 
@@ -380,6 +419,13 @@ where
         self
     }
 
+    /// Install a durable conversation sink shared by all manager transports.
+    #[must_use]
+    pub fn session_observer(mut self, observer: Arc<dyn SessionObserver>) -> Self {
+        self.session_observer = Some(observer);
+        self
+    }
+
     /// Serve the controller on a manager-facing ACP transport.
     pub async fn run(
         self,
@@ -387,10 +433,12 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         let route_control = self.route_control;
         let disconnect_control = route_control.clone();
+        let disconnect_observer = self.session_observer.clone();
         let proxy = ControllerProxy {
             config: self.config,
             route_control,
             session_cost: self.session_cost,
+            session_observer: self.session_observer,
         };
         let result = ConductorImpl::new_agent(
             "bitrouter-acp-controller",
@@ -398,6 +446,19 @@ where
         )
         .run(transport)
         .await;
+        let observation_result = match disconnect_observer {
+            Some(observer) => {
+                observer
+                    .observe(SessionObservation {
+                        operation_id: uuid::Uuid::new_v4().to_string(),
+                        method: "connection/closed".into(),
+                        phase: "disconnect".into(),
+                        payload: serde_json::json!({"clean":result.is_ok()}),
+                    })
+                    .await
+            }
+            None => Ok(()),
+        };
         let disconnected = match disconnect_control {
             Some(control) => control
                 .disconnected()
@@ -407,7 +468,7 @@ where
         };
         match result {
             Err(error) => Err(error),
-            Ok(()) => disconnected,
+            Ok(()) => disconnected.and(observation_result),
         }
     }
 }
@@ -416,6 +477,7 @@ struct ControllerProxy {
     config: ControllerConfig,
     route_control: Option<Arc<dyn RouteControl>>,
     session_cost: Option<Arc<dyn SessionCost>>,
+    session_observer: Option<Arc<dyn SessionObserver>>,
 }
 
 const INITIALIZE_NOT_STARTED: u8 = 0;
@@ -432,6 +494,10 @@ impl ConnectTo<Conductor> for ControllerProxy {
         let route_control = self.route_control;
         let route_control_enabled = route_control.is_some();
         let session_cost = self.session_cost;
+        let session_observer = self.session_observer;
+        let initialize_observer = session_observer.clone();
+        let close_observer = session_observer.clone();
+        let delete_observer = session_observer.clone();
         let session_cost_enabled = session_cost.is_some();
         let list_control = route_control.clone();
         let set_control = route_control.clone();
@@ -454,6 +520,7 @@ impl ConnectTo<Conductor> for ControllerProxy {
                       responder: Responder<InitializeResponse>,
                       connection: ConnectionTo<Conductor>| {
                     let config = std::sync::Arc::clone(&config);
+                    let observer = initialize_observer.clone();
                     let initialize_state = std::sync::Arc::clone(&initialize_state);
                     async move {
                         if initialize_state
@@ -483,6 +550,16 @@ impl ConnectTo<Conductor> for ControllerProxy {
                                     return responder.respond_with_error(error);
                                 }
                             };
+                            if let Some(observer) = observer {
+                                let info = response.agent_info.as_ref().map(|info| serde_json::json!({"name":info.name,"version":info.version}));
+                                if let Err(error) = observer.observe(SessionObservation {
+                                    operation_id: uuid::Uuid::new_v4().to_string(), method: "initialize".into(), phase: "response".into(),
+                                    payload: serde_json::json!({"agentInfo":info,"loadSession":response.agent_capabilities.load_session}),
+                                }).await {
+                                    initialize_state.store(INITIALIZE_FAILED, Ordering::SeqCst);
+                                    return responder.respond_with_error(error);
+                                }
+                            }
                             if response.agent_capabilities.providers.is_some()
                                 && let Some(endpoint) = &config.endpoint
                                 && let Err(error) =
@@ -620,30 +697,42 @@ impl ConnectTo<Conductor> for ControllerProxy {
                 >,
                       connection: ConnectionTo<Conductor>| {
                     let route_control = close_control.clone();
+                    let observer = close_observer.clone();
                     let initialize_state = Arc::clone(&close_initialize_state);
                     async move {
                         if initialize_state.load(Ordering::SeqCst) != INITIALIZE_READY {
                             return responder.respond_with_error(initialization_incomplete());
                         }
                         let session_id = request.session_id.0.to_string();
+                        let operation_id = uuid::Uuid::new_v4().to_string();
+                        if let Err(error) = observe_session_boundary(observer.as_deref(), &operation_id, "session/close", "request", &session_id).await {
+                            return responder.respond_with_error(error);
+                        }
                         let gate_connection = connection.clone();
                         connection.spawn(async move {
-                            match gate_connection
-                                .send_request_to(Agent, request)
-                                .block_task()
-                                .await
-                            {
-                                Ok(response) => {
-                                    if let Some(route_control) = route_control
-                                        && let Err(error) =
-                                            route_control.session_closed(&session_id).await
-                                    {
-                                        return responder
-                                            .respond_with_error(error.into_rpc_error());
-                                    }
-                                    responder.respond(response)
+                            let result = gate_connection.send_request_to(Agent, request)
+                                .forward_cancellation_from(responder.cancellation()).block_task().await;
+                            let payload = match &result {
+                                Ok(_) => serde_json::json!({"sessionId":session_id}),
+                                Err(error) => serde_json::json!({"sessionId":session_id,"error_code":error.code}),
+                            };
+                            let observed = match observer {
+                                Some(observer) => observer.observe(SessionObservation { operation_id,
+                                    method: "session/close".into(), phase: "response".into(), payload }).await,
+                                None => Ok(()),
+                            };
+                            let cleaned = if result.is_ok() {
+                                match route_control {
+                                    Some(control) => control.session_closed(&session_id).await.map_err(RouteControlError::into_rpc_error),
+                                    None => Ok(()),
                                 }
+                            } else { Ok(()) };
+                            match result {
                                 Err(error) => responder.respond_with_error(error),
+                                Ok(response) => match cleaned.and(observed) {
+                                    Ok(()) => responder.respond(response),
+                                    Err(error) => responder.respond_with_error(error),
+                                },
                             }
                         })?;
                         Ok(())
@@ -659,30 +748,42 @@ impl ConnectTo<Conductor> for ControllerProxy {
                 >,
                       connection: ConnectionTo<Conductor>| {
                     let route_control = delete_control.clone();
+                    let observer = delete_observer.clone();
                     let initialize_state = Arc::clone(&delete_initialize_state);
                     async move {
                         if initialize_state.load(Ordering::SeqCst) != INITIALIZE_READY {
                             return responder.respond_with_error(initialization_incomplete());
                         }
                         let session_id = request.session_id.0.to_string();
+                        let operation_id = uuid::Uuid::new_v4().to_string();
+                        if let Err(error) = observe_session_boundary(observer.as_deref(), &operation_id, "session/delete", "request", &session_id).await {
+                            return responder.respond_with_error(error);
+                        }
                         let gate_connection = connection.clone();
                         connection.spawn(async move {
-                            match gate_connection
-                                .send_request_to(Agent, request)
-                                .block_task()
-                                .await
-                            {
-                                Ok(response) => {
-                                    if let Some(route_control) = route_control
-                                        && let Err(error) =
-                                            route_control.session_closed(&session_id).await
-                                    {
-                                        return responder
-                                            .respond_with_error(error.into_rpc_error());
-                                    }
-                                    responder.respond(response)
+                            let result = gate_connection.send_request_to(Agent, request)
+                                .forward_cancellation_from(responder.cancellation()).block_task().await;
+                            let payload = match &result {
+                                Ok(_) => serde_json::json!({"sessionId":session_id}),
+                                Err(error) => serde_json::json!({"sessionId":session_id,"error_code":error.code}),
+                            };
+                            let observed = match observer {
+                                Some(observer) => observer.observe(SessionObservation { operation_id,
+                                    method: "session/delete".into(), phase: "response".into(), payload }).await,
+                                None => Ok(()),
+                            };
+                            let cleaned = if result.is_ok() {
+                                match route_control {
+                                    Some(control) => control.session_closed(&session_id).await.map_err(RouteControlError::into_rpc_error),
+                                    None => Ok(()),
                                 }
+                            } else { Ok(()) };
+                            match result {
                                 Err(error) => responder.respond_with_error(error),
+                                Ok(response) => match cleaned.and(observed) {
+                                    Ok(()) => responder.respond(response),
+                                    Err(error) => responder.respond_with_error(error),
+                                },
                             }
                         })?;
                         Ok(())
@@ -693,6 +794,7 @@ impl ConnectTo<Conductor> for ControllerProxy {
             .with_handler(ForwardMessages {
                 initialize_state: forwarding_state,
                 session_cost,
+                session_observer,
             })
             .connect_to(client)
             .await
@@ -822,6 +924,7 @@ fn decorate_initialize_response(
 struct ForwardMessages {
     initialize_state: std::sync::Arc<AtomicU8>,
     session_cost: Option<Arc<dyn SessionCost>>,
+    session_observer: Option<Arc<dyn SessionObserver>>,
 }
 
 fn reject_manager_dispatch(
@@ -845,7 +948,10 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
     ) -> Result<Handled<Dispatch>, agent_client_protocol::Error> {
         MatchDispatchFrom::new(message, &connection)
             .if_dispatch_from(Client, async |message: Dispatch| {
-                if matches!(message.method(), "providers/set" | "providers/list") {
+                // Disable can also recreate native Queries; provider endpoints
+                // belong to this controller, including this adapter extension.
+                // https://github.com/agentclientprotocol/claude-agent-acp
+                if matches!(message.method(), "providers/set" | "providers/list" | "providers/disable") {
                     reject_manager_dispatch(
                         message,
                         agent_client_protocol::Error::method_not_found().data(
@@ -858,14 +964,65 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
                     reject_manager_dispatch(message, initialization_incomplete())?;
                     return Ok(Handled::Yes);
                 }
+                if let Some(observer) = &self.session_observer
+                    && observed_session_method(message.method())
+                    && let Dispatch::Request(mut request, responder) = message {
+                        let method = request.method().to_owned();
+                        let operation_id = uuid::Uuid::new_v4().to_string();
+                        let payload = session_request_fields(request.params());
+                        if let Err(error) = observer.observe(SessionObservation { operation_id: operation_id.clone(),
+                            method: method.clone(), phase: "request".into(), payload }).await {
+                            responder.respond_with_error(error)?;
+                            return Ok(Handled::Yes);
+                        }
+                        let observer = observer.clone();
+                        if matches!(method.as_str(), "session/new" | "session/load" | "session/resume" | "session/fork") {
+                            match observer.prepare_session_request(&operation_id, &method, request.params.clone()).await {
+                                Ok(params) => request.params = params,
+                                Err(error) => {
+                                    let terminal = observer.observe(SessionObservation {
+                                        operation_id, method, phase: "response".into(),
+                                        payload: serde_json::json!({"error_code":error.code}),
+                                    }).await;
+                                    return responder.respond_with_error(terminal.err().unwrap_or(error)).map(|()| Handled::Yes);
+                                }
+                            }
+                        }
+                        // Keep ACP's per-hop cancellation propagation while
+                        // awaiting persistence before responding to the manager.
+                        // https://agentclientprotocol.com/protocol/v1/session-setup
+                        let pending = connection.send_request_to(Agent, request)
+                            .forward_cancellation_from(responder.cancellation());
+                        connection.spawn(async move {
+                            let result = pending.block_task().await;
+                            let payload = match &result {
+                                Ok(value) => session_result_fields(value),
+                                Err(error) => serde_json::json!({"error_code":error.code}),
+                            };
+                            match observer.observe(SessionObservation { operation_id, method,
+                                phase: "response".into(), payload }).await {
+                                Ok(()) => responder.respond_with_result(result),
+                                Err(error) => responder.respond_with_error(error),
+                            }
+                        })?;
+                        return Ok(Handled::Yes);
+                    }
                 connection.send_proxied_message_to(Agent, message)?;
                 Ok(Handled::Yes)
             })
             .await
             .if_dispatch_from(Agent, async |message: Dispatch| {
-                // The one harness message the controller looks inside: a
-                // `session/update`, and only when a cost bridge is installed.
-                // Everything else keeps the verbatim path.
+                if let Some(observer) = &self.session_observer
+                    && let Dispatch::Notification(notification) = &message
+                    && SessionNotification::matches_method(notification.method()) {
+                        observer.observe(SessionObservation {
+                            operation_id: uuid::Uuid::new_v4().to_string(),
+                            method: notification.method().into(), phase: "notification".into(),
+                            payload: notification.params().clone(),
+                        }).await?;
+                    }
+                // Persist the original full envelope before cost decoration or
+                // any display broadcast can alter or discard its provenance.
                 let message = match (message, self.session_cost.as_deref()) {
                     (Dispatch::Notification(notification), Some(session_cost))
                         if SessionNotification::matches_method(notification.method()) =>
@@ -886,6 +1043,51 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
     fn describe_chain(&self) -> impl std::fmt::Debug {
         "BitRouterForwardMessages"
     }
+}
+
+async fn observe_session_boundary(
+    observer: Option<&dyn SessionObserver>,
+    operation_id: &str,
+    method: &str,
+    phase: &str,
+    session_id: &str,
+) -> Result<(), agent_client_protocol::Error> {
+    if let Some(observer) = observer {
+        observer
+            .observe(SessionObservation {
+                operation_id: operation_id.into(),
+                method: method.into(),
+                phase: phase.into(),
+                payload: serde_json::json!({"sessionId":session_id}),
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+fn observed_session_method(method: &str) -> bool {
+    matches!(
+        method,
+        "session/new" | "session/load" | "session/resume" | "session/fork" | "session/prompt"
+    )
+}
+
+fn session_request_fields(params: &serde_json::Value) -> serde_json::Value {
+    selected_fields(params, &["sessionId", "cwd", "prompt"])
+}
+
+fn session_result_fields(params: &serde_json::Value) -> serde_json::Value {
+    selected_fields(params, &["sessionId", "stopReason"])
+}
+
+fn selected_fields(params: &serde_json::Value, names: &[&str]) -> serde_json::Value {
+    let mut selected = serde_json::Map::new();
+    for name in names {
+        if let Some(value) = params.get(*name) {
+            selected.insert((*name).into(), value.clone());
+        }
+    }
+    serde_json::Value::Object(selected)
 }
 
 /// Wire tag of the one `session/update` kind the controller decorates.
@@ -1192,6 +1394,13 @@ mod tests {
     )]
     #[serde(transparent)]
     struct ManagerExtensionResponse(serde_json::Value);
+
+    #[derive(
+        Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+    )]
+    #[request(method = "providers/disable", response = ManagerExtensionResponse)]
+    #[serde(transparent)]
+    struct DisableProvidersRpc(serde_json::Value);
 
     #[derive(
         Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
@@ -1834,6 +2043,7 @@ mod tests {
             let initialize_state = Arc::clone(&self.state);
             let set_state = Arc::clone(&self.state);
             let list_state = Arc::clone(&self.state);
+            let disable_state = Arc::clone(&self.state);
             let session_state = Arc::clone(&self.state);
             Agent
                 .builder()
@@ -1863,6 +2073,13 @@ mod tests {
                         }
                         set_state.configured.store(true, Ordering::SeqCst);
                         responder.respond(SetProviderRpcResponse(SetProviderResponse::new()))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_request: DisableProvidersRpc, responder, _connection| {
+                        disable_state.configured.store(false, Ordering::SeqCst);
+                        responder.respond(ManagerExtensionResponse(serde_json::json!({})))
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -2411,6 +2628,13 @@ mod tests {
                         .err()
                         .ok_or_else(|| anyhow::anyhow!("manager provider rewrite was accepted"))?;
                     assert_eq!(i32::from(error.code), -32601);
+                    let error = receive(
+                        connection.send_request(DisableProvidersRpc(serde_json::json!({}))),
+                    )
+                    .await
+                    .err()
+                    .ok_or_else(|| anyhow::anyhow!("manager disabled the provider"))?;
+                    assert_eq!(i32::from(error.code), -32601);
                     Ok(())
                 },
             )
@@ -2421,6 +2645,7 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         assert_eq!(requests.len(), 1, "only the controller may configure it");
+        assert!(state.configured.load(Ordering::SeqCst));
         assert_eq!(requests[0].base_url, provider_endpoint().base_url);
         Ok(())
     }
@@ -3417,6 +3642,282 @@ mod tests {
         let mut malformed = params.clone();
         malformed["update"]["_meta"] = serde_json::json!("not-an-object");
         assert!(super::with_attributed_cost(&malformed, Cost::new(0.5, "USD")).is_none());
+        Ok(())
+    }
+    #[derive(Default)]
+    struct RecordingObserver {
+        events: Mutex<Vec<super::SessionObservation>>,
+        reject_preparation: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl super::SessionObserver for RecordingObserver {
+        async fn observe(
+            &self,
+            observation: super::SessionObservation,
+        ) -> Result<(), agent_client_protocol::Error> {
+            record(&self.events, observation);
+            Ok(())
+        }
+
+        async fn prepare_session_request(
+            &self,
+            _operation_id: &str,
+            _method: &str,
+            params: serde_json::Value,
+        ) -> Result<serde_json::Value, agent_client_protocol::Error> {
+            if self.reject_preparation {
+                return Err(agent_client_protocol::Error::internal_error());
+            }
+            Ok(params)
+        }
+    }
+
+    #[tokio::test]
+    async fn preparation_failure_records_terminal_error_without_forwarding() -> anyhow::Result<()> {
+        let state = Arc::new(TransparentState::default());
+        let observer = Arc::new(RecordingObserver {
+            reject_preparation: true,
+            ..RecordingObserver::default()
+        });
+        let controller = Controller::new(
+            TransparentAgent {
+                state: state.clone(),
+            },
+            ControllerConfig::new(ControllerIdentity::new("claude-acp", "adapter", "test")),
+        )
+        .session_observer(observer.clone());
+        let (manager, upstream) = agent_client_protocol::Channel::duplex();
+        let task = tokio::spawn(controller.run(upstream));
+        Client
+            .builder()
+            .connect_with(manager, async |connection: ConnectionTo<Agent>| {
+                receive(connection.send_request(InitializeRequest::new(ProtocolVersion::V1)))
+                    .await?;
+                assert!(
+                    receive(connection.send_request(NewSessionRequest::new("/workspace")))
+                        .await
+                        .is_err()
+                );
+                Ok(())
+            })
+            .await?;
+        task.await??;
+        assert_eq!(state.next_session.load(Ordering::SeqCst), 0);
+        let events = observer
+            .events
+            .lock()
+            .map_err(|_| anyhow::anyhow!("observer poisoned"))?;
+        let request = events
+            .iter()
+            .find(|event| event.method == "session/new" && event.phase == "request")
+            .ok_or_else(|| anyhow::anyhow!("request missing"))?;
+        assert!(
+            events
+                .iter()
+                .any(|event| event.operation_id == request.operation_id
+                    && event.phase == "response"
+                    && event.payload.get("error_code").is_some())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn durable_observer_receives_envelopes_before_cost_decoration_and_prompt_results()
+    -> anyhow::Result<()> {
+        let observer = Arc::new(RecordingObserver::default());
+        let bridge = Arc::new(RecordingSessionCost {
+            figures: HashMap::from([("native-a".into(), 0.42)]),
+            asked: Mutex::new(vec![]),
+        });
+        let controller = Controller::new(
+            UsageAgent,
+            ControllerConfig::new(ControllerIdentity::new("claude-acp", "adapter", "test")),
+        )
+        .session_cost(bridge)
+        .session_observer(observer.clone());
+        let (_, updates) = run_usage_manager(controller).await?;
+        assert_eq!(
+            usage_for(&updates, "native-a")?.0.cost,
+            Some(Cost::new(0.42, "USD"))
+        );
+        let events = observer
+            .events
+            .lock()
+            .map_err(|_| anyhow::anyhow!("observer poisoned"))?;
+        let original = events
+            .iter()
+            .find(|event| {
+                event.payload["sessionId"] == "native-a"
+                    && event.payload["update"]["sessionUpdate"] == "usage_update"
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing original envelope"))?;
+        assert_eq!(original.payload["update"]["cost"]["amount"], 9.99);
+        assert_eq!(original.payload["_meta"]["harness.update"], "native-a");
+        let request = events
+            .iter()
+            .find(|event| event.method == "session/prompt" && event.phase == "request")
+            .ok_or_else(|| anyhow::anyhow!("missing prompt request"))?;
+        let response = events
+            .iter()
+            .position(|event| {
+                event.operation_id == request.operation_id && event.phase == "response"
+            })
+            .ok_or_else(|| anyhow::anyhow!("missing correlated response"))?;
+        let update = events
+            .iter()
+            .position(|event| event.operation_id == original.operation_id)
+            .ok_or_else(|| anyhow::anyhow!("missing notification"))?;
+        assert!(update < response);
+        Ok(())
+    }
+
+    #[test]
+    fn observation_scope_excludes_provider_and_mcp_credentials() {
+        let params = serde_json::json!({"sessionId":"s", "cwd":"/work", "prompt":[],
+            "mcpServers":[{"env":{"SECRET":"secret"}}], "_meta":{"apiKey":"secret"}, "apiKey":"secret"});
+        assert_eq!(
+            super::session_request_fields(&params),
+            serde_json::json!({"sessionId":"s","cwd":"/work","prompt":[]})
+        );
+        assert!(!super::observed_session_method("authenticate"));
+        assert!(!super::observed_session_method("providers/set"));
+    }
+    struct FailedCloseObserver;
+
+    #[async_trait::async_trait]
+    impl super::SessionObserver for FailedCloseObserver {
+        async fn observe(
+            &self,
+            event: super::SessionObservation,
+        ) -> Result<(), agent_client_protocol::Error> {
+            if event.method == "session/close" && event.phase == "response" {
+                Err(agent_client_protocol::Error::internal_error()
+                    .data("evidence disk unavailable"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn completed_close_cleans_route_state_when_observer_fails() -> anyhow::Result<()> {
+        let routes = Arc::new(RecordingRouteControl::default());
+        let controller = Controller::new(
+            TransparentAgent {
+                state: Arc::new(TransparentState::default()),
+            },
+            ControllerConfig::new(ControllerIdentity::new("codex-acp", "adapter", "test")),
+        )
+        .route_control(routes.clone())
+        .session_observer(Arc::new(FailedCloseObserver));
+        let (manager, upstream) = agent_client_protocol::Channel::duplex();
+        let controller_task = tokio::spawn(controller.run(upstream));
+        Client
+            .builder()
+            .connect_with(manager, async |connection: ConnectionTo<Agent>| {
+                receive(connection.send_request(InitializeRequest::new(ProtocolVersion::V1)))
+                    .await?;
+                receive(connection.send_request(RouteSetRequest::new("close-me", "@balanced")))
+                    .await?;
+                assert!(
+                    receive(connection.send_request(CloseSessionRequest::new("close-me")))
+                        .await
+                        .is_err()
+                );
+                let current =
+                    receive(connection.send_request(RouteListRequest::new("close-me"))).await?;
+                assert!(current.current.is_none());
+                Ok(())
+            })
+            .await?;
+        controller_task.await??;
+        assert_eq!(
+            routes
+                .closed
+                .lock()
+                .map_err(|_| anyhow::anyhow!("close records poisoned"))?
+                .as_slice(),
+            ["close-me"]
+        );
+        Ok(())
+    }
+    struct CancellableAgent(Arc<AtomicBool>);
+
+    impl ConnectTo<Client> for CancellableAgent {
+        async fn connect_to(
+            self,
+            client: impl ConnectTo<Agent>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            Agent
+                .builder()
+                .on_receive_request(
+                    async |request: InitializeRequest, responder, _| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    move |_request: PromptRequest,
+                          responder: agent_client_protocol::Responder<PromptResponse>,
+                          connection: ConnectionTo<Client>| {
+                        let cancelled = self.0.clone();
+                        async move {
+                            connection.spawn(async move {
+                                responder.cancellation().cancelled().await;
+                                cancelled.store(true, Ordering::SeqCst);
+                                responder.respond_with_error(
+                                    agent_client_protocol::Error::request_cancelled(),
+                                )
+                            })?;
+                            Ok(())
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(client)
+                .await
+        }
+    }
+
+    #[tokio::test]
+    async fn observed_prompt_forwards_cancellation_and_records_terminal_error() -> anyhow::Result<()>
+    {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let observer = Arc::new(RecordingObserver::default());
+        let controller = Controller::new(
+            CancellableAgent(cancelled.clone()),
+            ControllerConfig::new(ControllerIdentity::new("codex-acp", "adapter", "test")),
+        )
+        .session_observer(observer.clone());
+        let (manager, upstream) = agent_client_protocol::Channel::duplex();
+        let controller_task = tokio::spawn(controller.run(upstream));
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            Client
+                .builder()
+                .connect_with(manager, async |connection: ConnectionTo<Agent>| {
+                    receive(connection.send_request(InitializeRequest::new(ProtocolVersion::V1)))
+                        .await?;
+                    let pending = connection.send_request(PromptRequest::new(
+                        "native",
+                        vec![ContentBlock::Text(TextContent::new("work"))],
+                    ));
+                    pending.cancel()?;
+                    assert!(receive(pending).await.is_err());
+                    Ok(())
+                }),
+        )
+        .await??;
+        controller_task.await??;
+        assert!(cancelled.load(Ordering::SeqCst));
+        let events = observer
+            .events
+            .lock()
+            .map_err(|_| anyhow::anyhow!("observer poisoned"))?;
+        assert!(events.iter().any(|event| event.method == "session/prompt"
+            && event.phase == "response"
+            && event.payload.get("error_code").is_some()));
         Ok(())
     }
 }

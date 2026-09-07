@@ -75,6 +75,7 @@ use bitrouter_tui::permission::{Decision, Mode, Policy, Prompt as PermissionProm
 
 use crate::chat::effects::Wire;
 use crate::paths::ConfigSource;
+use crate::session_evidence::service::{EvidenceHandle, EvidenceLaunch};
 
 // ── routing (spawn --via-daemon by default) ─────────────────────────────────────
 
@@ -1300,6 +1301,15 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?;
     let AcpTransport::Stdio { command, args, env } = &agent.transport;
     let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
+    let mut env = env.clone();
+    let mut evidence = EvidenceHandle::open(EvidenceLaunch {
+        home: source.home(),
+        database_url: &config.database.url,
+        identity: &identity,
+        env: &mut env,
+        strip_inherited_env: &options.strip_inherited_env,
+    })
+    .await?;
     let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
     if let Some(endpoint) = routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
@@ -1315,15 +1325,22 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
             .strip_inherited_env(options.strip_inherited_env);
     let mut controller =
         bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
+    if let Some(evidence) = &evidence {
+        controller = controller.session_observer(evidence.service.clone());
+    }
     if let Some(binding) = &binding {
         controller = controller
             .route_control(binding.route_control())
             .session_cost(binding.session_cost());
     }
-    controller
+    let result = controller
         .run(agent_client_protocol::Stdio::new())
         .await
-        .map_err(|error| anyhow::anyhow!("acp serve: {error}"))
+        .map_err(|error| anyhow::anyhow!("acp serve: {error}"));
+    if let Some(evidence) = &mut evidence {
+        evidence.shutdown().await?;
+    }
+    result
 }
 
 // ── chat ──────────────────────────────────────────────────────────────────────
@@ -1401,6 +1418,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     // use.
     if !std::io::stdout().is_terminal() {
         return chat_piped(
+            source,
             &config,
             agent_id,
             &routed,
@@ -1426,11 +1444,17 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         terminal_auth: true,
         ..options
     };
-    let mut session =
-        launch_controlled(&config, agent_id, &routed, options.clone(), binding.clone())
-            .await
-            .with_context(|| format!("launching acp session for agent '{agent_id}'"))
-            .map_err(show_session_log)?;
+    let mut session = launch_controlled(
+        source,
+        &config,
+        agent_id,
+        &routed,
+        options.clone(),
+        binding.clone(),
+    )
+    .await
+    .with_context(|| format!("launching acp session for agent '{agent_id}'"))
+    .map_err(show_session_log)?;
 
     // At most one authentication round. A second `auth_required` after a login
     // the agent reported as successful is the agent disagreeing with itself,
@@ -1488,6 +1512,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                         // on screen as it happened; no tail to add.
                         run_terminal_login(&config, agent_id, &method).await?;
                         session = launch_controlled(
+                            source,
                             &config,
                             agent_id,
                             &routed,
@@ -1752,6 +1777,7 @@ fn unauthenticated_message(
 }
 
 async fn chat_piped(
+    source: &ConfigSource,
     config: &Config,
     agent_id: &str,
     routed: &Routed,
@@ -1762,7 +1788,7 @@ async fn chat_piped(
 ) -> Result<()> {
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
-    let mut session = launch_controlled(config, agent_id, routed, options, binding)
+    let mut session = launch_controlled(source, config, agent_id, routed, options, binding)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))
         .map_err(show_session_log)?;
@@ -1899,7 +1925,7 @@ where
 
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
-    let mut session = launch_controlled(&config, agent_id, &routed, options, None)
+    let mut session = launch_controlled(source, &config, agent_id, &routed, options, None)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     let ids = match session.client.new_session(cwd, mcp_servers).await {
@@ -2027,6 +2053,7 @@ fn teardown_result(clean: bool) -> Result<()> {
 /// harness child's I/O, and the client all run on this runtime.
 pub(crate) struct ControlledSession {
     pub(crate) client: AcpClient,
+    pub(crate) evidence: Option<EvidenceHandle>,
     /// The route namespace this session's leases live in, when it has one.
     /// Cleaned up by [`ControlledSession::shutdown`] on every exit.
     binding: Option<LocalControllerBinding>,
@@ -2054,6 +2081,16 @@ impl ControlledSession {
     /// the reason is.
     pub(crate) async fn shutdown(&mut self) -> bool {
         let mut clean = true;
+        if let Some(evidence) = &self.evidence {
+            match tokio::time::timeout(Duration::from_secs(30), evidence.service.reconcile()).await
+            {
+                Ok(Ok(_)) => {}
+                _ => {
+                    tracing::warn!("native evidence did not reconcile before harness shutdown");
+                    clean = false;
+                }
+            }
+        }
         if let Err(error) = self.client.shutdown().await {
             tracing::warn!(%error, "acp teardown unconfirmed; the harness may not have terminated");
             clean = false;
@@ -2086,6 +2123,12 @@ impl ControlledSession {
         if let Some(binding) = &self.binding {
             binding.revoke().await;
         }
+        if let Some(mut evidence) = self.evidence.take()
+            && let Err(error) = evidence.shutdown().await
+        {
+            tracing::warn!(%error, "native evidence did not reconcile after harness shutdown");
+            clean = false;
+        }
         clean
     }
 }
@@ -2096,6 +2139,7 @@ impl ControlledSession {
 /// provider through `providers/set` exactly as a served one does — and, with
 /// a `binding`, the same route and cost bridges.
 async fn launch_controlled(
+    source: &ConfigSource,
     config: &Config,
     agent_id: &str,
     routed: &Routed,
@@ -2112,6 +2156,15 @@ async fn launch_controlled(
     let AcpTransport::Stdio { command, args, env } = &agent.transport;
 
     let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
+    let mut env = env.clone();
+    let evidence = EvidenceHandle::open(EvidenceLaunch {
+        home: source.home(),
+        database_url: &config.database.url,
+        identity: &identity,
+        env: &mut env,
+        strip_inherited_env: &options.strip_inherited_env,
+    })
+    .await?;
     let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
     if let Some(endpoint) = routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
@@ -2122,6 +2175,9 @@ async fn launch_controlled(
     let reaped = process.reaped();
     let mut controller =
         bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
+    if let Some(evidence) = &evidence {
+        controller = controller.session_observer(evidence.service.clone());
+    }
     if let Some(binding) = &binding {
         controller = controller
             .route_control(binding.route_control())
@@ -2164,6 +2220,7 @@ async fn launch_controlled(
     };
     Ok(ControlledSession {
         client,
+        evidence,
         binding,
         reaped,
         controller,
