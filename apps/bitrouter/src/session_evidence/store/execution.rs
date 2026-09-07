@@ -224,6 +224,23 @@ impl EvidenceStore {
                                 pending.insert(child.clone());
                             }
                         }
+                        FactKind::ConversationReset {
+                            new_conversation_id,
+                        } if fact.node.as_ref() == Some(&node) => {
+                            // Reset names another native transcript while the
+                            // adapter retains its ACP session. Discover it as a
+                            // candidate, without assigning task membership or
+                            // treating the previous conversation as its parent.
+                            // https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/acp-agent.ts
+                            let reset = NodeKey {
+                                namespace: node.namespace.clone(),
+                                harness: node.harness,
+                                native_id: new_conversation_id.clone(),
+                                agent_id: None,
+                            };
+                            reset.validate()?;
+                            pending.insert(reset);
+                        }
                         FactKind::Gap { reason } => {
                             graph.gaps.insert(reason.clone());
                         }

@@ -197,7 +197,11 @@ fn attempt() -> Attempt {
     Attempt {
         id: "attempt-1".into(),
         task_id: "task-1".into(),
-        root: root.clone(),
+        session: crate::session_evidence::types::AcpSessionKey {
+            namespace: root.namespace.clone(),
+            harness: root.harness,
+            session_id: "adapter-session".into(),
+        },
         members: BTreeSet::from([root]),
         phase: AttemptPhase::Collecting,
         revision: 0,
@@ -386,7 +390,7 @@ async fn same_owner_unrelated_session_requires_bounded_fork_provenance() -> Resu
     manifest.edges.push(ExecutionEdge {
         kind: EdgeKind::Fork,
         from: node("parent-session"),
-        to: attempt.root.clone(),
+        to: node("native-session"),
         checkpoint: Some(manifest.ranges[0].clone()),
         evidence_record_ids: manifest.record_digests.keys().cloned().collect(),
     });

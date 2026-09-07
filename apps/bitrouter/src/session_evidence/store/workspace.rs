@@ -115,7 +115,7 @@ mod tests {
         let attempt = store.attempts(None, 16).await?.remove(0);
         assert_eq!(
             store
-                .workspace_evidence(&attempt.root)
+                .workspace_evidence(&attempt.session)
                 .await?
                 .baseline
                 .as_deref(),
@@ -130,8 +130,8 @@ mod tests {
             .await?;
         // Operation membership is independently readable; an unavailable chosen
         // checkpoint cannot be presented or consumed as complete evidence.
-        assert!(store.active_attempt(&attempt.root).await?.is_some());
-        assert!(store.workspace_evidence(&attempt.root).await.is_err());
+        assert!(store.active_attempt(&attempt.session).await?.is_some());
+        assert!(store.workspace_evidence(&attempt.session).await.is_err());
         Ok(())
     }
 }

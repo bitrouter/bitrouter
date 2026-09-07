@@ -407,6 +407,18 @@ async fn damaged_raw_copy_cannot_bind_and_does_not_hide_later_history() -> Resul
         ))
         .await?;
     write_rows(&directory.path().join("profile/projects/work/root.jsonl"), vec![json!({"type":"user","sessionId":"root","uuid":"user","parentUuid":null,"message":{"content":"work"}})]).await?;
+    let spool = PathBuf::from(
+        prepared["_meta"]["claudeCode"]["options"]["env"][SPOOL_ENV]
+            .as_str()
+            .context("fixture hook spool")?,
+    );
+    write_rows(
+        &spool.join("hook-independent.jsonl"),
+        vec![json!({"payload":{
+            "hook_event_name":"SessionStart", "session_id":"root"
+        }})],
+    )
+    .await?;
     drop(handle);
     let resumed = service(directory.path()).await?;
     let snapshot = recover(&resumed.service).await?;

@@ -87,9 +87,9 @@ async fn prompt(
         .attempts(None, 16)
         .await?
         .into_iter()
-        .find(|attempt| attempt.root.native_id == session)
+        .find(|attempt| attempt.session.session_id == session)
         .context("attempt")?;
-    service.store.workspace_evidence(&attempt.root).await
+    service.store.workspace_evidence(&attempt.session).await
 }
 
 async fn artifact(home: &Path, database_url: &str, id: &str) -> Result<Value> {
@@ -150,7 +150,7 @@ async fn pending_result_keeps_its_original_native_exclusions_after_another_promp
     );
     service.observe(response).await?;
     let attempt = service.store.attempts(None, 16).await?.remove(0);
-    let evidence = service.store.workspace_evidence(&attempt.root).await?;
+    let evidence = service.store.workspace_evidence(&attempt.session).await?;
     let result = artifact(
         &directory.path().join("router"),
         "sqlite:evidence.db?mode=rwc",

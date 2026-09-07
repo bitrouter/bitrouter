@@ -455,6 +455,12 @@ fn replay_acp(
     ) {
         return Ok(BTreeSet::new());
     }
+    // Claude lifecycle responses identify the adapter conversation, not its
+    // native transcript. Native SDK/CLI/hook records supply the latter.
+    // https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/acp-agent.ts
+    if root.harness == Harness::ClaudeCode {
+        return Ok(BTreeSet::new());
+    }
     let operation = string(raw, "operation_id")?;
     let payload = raw
         .get("payload")

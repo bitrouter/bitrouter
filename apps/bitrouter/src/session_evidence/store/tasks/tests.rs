@@ -3,13 +3,274 @@ use crate::session_evidence::journal::Journal;
 use crate::session_evidence::types::Harness;
 use serde_json::json;
 
-fn root(session: &str) -> NodeKey {
-    NodeKey {
+fn root(session: &str) -> AcpSessionKey {
+    AcpSessionKey {
         namespace: "native-profile".into(),
         harness: Harness::ClaudeCode,
-        native_id: session.into(),
-        agent_id: None,
+        session_id: session.into(),
     }
+}
+
+#[tokio::test]
+async fn incompatible_or_damaged_legacy_attempts_are_not_reinterpreted_or_rewritten() -> Result<()>
+{
+    for case in [
+        "extra-member",
+        "manifest",
+        "ready",
+        "mixed",
+        "digest",
+        "agent",
+    ] {
+        let store = store().await?;
+        let legacy_root = json!({"namespace":"profile","harness":"claude_code","native_id":"public","agent_id":null});
+        let mut value = json!({"id":"legacy","task_id":"task","root":legacy_root,"members":[legacy_root],
+            "phase":"collecting","revision":0,"latest_manifest":null,"effective_manifest":null,
+            "started_at":"2026-09-08T00:00:00Z"});
+        match case {
+            "extra-member" => {
+                let mut other = legacy_root.clone();
+                other["native_id"] = json!("another");
+                value["members"]
+                    .as_array_mut()
+                    .context("members")?
+                    .push(other);
+            }
+            "manifest" => value["latest_manifest"] = json!("a".repeat(64)),
+            "ready" => value["phase"] = json!("ready"),
+            "mixed" => {
+                value["session"] =
+                    json!({"namespace":"profile","harness":"claude_code","session_id":"public"})
+            }
+            "agent" => value["root"]["agent_id"] = json!("child"),
+            _ => {}
+        }
+        store
+            .insert_object(&store.db, "attempt", "legacy", 0, &value)
+            .await?;
+        if case == "digest" {
+            object_entity::Entity::update_many()
+                .col_expr(object_entity::Column::Digest, Expr::value("damaged"))
+                .filter(object_entity::Column::Id.eq(store.object_id("attempt", "legacy")?))
+                .exec(&store.db)
+                .await?;
+        }
+        assert!(store.attempt("legacy").await.is_err(), "{case}");
+        let unchanged = store
+            .object(&store.db, "attempt", "legacy")
+            .await?
+            .context("legacy row")?;
+        assert_eq!(
+            serde_json::from_str::<Value>(&unchanged.object_json)?,
+            value
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn task_session_candidates_cross_pages_and_isolate_corruption_and_foreign_scopes()
+-> Result<()> {
+    let store = store().await?;
+    let mut expected = BTreeSet::new();
+    for index in 0..20 {
+        let id = format!("session-{index}");
+        let session = root(&id);
+        journal(&store, &format!("controller-{index}"), &session)
+            .await?
+            .append(request("one", &id))
+            .await?;
+        expected.insert(session);
+    }
+    let first = object_entity::Entity::find()
+        .filter(object_entity::Column::Owner.eq(&store.owner_key))
+        .filter(object_entity::Column::Kind.eq("active_task"))
+        .order_by_asc(object_entity::Column::Id)
+        .one(&store.db)
+        .await?
+        .context("first task")?;
+    let invalid: ActiveTask = decode_task_object(first.clone())?;
+    expected.remove(&invalid.session);
+    object_entity::Entity::update_many()
+        .col_expr(object_entity::Column::ObjectJson, Expr::value("{}"))
+        .filter(object_entity::Column::Id.eq(first.id))
+        .exec(&store.db)
+        .await?;
+    for (namespace, harness) in [
+        ("another-profile", Harness::ClaudeCode),
+        ("native-profile", Harness::Codex),
+    ] {
+        let session = AcpSessionKey {
+            namespace: namespace.into(),
+            harness,
+            session_id: "foreign".into(),
+        };
+        journal(
+            &store,
+            &format!("controller-{namespace}-{harness:?}"),
+            &session,
+        )
+        .await?
+        .append(request("one", "foreign"))
+        .await?;
+    }
+    let bob = EvidenceStore::new(store.db.clone(), "bob")?;
+    journal(&bob, "bob", &root("bob"))
+        .await?
+        .append(request("one", "bob"))
+        .await?;
+    let (sessions, gaps) = store
+        .task_sessions(
+            Harness::ClaudeCode,
+            &BTreeSet::from(["native-profile".into()]),
+        )
+        .await?;
+    assert_eq!(sessions, expected);
+    assert_eq!(gaps, BTreeSet::from(["native_task_state_invalid".into()]));
+    for session in sessions {
+        assert!(store.active_attempt(&session).await?.is_some());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_task_identity_is_verified_after_reopen_without_inheriting_native_membership()
+-> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let url = format!(
+        "sqlite:{}?mode=rwc",
+        directory.path().join("evidence.db").display()
+    );
+    let db = crate::db::connect(&url).await?;
+    crate::db::run_migrations(&db).await?;
+    let store = EvidenceStore::new(db, "alice")?;
+    let session = root("public");
+    let log = journal(&store, "origin-controller", &session).await?;
+    log.append(request("one", "public")).await?;
+    log.append(response("one")).await?;
+    let original = active(&store, &session).await?;
+    let task = store
+        .active_task(&store.db, &session)
+        .await?
+        .context("task")?;
+    let operation = store
+        .prompt_operation(&store.db, &task.origin_operation)
+        .await?
+        .context("operation")?;
+    let legacy_root = json!({"namespace":session.namespace,"harness":session.harness,
+        "native_id":session.session_id,"agent_id":null});
+    let legacy_key = canonical_digest(&legacy_root)?;
+    // These are the d85c8e00 shapes, including its assumed singleton member.
+    let legacy_task = json!({"id":legacy_key,"revision":task.revision,"root":legacy_root,
+        "attempt_id":task.attempt_id,"origin_operation":task.origin_operation,
+        "operations":task.operations,"open_operations":task.open_operations,"last_response":task.last_response});
+    let legacy_attempt = json!({"id":original.id,"task_id":original.task_id,"root":legacy_root,
+        "members":[legacy_root],"phase":original.phase,"revision":original.revision,
+        "latest_manifest":null,"effective_manifest":null,"started_at":original.started_at});
+    let legacy_operation = json!({"id":operation.id,"revision":operation.revision,
+        "controller_id":operation.controller_id,"operation_id":operation.operation_id,"root":legacy_root,
+        "attempt_id":operation.attempt_id,"request":operation.request,"response":operation.response});
+    for (kind, old_key, new_key, value) in [
+        (
+            "active_task",
+            task.id.as_str(),
+            legacy_key.as_str(),
+            &legacy_task,
+        ),
+        (
+            "attempt",
+            original.id.as_str(),
+            original.id.as_str(),
+            &legacy_attempt,
+        ),
+        (
+            "prompt_operation",
+            operation.id.as_str(),
+            operation.id.as_str(),
+            &legacy_operation,
+        ),
+    ] {
+        object_entity::Entity::delete_by_id(store.object_id(kind, old_key)?)
+            .exec(&store.db)
+            .await?;
+        store
+            .insert_object(
+                &store.db,
+                kind,
+                new_key,
+                value["revision"].as_i64().context("revision")?,
+                value,
+            )
+            .await?;
+    }
+    drop(log);
+    drop(store);
+    let reopened = EvidenceStore::new(crate::db::connect(&url).await?, "alice")?;
+    assert_eq!(active(&reopened, &session).await?, original);
+    assert!(
+        reopened
+            .attempt(&original.id)
+            .await?
+            .context("legacy attempt")?
+            .members
+            .is_empty()
+    );
+    let unchanged = reopened
+        .object(&reopened.db, "attempt", &original.id)
+        .await?
+        .context("original row")?;
+    assert_eq!(
+        serde_json::from_str::<Value>(&unchanged.object_json)?,
+        legacy_attempt
+    );
+    let continued = journal(&reopened, "replacement-controller", &session).await?;
+    continued.append(request("two", "public")).await?;
+    continued.append(response("two")).await?;
+    let result = active(&reopened, &session).await?;
+    assert_eq!(result.id, original.id);
+    assert_eq!(result.session, session);
+    assert!(result.members.is_empty());
+    assert_eq!(reopened.attempts(None, 16).await?.len(), 1);
+    let stored = reopened
+        .object(&reopened.db, "attempt", &original.id)
+        .await?
+        .context("updated row")?;
+    assert!(
+        serde_json::from_str::<Value>(&stored.object_json)?
+            .get("root")
+            .is_none()
+    );
+    // Upgrading mutable state never substitutes for the original ACP proof.
+    record_entity::Entity::delete_by_id(&operation.request.record_id)
+        .exec(&reopened.db)
+        .await?;
+    assert!(reopened.active_attempt(&session).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn conflicting_old_and_new_session_keys_cannot_select_an_arbitrary_task() -> Result<()> {
+    let store = store().await?;
+    let session = root("public");
+    let journal = journal(&store, "controller", &session).await?;
+    journal.append(request("one", "public")).await?;
+    let mut duplicate = store
+        .active_task(&store.db, &session)
+        .await?
+        .context("task")?;
+    duplicate.id = legacy_session_id(&session)?;
+    store
+        .insert_object(
+            &store.db,
+            "active_task",
+            &duplicate.id,
+            i64::try_from(duplicate.revision)?,
+            &duplicate,
+        )
+        .await?;
+    assert!(store.active_attempt(&session).await.is_err());
+    assert!(journal.append(response("one")).await.is_err());
+    Ok(())
 }
 
 #[tokio::test]
@@ -39,7 +300,7 @@ async fn tasks_stored_before_workspace_checkpoints_remain_readable_and_writable(
     let task = store.active_task(&store.db, &node).await?.context("task")?;
     // Frozen e46946a4 object shape, with an actual pre-field digest. A round
     // trip of today's type would not exercise compatibility with this row.
-    let legacy = json!({"id":task.id,"revision":task.revision,"root":task.root,
+    let legacy = json!({"id":task.id,"revision":task.revision,"root": {"namespace":task.session.namespace,"harness":task.session.harness,"native_id":task.session.session_id,"agent_id":null},
         "attempt_id":task.attempt_id,"origin_operation":task.origin_operation,
         "operations":task.operations,"open_operations":task.open_operations});
     let row = store
@@ -232,7 +493,7 @@ async fn postgres_task_reads_keep_one_snapshot_during_concurrent_completion() ->
     verify_concurrent_read_snapshot(&url).await
 }
 
-async fn journal(store: &EvidenceStore, controller: &str, root: &NodeKey) -> Result<Journal> {
+async fn journal(store: &EvidenceStore, controller: &str, root: &AcpSessionKey) -> Result<Journal> {
     Journal::new(
         store.clone(),
         SourceDescriptor {
@@ -259,7 +520,7 @@ fn response(operation: &str) -> Value {
         "payload":{"stopReason":"end_turn"}})
 }
 
-async fn active(store: &EvidenceStore, root: &NodeKey) -> Result<Attempt> {
+async fn active(store: &EvidenceStore, root: &AcpSessionKey) -> Result<Attempt> {
     store.active_attempt(root).await?.context("active attempt")
 }
 

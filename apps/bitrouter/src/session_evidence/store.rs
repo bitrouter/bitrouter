@@ -338,7 +338,7 @@ impl EvidenceStore {
     pub async fn attempt(&self, id: &str) -> Result<Option<Attempt>> {
         self.object(&self.db, "attempt", id)
             .await?
-            .map(decode_object)
+            .map(tasks::decode_task_object)
             .transpose()
     }
 
@@ -359,7 +359,7 @@ impl EvidenceStore {
         rows.into_iter()
             .map(|row| {
                 ensure!(row.owner == self.owner_key, "foreign evidence attempt");
-                decode_object(row)
+                tasks::decode_task_object(row)
             })
             .collect()
     }
@@ -371,7 +371,7 @@ impl EvidenceStore {
             "attempt revision must advance once"
         );
         let transaction = self.db.begin().await?;
-        let old: Attempt = decode_object(
+        let old: Attempt = tasks::decode_task_object(
             self.object(&transaction, "attempt", &attempt.id)
                 .await?
                 .context("unknown evidence attempt")?,
@@ -381,7 +381,7 @@ impl EvidenceStore {
             "attempt changed; reload before retry"
         );
         ensure!(
-            old.root == attempt.root
+            old.session == attempt.session
                 && old.task_id == attempt.task_id
                 && old.started_at == attempt.started_at,
             "attempt identity is immutable"
@@ -471,7 +471,7 @@ impl EvidenceStore {
             return Ok(digest);
         }
         let transaction = self.db.begin().await?;
-        let attempt: Attempt = decode_object(
+        let attempt: Attempt = tasks::decode_task_object(
             self.object(&transaction, "attempt", &manifest.attempt_id)
                 .await?
                 .context("unknown evidence attempt")?,
@@ -493,8 +493,8 @@ impl EvidenceStore {
                 .context("unknown or foreign evidence source")?;
             let source = decode_source(source)?;
             ensure!(
-                source.descriptor.namespace == attempt.root.namespace
-                    && source.descriptor.harness == attempt.root.harness,
+                source.descriptor.namespace == attempt.session.namespace
+                    && source.descriptor.harness == attempt.session.harness,
                 "manifest source namespace mismatch"
             );
             ensure!(

@@ -152,8 +152,13 @@ temporary hook file. Historical Query state is not restored as a live session.
 Recovery failures and resource limits remain visible gaps; they do not disable
 current collection. No additional user command is needed for this recovery.
 
-A prompt in a confirmed native session automatically starts its first local
-task/attempt. Further prompts keep that identity across reconnects. The prompt
+A prompt in a confirmed ACP session scope automatically starts its first local
+task/attempt. Its adapter conversation key is distinct from native execution
+nodes: Claude can reset or fork a native conversation while retaining a different
+public ACP id. Neither a Claude lifecycle response nor the first prompt assigns
+native task membership. Native process, SDK or hook records discover transcript
+identities independently, and unbound membership remains an explicit gap.
+Further prompts keep the task identity across reconnects. The prompt
 record and its task transition commit together; an RPC result starts settlement
 but does not certify coding success or completed background work. Outstanding
 RPCs owned by another controller remain explicit uncertainty. Task state is

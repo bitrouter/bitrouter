@@ -23,6 +23,28 @@ pub enum Harness {
     ClaudeCode,
 }
 
+/// The adapter's conversation identity. It never authorizes a native history
+/// lookup: a Claude Query can change native conversations without changing it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcpSessionKey {
+    pub namespace: String,
+    pub harness: Harness,
+    pub session_id: String,
+}
+
+impl AcpSessionKey {
+    pub fn validate(&self) -> Result<()> {
+        identifier(&self.namespace)?;
+        identifier(&self.session_id)
+    }
+
+    pub fn id(&self) -> Result<String> {
+        self.validate()?;
+        canonical_digest(self)
+    }
+}
+
 /// A native execution node. Grouping, spawn ancestry and forks are separate.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -412,7 +434,7 @@ pub enum AttemptPhase {
 pub struct Attempt {
     pub id: String,
     pub task_id: String,
-    pub root: NodeKey,
+    pub session: AcpSessionKey,
     pub members: BTreeSet<NodeKey>,
     pub phase: AttemptPhase,
     pub revision: u64,
@@ -425,7 +447,7 @@ impl Attempt {
     pub fn validate(&self) -> Result<()> {
         identifier(&self.id)?;
         identifier(&self.task_id)?;
-        self.root.validate()?;
+        self.session.validate()?;
         ensure!(
             self.members.len() <= MAX_GRAPH_ITEMS,
             "too many attempt members"
@@ -437,18 +459,14 @@ impl Attempt {
         {
             digest_identifier(digest)?;
         }
-        ensure!(
-            self.members.contains(&self.root),
-            "attempt must include its root"
-        );
         for member in &self.members {
             member.validate()?;
             ensure!(
-                member.namespace == self.root.namespace,
+                member.namespace == self.session.namespace,
                 "attempt namespace mismatch"
             );
             ensure!(
-                member.harness == self.root.harness,
+                member.harness == self.session.harness,
                 "attempt harness mismatch"
             );
         }

@@ -31,6 +31,212 @@ async fn transcript(native: &Path, id: &str) -> Result<()> {
     .await
 }
 
+async fn native_start(spool: &Path, id: &str) -> Result<()> {
+    write_rows(
+        &spool.join(format!("hook-{id}.jsonl")),
+        vec![json!({"payload":{
+            "hook_event_name":"SessionStart", "session_id":id
+        }})],
+    )
+    .await
+}
+
+#[tokio::test]
+async fn committed_prompt_is_visible_after_observer_cancellation_on_the_same_controller()
+-> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut handle = claude_service(directory.path()).await?;
+    stop_worker(&mut handle).await?;
+    let service = &handle.service;
+    service
+        .observe(observation(
+            "new",
+            "session/new",
+            "response",
+            json!({"sessionId":"public"}),
+        ))
+        .await?;
+    let source = service
+        .store
+        .sources(None, 128)
+        .await?
+        .into_iter()
+        .find(|source| source.descriptor.format == SourceFormat::Acp)
+        .context("controller journal")?;
+    let reader = EvidenceStore::new(
+        crate::db::connect(&crate::db::anchor_url(
+            "sqlite:evidence.db?mode=ro",
+            &directory.path().join("router"),
+        ))
+        .await?,
+        service.store.owner(),
+    )?;
+    let mut pending = Box::pin(service.observe(observation(
+        "cancelled",
+        "session/prompt",
+        "request",
+        json!({"sessionId":"public","prompt":[]}),
+    )));
+    std::future::poll_fn(|cx| {
+        use std::future::Future;
+        match pending.as_mut().poll(cx) {
+            std::task::Poll::Pending => std::task::Poll::Ready(Ok(())),
+            std::task::Poll::Ready(_) => {
+                std::task::Poll::Ready(Err(anyhow::anyhow!("observer must reach a database await")))
+            }
+        }
+    })
+    .await?;
+    let state = service.state.lock().await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::select! {
+                result = &mut pending => {
+                    result?;
+                    anyhow::bail!("observer finished through a locked state");
+                }
+                current = reader.source(&source.id) => {
+                    if current?.context("committed source")?.cursor.next_sequence == source.cursor.next_sequence + 1 {
+                        return anyhow::Ok(());
+                    }
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    }).await??;
+    assert!(!state.pending.contains_key("cancelled"));
+    drop(pending);
+    drop(state);
+    let snapshot = service.reconcile().await?;
+    assert_eq!(snapshot.attempts.len(), 1);
+    assert_eq!(snapshot.attempts[0].session.session_id, "public");
+    assert!(snapshot.attempts[0].members.is_empty());
+    assert_eq!(
+        snapshot.attempts[0].phase,
+        super::super::super::types::AttemptPhase::Collecting
+    );
+    assert!(snapshot.histories.is_empty());
+    assert!(!service.state.lock().await.pending.contains_key("cancelled"));
+    drop(reader);
+    Ok(())
+}
+
+#[tokio::test]
+async fn claude_public_session_survives_native_reset_without_becoming_a_transcript_identity()
+-> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut handle = claude_service(directory.path()).await?;
+    stop_worker(&mut handle).await?;
+    let service = &handle.service;
+    service
+        .observe(observation("new", "session/new", "request", json!({})))
+        .await?;
+    service
+        .observe(observation(
+            "new",
+            "session/new",
+            "response",
+            json!({"sessionId":"public"}),
+        ))
+        .await?;
+    for id in ["public", "native-before", "native-after"] {
+        transcript(&directory.path().join("default"), id).await?;
+    }
+    service
+        .observe(observation(
+            "one",
+            "session/prompt",
+            "request",
+            json!({"sessionId":"public","prompt":[]}),
+        ))
+        .await?;
+    let before_native = service.reconcile().await?;
+    assert!(before_native.histories.is_empty());
+    let original = before_native
+        .attempts
+        .first()
+        .context("logical task without native evidence")?
+        .clone();
+    assert_eq!(original.session.session_id, "public");
+    assert!(original.members.is_empty());
+    assert!(
+        before_native
+            .gaps
+            .contains("native_attempt_membership_unavailable")
+    );
+    native_start(&service.spool, "native-before").await?;
+    service
+        .observe(observation(
+            "reset",
+            "_claude/sdkMessage",
+            "notification",
+            json!({
+                "sessionId":"public","message":{"type":"conversation_reset","uuid":"reset-event",
+                "session_id":"native-before","new_conversation_id":"native-after"}
+            }),
+        ))
+        .await?;
+    service
+        .observe(observation(
+            "one",
+            "session/prompt",
+            "response",
+            json!({"stopReason":"end_turn"}),
+        ))
+        .await?;
+    service
+        .observe(observation(
+            "two",
+            "session/prompt",
+            "request",
+            json!({"sessionId":"public","prompt":[]}),
+        ))
+        .await?;
+    // Publishing the task must not depend on finding either native id.
+    let mut live = service.reconcile().await?;
+    // The earlier snapshot fixed an inventory cut before these observations.
+    // A subsequent epoch must replay the newly committed journal tail.
+    for _ in 0..32 {
+        if live.attempts.len() == 1 && live.histories.len() == 2 {
+            break;
+        }
+        live = service.reconcile().await?;
+    }
+    assert_eq!(live.attempts.len(), 1);
+    assert_eq!(live.attempts[0].id, original.id);
+    assert!(live.attempts[0].members.is_empty());
+    assert_eq!(
+        live.histories
+            .iter()
+            .map(|history| history.node.native_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["native-before", "native-after"])
+    );
+    assert!(
+        !live
+            .graph
+            .nodes
+            .iter()
+            .any(|node| node.native_id == "public")
+    );
+    drop(handle);
+    let mut resumed = claude_service(directory.path()).await?;
+    stop_worker(&mut resumed).await?;
+    let recovered = finish_recovery(&resumed.service).await?;
+    assert_eq!(recovered.attempts, live.attempts);
+    assert_eq!(
+        recovered
+            .histories
+            .iter()
+            .map(|history| history.node.native_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["native-before", "native-after"])
+    );
+    assert!(recovered.gaps.contains("native_prompt_response_unobserved"));
+    assert!(resumed.service.state.lock().await.loaded.is_empty());
+    Ok(())
+}
+
 #[tokio::test]
 async fn corrupt_lifecycle_index_keeps_later_raw_sessions_recoverable_after_restart() -> Result<()>
 {
@@ -57,6 +263,7 @@ async fn corrupt_lifecycle_index_keeps_later_raw_sessions_recoverable_after_rest
             ))
             .await?;
         transcript(&directory.path().join("default"), id).await?;
+        native_start(&origin.service.spool, id).await?;
     }
     let source = origin
         .service
@@ -279,6 +486,7 @@ async fn restart_recovers_registered_profiles_and_consumed_hooks_without_live_qu
     for id in ["loaded-root", "consumed-root", "late-root", "unrelated"] {
         transcript(&native, id).await?;
     }
+    native_start(&context.spool, "loaded-root").await?;
     let consumed = context.spool.join("hook-consumed.jsonl");
     write_rows(
         &consumed,
@@ -600,7 +808,7 @@ async fn recovery_rejects_foreign_and_misbound_root_registrations() -> Result<()
 #[test]
 fn acp_recovery_requires_correlated_operations_and_leaves_unscoped_sdk_to_binding() -> Result<()> {
     let root = NativeRoot {
-        harness: Harness::ClaudeCode,
+        harness: Harness::Codex,
         namespace: "fixture".into(),
         directory: "/fixture/projects".into(),
     };
@@ -926,6 +1134,7 @@ async fn corrupt_opaque_cursor_at_a_full_page_boundary_does_not_stop_recovery() 
         ))
         .await?;
     transcript(&directory.path().join("default"), "root").await?;
+    native_start(&origin.service.spool, "root").await?;
     for index in 0..13 {
         origin
             .service

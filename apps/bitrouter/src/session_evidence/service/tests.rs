@@ -101,11 +101,10 @@ async fn controlled_prompts_create_durable_attempts_for_both_harnesses() -> Resu
                 json!({"sessionId":"native-root"}),
             ))
             .await?;
-        let root = NodeKey {
+        let root = super::super::types::AcpSessionKey {
             namespace: service.collector.root().namespace.clone(),
             harness: service.collector.root().harness,
-            native_id: "native-root".into(),
-            agent_id: None,
+            session_id: "native-root".into(),
         };
         assert!(service.store.active_attempt(&root).await?.is_none());
         service
@@ -122,7 +121,7 @@ async fn controlled_prompts_create_durable_attempts_for_both_harnesses() -> Resu
             .await?
             .context("attempt before forwarding")?;
         assert_eq!(attempt.phase, AttemptPhase::Collecting);
-        assert_eq!(attempt.members, BTreeSet::from([root.clone()]));
+        assert!(attempt.members.is_empty());
         service.observe(observation("update", "session/update", "notification", json!({"sessionId":"native-root","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}}))).await?;
         assert_eq!(
             service
@@ -298,7 +297,7 @@ async fn prompt_workspace_checkpoints_keep_the_original_baseline_and_result_afte
         ))
         .await?;
     let attempt = service.store.attempts(None, 16).await?.remove(0);
-    let before = service.store.workspace_evidence(&attempt.root).await?;
+    let before = service.store.workspace_evidence(&attempt.session).await?;
     assert_eq!(before.baseline.as_deref(), Some(expected.digest.as_str()));
     assert!(before.latest_prompt_result.is_none());
     // The collector observes ordinary filesystem effects, including shell
@@ -320,7 +319,7 @@ async fn prompt_workspace_checkpoints_keep_the_original_baseline_and_result_afte
             json!({"stopReason":"end_turn"}),
         ))
         .await?;
-    let result = service.store.workspace_evidence(&attempt.root).await?;
+    let result = service.store.workspace_evidence(&attempt.session).await?;
     assert_eq!(result.baseline, before.baseline);
     assert!(result.latest_prompt_result.is_some());
     assert_ne!(result.latest_prompt_result, result.baseline);
@@ -336,7 +335,7 @@ async fn prompt_workspace_checkpoints_keep_the_original_baseline_and_result_afte
     ))
     .await?;
     let reopened = EvidenceStore::new(db, "local")?;
-    assert_eq!(reopened.workspace_evidence(&attempt.root).await?, result);
+    assert_eq!(reopened.workspace_evidence(&attempt.session).await?, result);
     Ok(())
 }
 
@@ -659,6 +658,15 @@ async fn concurrent_claude_profiles_bind_reverse_results_and_keep_hooks_scoped()
             json!({"stopReason":"end_turn"}),
         ))
         .await?;
+    for (params, id) in [(&first, "first"), (&second, "second")] {
+        write_rows(
+            &spool(params)?.join(format!("hook-{id}.jsonl")),
+            vec![json!({"payload":{
+                "hook_event_name":"SessionStart", "session_id":id
+            }})],
+        )
+        .await?;
+    }
     let missing_metadata = service.reconcile().await?;
     assert!(
         missing_metadata
@@ -675,7 +683,10 @@ async fn concurrent_claude_profiles_bind_reverse_results_and_keep_hooks_scoped()
     // These profile directories are transcript fixtures, not Git workspaces.
     assert_eq!(
         snapshot.gaps,
-        BTreeSet::from(["workspace_capture_failed".into()])
+        BTreeSet::from([
+            "workspace_capture_failed".into(),
+            "native_attempt_membership_unavailable".into()
+        ])
     );
     assert_eq!(snapshot.histories.len(), 3);
     assert!(snapshot.graph.facts.iter().any(|fact| {
@@ -984,7 +995,7 @@ async fn claude_reuse_failure_and_close_follow_actual_query_lifetime() -> Result
         service.state.lock().await.sessions.get("session"),
         Some(&initial)
     );
-    assert_eq!(service.state.lock().await.nodes.len(), 3);
+    assert!(service.state.lock().await.nodes.is_empty());
     assert!(service.state.lock().await.pending.is_empty());
     handle.shutdown().await?;
     Ok(())
@@ -1049,7 +1060,7 @@ async fn idle_query_recreation_cannot_silently_rebind_a_profile() -> Result<()> 
             .uncertain_queries
             .contains("root")
     );
-    assert_eq!(service.state.lock().await.nodes.len(), 1);
+    assert!(service.state.lock().await.nodes.is_empty());
     assert!(
         service
             .reconcile()
@@ -1123,6 +1134,14 @@ async fn controller_service_collects_native_children_and_survives_resume() -> Re
                 json!({"method":"runtime/started","version":"0.148.0"}),
                 json!({"direction":"server","phase":"notification","method":"item/completed","payload":{"threadId":"root","turnId":"turn-root","item":{"id":"spawn-child","type":"collabAgentToolCall","tool":"spawnAgent","status":"completed","senderThreadId":"root","receiverThreadIds":["child"],"agentsStates":{}}}}),
             ]).await?;
+        } else {
+            write_rows(
+                &handle.service.spool.join("hook-root.jsonl"),
+                vec![json!({"payload":{
+                    "hook_event_name":"SessionStart", "session_id":"root"
+                }})],
+            )
+            .await?;
         }
         handle
             .service
@@ -1231,7 +1250,17 @@ async fn controller_service_collects_native_children_and_survives_resume() -> Re
                 payload: json!({"sessionId":"root"}),
             })
             .await?;
-        let snapshot = resumed.service.reconcile().await?;
+        let mut snapshot = resumed.service.reconcile().await?;
+        for _ in 0..32 {
+            if snapshot.histories.iter().any(|history| {
+                history.node.native_id == "root"
+                    && history.node.agent_id.is_none()
+                    && history.source.is_some()
+            }) {
+                break;
+            }
+            snapshot = resumed.service.reconcile().await?;
+        }
         let root = snapshot
             .histories
             .iter()

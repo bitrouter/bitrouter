@@ -10,7 +10,7 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
 | History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex bounded fork ancestry is immutable. | Complete Claude independent-fork UUID remapping and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and exact resumed-child execution ranges. |
-| Task boundaries | A confirmed first prompt creates a task/attempt; original prompt and response records commit with operation membership. | Explicit task/attempt switching, native execution membership and immutable per-attempt source cuts. |
+| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership. | Explicit task/attempt switching, native execution membership and immutable per-attempt source cuts. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
 | Evaluation | Manifest persistence/validation and request-set accounting primitives exist. | Production manifest construction, coding evaluation, authoritative Eval admission and human feedback. |
 | TUI | Collection state is available in an application snapshot. | User-facing evaluation status, checkpoint feedback and task/attempt actions. |
@@ -75,8 +75,8 @@ continues. Tests cover database reopen, profile separation, retired hooks,
 concurrent controllers, cancellation, corrupt inventory cursors, and pagination.
 A completed recovery sweep is not a task settlement decision.
 
-The application now creates the first task and attempt on a prompt whose native
-session scope is confirmed. Subsequent prompts retain that identity across
+The application now creates the first task and attempt on a prompt whose ACP
+session profile scope is confirmed. Subsequent prompts retain that identity across
 controller connections. Raw prompt observations, source cursors, operation
 membership and attempt transitions commit together. Reads verify every recorded
 prompt boundary against its owned source and original record, including completed
@@ -319,6 +319,42 @@ checks passed. An earlier run stopped on the unmodified CLI
 version-probe timeout; both subsequent complete serial runs passed that test.
 This remains format and transport coverage, not the full pinned native-runtime
 conformance matrix or complete task execution attribution.
+
+Application tasks now use `AcpSessionKey` rather than a native `NodeKey` as their
+conversation identity. The first prompt no longer creates an assumed singleton
+native membership. A Claude lifecycle response identifies only the adapter's
+conversation; native hooks, CLI and scoped SDK evidence discover its transcript
+nodes. The candidate graph follows a verified conversation-reset record to its
+new native id without adding spawn/fork ancestry or assigning either execution
+to a task. Missing native membership remains an explicit gap.
+
+Task snapshots discover committed active-task objects independently of native
+history discovery and live observer caches, then verify the original prompt
+boundaries. Cancellation after the raw transaction cannot hide a task from its
+own controller. Candidate discovery uses 16-row pages with owner, harness and
+registered-namespace isolation. A corrupt row does not prevent later candidates
+from being inspected. The total scan remains bounded by `MAX_GRAPH_ITEMS`, with
+an explicit gap beyond the limit; it does not certify complete long-lived task
+inventory and still needs task-scoped pagination for the full evaluation flow.
+
+Pre-separation, unscored task objects remain readable through their original
+digests and raw prompt provenance. Their assumed singleton native membership is
+removed from the derived view; their task/attempt ids remain stable. Subsequent
+transitions write the separated identity shape. Old and new active lookup keys
+cannot coexist ambiguously. Legacy objects with extra members, manifest pointers,
+ready state, mixed identities or damaged digests are rejected without rewriting
+them. Immutable manifests are never migrated by this compatibility reader.
+
+Independent review identified and corrected the commit-to-publication cancellation
+window. The regression pauses the real observer after its database await, blocks
+the state update, observes the committed prompt through an independent read-only
+SQLite connection, then cancels and verifies same-controller task visibility.
+Additional regressions cover three distinct ACP/reset native ids with a decoy
+transcript, old database reopen and continuation, missing original evidence,
+legacy-format rejection, conflicting lookup keys, and paged scope isolation.
+The workspace run passed all 3,256 tests with 12 skipped. Clippy, formatting,
+doctests, rustdoc and distribution checks passed. These fixtures do not certify
+pinned native-runtime conformance or complete task execution attribution.
 
 Still required: complete execution-relation parsing, remaining native SDK
 rebinding cases without matching native events; complete native query-lifetime recovery;

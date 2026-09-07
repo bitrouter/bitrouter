@@ -1,4 +1,4 @@
-//! Application task identity follows confirmed native sessions. Prompt RPC
+//! Application task identity follows confirmed ACP session scopes. Prompt RPC
 //! boundaries are durable operation membership, never native completion proof.
 
 use sea_orm::{AccessMode, DatabaseTransaction, DbBackend, IsolationLevel};
@@ -6,14 +6,85 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::*;
-use crate::session_evidence::types::{NodeKey, SourceFormat};
+use crate::session_evidence::types::{AcpSessionKey, Harness, NodeKey, SourceFormat};
+
+/// Read the pre-separation mutable task objects without carrying their assumed
+/// native membership forward. Their raw boundaries are still verified by the
+/// task reader. Immutable manifests and their serialized bytes are untouched.
+pub(super) fn decode_task_object<T: serde::de::DeserializeOwned + Serialize>(
+    row: object_entity::Model,
+) -> Result<T> {
+    let kind = row.kind.clone();
+    ensure!(
+        matches!(
+            kind.as_str(),
+            "attempt" | "active_task" | "prompt_operation"
+        ),
+        "unexpected task object kind"
+    );
+    let mut value: Value = decode_object(row)?;
+    if let Some(root) = value.get("root").cloned() {
+        ensure!(
+            value.get("session").is_none(),
+            "mixed task identity formats"
+        );
+        let root: NodeKey = serde_json::from_value(root)?;
+        root.validate()?;
+        ensure!(
+            root.agent_id.is_none(),
+            "legacy ACP task has an agent identity"
+        );
+        if kind == "attempt" {
+            let members: BTreeSet<NodeKey> = serde_json::from_value(
+                value
+                    .get("members")
+                    .cloned()
+                    .context("legacy attempt members missing")?,
+            )?;
+            ensure!(
+                members == BTreeSet::from([root.clone()])
+                    && matches!(
+                        value.get("phase").and_then(Value::as_str),
+                        Some("collecting" | "settling")
+                    )
+                    && value.get("latest_manifest") == Some(&Value::Null)
+                    && value.get("effective_manifest") == Some(&Value::Null),
+                "legacy native attempt requires explicit migration"
+            );
+            value["members"] = serde_json::json!([]);
+        }
+        let fields = value.as_object_mut().context("invalid task object")?;
+        fields.remove("root");
+        fields.insert(
+            "session".into(),
+            serde_json::to_value(AcpSessionKey {
+                namespace: root.namespace,
+                harness: root.harness,
+                session_id: root.native_id,
+            })?,
+        );
+    }
+    Ok(serde_json::from_value(value)?)
+}
+
+fn legacy_session_id(session: &AcpSessionKey) -> Result<String> {
+    // This is only the old mutable object's lookup key, never native identity
+    // evidence. New objects use AcpSessionKey::id and a distinct JSON shape.
+    NodeKey {
+        namespace: session.namespace.clone(),
+        harness: session.harness,
+        native_id: session.session_id.clone(),
+        agent_id: None,
+    }
+    .id()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ActiveTask {
     id: String,
     revision: u64,
-    root: NodeKey,
+    session: AcpSessionKey,
     attempt_id: String,
     origin_operation: String,
     operations: BTreeSet<String>,
@@ -24,7 +95,10 @@ struct ActiveTask {
 
 impl ActiveTask {
     fn validate(&self) -> Result<()> {
-        ensure!(self.id == self.root.id()?, "active task root mismatch");
+        ensure!(
+            self.id == self.session.id()? || self.id == legacy_session_id(&self.session)?,
+            "active task session mismatch"
+        );
         digest_identifier(&self.attempt_id)?;
         ensure!(
             self.operations.len() <= MAX_GRAPH_ITEMS
@@ -96,7 +170,7 @@ struct PromptOperation {
     revision: u64,
     controller_id: String,
     operation_id: String,
-    root: NodeKey,
+    session: AcpSessionKey,
     attempt_id: String,
     request: Boundary,
     response: Option<Boundary>,
@@ -114,7 +188,7 @@ impl PromptOperation {
             self.id == Self::key(&self.controller_id, &self.operation_id)?,
             "prompt operation identity mismatch"
         );
-        self.root.validate()?;
+        self.session.validate()?;
         digest_identifier(&self.attempt_id)?;
         self.request.validate()?;
         ensure!(
@@ -129,6 +203,60 @@ impl PromptOperation {
 }
 
 impl EvidenceStore {
+    /// Discover logical tasks from committed state, including a prompt whose
+    /// observer was cancelled before updating its process-local caches. These
+    /// are candidates: active_attempt verifies the original prompt boundaries.
+    pub(crate) async fn task_sessions(
+        &self,
+        harness: Harness,
+        namespaces: &BTreeSet<String>,
+    ) -> Result<(BTreeSet<AcpSessionKey>, BTreeSet<String>)> {
+        let mut sessions = BTreeSet::new();
+        let mut gaps = BTreeSet::new();
+        let mut after = None;
+        let mut inspected = 0;
+        loop {
+            let mut query = object_entity::Entity::find()
+                .filter(object_entity::Column::Owner.eq(&self.owner_key))
+                .filter(object_entity::Column::Kind.eq("active_task"))
+                .order_by_asc(object_entity::Column::Id)
+                .limit(16);
+            if let Some(id) = &after {
+                query = query.filter(object_entity::Column::Id.gt(id));
+            }
+            let rows = query.all(&self.db).await?;
+            if rows.is_empty() {
+                break;
+            }
+            for row in rows {
+                if inspected == MAX_GRAPH_ITEMS {
+                    gaps.insert("native_task_session_limit".into());
+                    return Ok((sessions, gaps));
+                }
+                inspected += 1;
+                after = Some(row.id.clone());
+                let parsed = decode_task_object::<ActiveTask>(row).and_then(|task| {
+                    task.validate()?;
+                    Ok(task.session)
+                });
+                match parsed {
+                    Ok(session)
+                        if session.harness == harness
+                            && namespaces.contains(&session.namespace) =>
+                    {
+                        sessions.insert(session);
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, "ACP task session could not be read");
+                        gaps.insert("native_task_state_invalid".into());
+                    }
+                }
+            }
+        }
+        Ok((sessions, gaps))
+    }
+
     /// Append the raw observation, its source cursor and the task transition
     /// in one transaction. A failed transition cannot leave a forwarded prompt
     /// without task membership. Generic native backfill does not create tasks.
@@ -180,13 +308,12 @@ impl EvidenceStore {
                         .pointer("/payload/sessionId")
                         .and_then(Value::as_str)
                         .context("confirmed prompt session missing")?;
-                    let root = NodeKey {
+                    let session = AcpSessionKey {
                         namespace: source.descriptor.namespace.clone(),
                         harness: source.descriptor.harness,
-                        native_id: session.into(),
-                        agent_id: None,
+                        session_id: session.into(),
                     };
-                    root.validate()?;
+                    session.validate()?;
                     let started_at = record
                         .raw
                         .get("observed_at")
@@ -200,7 +327,7 @@ impl EvidenceStore {
                             revision: 0,
                             controller_id: controller.into(),
                             operation_id: operation.into(),
-                            root,
+                            session,
                             attempt_id,
                             request: boundary,
                             response: None,
@@ -230,14 +357,14 @@ impl EvidenceStore {
     ) -> Result<()> {
         if let Some(old) = self.prompt_operation(db, &operation.id).await? {
             ensure!(
-                old.root == operation.root
+                old.session == operation.session
                     && old.request.semantic_digest == operation.request.semantic_digest,
                 "prompt operation was reused for different work"
             );
             return Ok(());
         }
-        let key = operation.root.id()?;
-        let active = self.active_task(db, &operation.root).await?;
+        let key = operation.session.id()?;
+        let active = self.active_task(db, &operation.session).await?;
         let (mut task, mut attempt) = match active {
             Some(task) => {
                 let attempt = self.task_attempt(db, &task).await?;
@@ -247,8 +374,8 @@ impl EvidenceStore {
                 let attempt = Attempt {
                     id: operation.attempt_id.clone(),
                     task_id: canonical_digest(&("task", &operation.id))?,
-                    root: operation.root.clone(),
-                    members: BTreeSet::from([operation.root.clone()]),
+                    session: operation.session.clone(),
+                    members: BTreeSet::new(),
                     phase: AttemptPhase::Collecting,
                     revision: 0,
                     latest_manifest: None,
@@ -259,7 +386,7 @@ impl EvidenceStore {
                 let task = ActiveTask {
                     id: key,
                     revision: 0,
-                    root: operation.root.clone(),
+                    session: operation.session.clone(),
                     attempt_id: attempt.id.clone(),
                     origin_operation: operation.id.clone(),
                     operations: BTreeSet::from([operation.id.clone()]),
@@ -301,7 +428,7 @@ impl EvidenceStore {
             return Ok(());
         };
         ensure!(
-            operation.root.harness == source.descriptor.harness,
+            operation.session.harness == source.descriptor.harness,
             "prompt response harness mismatch"
         );
         if let Some(old) = &operation.response {
@@ -312,7 +439,7 @@ impl EvidenceStore {
             return Ok(());
         }
         let mut task = self
-            .active_task(db, &operation.root)
+            .active_task(db, &operation.session)
             .await?
             .context("prompt task disappeared")?;
         ensure!(
@@ -371,7 +498,7 @@ impl EvidenceStore {
         let operation: Option<PromptOperation> = self
             .object(db, "prompt_operation", id)
             .await?
-            .map(decode_object)
+            .map(decode_task_object)
             .transpose()?;
         if let Some(operation) = &operation {
             operation.validate()?;
@@ -405,7 +532,7 @@ impl EvidenceStore {
         ensure!(
             source.descriptor.format == SourceFormat::Acp
                 && source.descriptor.node.is_none()
-                && source.descriptor.harness == operation.root.harness
+                && source.descriptor.harness == operation.session.harness
                 && source.descriptor.locator == format!("controller:{}", operation.controller_id),
             "prompt boundary source mismatch"
         );
@@ -425,7 +552,7 @@ impl EvidenceStore {
         );
         if phase == "request" {
             ensure!(
-                source.descriptor.namespace == operation.root.namespace
+                source.descriptor.namespace == operation.session.namespace
                     && record.input.raw.get("native_scope").and_then(Value::as_str)
                         == Some("session")
                     && record
@@ -433,8 +560,8 @@ impl EvidenceStore {
                         .raw
                         .pointer("/payload/sessionId")
                         .and_then(Value::as_str)
-                        == Some(operation.root.native_id.as_str()),
-                "prompt boundary native identity mismatch"
+                        == Some(operation.session.session_id.as_str()),
+                "prompt boundary ACP identity mismatch"
             );
         }
         if let Some(workspace) = record.input.raw.get("workspace_artifact") {
@@ -449,28 +576,36 @@ impl EvidenceStore {
     async fn active_task(
         &self,
         db: &impl ConnectionTrait,
-        root: &NodeKey,
+        session: &AcpSessionKey,
     ) -> Result<Option<ActiveTask>> {
-        let task: Option<ActiveTask> = self
-            .object(db, "active_task", &root.id()?)
-            .await?
-            .map(decode_object)
-            .transpose()?;
+        session.validate()?;
+        let current = self.object(db, "active_task", &session.id()?).await?;
+        let legacy = self
+            .object(db, "active_task", &legacy_session_id(session)?)
+            .await?;
+        ensure!(
+            current.is_none() || legacy.is_none(),
+            "conflicting ACP task identities"
+        );
+        let task: Option<ActiveTask> = current.or(legacy).map(decode_task_object).transpose()?;
         if let Some(task) = &task {
             task.validate()?;
-            ensure!(&task.root == root, "active task identity mismatch");
+            ensure!(&task.session == session, "active task identity mismatch");
         }
         Ok(task)
     }
 
     async fn task_attempt(&self, db: &impl ConnectionTrait, task: &ActiveTask) -> Result<Attempt> {
-        let attempt: Attempt = decode_object(
+        let attempt: Attempt = decode_task_object(
             self.object(db, "attempt", &task.attempt_id)
                 .await?
                 .context("active attempt missing")?,
         )?;
         attempt.validate()?;
-        ensure!(attempt.root == task.root, "active attempt root mismatch");
+        ensure!(
+            attempt.session == task.session,
+            "active attempt session mismatch"
+        );
         ensure!(
             attempt.id == canonical_digest(&("attempt", &task.origin_operation))?
                 && attempt.task_id == canonical_digest(&("task", &task.origin_operation))?,
@@ -483,7 +618,7 @@ impl EvidenceStore {
                 .await?
                 .context("task operation missing")?;
             ensure!(
-                operation.attempt_id == attempt.id && operation.root == task.root,
+                operation.attempt_id == attempt.id && operation.session == task.session,
                 "task operation membership mismatch"
             );
             if operation.response.is_none() {
@@ -497,9 +632,9 @@ impl EvidenceStore {
         Ok(attempt)
     }
 
-    pub(crate) async fn active_attempt(&self, root: &NodeKey) -> Result<Option<Attempt>> {
+    pub(crate) async fn active_attempt(&self, session: &AcpSessionKey) -> Result<Option<Attempt>> {
         let transaction = self.task_read_transaction().await?;
-        let attempt = match self.active_task(&transaction, root).await? {
+        let attempt = match self.active_task(&transaction, session).await? {
             Some(task) => self.task_attempt(&transaction, &task).await.map(Some),
             None => Ok(None),
         }?;
@@ -509,12 +644,12 @@ impl EvidenceStore {
 
     pub(crate) async fn has_unobserved_prompts(
         &self,
-        root: &NodeKey,
+        session: &AcpSessionKey,
         controller: &str,
     ) -> Result<bool> {
         let transaction = self.task_read_transaction().await?;
         let mut unobserved = false;
-        if let Some(task) = self.active_task(&transaction, root).await? {
+        if let Some(task) = self.active_task(&transaction, session).await? {
             for id in &task.open_operations {
                 let operation = self
                     .prompt_operation(&transaction, id)
@@ -548,13 +683,13 @@ impl EvidenceStore {
 
     pub(crate) async fn workspace_evidence(
         &self,
-        root: &NodeKey,
+        session: &AcpSessionKey,
     ) -> Result<crate::session_evidence::types::WorkspaceEvidence> {
         use crate::session_evidence::types::WorkspaceEvidence;
 
         let transaction = self.task_read_transaction().await?;
         let mut evidence = WorkspaceEvidence::default();
-        if let Some(task) = self.active_task(&transaction, root).await? {
+        if let Some(task) = self.active_task(&transaction, session).await? {
             self.task_attempt(&transaction, &task).await?;
             let origin = self
                 .prompt_operation(&transaction, &task.origin_operation)

@@ -462,7 +462,7 @@ impl ControllerEvidence {
                 return Ok(());
             }
             // ACP load/resume results may omit sessionId. Only a successful
-            // lifecycle result may bind the original requested native id.
+            // lifecycle result may bind the original requested ACP id.
             // https://agentclientprotocol.com/protocol/v1/session-setup
             let session_id = session_id.or_else(|| {
                 matches!(
@@ -476,20 +476,25 @@ impl ControllerEvidence {
                 if state.uncertain_queries.contains(&session_id) {
                     return Ok(());
                 }
-                // Only successful lifecycle responses promote ACP ids to native
-                // roots. Notification ids can be synthetic subagent views.
+                // The Codex adapter exposes its native thread id as the ACP id.
+                // Claude's public session id can differ from the native Query,
+                // so only native process/SDK/hook evidence discovers its nodes.
                 // https://github.com/agentclientprotocol/codex-acp
-                let node = NodeKey {
-                    namespace: root.namespace.clone(),
-                    harness: root.harness,
-                    native_id: session_id.clone(),
-                    agent_id: None,
-                };
-                node.validate()?;
-                ensure!(
-                    state.nodes.contains(&node) || state.nodes.len() < MAX_GRAPH_ITEMS,
-                    "native execution node limit"
-                );
+                // https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/acp-agent.ts
+                if root.harness == Harness::Codex {
+                    let node = NodeKey {
+                        namespace: root.namespace.clone(),
+                        harness: root.harness,
+                        native_id: session_id.clone(),
+                        agent_id: None,
+                    };
+                    node.validate()?;
+                    ensure!(
+                        state.nodes.contains(&node) || state.nodes.len() < MAX_GRAPH_ITEMS,
+                        "native execution node limit"
+                    );
+                    state.nodes.insert(node);
+                }
                 let replaced = requested.as_ref() == Some(&session_id)
                     && matches!(
                         observation.method.as_str(),
@@ -523,7 +528,6 @@ impl ControllerEvidence {
                         },
                     );
                 }
-                state.nodes.insert(node);
             }
         }
         Ok(())

@@ -457,15 +457,21 @@ impl ControllerEvidence {
         }
         let mut attempts = Vec::new();
         let mut workspace_checkpoints = BTreeMap::new();
-        for node in &nodes {
+        let namespaces = collectors.keys().cloned().collect();
+        let (task_sessions, task_gaps) = self
+            .store
+            .task_sessions(self.collector.root().harness, &namespaces)
+            .await?;
+        gaps.extend(task_gaps);
+        for session in &task_sessions {
             let status = async {
-                let attempt = self.store.active_attempt(node).await?;
+                let attempt = self.store.active_attempt(session).await?;
                 let unobserved = attempt.is_some()
                     && self
                         .store
-                        .has_unobserved_prompts(node, &self.controller_id)
+                        .has_unobserved_prompts(session, &self.controller_id)
                         .await?;
-                let workspace = match self.store.workspace_evidence(node).await {
+                let workspace = match self.store.workspace_evidence(session).await {
                     Ok(workspace) => workspace,
                     Err(error) => {
                         tracing::warn!(%error, "workspace checkpoint could not be read");
@@ -480,6 +486,9 @@ impl ControllerEvidence {
             .await;
             match status {
                 Ok((Some(attempt), unobserved, workspace)) => {
+                    if attempt.members.is_empty() {
+                        gaps.insert("native_attempt_membership_unavailable".into());
+                    }
                     if unobserved {
                         gaps.insert("native_prompt_response_unobserved".into());
                     }
