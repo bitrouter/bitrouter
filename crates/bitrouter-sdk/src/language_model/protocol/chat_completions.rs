@@ -1631,6 +1631,7 @@ impl StreamDecoder for ChatStreamDecoder {
                             id: self.tool_ids[idx].clone(),
                             name: name.map(|n| n.to_string()),
                             arguments: args.to_string(),
+                            provider_metadata: Default::default(),
                         });
                     }
                 }
@@ -1781,6 +1782,7 @@ impl StreamEncoder for ChatStreamEncoder {
                 id,
                 name,
                 arguments,
+                ..
             } => {
                 let index = self.tool_call_index(id);
                 let name = name.as_deref().filter(|n| !n.is_empty());

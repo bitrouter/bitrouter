@@ -324,9 +324,13 @@ fn observe_content(turn: &mut TurnAccumulator, content: &Content) {
             arguments,
             provider_executed,
             dynamic,
-            ..
+            provider_metadata,
         } => {
-            observe_tool_call(turn, id, name, arguments, *provider_executed, *dynamic);
+            if client_tool_metadata_present(provider_metadata) {
+                turn.invalidate();
+            } else {
+                observe_tool_call(turn, id, name, arguments, *provider_executed, *dynamic);
+            }
             return;
         }
         Content::File { .. }
@@ -404,14 +408,16 @@ fn terminal_assistant_turn_commitment(
                 let value = value.finish();
                 turn.add_part(2, std::slice::from_ref(&value), value.len > 0);
             }
-            "function_call" => observe_tool_call(
-                &mut turn,
-                item.get("call_id")?.as_str()?,
-                item.get("name")?.as_str()?,
-                item.get("arguments")?.as_str()?,
-                false,
-                false,
-            ),
+            "function_call" if item.get("namespace").is_none_or(serde_json::Value::is_null) => {
+                observe_tool_call(
+                    &mut turn,
+                    item.get("call_id")?.as_str()?,
+                    item.get("name")?.as_str()?,
+                    item.get("arguments")?.as_str()?,
+                    false,
+                    false,
+                )
+            }
             _ => return None,
         }
     }
@@ -455,8 +461,13 @@ fn observe_causal_content(turn: &mut TurnAccumulator, content: &Content) {
             call_id,
             output,
             dynamic,
+            provider_metadata,
             ..
         } => {
+            if client_tool_metadata_present(provider_metadata) {
+                turn.invalidate();
+                return;
+            }
             let (output_tag, output_value) = match output {
                 ToolResultOutput::Text { value } => ("text", value.as_str()),
                 ToolResultOutput::ErrorText { value } => ("error_text", value.as_str()),
@@ -788,7 +799,14 @@ impl StreamingAssistantTurnCommitment {
                 id,
                 name,
                 arguments,
-            } => self.observe_tool_delta(id, name.as_deref(), arguments),
+                provider_metadata,
+            } => {
+                if provider_metadata.is_empty() {
+                    self.observe_tool_delta(id, name.as_deref(), arguments);
+                } else {
+                    self.turn.invalidate();
+                }
+            }
             StreamPart::ServerToolCall {
                 id,
                 name,
@@ -1047,21 +1065,25 @@ mod assistant_turn_commitment_tests {
                 id: "call-a".into(),
                 name: Some("inspect".into()),
                 arguments: "{\"path\":\"".into(),
+                provider_metadata: Default::default(),
             },
             StreamPart::ToolCallDelta {
                 id: "call-b".into(),
                 name: Some("search".into()),
                 arguments: "{\"query\":\"".into(),
+                provider_metadata: Default::default(),
             },
             StreamPart::ToolCallDelta {
                 id: "call-a".into(),
                 name: None,
                 arguments: "src/\"}".into(),
+                provider_metadata: Default::default(),
             },
             StreamPart::ToolCallDelta {
                 id: "call-b".into(),
                 name: None,
                 arguments: "TODO\"}".into(),
+                provider_metadata: Default::default(),
             },
         ] {
             streamed.observe(&part);
@@ -1079,11 +1101,13 @@ mod assistant_turn_commitment_tests {
                 id: "call-1".into(),
                 name: Some("inspect".into()),
                 arguments: "{".into(),
+                provider_metadata: Default::default(),
             },
             StreamPart::ToolCallDelta {
                 id: "call-1".into(),
                 name: Some("inspect".into()),
                 arguments: "}".into(),
+                provider_metadata: Default::default(),
             },
         ] {
             streamed.observe(&part);
@@ -1100,6 +1124,7 @@ mod assistant_turn_commitment_tests {
                 id: format!("call-{index}"),
                 name: Some(format!("tool-{index}")),
                 arguments: "{}".into(),
+                provider_metadata: Default::default(),
             });
         }
         assert!(at_limit.finish().is_some());
@@ -1110,6 +1135,7 @@ mod assistant_turn_commitment_tests {
                 id: format!("call-{index}"),
                 name: Some(format!("tool-{index}")),
                 arguments: "{}".into(),
+                provider_metadata: Default::default(),
             });
         }
         assert_eq!(over_limit.finish(), None);
@@ -1791,6 +1817,61 @@ fn render_source_annotation(source: &Source) -> serde_json::Value {
     }
 }
 
+/// Preserve the wire identity of client tools across the canonical boundary.
+/// Custom tools take arbitrary text (`input`), and namespace-scoped calls must
+/// retain their namespace even when multiple scopes use the same tool name.
+fn client_tool_metadata(item: &serde_json::Value) -> ProviderMetadata {
+    let mut metadata = ProviderMetadata::new();
+    for key in ["namespace", "type"] {
+        if let Some(value) = item.get(key).filter(|value| value.is_string()) {
+            if key == "type"
+                && !matches!(
+                    value.as_str(),
+                    Some("custom_tool_call" | "custom_tool_call_output")
+                )
+            {
+                continue;
+            }
+            set_provider_metadata(&mut metadata, PROVIDER_ID_OPENAI, key, value.clone());
+        }
+    }
+    metadata
+}
+
+fn custom_call(metadata: &ProviderMetadata) -> bool {
+    provider_namespace(metadata, PROVIDER_ID_OPENAI)
+        .and_then(|fields| fields.get("type"))
+        .and_then(serde_json::Value::as_str)
+        == Some("custom_tool_call")
+}
+
+/// Continuation commitments currently bind ordinary function calls only.
+fn client_tool_metadata_present(metadata: &ProviderMetadata) -> bool {
+    provider_namespace(metadata, PROVIDER_ID_OPENAI)
+        .is_some_and(|fields| fields.contains_key("namespace") || fields.contains_key("type"))
+}
+
+fn client_call_item(
+    id: &str,
+    name: &str,
+    arguments: &str,
+    metadata: &ProviderMetadata,
+) -> serde_json::Value {
+    let custom = custom_call(metadata);
+    let mut item = serde_json::json!({
+        "type": if custom { "custom_tool_call" } else { "function_call" },
+        "call_id": id,
+        "name": name,
+        (if custom { "input" } else { "arguments" }): arguments,
+    });
+    if let Some(namespace) =
+        provider_namespace(metadata, PROVIDER_ID_OPENAI).and_then(|fields| fields.get("namespace"))
+    {
+        item["namespace"] = namespace.clone();
+    }
+    item
+}
+
 /// Parse the Responses `input` field — a string or a heterogeneous item array.
 /// Lenient by design (#454-3): item shapes that are not recognised are skipped,
 /// not rejected.
@@ -1810,7 +1891,7 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                             messages.push(Message { role, content });
                         }
                     }
-                    Some("function_call") => {
+                    Some("function_call" | "custom_tool_call") => {
                         messages.push(Message {
                             role: Role::Assistant,
                             // tool calls are single-part assistant turns
@@ -1827,7 +1908,11 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                                     .unwrap_or_default()
                                     .to_string(),
                                 arguments: item
-                                    .get("arguments")
+                                    .get(if item_type == Some("custom_tool_call") {
+                                        "input"
+                                    } else {
+                                        "arguments"
+                                    })
                                     .and_then(|a| a.as_str())
                                     .unwrap_or_default()
                                     .to_string(),
@@ -1839,7 +1924,7 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                                 // …nor is it a provider-executed MCP (`dynamic`)
                                 // call (those arrive as `mcp_call` items).
                                 dynamic: false,
-                                provider_metadata: ProviderMetadata::new(),
+                                provider_metadata: client_tool_metadata(item),
                             }],
                         });
                     }
@@ -1849,7 +1934,7 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                     // wire. A string → Text, a part array → Content, any other
                     // value → Json.
                     // <https://platform.openai.com/docs/api-reference/responses/create>
-                    Some("function_call_output") => {
+                    Some("function_call_output" | "custom_tool_call_output") => {
                         let output = item
                             .get("output")
                             .map(parse_responses_tool_output)
@@ -1869,7 +1954,7 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                                 // A `function_call_output` is a plain client
                                 // tool-result item, never an inline MCP result.
                                 dynamic: false,
-                                provider_metadata: ProviderMetadata::new(),
+                                provider_metadata: client_tool_metadata(item),
                             }],
                         });
                     }
@@ -2075,11 +2160,29 @@ impl InboundAdapter for ResponsesAdapter {
         // tool whose config keys ride in `extra` and are preserved verbatim under
         // an `openai.<type>` id.
         // <https://platform.openai.com/docs/api-reference/responses/create#responses-create-tools>
-        let tools = req
+        let mut tools: Vec<_> = req
             .tools
             .into_iter()
             .filter_map(parse_responses_tool)
             .collect();
+        // Recent Codex clients send local tool declarations as developer
+        // `additional_tools` input items instead of the top-level array. They
+        // are declarations, not messages; promote them through the same tool
+        // parser so namespace names and nested custom-tool schemas survive.
+        if let Some(items) = req.input.as_array() {
+            for item in items {
+                if item.get("type").and_then(serde_json::Value::as_str) != Some("additional_tools")
+                {
+                    continue;
+                }
+                let definitions = item.get("tools").cloned().unwrap_or_default();
+                let declarations: Vec<ResponsesTool> = serde_json::from_value(definitions.clone())
+                    .map_err(|error| {
+                        describe_deser_error("additional_tools.tools", &error, &definitions)
+                    })?;
+                tools.extend(declarations.into_iter().filter_map(parse_responses_tool));
+            }
+        }
 
         // `text` is a typed field. Promote `text.format: json_schema` into the
         // canonical slot; other formats and sibling keys (e.g. `verbosity`)
@@ -2362,7 +2465,7 @@ impl OutboundAdapter for ResponsesAdapter {
                         });
                     }
                 }
-                Some("function_call") => {
+                Some("function_call" | "custom_tool_call") => {
                     content.push(Content::ToolCall {
                         id: item
                             .get("call_id")
@@ -2375,14 +2478,22 @@ impl OutboundAdapter for ResponsesAdapter {
                             .unwrap_or_default()
                             .to_string(),
                         arguments: item
-                            .get("arguments")
+                            .get(
+                                if item.get("type").and_then(serde_json::Value::as_str)
+                                    == Some("custom_tool_call")
+                                {
+                                    "input"
+                                } else {
+                                    "arguments"
+                                },
+                            )
                             .and_then(|a| a.as_str())
                             .unwrap_or_default()
                             .to_string(),
                         // A `function_call` output item is a client tool call.
                         provider_executed: false,
                         dynamic: false,
-                        provider_metadata: ProviderMetadata::new(),
+                        provider_metadata: client_tool_metadata(item),
                     });
                 }
                 // OpenAI Responses built-in (server-side) tools surface as their
@@ -2823,6 +2934,7 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
                 name,
                 arguments,
                 provider_executed,
+                provider_metadata,
                 ..
             } => {
                 // A provider-executed server-tool call is NOT re-sent as a client
@@ -2841,12 +2953,7 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
                     {
                         items.push(item);
                     } else {
-                        items.push(serde_json::json!({
-                            "type": "function_call",
-                            "call_id": id,
-                            "name": name,
-                            "arguments": arguments,
-                        }));
+                        items.push(client_call_item(id, name, arguments, provider_metadata));
                     }
                 }
             }
@@ -2920,7 +3027,9 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
                 if !*dynamic && !denial_paired_with_approval {
                     let output_value = render_responses_tool_output(output);
                     items.push(serde_json::json!({
-                        "type": "function_call_output",
+                        "type": if provider_namespace(provider_metadata, PROVIDER_ID_OPENAI)
+                            .and_then(|fields| fields.get("type")).and_then(serde_json::Value::as_str)
+                            == Some("custom_tool_call_output") { "custom_tool_call_output" } else { "function_call_output" },
                         "call_id": call_id,
                         "output": output_value,
                     }));
@@ -3143,6 +3252,7 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
             arguments,
             provider_executed,
             dynamic,
+            provider_metadata,
             ..
         } = c
         {
@@ -3219,12 +3329,7 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
                 // result was not paired (handled above): both render as a valid
                 // `function_call` item. The MCP tool name keeps its `mcp.` prefix
                 // so a downstream consumer can still recover the bare tool name.
-                items.push(serde_json::json!({
-                    "type": "function_call",
-                    "call_id": id,
-                    "name": name,
-                    "arguments": arguments,
-                }));
+                items.push(client_call_item(id, name, arguments, provider_metadata));
             }
         }
     }
@@ -3497,7 +3602,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
                         // upstream omitted it (used only for marker correlation).
                         "message" => parts.push(StreamPart::TextStart { id: item_id }),
                         "reasoning" => parts.push(StreamPart::ReasoningStart { id: item_id }),
-                        "function_call" => {
+                        "function_call" | "custom_tool_call" => {
                             // A function-call item frames itself via the
                             // `name`-bearing `ToolCallDelta` below — no separate
                             // start marker (see the `StreamPart` enum docs).
@@ -3525,6 +3630,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
                                 id: call_id,
                                 name: Some(name),
                                 arguments: String::new(),
+                                provider_metadata: client_tool_metadata(item),
                             });
                         }
                         // Streaming MCP gap: a streamed `mcp_call` item (a
@@ -3576,7 +3682,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     });
                 }
             }
-            "response.function_call_arguments.delta" => {
+            "response.function_call_arguments.delta" | "response.custom_tool_call_input.delta" => {
                 // map item_id → call_id (#434); emit a single arguments delta
                 let item_id = json
                     .get("item_id")
@@ -3589,12 +3695,13 @@ impl StreamDecoder for ResponsesStreamDecoder {
                         id: call_id,
                         name: None,
                         arguments: delta.to_string(),
+                        provider_metadata: Default::default(),
                     });
                 }
             }
             // the `.done` event repeats the full arguments — do NOT re-emit
             // them (would duplicate, #434).
-            "response.function_call_arguments.done" => {}
+            "response.function_call_arguments.done" | "response.custom_tool_call_input.done" => {}
             "response.output_item.done" => {
                 // Close the matching text / reasoning block so the boundary
                 // survives re-encoding (the merged-block fix). A `function_call`
@@ -3835,6 +3942,7 @@ struct ToolItemState {
     tool_name: String,
     /// Accumulated argument JSON fragments.
     accumulated_args: String,
+    provider_metadata: ProviderMetadata,
 }
 
 impl ResponsesStreamEncoder {
@@ -4076,26 +4184,26 @@ impl ResponsesStreamEncoder {
         self.open_text_item(frames);
     }
 
-    /// Open a function-call item: `output_item.added` (type=function_call).
-    /// Closes any other open item first. Idempotent for the same call.
-    fn open_tool_item(&mut self, frames: &mut Vec<SseFrame>, call_id: &str, name: &str) {
+    /// Open a client tool item, preserving its type and namespace.
+    fn open_tool_item(
+        &mut self,
+        frames: &mut Vec<SseFrame>,
+        call_id: &str,
+        name: &str,
+        metadata: &ProviderMetadata,
+    ) {
         self.close_reasoning_item(frames);
         self.close_text_item(frames);
         self.close_tool_item(frames);
         let output_index = self.allocate_output_index();
         let item_id = format!("fc_{}", uuid::Uuid::new_v4());
+        let mut item = client_call_item(call_id, name, "", metadata);
+        item["id"] = item_id.clone().into();
+        item["status"] = "in_progress".into();
         frames.push(self.ev(
             "response.output_item.added",
             serde_json::json!({
-                "output_index": output_index,
-                "item": {
-                    "type": "function_call",
-                    "id": item_id,
-                    "call_id": call_id,
-                    "name": name,
-                    "arguments": "",
-                    "status": "in_progress",
-                },
+                "output_index": output_index, "item": item,
             }),
         ));
         self.tool_item = Some(ToolItemState {
@@ -4104,37 +4212,38 @@ impl ResponsesStreamEncoder {
             output_index,
             tool_name: name.to_string(),
             accumulated_args: String::new(),
+            provider_metadata: metadata.clone(),
         });
     }
 
-    /// Close the open function-call item, if any:
-    /// `function_call_arguments.done` + `output_item.done`.
     fn close_tool_item(&mut self, frames: &mut Vec<SseFrame>) {
         let Some(state) = self.tool_item.take() else {
             return;
         };
-        let final_args = state.accumulated_args;
+        let custom = custom_call(&state.provider_metadata);
         frames.push(self.ev(
-            "response.function_call_arguments.done",
+            if custom {
+                "response.custom_tool_call_input.done"
+            } else {
+                "response.function_call_arguments.done"
+            },
             serde_json::json!({
-                "item_id": state.item_id,
-                "output_index": state.output_index,
-                "arguments": final_args,
+                "item_id": state.item_id, "output_index": state.output_index,
+                (if custom { "input" } else { "arguments" }): state.accumulated_args,
             }),
         ));
-        let item = serde_json::json!({
-            "type": "function_call",
-            "id": state.item_id,
-            "call_id": state.call_id,
-            "name": state.tool_name,
-            "arguments": final_args,
-            "status": "completed",
-        });
+        let mut item = client_call_item(
+            &state.call_id,
+            &state.tool_name,
+            &state.accumulated_args,
+            &state.provider_metadata,
+        );
+        item["id"] = state.item_id.into();
+        item["status"] = "completed".into();
         frames.push(self.ev(
             "response.output_item.done",
             serde_json::json!({
-                "output_index": state.output_index,
-                "item": item.clone(),
+                "output_index": state.output_index, "item": item.clone(),
             }),
         ));
         self.completed_items.push(item);
@@ -4245,6 +4354,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 id,
                 name,
                 arguments,
+                provider_metadata,
             } => {
                 // A delta carrying a *non-empty* `name` starts a new
                 // function-call item. `open_tool_item` closes any previously-open
@@ -4256,7 +4366,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                 // (empty name + partial args) — which Codex rejects as
                 // "unsupported call" / unparsable arguments.
                 if let Some(name) = name.as_deref().filter(|n| !n.is_empty()) {
-                    self.open_tool_item(&mut frames, id, name);
+                    self.open_tool_item(&mut frames, id, name, provider_metadata);
                 }
                 if !arguments.is_empty() {
                     // Append to the in-flight tool item. If a stray
@@ -4264,13 +4374,20 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     // upstream omitted the name), open one with an empty
                     // name rather than dropping the delta.
                     if self.tool_item.is_none() {
-                        self.open_tool_item(&mut frames, id, "");
+                        self.open_tool_item(&mut frames, id, "", provider_metadata);
                     }
-                    let state = self.tool_item.as_mut().expect("tool item just opened");
+                    let Some(state) = self.tool_item.as_mut() else {
+                        return Ok(frames);
+                    };
                     state.accumulated_args.push_str(arguments);
                     let (item_id, output_index) = (state.item_id.clone(), state.output_index);
+                    let custom = custom_call(&state.provider_metadata);
                     frames.push(self.ev(
-                        "response.function_call_arguments.delta",
+                        if custom {
+                            "response.custom_tool_call_input.delta"
+                        } else {
+                            "response.function_call_arguments.delta"
+                        },
                         serde_json::json!({
                             "item_id": item_id,
                             "output_index": output_index,

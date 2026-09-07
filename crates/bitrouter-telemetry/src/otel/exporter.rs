@@ -3078,6 +3078,7 @@ mod hop_tests {
                         id: "call-1".into(),
                         name: Some("get_weather".into()),
                         arguments: String::new(),
+                        provider_metadata: Default::default(),
                     },
                     StreamPart::Finish {
                         reason: FinishReason::Stop,

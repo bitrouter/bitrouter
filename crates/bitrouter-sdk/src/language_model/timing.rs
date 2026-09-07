@@ -101,6 +101,7 @@ mod tests {
                 id: "call-1".into(),
                 name: None,
                 arguments: String::new(),
+                provider_metadata: Default::default(),
             },
         ];
 

@@ -663,6 +663,33 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn routed_codex_input_tools_reach_the_subscription_backend() -> Result<()> {
+        use bitrouter_sdk::language_model::protocol::responses::ResponsesAdapter;
+        use bitrouter_sdk::language_model::protocol::{InboundAdapter, OutboundAdapter};
+
+        let declarations = serde_json::json!([{
+            "type": "namespace", "name": "functions", "tools": [{
+                "type": "custom", "name": "exec", "description": "Read workspace files",
+                "format": {"type": "text"}
+            }]
+        }]);
+        let adapter = ResponsesAdapter;
+        let prompt = adapter.parse_request(serde_json::json!({
+            "model": "m",
+            "input": [
+                {"type": "additional_tools", "role": "developer", "tools": declarations},
+                {"role": "user", "content": "Read README.md"}
+            ]
+        }))?;
+        let mut body = adapter.render_request(&prompt)?;
+        shape_codex_responses_body(&mut body);
+        assert_eq!(body["input"][0]["type"], "additional_tools");
+        assert_eq!(body["input"][0]["tools"], declarations);
+        assert_eq!(body["input"][1]["content"][0]["text"], "Read README.md");
+        Ok(())
+    }
+
     fn tmp_store_path() -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);

@@ -1000,6 +1000,7 @@ impl HttpExecutor {
                     id,
                     name,
                     arguments,
+                    provider_metadata,
                 } => {
                     let index = match tool_indices.get(&id).copied() {
                         Some(index) => index,
@@ -1011,7 +1012,7 @@ impl HttpExecutor {
                                 arguments: String::new(),
                                 provider_executed: false,
                                 dynamic: false,
-                                provider_metadata: Default::default(),
+                                provider_metadata: provider_metadata.clone(),
                             });
                             tool_indices.insert(id, index);
                             index

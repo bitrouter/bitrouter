@@ -703,6 +703,7 @@ fn conversion_matrix_4x4_streaming() {
             id: "call_9".to_string(),
             name: Some("calc".to_string()),
             arguments: "{\"x\":1}".to_string(),
+            provider_metadata: Default::default(),
         },
         StreamPart::Usage {
             usage: Usage {
@@ -2814,6 +2815,7 @@ fn messages_stream_encoder_closes_block_on_kind_transition() {
             id: "t1".into(),
             name: Some("calc".into()),
             arguments: "{}".into(),
+            provider_metadata: Default::default(),
         },
     ];
     let mut events: Vec<String> = Vec::new();
@@ -3458,11 +3460,13 @@ fn tool_call_streaming_still_frames_distinctly_with_markers_present() {
             id: "call_a".into(),
             name: Some("first".into()),
             arguments: "{}".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::ToolCallDelta {
             id: "call_b".into(),
             name: Some("second".into()),
             arguments: "{}".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::Finish {
             reason: FinishReason::Stop,
@@ -4873,6 +4877,7 @@ fn responses_stream_tool_call_lifecycle() {
                 id: "call_1".to_string(),
                 name: Some("shell".to_string()),
                 arguments: "{\"cmd\":".to_string(),
+                provider_metadata: Default::default(),
             })
             .unwrap(),
     );
@@ -4882,6 +4887,7 @@ fn responses_stream_tool_call_lifecycle() {
                 id: "call_1".to_string(),
                 name: None,
                 arguments: "\"ls\"}".to_string(),
+                provider_metadata: Default::default(),
             })
             .unwrap(),
     );
@@ -11720,16 +11726,19 @@ fn responses_encoder_treats_empty_name_delta_as_continuation() {
             id: id.clone(),
             name: Some("exec_command".into()),
             arguments: "".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::ToolCallDelta {
             id: id.clone(),
             name: Some("".into()),
             arguments: "{\"cmd\":\"".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::ToolCallDelta {
             id: id.clone(),
             name: Some("".into()),
             arguments: "ls\"}".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::Finish {
             reason: FinishReason::ToolCalls,
@@ -11839,16 +11848,19 @@ fn messages_encoder_treats_empty_name_delta_as_continuation() {
             id: id.clone(),
             name: Some("exec_command".into()),
             arguments: "".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::ToolCallDelta {
             id: id.clone(),
             name: Some("".into()),
             arguments: "{\"cmd\":\"".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::ToolCallDelta {
             id: id.clone(),
             name: Some("".into()),
             arguments: "ls\"}".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::Finish {
             reason: FinishReason::ToolCalls,
@@ -11906,16 +11918,19 @@ fn gemini_encode_fragmented_args_single_function_call() {
             id: id.clone(),
             name: Some("exec_command".into()),
             arguments: "".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::ToolCallDelta {
             id: id.clone(),
             name: None,
             arguments: "{\"cmd\":".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::ToolCallDelta {
             id: id.clone(),
             name: None,
             arguments: "\"ls\"}".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::Finish {
             reason: FinishReason::ToolCalls,
@@ -11958,11 +11973,13 @@ fn gemini_encode_two_tool_calls_emit_two_function_calls() {
             id: "a".into(),
             name: Some("first".into()),
             arguments: "{\"x\":1}".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::ToolCallDelta {
             id: "b".into(),
             name: Some("second".into()),
             arguments: "{\"y\":2}".into(),
+            provider_metadata: Default::default(),
         },
         StreamPart::Finish {
             reason: FinishReason::ToolCalls,
@@ -12140,4 +12157,112 @@ fn coarse_wires_drop_server_tool_activity() {
             "coarse wire {proto:?} must drop server-tool activity: {events:?}"
         );
     }
+}
+
+#[test]
+fn responses_additional_tools_preserve_namespaces_and_custom_grammars() -> crate::Result<()> {
+    let tools = serde_json::json!([{
+        "type": "namespace", "name": "functions", "description": "Workspace tools",
+        "tools": [
+            {"type": "custom", "name": "exec", "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"}},
+            {"type": "function", "name": "read_file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}
+        ]
+    }]);
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let prompt = adapter.parse_request(serde_json::json!({
+        "model": "m", "input": [
+            {"type": "additional_tools", "id": "tools-1", "role": "developer", "tools": tools},
+            {"role": "user", "content": "Read README.md"}
+        ]
+    }))?;
+    assert_eq!(prompt.messages.len(), 1);
+    assert_eq!(adapter.render_request(&prompt)?["tools"], tools);
+    assert!(
+        adapter
+            .parse_request(serde_json::json!({
+                "input": [{"type": "additional_tools", "tools": "invalid"}]
+            }))
+            .is_err(),
+        "malformed declarations must not silently disable tools"
+    );
+    Ok(())
+}
+
+#[test]
+fn responses_custom_tool_calls_and_results_round_trip() -> crate::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    for (kind, field, arguments) in [
+        (
+            "custom_tool_call",
+            "input",
+            "text(await tools.read_file({path: 'README.md'}));",
+        ),
+        ("function_call", "arguments", r#"{"path":"README.md"}"#),
+    ] {
+        let call = serde_json::json!({"type": kind, "call_id": "c1", "namespace": "functions", "name": "read", (field): arguments});
+        let result = serde_json::json!({"type": if kind == "custom_tool_call" {"custom_tool_call_output"} else {"function_call_output"}, "call_id": "c1", "output": "Fixture contents"});
+        let prompt =
+            adapter.parse_request(serde_json::json!({"model":"m", "input":[call, result]}))?;
+        assert_eq!(
+            adapter.render_request(&prompt)?["input"],
+            serde_json::json!([call, result])
+        );
+        let parsed = adapter.parse_response(
+            serde_json::json!({"id":"r1", "status":"completed", "output":[call]}),
+        )?;
+        let rendered = adapter.render_response(&parsed, &prompt, "r1")?;
+        assert_eq!(rendered["output"][0], call);
+    }
+    Ok(())
+}
+
+#[test]
+fn responses_custom_tool_stream_preserves_type_namespace_and_text() -> crate::Result<()> {
+    let adapter = adapter_for(ApiProtocol::Responses);
+    let mut decoder = adapter.stream_decoder();
+    let mut encoder = adapter.stream_encoder("r1", "m");
+    let mut frames = Vec::new();
+    for event in [
+        serde_json::json!({"type":"response.output_item.added", "output_index":0, "item":{"id":"custom1", "type":"custom_tool_call", "call_id":"c1", "namespace":"functions", "name":"exec", "input":""}}),
+        serde_json::json!({"type":"response.custom_tool_call_input.delta", "item_id":"custom1", "delta":"const path = 'README.md';\n"}),
+        serde_json::json!({"type":"response.custom_tool_call_input.delta", "item_id":"custom1", "delta":"text(await tools.read_file({path}));"}),
+    ] {
+        for part in decoder.decode(&SseEvent {
+            event: None,
+            data: event.to_string(),
+        })? {
+            frames.extend(encoder.encode(&part)?);
+        }
+    }
+    frames.extend(encoder.encode(&StreamPart::Finish {
+        reason: FinishReason::Stop,
+    })?);
+    let mut completed = None;
+    let mut delta_count = 0;
+    for frame in frames {
+        if let SseFrame::Event { event, data } = frame {
+            let value: serde_json::Value = serde_json::from_str(&data)
+                .map_err(|e| crate::BitrouterError::internal(e.to_string()))?;
+            if event.as_deref() == Some("response.custom_tool_call_input.delta") {
+                delta_count += 1;
+            }
+            if event.as_deref() == Some("response.completed") {
+                completed = Some(value);
+            }
+        }
+    }
+    let completed =
+        completed.ok_or_else(|| crate::BitrouterError::internal("missing completion"))?;
+    let item = &completed["response"]["output"][0];
+    assert_eq!(delta_count, 2);
+    assert_eq!(item["type"], "custom_tool_call");
+    assert_eq!(item["namespace"], "functions");
+    assert_eq!(item["name"], "exec");
+    assert_eq!(item["call_id"], "c1");
+    assert_eq!(
+        item["input"],
+        "const path = 'README.md';\ntext(await tools.read_file({path}));"
+    );
+    assert!(item.get("arguments").is_none());
+    Ok(())
 }
