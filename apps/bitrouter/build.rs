@@ -2,7 +2,7 @@
 //!
 //! `registry/agents/` + `registry/runtimes/` are the source of truth for which
 //! agents BitRouter can drive and how their traffic is routed; this turns the
-//! generated `dist/registry/{agents,runtimes}.json` into the `&'static`
+//! generated `dist/registry/{agents,runtimes}.json` snapshot into the `&'static`
 //! catalog `harness.rs` exposes. Editing the registry and rebuilding the dist
 //! artifacts is therefore enough to add or change an agent — no Rust edit.
 //!
@@ -21,9 +21,10 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?)
-        .join("../..")
-        .join("dist/registry");
+    // The package-local snapshot is generated together with `dist/registry`.
+    // Keeping the build input inside the crate is required by `cargo package`,
+    // whose verification build cannot read files outside the packaged crate.
+    let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?).join("registry-dist");
     let agents_path = root.join("agents.json");
     let runtimes_path = root.join("runtimes.json");
     println!("cargo::rerun-if-changed={}", agents_path.display());

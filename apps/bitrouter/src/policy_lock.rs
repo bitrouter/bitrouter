@@ -1976,9 +1976,9 @@ fn embedded_catalog_supports_capability(
     model_id: &str,
     capability: bitrouter_sdk::language_model::types::Capability,
 ) -> bool {
-    let Ok(catalog) = serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../../dist/registry/models.json"
-    )) else {
+    let Ok(catalog) =
+        serde_json::from_str::<serde_json::Value>(include_str!("../registry-dist/models.json"))
+    else {
         return false;
     };
     catalog
