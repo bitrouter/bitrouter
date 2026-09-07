@@ -180,6 +180,50 @@ done
 "#;
 
     #[tokio::test]
+    async fn full_screen_host_returns_routing_notes_to_its_presenter() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = crate::paths::ConfigSource::Default {
+            home: directory.path().to_path_buf(),
+        };
+        let mut config = Config::default();
+        config.agents.insert(
+            "stub".to_string(),
+            AcpAgentConfig {
+                name: "stub".to_string(),
+                transport: AcpTransport::Stdio {
+                    command: "bash".to_string(),
+                    args: vec!["-c".to_string(), STUB.to_string()],
+                    env: HashMap::new(),
+                },
+            },
+        );
+        let mut diagnostics = Vec::new();
+        let host = SessionHost::prepare_with_diagnostics(
+            SpawnContext {
+                source: &source,
+                config,
+                agent_id: "stub",
+                options: launch_options(None),
+                routing: RoutingOptions {
+                    direct: true,
+                    model: Some("ignored-model".to_string()),
+                    ..RoutingOptions::default()
+                },
+            },
+            false,
+            &mut |message| diagnostics.push(message),
+        )
+        .await?;
+
+        assert_eq!(
+            diagnostics,
+            ["note: --model 'ignored-model' ignored — running --direct"]
+        );
+        assert_eq!(host.agent_id, "stub");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn shared_host_negotiates_lifecycle_and_drives_one_turn() -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
         let source = crate::paths::ConfigSource::Default {
@@ -625,6 +669,26 @@ async fn apply_routing_with_cloud_credentials(
     opts: &RoutingOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
 ) -> std::result::Result<Routed, RoutingError> {
+    let mut diagnostics = |message| eprintln!("{message}");
+    apply_routing_with_diagnostics(
+        source,
+        config,
+        agent_id,
+        opts,
+        cloud_credentials,
+        &mut diagnostics,
+    )
+    .await
+}
+
+async fn apply_routing_with_diagnostics(
+    source: &ConfigSource,
+    config: &mut Config,
+    agent_id: &str,
+    opts: &RoutingOptions,
+    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
+    diagnostics: &mut dyn FnMut(String),
+) -> std::result::Result<Routed, RoutingError> {
     // A catalog-known id needs no `agents:` entry — synthesize its invocation.
     if !config.agents.contains_key(agent_id)
         && let Some(h) = crate::harness::by_id(agent_id)
@@ -651,14 +715,8 @@ async fn apply_routing_with_cloud_credentials(
 
     // `--model` only takes effect when the daemon route is applied; warn
     // rather than silently drop it on any path that launches direct.
-    let warn_model_dropped = |why: &str| {
-        if let Some(m) = &opts.model {
-            eprintln!("note: --model '{m}' ignored — {why}");
-        }
-    };
-
     if opts.direct {
-        warn_model_dropped("running --direct");
+        warn_model_dropped(opts, "running --direct", diagnostics);
         return Ok(Routed::default());
     }
 
@@ -673,20 +731,24 @@ async fn apply_routing_with_cloud_credentials(
         None => return Ok(Routed::default()),
     };
     let Some(harness) = harness else {
-        eprintln!(
+        diagnostics(format!(
             "note: routing unavailable for '{agent_id}' (not catalog-matched); \
              launching direct — set its `env` to route manually"
-        );
-        warn_model_dropped("the agent is not catalog-matched");
+        ));
+        warn_model_dropped(opts, "the agent is not catalog-matched", diagnostics);
         return Ok(Routed::default());
     };
     if !harness.env_args_routable() {
-        eprintln!(
+        diagnostics(format!(
             "note: '{}' routes via synthesized config, which headless spawn doesn't do yet \
              in this ACP adapter; launching direct",
             harness.id
+        ));
+        warn_model_dropped(
+            opts,
+            "the harness routes only in the interactive facet",
+            diagnostics,
         );
-        warn_model_dropped("the harness routes only in the interactive facet");
         return Ok(Routed::default());
     }
     let uses_maintained_adapter =
@@ -699,11 +761,15 @@ async fn apply_routing_with_cloud_credentials(
                 }
             });
     if harness.id == "codex-acp" && !uses_maintained_adapter {
-        eprintln!(
+        diagnostics(format!(
             "note: routing unavailable for '{agent_id}': Codex ACP endpoint configuration \
              requires @agentclientprotocol/codex-acp@1.10.0; launching direct"
+        ));
+        warn_model_dropped(
+            opts,
+            "the configured Codex ACP adapter is not the maintained pin",
+            diagnostics,
         );
-        warn_model_dropped("the configured Codex ACP adapter is not the maintained pin");
         return Ok(Routed::default());
     }
 
@@ -727,12 +793,12 @@ async fn apply_routing_with_cloud_credentials(
     // rejected by the daemon's auth hook under `skip_auth: false` — warn
     // rather than let the session 401 mid-turn (SPAWN_SPEC §6.3).
     if require_key && !harness.auth_is_bearer() {
-        eprintln!(
+        diagnostics(format!(
             "warning: '{}' sends its API key as a non-Bearer header the daemon rejects under \
              auth mode (`skip_auth: false`) — this session will likely 401. Use `skip_auth: \
              true`, a `--direct` session, or a different harness.",
             harness.id
-        );
+        ));
     }
 
     let explicit_key = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV);
@@ -800,10 +866,10 @@ async fn apply_routing_with_cloud_credentials(
             if let Some(existing) = env.get(&k)
                 && existing != &v
             {
-                eprintln!(
+                diagnostics(format!(
                     "note: routing overrides your `env.{k}` for '{agent_id}' \
                      (pass --direct to keep your value)"
-                );
+                ));
             }
             env.insert(k, v);
         }
@@ -816,6 +882,12 @@ async fn apply_routing_with_cloud_credentials(
         api_principal: endpoint_plan.as_ref().map(|_| api_principal),
         endpoint_plan,
     })
+}
+
+fn warn_model_dropped(opts: &RoutingOptions, why: &str, diagnostics: &mut dyn FnMut(String)) {
+    if let Some(model) = &opts.model {
+        diagnostics(format!("note: --model '{model}' ignored — {why}"));
+    }
 }
 
 // ── NDJSON helpers ────────────────────────────────────────────────────────────
@@ -1446,6 +1518,18 @@ impl SessionHandle {
 impl SessionHost {
     /// Resolve and prepare a controller without opening a native session.
     pub(crate) async fn prepare(ctx: SpawnContext<'_>, terminal_auth: bool) -> Result<Self> {
+        let mut diagnostics = |message| eprintln!("{message}");
+        Self::prepare_with_diagnostics(ctx, terminal_auth, &mut diagnostics).await
+    }
+
+    /// Prepare a controller while handing presentation-safe routing notes to
+    /// the caller. Full-screen clients use this so ordinary fallback notices
+    /// become part of their view instead of writing behind the renderer.
+    pub(crate) async fn prepare_with_diagnostics(
+        ctx: SpawnContext<'_>,
+        terminal_auth: bool,
+        diagnostics: &mut dyn FnMut(String),
+    ) -> Result<Self> {
         let SpawnContext {
             source,
             mut config,
@@ -1455,12 +1539,13 @@ impl SessionHost {
         } = ctx;
         let agent_id = resolve_agent_id(&config, agent_id)?;
         let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
-        let routed = apply_routing_with_cloud_credentials(
+        let routed = apply_routing_with_diagnostics(
             source,
             &mut config,
             &agent_id,
             &routing,
             &cloud_credentials,
+            diagnostics,
         )
         .await
         .map_err(anyhow::Error::new)?;
@@ -1470,8 +1555,13 @@ impl SessionHost {
             .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?
             .validate()
             .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
-        let binding =
-            LocalControllerBinding::open(source, &config, &routed, routing.base_url.is_some());
+        let binding = LocalControllerBinding::open_with_diagnostics(
+            source,
+            &config,
+            &routed,
+            routing.base_url.is_some(),
+            diagnostics,
+        );
         options.terminal_auth = terminal_auth;
         Ok(Self {
             config,
@@ -1534,6 +1624,17 @@ impl LocalControllerBinding {
         routed: &Routed,
         explicit_base_url: bool,
     ) -> Option<Self> {
+        let mut diagnostics = |message| eprintln!("{message}");
+        Self::open_with_diagnostics(source, config, routed, explicit_base_url, &mut diagnostics)
+    }
+
+    fn open_with_diagnostics(
+        source: &ConfigSource,
+        config: &Config,
+        routed: &Routed,
+        explicit_base_url: bool,
+        diagnostics: &mut dyn FnMut(String),
+    ) -> Option<Self> {
         let (Some(_endpoint), Some(controller_instance_id), Some(api_principal)) = (
             routed.endpoint_plan.as_ref(),
             routed.controller_instance_id.clone(),
@@ -1542,9 +1643,10 @@ impl LocalControllerBinding {
             return None;
         };
         if explicit_base_url {
-            eprintln!(
+            diagnostics(
                 "note: _bitrouter/route/* is unavailable with an explicit --base-url; \
                  the remote model endpoint remains usable without session route control"
+                    .to_string(),
             );
             return None;
         }

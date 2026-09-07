@@ -68,7 +68,12 @@ pub struct Dashboard {
     pub requests: Vec<RequestLine>,
     pub route_input: String,
     pub route: Option<RouteLine>,
+    /// Action failure retained until that action later succeeds.
     pub error: Option<String>,
+    /// Connection/snapshot failure cleared by the next successful refresh.
+    pub refresh_error: Option<String>,
+    /// Non-fatal action diagnostic, such as an ACP routing fallback.
+    pub notice: Option<String>,
     pub agents: Vec<AgentLine>,
     pub selected_agent: usize,
     pub conversation: Conversation,
@@ -283,10 +288,19 @@ fn draw(
     conversation: Option<&[Line<'static>]>,
 ) {
     let area = frame.area();
-    let error_height = u16::from(dashboard.error.is_some()) * 3;
-    let [header, content, error, footer] = Layout::vertical([
+    let error_messages = dashboard
+        .error
+        .iter()
+        .chain(dashboard.refresh_error.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let error_message = error_messages.join("\n");
+    let notice_height = u16::from(dashboard.notice.is_some()) * 3;
+    let (error_height, error_scroll) = error_layout(&error_message, area, notice_height);
+    let [header, content, notice, error, footer] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(4),
+        Constraint::Length(notice_height),
         Constraint::Length(error_height),
         Constraint::Length(1),
     ])
@@ -330,12 +344,23 @@ fn draw(
         Page::Route => draw_route(frame, content, dashboard),
     }
 
-    if let Some(message) = &dashboard.error {
+    if let Some(message) = &dashboard.notice {
         frame.render_widget(
             Paragraph::new(message.as_str())
+                .style(Style::default().fg(Color::Yellow))
+                .block(Block::default().borders(Borders::TOP).title(" Notice "))
+                .wrap(Wrap { trim: true }),
+            notice,
+        );
+    }
+
+    if !error_messages.is_empty() {
+        frame.render_widget(
+            Paragraph::new(error_message)
                 .style(Style::default().fg(Color::Red))
                 .block(Block::default().borders(Borders::TOP).title(" Error "))
-                .wrap(Wrap { trim: true }),
+                .wrap(Wrap { trim: true })
+                .scroll((error_scroll, 0)),
             error,
         );
     }
@@ -352,6 +377,40 @@ fn draw(
         Paragraph::new(help).style(Style::default().fg(Color::DarkGray)),
         footer,
     );
+}
+
+/// Size a diagnostic pane from its wrapped rows while reserving the main view.
+/// Long failures show their tail because adapter stderr usually puts the most
+/// specific cause and remediation there.
+fn error_layout(message: &str, area: ratatui::layout::Rect, notice_height: u16) -> (u16, u16) {
+    if message.is_empty() {
+        return (0, 0);
+    }
+    const HEADER_HEIGHT: u16 = 3;
+    const FOOTER_HEIGHT: u16 = 1;
+    const MIN_CONTENT_HEIGHT: u16 = 4;
+    const MAX_ERROR_HEIGHT: u16 = 10;
+    const ERROR_BORDER_HEIGHT: u16 = 1;
+
+    let reserved = HEADER_HEIGHT
+        .saturating_add(FOOTER_HEIGHT)
+        .saturating_add(MIN_CONTENT_HEIGHT)
+        .saturating_add(notice_height);
+    let max_height = area.height.saturating_sub(reserved).min(MAX_ERROR_HEIGHT);
+    if max_height == 0 {
+        return (0, 0);
+    }
+    let wrapped_rows = Paragraph::new(message)
+        .wrap(Wrap { trim: true })
+        .line_count(area.width);
+    let wrapped_rows = u16::try_from(wrapped_rows).unwrap_or(u16::MAX);
+    let minimum = 3.min(max_height);
+    let height = wrapped_rows
+        .saturating_add(ERROR_BORDER_HEIGHT)
+        .max(minimum)
+        .min(max_height);
+    let visible_rows = height.saturating_sub(ERROR_BORDER_HEIGHT);
+    (height, wrapped_rows.saturating_sub(visible_rows))
 }
 
 fn draw_home(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Dashboard) {
@@ -454,16 +513,7 @@ fn draw_conversation(
             .wrap(Wrap { trim: false }),
         transcript,
     );
-    let session = dashboard
-        .conversation
-        .native_session_id
-        .as_deref()
-        .unwrap_or("not connected");
-    let route = dashboard.conversation.route.as_deref().unwrap_or("direct");
-    let status_line = format!(
-        "{} · session {session} · route {route}",
-        dashboard.conversation.status
-    );
+    let status_line = conversation_status(&dashboard.conversation);
     frame.render_widget(
         Paragraph::new(status_line).style(Style::default().fg(Color::DarkGray)),
         status,
@@ -484,6 +534,19 @@ fn draw_conversation(
             .block(Block::default().borders(Borders::ALL).title(title)),
         input,
     );
+}
+
+fn conversation_status(conversation: &Conversation) -> String {
+    let Some(session) = conversation.native_session_id.as_deref() else {
+        return "not connected · select an ACP-capable agent in Agents".to_string();
+    };
+    let status = if conversation.status.is_empty() {
+        "idle"
+    } else {
+        conversation.status.as_str()
+    };
+    let route = conversation.route.as_deref().unwrap_or("direct");
+    format!("{status} · session {session} · route {route}")
 }
 
 fn draw_sessions(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Dashboard) {
@@ -619,6 +682,16 @@ mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
 
+    fn rendered_text(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
     #[test]
     fn every_page_renders_with_sparse_data() -> io::Result<()> {
         let backend = TestBackend::new(80, 24);
@@ -631,6 +704,45 @@ mod tests {
         for page in Page::ALL {
             terminal.draw(|frame| draw(frame, page, &dashboard, None))?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn error_layout_grows_to_a_cap_and_scrolls_to_the_tail() {
+        let area = ratatui::layout::Rect::new(0, 0, 120, 40);
+        assert_eq!(error_layout("short failure", area, 0), (3, 0));
+
+        let long = format!(
+            "{}Missing optional dependency @openai/codex-darwin-arm64",
+            "launch context and transport details ".repeat(80)
+        );
+        let (height, scroll) = error_layout(&long, area, 0);
+        assert_eq!(height, 10);
+        assert!(scroll > 0);
+
+        let (with_notice, _) = error_layout(&long, ratatui::layout::Rect::new(0, 0, 120, 16), 3);
+        assert_eq!(with_notice, 5);
+    }
+
+    #[test]
+    fn long_error_renders_actionable_tail_beside_persistent_notice() -> io::Result<()> {
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend)?;
+        let dashboard = Dashboard {
+            target: "local".to_string(),
+            notice: Some("routing fallback remains visible".to_string()),
+            error: Some(format!(
+                "{}Missing optional dependency @openai/codex-darwin-arm64",
+                "connection failed while launching adapter context ".repeat(80)
+            )),
+            ..Dashboard::default()
+        };
+
+        terminal.draw(|frame| draw(frame, Page::Agents, &dashboard, None))?;
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains("routing fallback remains visible"));
+        assert!(rendered.contains("Missing optional dependency"));
+        assert!(rendered.contains("@openai/codex-darwin-arm64"));
         Ok(())
     }
 
@@ -678,6 +790,26 @@ mod tests {
         );
         assert!(dashboard.conversation.input.is_empty());
         assert_eq!(step(&mut dashboard, Action::SubmitPrompt), None);
+    }
+
+    #[test]
+    fn disconnected_conversation_has_no_route_or_empty_status_prefix() {
+        let status = conversation_status(&Conversation::default());
+        assert_eq!(
+            status,
+            "not connected · select an ACP-capable agent in Agents"
+        );
+        assert!(!status.contains("route direct"));
+        assert!(!status.starts_with('·'));
+    }
+
+    #[test]
+    fn connected_conversation_identifies_a_direct_session() {
+        let status = conversation_status(&Conversation {
+            native_session_id: Some("session-1".to_string()),
+            ..Conversation::default()
+        });
+        assert_eq!(status, "idle · session session-1 · route direct");
     }
 
     #[test]

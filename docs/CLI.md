@@ -355,6 +355,11 @@ bitrouter models [-c <path>] [-p <provider-id>]
 
 Lists all routable models, each with **every** provider that can serve it — the
 fallback chain, in order. Filter to one provider with `--provider`.
+Subscription providers are explicit-route-only, so their rows use a pinned
+`provider:canonical-model` selector (for example,
+`openai-codex:openai/gpt-5.6-sol`). Copying any displayed selector into
+`bitrouter route` therefore previews the route without implicitly opting a bare
+canonical request into a personal subscription.
 
 Queries the running daemon if reachable and falls back to a local config parse,
 the same order `bitrouter route` uses: the live routing table reflects `reload`s

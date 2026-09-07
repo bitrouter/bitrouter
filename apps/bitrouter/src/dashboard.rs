@@ -382,7 +382,14 @@ async fn open_session(
     };
     // The full-screen shell cannot relinquish the terminal for an external
     // authentication flow, so advertise only the capabilities it can honor.
-    let host = crate::acp_cli::SessionHost::prepare(context, false).await?;
+    let mut diagnostics = Vec::new();
+    let prepared =
+        crate::acp_cli::SessionHost::prepare_with_diagnostics(context, false, &mut |message| {
+            diagnostics.push(message)
+        })
+        .await;
+    dashboard.notice = (!diagnostics.is_empty()).then(|| diagnostics.join("\n"));
+    let host = prepared?;
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mut handle = host.open(&request.selection, cwd).await?;
     driver.updates = handle.take_updates();
@@ -615,25 +622,35 @@ async fn refresh(target: &Target, dashboard: &mut bitrouter_tui::dashboard::Dash
             let route_input = std::mem::take(&mut dashboard.route_input);
             let route = dashboard.route.take();
             let snapshot = dashboard_from_reports(target.label(), status, models, requests);
-            dashboard.target = snapshot.target;
-            dashboard.connected = snapshot.connected;
-            dashboard.status = snapshot.status;
-            dashboard.pid = snapshot.pid;
-            dashboard.listen = snapshot.listen;
-            dashboard.providers = snapshot.providers;
-            dashboard.spend = snapshot.spend;
-            dashboard.models = snapshot.models;
-            dashboard.requests = snapshot.requests;
+            apply_snapshot(dashboard, snapshot);
             dashboard.route_input = route_input;
             dashboard.route = route;
-            dashboard.error = snapshot.error;
         }
         Err(error) => {
             dashboard.connected = false;
             dashboard.status = "unavailable".to_string();
-            dashboard.error = Some(error.to_string());
+            dashboard.refresh_error = Some(error.to_string());
         }
     }
+}
+
+/// Apply only server-owned snapshot fields. Drafts, action diagnostics, and
+/// the active ACP conversation belong to the interactive client and must not
+/// be erased by the background polling cadence.
+fn apply_snapshot(
+    dashboard: &mut bitrouter_tui::dashboard::Dashboard,
+    snapshot: bitrouter_tui::dashboard::Dashboard,
+) {
+    dashboard.target = snapshot.target;
+    dashboard.connected = snapshot.connected;
+    dashboard.status = snapshot.status;
+    dashboard.pid = snapshot.pid;
+    dashboard.listen = snapshot.listen;
+    dashboard.providers = snapshot.providers;
+    dashboard.spend = snapshot.spend;
+    dashboard.models = snapshot.models;
+    dashboard.requests = snapshot.requests;
+    dashboard.refresh_error = None;
 }
 
 fn dashboard_from_reports(
@@ -722,6 +739,29 @@ fn route_line(report: RouteReport) -> bitrouter_tui::dashboard::RouteLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_refresh_preserves_interactive_diagnostics() {
+        let mut dashboard = bitrouter_tui::dashboard::Dashboard {
+            error: Some("Could not start agent".to_string()),
+            refresh_error: Some("connection interrupted".to_string()),
+            notice: Some("routing fallback".to_string()),
+            ..Default::default()
+        };
+        let snapshot = bitrouter_tui::dashboard::Dashboard {
+            target: "local".to_string(),
+            connected: true,
+            status: "running".to_string(),
+            ..Default::default()
+        };
+
+        apply_snapshot(&mut dashboard, snapshot);
+
+        assert_eq!(dashboard.error.as_deref(), Some("Could not start agent"));
+        assert_eq!(dashboard.notice.as_deref(), Some("routing fallback"));
+        assert_eq!(dashboard.refresh_error, None);
+        assert!(dashboard.connected);
+    }
 
     #[test]
     fn route_page_keeps_requested_and_effective_models_distinct() {
