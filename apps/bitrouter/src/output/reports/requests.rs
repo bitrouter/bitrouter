@@ -146,7 +146,7 @@ impl From<RequestRow> for RequestView {
 }
 
 impl RequestView {
-    /// The row as the human table's cells, in [`HEADERS`] order.
+    /// The row as the human table's cells, in `HEADERS` order.
     pub fn display_cells(&self) -> [String; 8] {
         [
             clock(&self.created_at),
