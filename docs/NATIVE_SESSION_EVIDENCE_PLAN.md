@@ -219,7 +219,7 @@ rerun without that report. Clippy, formatting, doctests, rustdoc and distributio
 checks passed. These checks do not replace the outstanding native-runtime
 conformance matrix.
 
-The execution parser is now `native-evidence/2`. SDK facts retain the adapter's
+The SDK identity stage introduced `native-evidence/2`. SDK facts retain the adapter's
 ACP attachment separately from the message's native `session_id`, including
 after a conversation reset. Missing native identity remains a gap. Versioned
 fact ids permit replay into v2 without changing old v1 fact bytes or frozen
@@ -274,6 +274,51 @@ rustdoc and distribution checks passed. The cancellation fixture uses an
 independent read-only SQLite connection to inspect committed state while the
 import future is paused. These tests do not certify real native-runtime
 conformance, complete Query recovery, task membership or evaluation readiness.
+
+The parser is now `native-evidence/3`. Each new fact pins its exact raw record
+reference and source format; earlier facts retain their serialization and are
+replayed separately. The Codex App Server tap also preserves `expectedTurnId`
+on steering requests and the accepted `turnId` on responses. These native RPC
+ids are distinct from the controller's ACP operation ids.
+
+Application execution snapshots now expose Codex run bookends grouped by native
+node and turn id. Starts, terminal outcomes and abort reasons retain original
+record references. Anonymous rollout aborts never close an adjacent turn, agent
+tool completion never closes a child run, and repeated child turns stay separate.
+Conflicting terminal outcomes and reversed same-source bookends remain gaps.
+Matching ids can join observations across sources; timestamps cannot order those
+sources or establish execution membership.
+
+Bookends also carry origin. Direct App Server events and rollouts with an intact,
+non-fork initial metadata record can identify local execution. Copied or referenced
+fork histories and missing metadata retain unverified bookends: an inherited
+completion or synthetic fork abort cannot become the child's observed outcome,
+even when a new directly observed turn reuses that id. A terminal without its
+start retains a coverage gap. Run outcomes are observed status only; consumers
+must check run, graph and history gaps, and still require task membership and
+settlement evidence before evaluation. Exact attribution of local fork rollout
+segments without direct events remains required.
+
+ACP prompt-to-native input correlation is also still required. The inspected
+Claude adapter 0.75.1 creates its own prompt UUID and its prompt response does
+not carry that UUID. Session identity, input text and response timing do not
+establish this link. The controller's operation boundary cannot yet select a
+native command merely because it is the next one observed.
+
+Independent review corrected copied-fork execution attribution, separated
+unverified history from direct-event order checks, and removed quadratic work
+over repeated bookends. Record reference validation runs once per extraction,
+with the checked reference shared by that record's facts. Regressions cover
+anonymous and named aborts, resumed child turns, inherited/synthetic fork
+bookends, reused turn ids, conflicting outcomes, a large repeated-boundary set,
+the run limit, and first v3 backfill after reopening a database with only v2
+indexes. Old v1/v2 fact bytes remain unchanged and missing original terminal
+records invalidate their derived evidence. The final workspace run passed all
+3,250 tests with 12 skipped. Clippy, formatting, doctests, rustdoc and distribution
+checks passed. An earlier run stopped on the unmodified CLI
+version-probe timeout; both subsequent complete serial runs passed that test.
+This remains format and transport coverage, not the full pinned native-runtime
+conformance matrix or complete task execution attribution.
 
 Still required: complete execution-relation parsing, remaining native SDK
 rebinding cases without matching native events; complete native query-lifetime recovery;

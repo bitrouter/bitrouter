@@ -2,7 +2,7 @@ use super::*;
 use serde_json::{Value, json};
 
 use crate::session_evidence::journal::Journal;
-use crate::session_evidence::types::{Harness, SourceFormat};
+use crate::session_evidence::types::{Harness, RecordRef, SourceFormat};
 
 fn node(id: &str) -> NodeKey {
     NodeKey {
@@ -118,7 +118,7 @@ async fn indexed_pagination_preserves_all_facts_and_grouping_does_not_adopt_node
             &store,
             descriptor(),
             json!({"direction":"server","phase":"notification","method":"turn/started",
-            "payload":{"threadId":"root","turn":{"id":format!("turn-{index}")}}}),
+            "payload":{"threadId":"root","turn":{"id":format!("turn-{index}"),"status":"inProgress"}}}),
         )
         .await?;
     }
@@ -140,6 +140,13 @@ async fn indexed_pagination_preserves_all_facts_and_grouping_does_not_adopt_node
         .await?;
     assert_eq!(graph.nodes, BTreeSet::from([node("root")]));
     assert_eq!(graph.facts.len(), ids.len());
+    assert_eq!(graph.codex_runs.len(), 140);
+    assert!(
+        graph
+            .codex_runs
+            .iter()
+            .all(|run| run.outcome.is_none() && run.starts.len() == 1)
+    );
     assert!(graph.gaps.is_empty());
     Ok(())
 }
@@ -257,6 +264,117 @@ async fn malformed_lifecycle_is_durable_uncertainty_and_does_not_block_raw_curso
 }
 
 #[tokio::test]
+async fn v3_run_bookends_recover_from_raw_without_rewriting_v2_facts() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let url = format!(
+        "sqlite:{}?mode=rwc",
+        directory.path().join("evidence.db").display()
+    );
+    let db = crate::db::connect(&url).await?;
+    crate::db::run_migrations(&db).await?;
+    let store = EvidenceStore::new(db.clone(), "alice")?;
+    append(
+        &store,
+        descriptor(),
+        json!({
+            "direction":"server","phase":"notification","method":"turn/started",
+            "payload":{"threadId":"root","turn":{"id":"turn","status":"inProgress"}}
+        }),
+    )
+    .await?;
+    let mut old = store
+        .node_facts(&node("root"), None, 100)
+        .await?
+        .into_iter()
+        .next()
+        .context("started fact")?;
+    old.parser_version = "native-evidence/2".into();
+    old.record = None;
+    old.source_format = None;
+    old.id = canonical_digest(&(
+        &old.parser_version,
+        &old.record_id,
+        &old.node,
+        &old.related_node,
+        &old.event,
+    ))?;
+    let old_json = serde_json::to_string(&old)?;
+    let old_id = canonical_digest(&(&store.owner_key, &old.id))?;
+    fact_entity::Entity::delete_many().exec(&db).await?;
+    fact_entity::Entity::insert(fact_entity::ActiveModel {
+        id: Set(old_id.clone()),
+        owner: Set(store.owner_key.clone()),
+        namespace: Set(canonical_digest(&(Harness::Codex, "native-profile"))?),
+        parser_version: Set(canonical_digest(&old.parser_version)?),
+        record_id: Set(old.record_id.clone()),
+        digest: Set(canonical_digest(&old)?),
+        node_id: Set(Some(node("root").id()?)),
+        related_node_id: Set(None),
+        fact_json: Set(old_json.clone()),
+    })
+    .exec(&db)
+    .await?;
+    let source = append(
+        &store,
+        descriptor(),
+        json!({
+            "direction":"server","phase":"notification","method":"turn/completed",
+            "payload":{"threadId":"root","turn":{"id":"turn","status":"interrupted"}}
+        }),
+    )
+    .await?;
+    // Close with only v2 indexes present, then derive v3 for the first time
+    // from the two durable raw records after reopening the database.
+    fact_entity::Entity::delete_many()
+        .filter(fact_entity::Column::ParserVersion.eq(canonical_digest(&PARSER_VERSION)?))
+        .exec(&db)
+        .await?;
+    assert_eq!(fact_entity::Entity::find().all(&db).await?.len(), 1);
+    drop(store);
+    drop(db);
+    let db = crate::db::connect(&url).await?;
+    let reopened = EvidenceStore::new(db.clone(), "alice")?;
+    reopened.index_execution_range(&range(&source)).await?;
+    let graph = reopened
+        .execution_graph(&BTreeSet::from([node("root")]))
+        .await?;
+    assert!(graph.gaps.is_empty());
+    assert_eq!(graph.codex_runs.len(), 1);
+    let run = &graph.codex_runs[0];
+    assert_eq!(
+        run.outcome,
+        Some(super::super::super::execution::runs::RunOutcome::Interrupted)
+    );
+    assert_eq!(run.starts[0].record.range.start, 0);
+    assert_eq!(run.terminations[0].record.range.start, 1);
+    for reference in [&run.starts[0].record, &run.terminations[0].record] {
+        let records = reopened.records(&reference.range).await?;
+        assert_eq!(
+            RecordRef::from_record(records.first().context("boundary raw record")?)?,
+            *reference
+        );
+    }
+    assert_eq!(
+        fact_entity::Entity::find_by_id(old_id)
+            .one(&db)
+            .await?
+            .context("legacy v2 fact")?
+            .fact_json,
+        old_json
+    );
+    // A terminal index is insufficient if its original evidence disappears.
+    record_entity::Entity::delete_by_id(&run.terminations[0].record.record_id)
+        .exec(&db)
+        .await?;
+    let damaged = reopened
+        .execution_graph(&BTreeSet::from([node("root")]))
+        .await?;
+    assert!(damaged.gaps.contains("native_graph_evidence_invalid"));
+    assert!(damaged.codex_runs.iter().all(|run| run.outcome.is_none()));
+    Ok(())
+}
+
+#[tokio::test]
 async fn adding_process_identity_preserves_legacy_fact_bytes_and_digests() -> Result<()> {
     let store = store().await?;
     append(&store, descriptor(), thread("root", None, "group")).await?;
@@ -280,7 +398,8 @@ async fn adding_process_identity_preserves_legacy_fact_bytes_and_digests() -> Re
 }
 
 #[tokio::test]
-async fn parser_v2_rebuilds_reset_identity_after_reopen_without_overwriting_v1() -> Result<()> {
+async fn current_parser_rebuilds_reset_identity_after_reopen_without_overwriting_v1() -> Result<()>
+{
     let directory = tempfile::tempdir()?;
     let url = format!(
         "sqlite:{}?mode=rwc",
@@ -320,6 +439,8 @@ async fn parser_v2_rebuilds_reset_identity_after_reopen_without_overwriting_v1()
         record_id: record.id.clone(),
         record_digest: record.digest,
         source_id: source.id.clone(),
+        record: None,
+        source_format: None,
         process_id: None,
         acp_session_id: None,
         node: None,
@@ -354,7 +475,7 @@ async fn parser_v2_rebuilds_reset_identity_after_reopen_without_overwriting_v1()
     };
     let facts = reopened.node_facts(&target, None, 100).await?;
     assert_eq!(facts.len(), 1);
-    assert_eq!(facts[0].parser_version, "native-evidence/2");
+    assert_eq!(facts[0].parser_version, PARSER_VERSION);
     assert_eq!(facts[0].acp_session_id.as_deref(), Some("acp-root"));
     assert_eq!(facts[0].node.as_ref(), Some(&target));
     assert_eq!(

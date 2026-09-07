@@ -32,6 +32,31 @@ async fn wire_tap_keeps_native_correlation_and_excludes_configuration_secrets() 
 }
 
 #[tokio::test]
+async fn steering_preserves_both_requested_and_accepted_native_turns() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut tap = tap(directory.path()).await?;
+    let request = tap.select("client", &json!({"id":"steer-1","method":"turn/steer","params":{
+        "threadId":"root","expectedTurnId":"turn-a","input":[],"config":{"api_key":"private"}
+    }}))?.context("steer request")?;
+    let response = tap
+        .select(
+            "server",
+            &json!({"id":"steer-1","result":{
+                "turnId":"turn-a","modelProvider":"private"
+            }}),
+        )?
+        .context("steer response")?;
+    assert_eq!(
+        request["payload"],
+        json!({"threadId":"root","expectedTurnId":"turn-a","input":[]})
+    );
+    assert_eq!(response["payload"], json!({"turnId":"turn-a"}));
+    assert_eq!(response["operation_id"], request["operation_id"]);
+    assert_eq!(response["method"], "turn/steer");
+    Ok(())
+}
+
+#[tokio::test]
 async fn forwarding_preserves_bytes_and_commits_the_full_event_first() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let tap = Arc::new(Mutex::new(tap(directory.path()).await?));

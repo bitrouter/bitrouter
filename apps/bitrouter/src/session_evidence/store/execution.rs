@@ -302,6 +302,9 @@ fn finish_graph(mut graph: ExecutionGraph, facts: BTreeMap<String, NativeFact>) 
         graph.gaps.insert("native_spawn_cycle".into());
     }
     graph.facts = facts.into_values().collect();
+    let (runs, gaps) = super::super::execution::runs::summarize(&graph.facts);
+    graph.codex_runs = runs;
+    graph.gaps.extend(gaps);
     graph
 }
 

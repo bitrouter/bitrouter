@@ -80,6 +80,50 @@ fn codex_rollout_preserves_failed_completion_and_event_aliases() -> Result<()> {
 }
 
 #[test]
+fn codex_aborts_keep_optional_identity_and_validate_terminal_reasons() -> Result<()> {
+    for reason in ["interrupted", "replaced", "review_ended", "budget_limited"] {
+        for id in [json!("turn"), Value::Null] {
+            let parsed = facts(
+                SourceFormat::CodexRollout,
+                json!({"type":"event_msg","payload":{
+                    "type":"turn_aborted","turn_id":id,"reason":reason
+                }}),
+            )?;
+            assert_eq!(
+                parsed[0].event,
+                FactKind::RunAborted {
+                    run_id: id.as_str().map(str::to_owned),
+                    reason: reason.into(),
+                }
+            );
+            assert!(parsed[0].record.is_some());
+        }
+    }
+    let legacy = facts(
+        SourceFormat::CodexRollout,
+        json!({"type":"event_msg","payload":{
+            "type":"turn_aborted","reason":"interrupted"
+        }}),
+    )?;
+    assert!(matches!(
+        legacy[0].event,
+        FactKind::RunAborted { run_id: None, .. }
+    ));
+    for payload in [
+        json!({"type":"turn_aborted","turn_id":7,"reason":"interrupted"}),
+        json!({"type":"turn_aborted","turn_id":"turn","reason":"unknown"}),
+        json!({"type":"turn_aborted","turn_id":"","reason":"interrupted"}),
+    ] {
+        let parsed = facts(
+            SourceFormat::CodexRollout,
+            json!({"type":"event_msg","payload":payload}),
+        )?;
+        assert!(matches!(parsed[0].event, FactKind::Gap { .. }));
+    }
+    Ok(())
+}
+
+#[test]
 fn codex_rollout_keeps_both_explicit_parent_claims_for_conflict_detection() -> Result<()> {
     let parsed = facts(
         SourceFormat::CodexRollout,

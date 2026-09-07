@@ -247,6 +247,16 @@ reads adjacent `agent-*.meta.json` files for explicit parent-agent relations.
 Missing parent metadata remains an evidence gap. The derived execution graph retains raw record references and
 does not by itself assign task membership or settle an evaluation.
 
+Codex execution snapshots separate turn bookends by native node and turn id,
+including interrupted turns and later executions by a resumed child. Each
+boundary retains its original source reference and origin. Fork history can
+contain copied parent turns or synthetic aborts; those records remain unverified
+unless execution provenance is established and cannot finish a child run.
+Missing turn ids, conflicting outcomes and reversed source order remain gaps.
+The tap retains requested and accepted turn ids for native steering, but those
+native RPC ids are not the controller's ACP prompt operation ids. This status
+does not establish task membership, native liveness or evaluation readiness.
+
 The maintained Claude adapter also requests selected `emitRawSDKMessages`
 lifecycle filters while preserving existing filters. The evidence journal keeps
 native command states, session idle/running states, task transitions, background

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::eval::types::{EvalDecisionRef, canonical_digest};
 
 pub const SCHEMA_VERSION: u32 = 1;
-pub const PARSER_VERSION: &str = "native-evidence/2";
+pub const PARSER_VERSION: &str = "native-evidence/3";
 pub const MAX_RECORD_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_OBJECT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RECORDS: usize = 100_000;

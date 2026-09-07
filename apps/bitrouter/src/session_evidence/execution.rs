@@ -8,17 +8,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::types::{
-    EdgeKind, MAX_GRAPH_ITEMS, NodeKey, PARSER_VERSION, SourceDescriptor, SourceFormat,
+    EdgeKind, MAX_GRAPH_ITEMS, NodeKey, PARSER_VERSION, RecordRef, SourceDescriptor, SourceFormat,
     StoredRecord, identifier,
 };
 use crate::eval::types::canonical_digest;
 
 mod claude;
+pub mod runs;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FactKind {
     Node,
+    HistorySource {
+        inherited: bool,
+    },
     Relation {
         relation: EdgeKind,
     },
@@ -31,6 +35,10 @@ pub enum FactKind {
     RunFinished {
         run_id: String,
         status: String,
+    },
+    RunAborted {
+        run_id: Option<String>,
+        reason: String,
     },
     Runtime {
         version: String,
@@ -98,6 +106,11 @@ pub struct NativeFact {
     pub record_id: String,
     pub record_digest: String,
     pub source_id: String,
+    /// Present on current parser output; older frozen facts retain their bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<RecordRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_format: Option<SourceFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_id: Option<String>,
     /// ACP attachment of this specific SDK observation, separate from the
@@ -114,12 +127,15 @@ pub struct NativeFact {
 pub struct ExecutionGraph {
     pub nodes: BTreeSet<NodeKey>,
     pub facts: Vec<NativeFact>,
+    #[serde(default)]
+    pub codex_runs: Vec<runs::CodexRun>,
     pub gaps: BTreeSet<String>,
 }
 
 struct Extractor<'a> {
     source: &'a SourceDescriptor,
     record: &'a StoredRecord,
+    reference: RecordRef,
     facts: BTreeMap<String, NativeFact>,
     process_id: Option<String>,
     acp_session_id: Option<String>,
@@ -131,6 +147,7 @@ pub fn extract(source: &SourceDescriptor, record: &StoredRecord) -> Result<Vec<N
     let mut extractor = Extractor {
         source,
         record,
+        reference: RecordRef::from_record(record)?,
         facts: BTreeMap::new(),
         process_id: None,
         acp_session_id: None,
@@ -156,6 +173,7 @@ pub(crate) fn validate_claude_message(
     let mut extractor = Extractor {
         source,
         record,
+        reference: RecordRef::from_record(record)?,
         facts: BTreeMap::new(),
         process_id: None,
         acp_session_id: None,
@@ -209,6 +227,8 @@ impl Extractor<'_> {
                 record_id: self.record.id.clone(),
                 record_digest: self.record.digest.clone(),
                 source_id: self.record.source_id.clone(),
+                record: Some(self.reference.clone()),
+                source_format: Some(self.source.format),
                 process_id: self.process_id.clone(),
                 acp_session_id: self.acp_session_id.clone(),
                 node,
@@ -262,6 +282,21 @@ impl Extractor<'_> {
                 "native metadata id mismatch"
             );
             self.push(Some(node.clone()), None, FactKind::Node)?;
+            if self.record.input.sequence == 0 {
+                // Copied forks can contain parent turn bookends. Referenced
+                // interrupted snapshots can also contain synthetic aborts.
+                // Neither record is proof that the child executed that turn.
+                // https://github.com/openai/codex/blob/50379197779be0e5afcbddb014a34cd1fc08af53/codex-rs/core/src/session/mod.rs
+                self.push(
+                    Some(node.clone()),
+                    None,
+                    FactKind::HistorySource {
+                        inherited: ["forked_from_id", "history_base"]
+                            .iter()
+                            .any(|key| payload.get(*key).is_some_and(|value| !value.is_null())),
+                    },
+                )?;
+            }
             if let Some(parent) = payload.get("parent_thread_id").and_then(Value::as_str) {
                 self.relation(self.node(parent, None)?, node.clone(), EdgeKind::Spawn)?;
             }
@@ -303,6 +338,21 @@ impl Extractor<'_> {
                         .into(),
                     },
                 )?,
+                Some("turn_aborted") => {
+                    // Older rollouts omit turn_id. Preserve that observation;
+                    // neither record adjacency nor a timestamp selects its turn.
+                    // https://github.com/openai/codex/blob/50379197779be0e5afcbddb014a34cd1fc08af53/codex-rs/protocol/src/protocol.rs
+                    let run_id = optional_text(payload, "turn_id")?;
+                    let reason = text(payload, "reason")?;
+                    ensure!(
+                        matches!(
+                            reason.as_str(),
+                            "interrupted" | "replaced" | "review_ended" | "budget_limited"
+                        ),
+                        "unsupported native abort reason"
+                    );
+                    self.push(Some(node), None, FactKind::RunAborted { run_id, reason })?;
+                }
                 _ => {}
             }
         }
@@ -356,6 +406,10 @@ impl Extractor<'_> {
             let turn = payload.get("turn").context("native turn missing")?;
             let run_id = text(turn, "id")?;
             let event = if method == "turn/started" {
+                ensure!(
+                    turn.get("status").and_then(Value::as_str) == Some("inProgress"),
+                    "invalid started turn status"
+                );
                 FactKind::RunStarted { run_id }
             } else {
                 let status = text(turn, "status")?;
@@ -544,6 +598,13 @@ fn text(value: &Value, key: &str) -> Result<String> {
         .context("native lifecycle field missing")?;
     identifier(text)?;
     Ok(text.into())
+}
+
+fn optional_text(value: &Value, key: &str) -> Result<Option<String>> {
+    match value.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => text(value, key).map(Some),
+    }
 }
 
 #[cfg(test)]

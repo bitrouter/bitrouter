@@ -298,6 +298,7 @@ impl WireTap {
                     &[
                         "threadId",
                         "turnId",
+                        "expectedTurnId",
                         "itemId",
                         "lastTurnId",
                         "numTurns",
@@ -332,7 +333,7 @@ impl WireTap {
         } else if origin == "client" {
             select_fields(
                 raw.get("result").unwrap_or(&Value::Null),
-                &["thread", "turn", "items", "data", "nextCursor"],
+                &["thread", "turn", "turnId", "items", "data", "nextCursor"],
             )
         } else {
             raw.get("result").cloned().unwrap_or(Value::Null)
