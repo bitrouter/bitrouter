@@ -1056,12 +1056,7 @@ impl InboundAdapter for GenerateContentAdapter {
         }
         let mut body = serde_json::json!({
             "candidates": [candidate],
-            "usageMetadata": {
-                "promptTokenCount": usage.prompt_tokens,
-                "candidatesTokenCount": usage.completion_tokens.saturating_sub(usage.reasoning_tokens),
-                "totalTokenCount": usage.total(),
-                "thoughtsTokenCount": usage.reasoning_tokens,
-            },
+            "usageMetadata": render_usage(&usage),
         });
         // Restore the result-level `modelVersion` when it round-tripped (only
         // ever set by this protocol's `parse_response`).
@@ -1421,6 +1416,23 @@ fn render_message(m: &Message) -> serde_json::Value {
     serde_json::json!({ "role": role_str(m.role), "parts": parts })
 }
 
+/// Render the official Gemini `UsageMetadata` shape. Gemini exposes cache
+/// reads as a subset of `promptTokenCount`, but has no cache-write counter.
+fn render_usage(usage: &Usage) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "promptTokenCount": usage.prompt_tokens,
+        "candidatesTokenCount": usage
+            .completion_tokens
+            .saturating_sub(usage.reasoning_tokens),
+        "totalTokenCount": usage.total(),
+        "thoughtsTokenCount": usage.reasoning_tokens,
+    });
+    if usage.cache_read_tokens > 0 {
+        value["cachedContentTokenCount"] = usage.cache_read_tokens.into();
+    }
+    value
+}
+
 fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
     // Absence of `promptTokenCount` means the chunk carries no usage at all.
     let prompt = value.get("promptTokenCount")?.as_u64().unwrap_or(0);
@@ -1772,14 +1784,7 @@ impl StreamEncoder for GenerateContentStreamEncoder {
                 if let Some(c) = self.flush_pending_tool() {
                     chunks.push(c);
                 }
-                chunks.push(serde_json::json!({
-                    "usageMetadata": {
-                        "promptTokenCount": usage.prompt_tokens,
-                        "candidatesTokenCount": usage.completion_tokens.saturating_sub(usage.reasoning_tokens),
-                        "totalTokenCount": usage.total(),
-                        "thoughtsTokenCount": usage.reasoning_tokens,
-                    }
-                }));
+                chunks.push(serde_json::json!({"usageMetadata": render_usage(usage)}));
             }
             StreamPart::Finish { reason } => {
                 if let Some(c) = self.flush_pending_tool() {
@@ -1811,12 +1816,7 @@ impl StreamEncoder for GenerateContentStreamEncoder {
                     }]
                 });
                 if let Some(u) = usage {
-                    chunk["usageMetadata"] = serde_json::json!({
-                        "promptTokenCount": u.prompt_tokens,
-                        "candidatesTokenCount": u.completion_tokens.saturating_sub(u.reasoning_tokens),
-                        "totalTokenCount": u.total(),
-                        "thoughtsTokenCount": u.reasoning_tokens,
-                    });
+                    chunk["usageMetadata"] = render_usage(u);
                 }
                 chunks.push(chunk);
             }

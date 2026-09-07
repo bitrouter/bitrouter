@@ -3296,9 +3296,18 @@ fn render_responses_usage(usage: &Usage) -> serde_json::Value {
         "total_tokens": usage.total(),
         "output_tokens_details": { "reasoning_tokens": usage.reasoning_tokens },
     });
-    if usage.cache_read_tokens > 0 {
-        obj["input_tokens_details"] =
-            serde_json::json!({ "cached_tokens": usage.cache_read_tokens });
+    if usage.cache_read_tokens > 0 || usage.cache_write_tokens > 0 {
+        let mut details = serde_json::Map::new();
+        if usage.cache_read_tokens > 0 {
+            details.insert("cached_tokens".to_string(), usage.cache_read_tokens.into());
+        }
+        if usage.cache_write_tokens > 0 {
+            details.insert(
+                "cache_write_tokens".to_string(),
+                usage.cache_write_tokens.into(),
+            );
+        }
+        obj["input_tokens_details"] = serde_json::Value::Object(details);
     }
     obj
 }
@@ -3322,12 +3331,17 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .and_then(|d| d.get("cached_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    let cache_write = value
+        .get("input_tokens_details")
+        .and_then(|d| d.get("cache_write_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     Some(Usage {
         prompt_tokens: input,
         completion_tokens: output,
         reasoning_tokens: reasoning,
         cache_read_tokens: cache_read,
-        cache_write_tokens: 0,
+        cache_write_tokens: cache_write,
         web_search_count: 0,
         origin: UsageOrigin::ProviderReported,
         raw: Some(Box::new(value.clone())),
@@ -4157,12 +4171,7 @@ impl ResponsesStreamEncoder {
         });
         if let Some(u) = usage {
             // #454-5: numeric, never null; absent stays absent.
-            response["usage"] = serde_json::json!({
-                "input_tokens": u.prompt_tokens,
-                "output_tokens": u.completion_tokens,
-                "total_tokens": u.total(),
-                "output_tokens_details": { "reasoning_tokens": u.reasoning_tokens },
-            });
+            response["usage"] = render_responses_usage(&u);
         }
         frames.push(self.ev(event_name, serde_json::json!({ "response": response })));
     }
