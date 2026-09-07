@@ -266,14 +266,24 @@ impl ControllerEvidence {
         let pending = (observation.phase == "response")
             .then(|| state.pending.get(&observation.operation_id))
             .flatten();
-        let uncertain = session_id
-            .into_iter()
-            .chain(
-                pending
-                    .filter(|scope| scope.method != "session/fork")
-                    .and_then(|scope| scope.session_id.as_deref()),
-            )
-            .any(|id| state.uncertain_queries.contains(id));
+        // A lifecycle transition can retain the old Query or create a new one
+        // before its RPC result. Notifications from either may arrive while
+        // sessions still contains the old profile. Preserve them unbound.
+        let transition_in_flight = observation.phase == "notification"
+            && session_id.is_some_and(|id| {
+                state.pending.values().any(|pending| {
+                    pending.session_id.as_deref() == Some(id) && lifecycle(&pending.method)
+                })
+            });
+        let uncertain = transition_in_flight
+            || session_id
+                .into_iter()
+                .chain(
+                    pending
+                        .filter(|scope| scope.method != "session/fork")
+                        .and_then(|scope| scope.session_id.as_deref()),
+                )
+                .any(|id| state.uncertain_queries.contains(id));
         if uncertain {
             return Ok((
                 state

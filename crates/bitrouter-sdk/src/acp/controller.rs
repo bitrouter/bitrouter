@@ -39,6 +39,17 @@ pub struct SessionObservation {
 /// observed operation visibly; an implementation must not silently drop data.
 #[async_trait]
 pub trait SessionObserver: Send + Sync {
+    /// Select durable fields from a notification. The default observes ACP
+    /// session updates; applications may opt into native lifecycle extensions
+    /// without coupling the controller to a particular harness protocol.
+    fn notification_fields(
+        &self,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        SessionNotification::matches_method(method).then(|| params.clone())
+    }
+
     /// Persist the observation before the controller forwards it.
     async fn observe(
         &self,
@@ -1014,11 +1025,11 @@ impl HandleDispatchFrom<Conductor> for ForwardMessages {
             .if_dispatch_from(Agent, async |message: Dispatch| {
                 if let Some(observer) = &self.session_observer
                     && let Dispatch::Notification(notification) = &message
-                    && SessionNotification::matches_method(notification.method()) {
+                    && let Some(payload) = observer.notification_fields(notification.method(), notification.params()) {
                         observer.observe(SessionObservation {
                             operation_id: uuid::Uuid::new_v4().to_string(),
                             method: notification.method().into(), phase: "notification".into(),
-                            payload: notification.params().clone(),
+                            payload,
                         }).await?;
                     }
                 // Persist the original full envelope before cost decoration or
@@ -3648,10 +3659,26 @@ mod tests {
     struct RecordingObserver {
         events: Mutex<Vec<super::SessionObservation>>,
         reject_preparation: bool,
+        native_notifications: bool,
     }
 
     #[async_trait::async_trait]
     impl super::SessionObserver for RecordingObserver {
+        fn notification_fields(
+            &self,
+            method: &str,
+            params: &serde_json::Value,
+        ) -> Option<serde_json::Value> {
+            if self.native_notifications && method == "_fixture/lifecycle" {
+                Some(super::selected_fields(params, &["sessionId", "state"]))
+            } else {
+                <SessionNotification as agent_client_protocol::JsonRpcMessage>::matches_method(
+                    method,
+                )
+                .then(|| params.clone())
+            }
+        }
+
         async fn observe(
             &self,
             observation: super::SessionObservation,
@@ -3671,6 +3698,105 @@ mod tests {
             }
             Ok(params)
         }
+    }
+
+    #[derive(
+        Debug,
+        Clone,
+        serde::Serialize,
+        serde::Deserialize,
+        agent_client_protocol::JsonRpcNotification,
+    )]
+    #[notification(method = "_fixture/lifecycle")]
+    struct NativeLifecycleNotice {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        state: String,
+        private_detail: String,
+    }
+
+    struct NativeNoticeAgent;
+
+    impl ConnectTo<Client> for NativeNoticeAgent {
+        async fn connect_to(
+            self,
+            client: impl ConnectTo<Agent>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            Agent
+                .builder()
+                .on_receive_request(
+                    async move |request: InitializeRequest, responder, _connection| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: PromptRequest, responder, connection| {
+                        connection.send_notification(NativeLifecycleNotice {
+                            session_id: request.session_id.0.to_string(),
+                            state: "idle".into(),
+                            private_detail: "original-only".into(),
+                        })?;
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(client)
+                .await
+        }
+    }
+
+    #[tokio::test]
+    async fn native_notification_selection_is_durable_before_forwarding_original()
+    -> anyhow::Result<()> {
+        let observer = Arc::new(RecordingObserver {
+            native_notifications: true,
+            ..RecordingObserver::default()
+        });
+        let received = Arc::new(tokio::sync::Notify::new());
+        let delivered = received.clone();
+        let observed = observer.clone();
+        let controller = Controller::new(
+            NativeNoticeAgent,
+            ControllerConfig::new(ControllerIdentity::new("fixture", "fixture", "test")),
+        )
+        .session_observer(observer.clone());
+        let (manager, upstream) = agent_client_protocol::Channel::duplex();
+        let task = tokio::spawn(controller.run(upstream));
+        Client
+            .builder()
+            .on_receive_notification(
+                async move |notification: NativeLifecycleNotice, _connection| {
+                    assert_eq!(notification.private_detail, "original-only");
+                    let events = observed
+                        .events
+                        .lock()
+                        .map_err(|_| agent_client_protocol::Error::internal_error())?;
+                    let event = events
+                        .iter()
+                        .find(|event| event.method == "_fixture/lifecycle")
+                        .ok_or_else(agent_client_protocol::Error::internal_error)?;
+                    assert_eq!(
+                        event.payload,
+                        serde_json::json!({"sessionId":"native","state":"idle"})
+                    );
+                    delivered.notify_one();
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .connect_with(manager, async |connection: ConnectionTo<Agent>| {
+                receive(connection.send_request(InitializeRequest::new(ProtocolVersion::V1)))
+                    .await?;
+                receive(connection.send_request(PromptRequest::new("native", vec![]))).await?;
+                tokio::time::timeout(std::time::Duration::from_secs(5), received.notified())
+                    .await
+                    .map_err(|_| agent_client_protocol::Error::internal_error())?;
+                Ok(())
+            })
+            .await?;
+        task.await??;
+        Ok(())
     }
 
     #[tokio::test]

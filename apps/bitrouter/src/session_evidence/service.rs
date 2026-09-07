@@ -483,6 +483,18 @@ impl ControllerEvidence {
 
 #[async_trait]
 impl SessionObserver for ControllerEvidence {
+    fn notification_fields(&self, method: &str, params: &Value) -> Option<Value> {
+        if method == "session/update" {
+            Some(params.clone())
+        } else if self.collector.root().harness == Harness::ClaudeCode
+            && method == super::claude_sdk::METHOD
+        {
+            super::claude_sdk::notification_fields(params)
+        } else {
+            None
+        }
+    }
+
     async fn observe(
         &self,
         observation: SessionObservation,
@@ -496,7 +508,10 @@ impl SessionObserver for ControllerEvidence {
             context.journal.append(event.clone()).await?;
             self.finish_observation(&observation, context.collector.root())
                 .await?;
-            if observation.phase == "response" || observation.phase == "disconnect" {
+            if observation.phase == "response"
+                || observation.phase == "disconnect"
+                || observation.method == super::claude_sdk::METHOD
+            {
                 self.wake.notify_one();
             }
             anyhow::Ok(())

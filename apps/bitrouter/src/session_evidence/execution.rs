@@ -13,6 +13,8 @@ use super::types::{
 };
 use crate::eval::types::canonical_digest;
 
+mod claude;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FactKind {
@@ -29,6 +31,39 @@ pub enum FactKind {
     RunFinished {
         run_id: String,
         status: String,
+    },
+    Runtime {
+        version: String,
+        capabilities: BTreeSet<String>,
+    },
+    NativeCommand {
+        command_id: String,
+        state: String,
+    },
+    SessionState {
+        state: String,
+    },
+    BackgroundTasks {
+        task_ids: BTreeSet<String>,
+    },
+    NativeTask {
+        task_id: String,
+        tool_use_id: Option<String>,
+        task_type: Option<String>,
+        status: Option<String>,
+        background: Option<bool>,
+    },
+    NativeResult {
+        result_id: String,
+        command_id: Option<String>,
+        status: String,
+        is_error: bool,
+    },
+    ConversationReset {
+        new_conversation_id: String,
+    },
+    SpawnedBy {
+        tool_call_id: String,
     },
     AgentCall {
         call_id: String,
@@ -161,7 +196,8 @@ impl Extractor<'_> {
             SourceFormat::CodexAppServer => self.codex_event(),
             SourceFormat::ClaudeHook => self.claude_hook(),
             SourceFormat::ClaudeAgentMetadata => self.claude_metadata(),
-            SourceFormat::ClaudeTranscript | SourceFormat::Acp => Ok(()),
+            SourceFormat::Acp => self.claude_sdk(),
+            SourceFormat::ClaudeTranscript => Ok(()),
         }
     }
 
@@ -439,11 +475,19 @@ impl Extractor<'_> {
                 return Ok(());
             }
         };
-        self.relation(
-            self.node(&child.native_id, parent_agent)?,
-            child,
-            EdgeKind::Spawn,
-        )
+        let parent = self.node(&child.native_id, parent_agent)?;
+        self.relation(parent.clone(), child.clone(), EdgeKind::Spawn)?;
+        if let Some(tool) = raw.get("toolUseId").and_then(Value::as_str) {
+            identifier(tool)?;
+            self.push(
+                Some(child),
+                Some(parent),
+                FactKind::SpawnedBy {
+                    tool_call_id: tool.into(),
+                },
+            )?;
+        }
+        Ok(())
     }
 }
 

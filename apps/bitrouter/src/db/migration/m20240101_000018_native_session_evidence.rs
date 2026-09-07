@@ -235,7 +235,7 @@ mod tests {
         for backend in [DbBackend::MySql, DbBackend::Postgres, DbBackend::Sqlite] {
             let table = Table::create()
                 .table(NativeEvidenceRecords::Table)
-                .col(&mut large_json(NativeEvidenceRecords::RecordJson, backend))
+                .col(large_json(NativeEvidenceRecords::RecordJson, backend))
                 .col(
                     ColumnDef::new(NativeEvidenceRecords::Generation)
                         .string_len(512)

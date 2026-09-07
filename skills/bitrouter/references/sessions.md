@@ -174,9 +174,18 @@ Claude prompt hooks retain native prompt IDs when present. Stop observations
 retain available background-work metadata; they do not certify that a task has
 finished. Child transcript collection follows nested subagent directories and
 reads adjacent `agent-*.meta.json` files for explicit parent-agent relations.
-Missing parent metadata remains an
-evidence gap. The derived execution graph retains raw record references and
+Missing parent metadata remains an evidence gap. The derived execution graph retains raw record references and
 does not by itself assign task membership or settle an evaluation.
+
+The maintained Claude adapter also requests selected `emitRawSDKMessages`
+lifecycle filters while preserving existing filters. The evidence journal keeps
+native command states, session idle/running states, task transitions, background
+task sets and runtime capabilities as separate observations. Task IDs are not
+assumed to be agent transcript IDs. Original notifications still reach the
+manager; configuration fields, result text and cumulative cost counters are
+excluded from this lifecycle view. Early notifications without a confirmed
+session/profile binding remain unbound and do not acquire the default profile's
+identity.
 
 Original records survive compaction and context rewind. Fork dependencies use
 native ordinal and byte cuts, and later parent work cannot enter the inherited

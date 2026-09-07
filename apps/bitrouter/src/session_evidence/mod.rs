@@ -2,6 +2,7 @@
 
 pub mod accounting;
 pub mod claude_hooks;
+pub mod claude_sdk;
 pub mod codex_proxy;
 pub mod collector;
 pub mod execution;

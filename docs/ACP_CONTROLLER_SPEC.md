@@ -261,6 +261,10 @@ These are review gates, not preferences.
   to the harness.
 - The application may read explicitly related Claude JSONL and Codex rollout
   files under configured native roots. It never mutates native session storage.
+- An application observer may select additional native lifecycle notification
+  fields for durable evidence. Default observation remains ACP session updates;
+  selecting evidence fields must not change the notification forwarded to the
+  manager. Persistence completes before forwarding the original notification.
 - The controller does not set `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or an
   equivalent home override unless the user explicitly requests an isolated
   harness environment. Test probes may use temporary homes.

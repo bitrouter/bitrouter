@@ -48,6 +48,208 @@ fn observation(operation: &str, method: &str, phase: &str, payload: Value) -> Se
     }
 }
 
+#[tokio::test]
+async fn native_sdk_lifecycle_is_durable_in_the_confirmed_session_profile() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut handle = claude_service(directory.path()).await?;
+    let service = &handle.service;
+    service
+        .observe(observation(
+            "new",
+            "session/new",
+            "response",
+            json!({"sessionId":"root"}),
+        ))
+        .await?;
+    let namespace = service
+        .state
+        .lock()
+        .await
+        .sessions
+        .get("root")
+        .cloned()
+        .context("root namespace")?;
+    for (id, message) in [
+        (
+            "sdk-init",
+            json!({"type":"system","subtype":"init","session_id":"root","uuid":"init","claude_code_version":"2.1.220","capabilities":["msg_lifecycle_v1"],"apiKeySource":"fixture-secret"}),
+        ),
+        (
+            "sdk-task",
+            json!({"type":"system","subtype":"task_started","session_id":"root","task_id":"shell-task","task_type":"local_bash","tool_use_id":"tool"}),
+        ),
+        (
+            "sdk-background",
+            json!({"type":"system","subtype":"background_tasks_changed","session_id":"root","tasks":[{"task_id":"shell-task","description":"private-description"}]}),
+        ),
+        (
+            "sdk-idle",
+            json!({"type":"system","subtype":"session_state_changed","session_id":"root","state":"idle"}),
+        ),
+    ] {
+        let payload = service
+            .notification_fields(
+                super::super::claude_sdk::METHOD,
+                &json!({"sessionId":"root","message":message}),
+            )
+            .context("selected lifecycle")?;
+        service
+            .observe(observation(
+                id,
+                super::super::claude_sdk::METHOD,
+                "notification",
+                payload,
+            ))
+            .await?;
+    }
+    let rows = journal_rows(service, &namespace).await?;
+    let serialized = serde_json::to_string(&rows)?;
+    assert!(!serialized.contains("fixture-secret"));
+    assert!(!serialized.contains("private-description"));
+    let root = NodeKey {
+        namespace,
+        harness: Harness::ClaudeCode,
+        native_id: "root".into(),
+        agent_id: None,
+    };
+    let graph = service
+        .store
+        .execution_graph(&BTreeSet::from([root.clone()]))
+        .await?;
+    assert_eq!(graph.nodes, BTreeSet::from([root]));
+    assert!(graph.facts.iter().any(|fact| matches!(&fact.event, super::super::execution::FactKind::Runtime { version, .. } if version == "2.1.220")));
+    assert!(graph.facts.iter().any(|fact| matches!(&fact.event, super::super::execution::FactKind::SessionState { state } if state == "idle")));
+    assert!(!graph.facts.iter().any(|fact| matches!(
+        fact.event,
+        super::super::execution::FactKind::RunFinished { .. }
+    )));
+    handle.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_notifications_during_query_rebuild_do_not_use_the_old_profile() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut handle = claude_service(directory.path()).await?;
+    let service = &handle.service;
+    let first_cwd = directory.path().join("first");
+    let second_cwd = directory.path().join("second");
+    let params = |cwd: &Path| {
+        json!({"sessionId":"root","cwd":cwd,"mcpServers":[],
+        "_meta":{"claudeCode":{"options":{"env":{"CLAUDE_CONFIG_DIR":"profile"}}}}})
+    };
+    service
+        .observe(observation(
+            "new",
+            "session/new",
+            "request",
+            json!({"cwd":first_cwd}),
+        ))
+        .await?;
+    service
+        .prepare_session_request("new", "session/new", params(&first_cwd))
+        .await?;
+    service
+        .observe(observation(
+            "new",
+            "session/new",
+            "response",
+            json!({"sessionId":"root"}),
+        ))
+        .await?;
+    let first = service
+        .state
+        .lock()
+        .await
+        .sessions
+        .get("root")
+        .cloned()
+        .context("first namespace")?;
+    service
+        .observe(observation(
+            "load",
+            "session/load",
+            "request",
+            json!({"sessionId":"root","cwd":second_cwd}),
+        ))
+        .await?;
+    service
+        .prepare_session_request("load", "session/load", params(&second_cwd))
+        .await?;
+    let second = service
+        .state
+        .lock()
+        .await
+        .pending
+        .get("load")
+        .map(|scope| scope.namespace.clone())
+        .context("second namespace")?;
+    assert_ne!(first, second);
+    for (id, message) in [
+        (
+            "during-init",
+            json!({"type":"system","subtype":"init","session_id":"root","claude_code_version":"2.1.220"}),
+        ),
+        (
+            "during-task",
+            json!({"type":"system","subtype":"task_started","session_id":"root","task_id":"task"}),
+        ),
+        (
+            "during-result",
+            json!({"type":"result","subtype":"success","session_id":"root","uuid":"result","is_error":false}),
+        ),
+    ] {
+        let payload = service
+            .notification_fields(
+                super::super::claude_sdk::METHOD,
+                &json!({"sessionId":"root","message":message}),
+            )
+            .context("native fields")?;
+        service
+            .observe(observation(
+                id,
+                super::super::claude_sdk::METHOD,
+                "notification",
+                payload,
+            ))
+            .await?;
+    }
+    let raw = journal_rows(service, &service.collector.root().namespace).await?;
+    let during: Vec<_> = raw
+        .iter()
+        .filter(|row| {
+            row["operation_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("during-"))
+        })
+        .collect();
+    assert_eq!(during.len(), 3);
+    assert!(during.iter().all(|row| row["native_scope"] == "unresolved"));
+    for namespace in [&first, &second] {
+        let node = NodeKey {
+            namespace: namespace.clone(),
+            harness: Harness::ClaudeCode,
+            native_id: "root".into(),
+            agent_id: None,
+        };
+        assert!(service.store.node_facts(&node, None, 100).await?.is_empty());
+    }
+    service
+        .observe(observation(
+            "load",
+            "session/load",
+            "response",
+            json!({"sessionId":"root"}),
+        ))
+        .await?;
+    assert_eq!(
+        service.state.lock().await.sessions.get("root"),
+        Some(&second)
+    );
+    handle.shutdown().await?;
+    Ok(())
+}
+
 async fn journal_rows(service: &ControllerEvidence, namespace: &str) -> Result<Vec<Value>> {
     let sources = service.store.sources(None, 128).await?;
     let source = sources

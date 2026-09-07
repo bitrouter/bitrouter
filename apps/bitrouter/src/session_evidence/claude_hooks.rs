@@ -35,7 +35,7 @@ pub async fn instrument(
         .get("cwd")
         .and_then(Value::as_str)
         .map(std::path::PathBuf::from);
-    let options = params
+    let meta = params
         .as_object_mut()
         .context("session params must be an object")?
         .entry("_meta")
@@ -45,7 +45,9 @@ pub async fn instrument(
         .entry("claudeCode")
         .or_insert_with(|| json!({}))
         .as_object_mut()
-        .context("Claude meta must be an object")?
+        .context("Claude meta must be an object")?;
+    super::claude_sdk::instrument(meta)?;
+    let options = meta
         .entry("options")
         .or_insert_with(|| json!({}))
         .as_object_mut()

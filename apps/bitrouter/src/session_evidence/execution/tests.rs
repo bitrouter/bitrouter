@@ -193,3 +193,99 @@ fn requests_are_not_native_results_and_unknown_terminal_status_is_a_gap() -> Res
     assert!(matches!(parsed[0].event, FactKind::Gap { .. }));
     Ok(())
 }
+
+fn sdk_facts(message: Value) -> Result<Vec<NativeFact>> {
+    facts(
+        SourceFormat::Acp,
+        json!({"method":"_claude/sdkMessage","phase":"notification","native_scope":"session",
+        "payload":{"sessionId":"root","message":message}}),
+    )
+}
+
+#[test]
+fn claude_sdk_keeps_command_result_idle_and_background_observations_separate() -> Result<()> {
+    let command = sdk_facts(
+        json!({"type":"command_lifecycle","command_uuid":"command","state":"completed"}),
+    )?;
+    assert_eq!(
+        command[0].event,
+        FactKind::NativeCommand {
+            command_id: "command".into(),
+            state: "completed".into()
+        }
+    );
+    let result = sdk_facts(
+        json!({"type":"result","subtype":"success","uuid":"result","is_error":false,"session_id":"root"}),
+    )?;
+    assert_eq!(
+        result[0].event,
+        FactKind::NativeResult {
+            result_id: "result".into(),
+            command_id: None,
+            status: "success".into(),
+            is_error: false
+        }
+    );
+    let idle = sdk_facts(
+        json!({"type":"system","subtype":"session_state_changed","state":"idle","session_id":"root"}),
+    )?;
+    assert_eq!(
+        idle[0].event,
+        FactKind::SessionState {
+            state: "idle".into()
+        }
+    );
+    let background = sdk_facts(
+        json!({"type":"system","subtype":"background_tasks_changed","session_id":"root","tasks":[{"task_id":"still-running"}]}),
+    )?;
+    assert_eq!(
+        background[0].event,
+        FactKind::BackgroundTasks {
+            task_ids: BTreeSet::from(["still-running".into()])
+        }
+    );
+    assert!(
+        command
+            .iter()
+            .chain(&result)
+            .chain(&idle)
+            .chain(&background)
+            .all(|fact| !matches!(fact.event, FactKind::RunFinished { .. }))
+    );
+    Ok(())
+}
+
+#[test]
+fn claude_sdk_task_ids_do_not_invent_agent_nodes_and_unknown_scope_stays_unbound() -> Result<()> {
+    let message = json!({"type":"system","subtype":"task_started","session_id":"root","task_id":"shell-job","tool_use_id":"tool-call","task_type":"local_bash"});
+    let task = sdk_facts(message.clone())?;
+    assert_eq!(
+        task[0]
+            .node
+            .as_ref()
+            .map(|node| (&node.native_id, &node.agent_id)),
+        Some((&"root".to_string(), &None))
+    );
+    assert!(task[0].related_node.is_none());
+    assert!(
+        matches!(&task[0].event, FactKind::NativeTask { task_id, tool_use_id:Some(tool), .. } if task_id == "shell-job" && tool == "tool-call")
+    );
+    let unbound = facts(
+        SourceFormat::Acp,
+        json!({"method":"_claude/sdkMessage","phase":"notification","native_scope":"controller",
+        "payload":{"sessionId":"root","message":message}}),
+    )?;
+    assert!(unbound.is_empty());
+    let wrong_session = sdk_facts(
+        json!({"type":"system","subtype":"session_state_changed","session_id":"other","state":"idle"}),
+    )?;
+    assert_eq!(wrong_session.len(), 1);
+    assert!(matches!(wrong_session[0].event, FactKind::Gap { .. }));
+    let captured = crate::session_evidence::claude_sdk::notification_fields(&json!({"sessionId":"root","message":{
+        "type":"system","subtype":"task_started","task_id":"task","tool_use_id":{"prompt":"private"}
+    }})).context("selected malformed event")?;
+    let malformed = sdk_facts(captured["message"].clone())?;
+    assert_eq!(malformed.len(), 1);
+    assert!(matches!(malformed[0].event, FactKind::Gap { .. }));
+    Ok(())
+}

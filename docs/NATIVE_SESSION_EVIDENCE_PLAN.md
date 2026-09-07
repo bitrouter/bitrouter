@@ -37,8 +37,18 @@ and targeted tests cover raw/index replay, corruption, owner isolation, database
 reopen, native event semantics, and metadata recovery. This does not complete
 the full runtime conformance matrix.
 
+The Claude SDK lifecycle stage opts into selected native extensions
+through the existing adapter and adds application-selected notification fields
+to the SDK observer. Confirmed session scopes index command states, native task
+states, background task sets, results, runtime capabilities and conversation
+resets separately. The original notification is forwarded after persistence;
+the evidence view excludes configuration fields, result text and overlapping
+cumulative cost counters. SDK task IDs are not agent transcript IDs. Early
+notifications stay in their unbound raw journal until their profile can be
+established; durable rebinding/recovery is still required.
+
 Still required: complete execution-relation parsing, native SDK lifecycle
-observation, and recovery of earlier
+rebinding, and recovery of earlier
 controller spools and root bindings; complete native query-lifetime recovery;
 capability/version gates; task membership and settlement; immutable workspace
 artifacts; authoritative
