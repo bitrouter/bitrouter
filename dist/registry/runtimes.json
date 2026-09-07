@@ -7,7 +7,7 @@
           "transport": {
             "args": [
               "-y",
-              "@agentclientprotocol/claude-agent-acp@0.70.0"
+              "@agentclientprotocol/claude-agent-acp@0.75.1"
             ],
             "command": "npx",
             "type": "stdio"
@@ -18,7 +18,7 @@
           "transport": {
             "args": [
               "-y",
-              "@agentclientprotocol/codex-acp@1.7.0"
+              "@agentclientprotocol/codex-acp@1.10.0"
             ],
             "command": "npx",
             "type": "stdio"

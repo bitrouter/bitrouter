@@ -196,49 +196,49 @@ Portable — there is no terminal-only path left to gate.
 
 ### `bitrouter init` (onboarding wizard)
 
-```
-bitrouter                            # bare: wizard when unconfigured, else status + hint
-bitrouter init                       # (re-)run the wizard interactively
-bitrouter init --yes [flags]         # headless: emit the JSON envelope, scaffold the config
-bitrouter init --force               # allow overwriting an existing bitrouter.yaml
-bitrouter init --reset               # clear stored credentials, then run
+```bash
+bitrouter
+bitrouter init --yes --harness codex --after exit
+bitrouter init --harness claude --model anthropic/claude-sonnet-4-6
 ```
 
-Bare `bitrouter` (no subcommand) is the front door. It runs a **network-free credential probe** — BYOK env keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY`), the cloud session file, and the local credential store — and either launches the guided wizard (nothing configured) or prints a one-line status + a `bitrouter launch` hint (already configured). It never re-onboards a configured user and never silently spawns a daemon or harness. Exit code 0 either way.
+Bare `bitrouter` opens first-run onboarding when no default ACP harness is
+saved. Credentials alone do not complete setup. The wizard saves `chat.agent`
+and optional `chat.model`, then either opens BitRouter's ACP TUI, starts the
+daemon, or exits. Subsequent bare invocations immediately open the saved TUI.
 
-The wizard is three steps, each mapping to a flag so an agent can drive it: **credentials** (sign in to BitRouter Cloud, log in to a provider, or paste a BYOK key), **harness** (`claude` / `codex`, installed via the native installer when missing), and **finish** — launch the harness now, start the daemon and print paste-in snippets, or exit. The only durable output is **credentials** (which zero-config auto-detects); the wizard never serializes `bitrouter.yaml` except the canned starter template.
+Configuration resolves from `./bitrouter.yaml`, then
+`$BITROUTER_HOME/bitrouter.yaml`, then `~/.bitrouter/bitrouter.yaml`. With no
+existing file, onboarding writes to the BitRouter home. `init -c PATH` selects
+an explicit destination. Existing configuration values are preserved while
+updating chat defaults; `--force` replaces them with the starter configuration.
+Writes are atomic. First-run defaults bind `127.0.0.1:4356` with `skip_auth: true`.
 
-`bitrouter init --yes` runs the whole thing non-interactively and **never blocks on a human**: it consumes the flag-supplied keys, reports-and-skips anything that would need interactive OAuth (in `providers_skipped_interactive`), emits the JSON result envelope on stdout, and reproduces the classic starter-file scaffold (`skip_auth: true`; refuses to overwrite unless `--force`).
+`init --yes` saves configuration without interactive credential prompts and
+exits by default. The default harness is `codex-acp`; `--harness claude` selects
+`claude-acp`. Repeated `--harness` flags use the first as the default. An explicit
+`--after launch` opens the ACP TUI even when setup itself was headless.
+Without a terminal, bare unconfigured invocation prints setup instructions
+and an inert onboarding envelope; it does not silently complete the wizard.
 
-| Flag | Step | Description |
-| --- | --- | --- |
-| `-c`, `--config <path>` | — | Starter-config write path (default `bitrouter.yaml`). |
-| `--yes`, `-y` | — | Headless: process the flags, never block, emit the envelope, scaffold the config. |
-| `--force` | — | Overwrite an existing `bitrouter.yaml` when scaffolding. |
-| `--reset` | — | Clear stored credentials first — cloud session always; provider credentials after a confirm, or unconditionally under `--yes`. |
-| `--cloud-login` | 1 | Sign in to BitRouter Cloud (device flow). Skipped-and-reported under `--yes`. |
-| `--api-key <brk_…>` | 1 | Seed the cloud credential from a `brk_` key (non-interactive). |
-| `--provider <id>` | 1 | Log in to an upstream provider (repeatable). |
-| `--provider-api-key <k>` | 1 | Key for the `--provider` at the same position (repeatable). |
-| `--use-detected` | 1 | Accept the auto-detected credential(s) without prompting. |
-| `--harness <claude\|codex>` | 2 | Harness to drive (repeatable). |
-| `--no-install` | 2 | Never install a missing harness. |
-| `--after <launch\|serve\|exit>` | 3 | Finish action (default `exit`; `launch` is honored only when the harness is present). |
-| `--model <id>` | 3 | Model handed to the harness for this session only (not persisted). |
-| `--write-config` | 3 | Write the starter `bitrouter.yaml`. |
+| Flag | Description |
+| --- | --- |
+| `-c`, `--config PATH` | Configuration destination; otherwise use the resolution chain above. |
+| `--yes`, `-y` | Process flags without interactive setup prompts. |
+| `--force` | Reset existing configuration to starter defaults before saving. |
+| `--reset` | Clear BitRouter credentials before setup; does not remove vendor CLI credentials. |
+| `--cloud-login` | Cloud device login; reported-and-skipped headlessly. |
+| `--api-key KEY` | Seed a BitRouter Cloud API key. |
+| `--provider ID` | Log in to a provider (repeatable); interactive OAuth is skipped headlessly. |
+| `--provider-api-key KEY` | Key paired with the provider at the same position. |
+| `--use-detected` | Accept detected credentials. |
+| `--harness claude\|codex` | Built-in ACP harness; the first selection becomes the default. |
+| `--after launch\|serve\|exit` | Open the ACP TUI, start the daemon, or exit. |
+| `--model ID` | Persist the default model for future TUI sessions. |
 
-The result envelope:
-
-```json
-{
-  "action": "onboarding",
-  "providers_configured": ["bitrouter", "openai"],
-  "providers_skipped_interactive": ["github-copilot"],
-  "harnesses_installed": ["claude"],
-  "after": "launch",
-  "snippet": null
-}
-```
+The JSON envelope includes `action`, `providers_configured`,
+`providers_skipped_interactive`, `harnesses_installed` (selected built-in ACP
+ids, not native CLI installations), `after`, and `snippet`.
 
 Retryable route candidates advance immediately unless an operator opts into an
 upstream fallback delay schedule:
@@ -606,49 +606,26 @@ it answers with that reason rather than failing.
 
 On a failed turn, or a session whose agent could not be shut down cleanly, `chat` prints the last lines of the session log after the session ends and names the file (`~/.bitrouter/logs/session-<stamp>-<pid>.log`). That log holds both BitRouter's own diagnostics and the agent child's stderr, interleaved. Unlike the other subcommands, `chat` writes its logs **only** to that file: it owns the terminal, and a log line arriving between two frames would scroll the screen out from under the renderer.
 
-### `bitrouter launch`
+### ACP workers and local CLI discovery
 
-```
-bitrouter launch -a <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
-```
+The maintained adapters are pinned to `@agentclientprotocol/codex-acp@1.10.0`
+and `@agentclientprotocol/claude-agent-acp@0.75.1`. Node.js 22+ and `npx` are
+required; npm obtains the pinned adapter on first use. No `agents:` entry is
+needed for either built-in id.
 
-Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the interactive surface — the human drives the harness's own TUI; for headless ACP sub-agents use `bitrouter spawn`.
+Codex and Claude subscription login metadata and model defaults also ship in
+the binary. With the default public registry, missing provider/model entries
+are filled from this snapshot; published metadata takes precedence. A custom
+registry URL or `registry.enabled: false` opts out. A stored subscription login
+auto-enables its provider, so no manual `providers:` entry is required.
 
-Before handing over, `launch` prints one line stating what the harness actually got — whether it is routed, and whether the tools/skills gateways reached it. That ceiling is the harness's, not BitRouter's: `pi` exposes no MCP mechanism to inject into.
-
-```
-launch: claude · routed via bitrouter (http://127.0.0.1:4356) · tools ✓ skills ✓
-launch: pi · routed via bitrouter (…) · tools ✗ skills ✗ (pi has no MCP mechanism)
-```
-
-`-a/--agent` takes **any catalog harness with an interactive binary**: `claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`, `agy` (catalog ids `claude-acp`, `codex-acp`, `pi-acp`, `hermes-acp` also resolve). An unknown id fails up front with the available list. Each is routed by its own mechanism, all from the shared catalog:
-
-| Harness | How it reaches BitRouter |
-| --- | --- |
-| `claude` | child env (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL` for `--model`) |
-| `codex` | one-shot `-c` overrides for a `bitrouter` provider (`base_url = <target>/v1`, `wire_api = "responses"`) |
-| `opencode` | synthesized `OPENCODE_CONFIG` JSON declaring a `bitrouter` openai-compatible provider |
-| `pi` | synthesized `PI_CODING_AGENT_DIR` with a `models.json`, selected by `--provider bitrouter --model …` |
-| `hermes` | synthesized `HERMES_HOME` with a `config.yaml` (loopback `custom` provider + `CUSTOM_API_KEY`) |
-| `openclaw` | synthesized `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH` profile (run as `tui --local`) |
-| `grok`, `agy` | **not routed** — own-auth subscription clients (see below) |
-
-
-The synthesized files are throwaway, written under the working tree's self-ignoring `.bitrouter/launch/`; the user's own `~/.config` is never touched. Their model lists come from the daemon's `/v1/models` (best-effort — an unreachable daemon just yields an empty list and the harness keeps its own defaults).
-
-**Gateway MCP servers.** `launch` also injects BitRouter's two MCP-shaped gateways into the harness: `bitrouter_tools` (the daemon's aggregate endpoint at `mcp.aggregate.route`, fanning out to every configured `mcp_servers` upstream — omitted when `mcp.aggregate.enabled: false`) and `bitrouter_skills` (this binary as `mcp serve --backend skills`, over the installed-skills root). Injection reaches the harnesses that have a mechanism for it — `claude` (`--mcp-config`), `codex` (`-c mcp_servers.*`), and `opencode` and `hermes` (their synthesized config files). `pi`, `openclaw`, `grok`, and `agy` expose no injectable MCP surface and launch without the gateways.
-
-`--model <id>` pins the harness's model through whatever mechanism it has: a model env var, a `-c model=` override, the synthesized config's default, or the harness's native flag for the own-auth clients. Following `cargo run`'s convention, everything after `--` is still forwarded to the agent verbatim, e.g. `bitrouter launch -a claude -- -p "summarize" --dangerously-skip-permissions`.
-
-**`grok` and `agy` are own-auth harnesses.** They launch with their own subscription auth and are **never redirected** — the startup line says `own-auth · not routed · not metered`, and `--check` reports it as a `routing` warning. They also remain **providers**: subscription clients whose sessions the daemon borrows to serve *other* requests (`supergrok` / `google-ai`), which is a separate stack and unaffected.
-
-The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing `claude` / `codex` binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines); the other harnesses have no bundled installer and error with a pointer to their upstream project.
-
-When the target is the local daemon (a derived base URL on a loopback/wildcard bind) and none is running, `launch` **auto-starts it** — printing a hint, launching a detached `serve`, and waiting for readiness before handing off to the agent. Pass `--no-start` to skip this (a reachability warning is printed instead). An explicit `--base-url` or a non-local bind is never auto-started — BitRouter can't start someone else's daemon — and only gets a warning if it looks unreachable.
-
-After the wrapped agent exits, `launch` prints a one-line session spend summary to stderr (spend during the run + today's total, from the local metering database). Silent when nothing was recorded in the window — e.g. when the run targeted Cloud.
-
-`bitrouter spawn --agent <claude|codex>` is a **deprecated alias** for `launch` (prints a migration note); it will be removed after one or two alpha releases.
+At session startup, BitRouter probes local CLIs with `--version` (two-second
+limit). Codex >=0.153.3 is passed to its adapter via `CODEX_PATH`; Claude Code
+>=2.1.257 is passed via `CLAUDE_CODE_EXECUTABLE`. Missing, old, failing or
+unresponsive CLIs leave the adapter's bundled runtime in use. Explicit env
+and agent-transport overrides win. Custom adapter versions are not modified.
+The ACP adapter is always the protocol peer; BitRouter never opens a native
+CLI TUI. `bitrouter launch` and the old `spawn --agent` alias were removed.
 
 ### `bitrouter spawn`
 
@@ -660,9 +637,9 @@ bitrouter spawn <agent> --check [routing flags]                              # p
 
 Spawns an **ACP-compatible harness as a headless sub-agent**, driven by a program (an orchestrating agent or a GUI). `<agent>` is a bundled-catalog id (`claude-acp`, `codex-acp`, `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a configured `agents:` entry; a catalog id needs no config entry. This subsumes `bitrouter acp serve|prompt` (which remain as stable aliases) and adds routing.
 
-**Attempts to route the sub-agent's LLM traffic through the daemon by default when the headless adapter supports redirection** — the same per-harness knowledge `launch` uses, from one shared catalog (so `launch -a claude` and `spawn claude-acp` inject identical gateway env/args). Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--turn-timeout`).
+**Attempts to route the sub-agent's LLM traffic through the daemon by default when the headless adapter supports redirection** — the same routing path used by the ACP TUI. Routing flags: `--direct` (opt out — use the harness's own provider auth), `--model <id>` (pin the model), `--base-url <url>` (override the gateway URL), `--no-start` (never auto-start the daemon). Session flags match `acp` (`--turn-timeout`).
 
-Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses whose routing is config-synthesis only (`opencode`, `pi-acp`, `hermes-acp`, `openclaw` — routed in the `bitrouter launch` interactive facet, not headless spawn yet) and non-catalog agents warn and run direct.
+Routed sub-agents authenticate with `BITROUTER_API_KEY` when set, else a local placeholder (valid under `skip_auth: true`); under `skip_auth: false` a key is required. If the daemon is unreachable after auto-start, or a required key is missing, `spawn` **fails fast before any session side effect** — a single NDJSON `{"type":"error","code":"daemon_unreachable"|"auth_required",…}` line in `-p` mode (stderr in `--serve` mode), exit non-zero. Catalog harnesses whose routing is config-synthesis only (`opencode`, `pi-acp`, `hermes-acp`, `openclaw` — not automatically redirected by these ACP adapters) and non-catalog agents warn and run direct.
 
 The permission flags and `--format` are `-p`'s only and are described under `bitrouter acp` above; `--serve` hands permissions to the manager, and passing them with it is an error.
 

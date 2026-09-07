@@ -1,8 +1,8 @@
 {
   "harnessId": "claude-acp",
   "package": "@agentclientprotocol/claude-agent-acp",
-  "version": "0.70.0",
-  "gitHead": "d0aafb1ca26427285ffaeac8d8a4452fff28e9c3",
+  "version": "0.75.1",
+  "gitHead": "3e23c5b960b66a6d2c892e7524c952e731c076a7",
   "providerId": "main",
   "protocol": "anthropic",
   "fallbackEnv": [
