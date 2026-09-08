@@ -3,21 +3,19 @@
 //!
 //! The reducer in `bitrouter_tui::machine` names what a session does as an
 //! [`Effect`]; some of those are the view's and some are the wire's. The
-//! interactive loop, the piped loop, and the headless `acp prompt` loop used
-//! to each hand-roll the wire half — three copies of "remove the request,
-//! resolve it", three of "cancel, then deny what is outstanding" — and the
-//! headless one had drifted: it could only ever deny. `Wire` is that half,
-//! written once, so a permission answered by a keystroke and one answered by a
-//! headless policy reach the agent through the same code.
+//! piped loop and the headless `acp prompt` loop used to each hand-roll the
+//! wire half — copies of "remove the request, resolve it" and "cancel, then
+//! deny what is outstanding". `Wire` is that half, written once, so a policy
+//! answer reaches the agent consistently on both surfaces.
 //!
 //! What it reaches is the ACP client and nothing else. The daemon bridges the
 //! launch half builds, the config, the metering store — none of it is named
 //! here, and the guard in [`crate::chat`] scans this file to keep it so.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
-use bitrouter_sdk::acp::client::{AcpClient, PendingPermission, RouteError};
-use bitrouter_tui::machine::{Action, Effect, Routes};
+use bitrouter_sdk::acp::client::{AcpClient, PendingPermission};
+use bitrouter_tui::machine::Effect;
 use bitrouter_tui::permission::{Decision, Policy, Prompt};
 
 /// The session's wire, and the requests it is holding open.
@@ -29,9 +27,6 @@ pub(crate) struct Wire<'a> {
     /// holds a strong handle on the resolver, and the client's ledger holds a
     /// weak one on purpose so that a dropped request still denies itself.
     outstanding: HashMap<String, PendingPermission>,
-    /// Answers produced by an effect that awaited inline, for the driver to
-    /// dispatch before it selects again.
-    replies: VecDeque<Action>,
 }
 
 impl<'a> Wire<'a> {
@@ -41,7 +36,6 @@ impl<'a> Wire<'a> {
             client,
             session_id,
             outstanding: HashMap::new(),
-            replies: VecDeque::new(),
         }
     }
 
@@ -77,11 +71,6 @@ impl<'a> Wire<'a> {
         (decision, prompt)
     }
 
-    /// The next answer an inline effect produced, if any.
-    pub(crate) fn reply(&mut self) -> Option<Action> {
-        self.replies.pop_front()
-    }
-
     /// Run the effect if it is the wire's. Returns it untouched if it is not,
     /// for whoever owns the view.
     pub(crate) async fn apply(&mut self, effect: Effect) -> Option<Effect> {
@@ -105,48 +94,6 @@ impl<'a> Wire<'a> {
                     tracing::warn!(%error, "cancelling the turn");
                 }
             }
-            // Awaited inline, exactly as the picker's own loop awaited it: both
-            // are reachable only from an idle prompt, where no turn is
-            // streaming and nothing else needs the loop.
-            Effect::ListRoutes => {
-                self.replies.push_back(Action::Routes(
-                    match self.client.route_list(self.session_id).await {
-                        Ok(listed) => Ok(Routes {
-                            available: listed.available,
-                            current: listed.current,
-                        }),
-                        Err(error) => Err(format!("{error}")),
-                    },
-                ));
-            }
-            // Typed by the client, so a refused route and a vanished binding
-            // read differently without parsing text.
-            Effect::SetRoute(route) => self.replies.push_back(Action::Routed(
-                match self.client.route_set(self.session_id, &route).await {
-                    Ok(in_force) => Ok(Some(in_force)),
-                    Err(RouteError::InvalidRoute(message)) => {
-                        Err(format!("route unchanged: {message}"))
-                    }
-                    Err(RouteError::Unavailable(message)) => Err(format!(
-                        "route unchanged: route control is unavailable ({message})"
-                    )),
-                    Err(RouteError::Other(error)) => Err(format!("route unchanged: {error:#}")),
-                },
-            )),
-            // `Ok(None)` is the lease being gone: the footer stops naming a
-            // route, because what is in force is now the daemon's own choice.
-            Effect::ResetRoute => self.replies.push_back(Action::Routed(
-                match self.client.route_reset(self.session_id).await {
-                    Ok(()) => Ok(None),
-                    Err(RouteError::InvalidRoute(message)) => {
-                        Err(format!("route unchanged: {message}"))
-                    }
-                    Err(RouteError::Unavailable(message)) => Err(format!(
-                        "route unchanged: route control is unavailable ({message})"
-                    )),
-                    Err(RouteError::Other(error)) => Err(format!("route unchanged: {error:#}")),
-                },
-            )),
             other => return Some(other),
         }
         None

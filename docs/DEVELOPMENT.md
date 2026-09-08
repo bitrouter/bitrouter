@@ -13,7 +13,7 @@ BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the lib
 | `crates/bitrouter-mcp`           | crate   | The action contract plus its MCP binding — shared report types + ports in `actions/` (`status`, `list_models`, `route`), exposed over stdio + streamable HTTP alongside the skills surfaces, with its billing wire type kept local. Control and introspection only — inference stays on the daemon's HTTP API |
 | `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
 | `crates/bitrouter-telemetry`     | crate   | Optional telemetry egress: the OTLP exporter (traces + metrics, multi-tenant attribution), the inbound ingress span, and the `tracing` ↔ OTel bridge — all default-off |
-| `crates/bitrouter-tui`           | crate   | Full-screen unified Code shell (`bitrouter code [<agent>]`) — operations views, ACP transcript, composer, and permission prompt |
+| `crates/bitrouter-tui`           | crate   | Full-screen unified Code shell (`bitrouter code [<agent>]`) — ACP transcript, multiline composer, temporary inspectors, and explicit permission choices |
 | `apps/bitrouter`                 | app     | Assembly library + the `bitrouter` CLI binary — turns a `Config` into a running `App` and owns the management commands |
 
 The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails is an ordinary library that implements those traits.
@@ -27,7 +27,7 @@ Clients reach BitRouter through four external **interfaces** — the ways *in*. 
 | **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bitrouter serve`        |
 | **MCP** (origin server)   | `crates/bitrouter-mcp`                                                                                    | `bitrouter mcp serve`    |
 | **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`): `controller` is the ACP-client-facing server, `client` the transport-generic ACP client, `up` the agent-process transport, and `translate` the typed view of `session/update` used by `run`. The client-facing stdio bridge, one-shot runner, and Code session all consume the same controller/client stack. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bitrouter acp serve`; `bitrouter run` |
-| **ACP (interactive)**     | `crates/bitrouter-tui/src/dashboard.rs` renders the unified shell; `apps/bitrouter/src/dashboard.rs` drives navigation and the active ACP session through the shared `SessionHost` in `apps/bitrouter/src/acp_cli.rs`. | `bitrouter code [<agent>]` |
+| **ACP (interactive)**     | `crates/bitrouter-tui/src/code.rs` owns conversation state and rendering; `apps/bitrouter/src/chat/code.rs` drives asynchronous effects and ACP turns, with injected services in `actions/code.rs` and the shared `SessionHost` in `acp_cli.rs`. | `bitrouter code [<agent>]` |
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
 is the boundary, and Cargo enforces it: the app depends on the crate by path,
@@ -90,10 +90,10 @@ for the table, and no terminal code anywhere in it.
 
 The second line, which keeps the crate synchronous, is **meaning vs
 transport**. What a key *means* is a terminal fact and lives in the crate
-(`editor`: the line editor, `is_cancel`, `is_redraw`). *Owning stdin and
+(`editor`: multiline composition; `code`: focus and interaction transitions). *Owning stdin and
 delivering events* is a fact about the host process — what else it selects
 over, and which runtime it has — so the pump stays in the app
-(`apps/bitrouter/src/chat/input.rs`). The same cut keeps signal handling out
+(`apps/bitrouter/src/chat/code.rs`). The same cut keeps signal handling out
 (`crate::chat::signals::Shutdown`) while terminal enter/restore stays in.
 `bitrouter-tui` therefore depends on no async runtime at all, and
 `cargo tree -p bitrouter-tui | rg -c '^tokio'` printing `0` is how that is

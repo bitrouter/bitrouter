@@ -34,7 +34,9 @@ daemon socket (so its traffic meters by controller instance, and the
 controller decorates `usage_update` with attributed cost), and its `/route`
 picker is built on `_bitrouter/route/list|set` — available only when the
 initialize metadata advertises them. There is no local engine, `record_id`,
-or FIFO turn queue on any path.
+or controller-owned FIFO turn queue. Code keeps an explicit process-local
+follow-up queue that dispatches only after normal turn completion; abnormal
+stops pause queued work for explicit action.
 
 ## Controller launch and initialization
 

@@ -643,55 +643,73 @@ disconnects; one controller connection can carry multiple
 harness-native sessions. Hidden `acp prompt` and `spawn` spellings remain only
 for migration. BitRouter keeps no session records.
 
-### `bitrouter code` — operations dashboard and ACP sessions
+### `bitrouter code` — coding conversation
 
-```
-bitrouter code [-c <path>] [--socket <path>]
+```bash
+bitrouter code [-c <path>]
+bitrouter code <agent> [--load <id>|--resume <id>] [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
+bitrouter code --socket <path>
 bitrouter --context <name> code
 ```
 
-Opens a full-screen dashboard over the same status, models, recent-requests,
-and route-preview actions the headless CLI uses. `Tab` switches pages, `1`–`7`
-jump directly, `r` refreshes, and `q`/`Esc`/`Ctrl-C` exits. On the Route page,
-type a model selector and press `Enter`; `Ctrl-U` clears it. Status, model, and
-request pages refresh every two seconds.
+Bare local `code` opens an empty conversation and a searchable **Choose agent**
+picker. Explicit `code <agent>` connects directly. Dismissing a picker restores
+the draft and reading position. A draft written before connecting remains a
+draft after agent selection and needs an explicit send.
 
-A named remote context uses authenticated HTTP only. A local dashboard uses the
-normal config, control socket, and metering database. No dashboard control
-starts or mutates a daemon.
+The conversation, multiline composer, and **agent, route, activity, and
+attributed session cost** stay visible. Ctrl-P opens commands and temporary
+inspectors; there are no permanent page tabs. Reports run on demand through the
+same typed actions as the CLI. Host request history is labelled by its scope;
+it is not presented as the current session's traffic or cost.
 
-### `bitrouter code <agent>`
-
-```
-bitrouter code <agent> [--load <id>|--resume <id>] [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
-```
-
-Opens the same full-screen, alternate-screen shell as bare `bitrouter code`,
-initially focused on Conversation with a harness-native ACP session. `Tab`
-moves between Conversation and the Home, Agents, Sessions, Models, Requests,
-and Route operations views without ending the session or losing the draft.
-`--load` replays a native session's history and `--resume` continues without
-replay when the harness advertises the selected operation. BitRouter does not
-create a second session database.
+Named remote contexts and explicit `--socket` operation targets open a
+read-only status inspector with status, model catalog, host request, and route
+preview actions. Remote requests use authenticated HTTP and never fall back to
+local data. These targets have no ACP composer, agent launcher, or session route
+mutation. Closing their root inspector exits.
 
 **Keys**
 
 | Key | Effect |
-|---|---|
-| `Enter` | Send the composer text, or open the selected agent from Agents |
-| `Tab` | Move to the next view while preserving the active conversation |
-| `PageUp` / `PageDown` | Scroll the conversation transcript |
-| `1`–`9` | Choose an open permission option |
-| `Esc` | Deny the open permission request |
-| `Ctrl-C` | Cancel the running turn; outside a running turn, exit |
-| `Ctrl-D` | Exit from Conversation |
+| --- | --- |
+| `Enter` | Send at idle; while working, preserve the draft and explain queueing |
+| `Shift-Enter` / `Ctrl-J` | Insert a newline (`Ctrl-J` is the fallback) |
+| `Tab` | Accept open completion; otherwise queue a follow-up during work |
+| `Ctrl-P` / leading `/` | Search the command palette / slash completions |
+| Arrows, Home/End | Edit at the grapheme cursor; Up/Down at draft boundaries visits process-local history |
+| `Ctrl-G` | Open `$VISUAL` or `$EDITOR` at idle with no pending permission |
+| `PageUp` / `PageDown` | Read transcript history without incoming updates moving the reading position |
+| `F2` | Explicitly focus the oldest pending permission |
+| Permission digits / arrows, then `Enter` | Highlight an offered choice, then explicitly confirm it |
+| `Esc` | Close a temporary surface; in the working composer, request cancellation |
+| `Ctrl-C` | Close a picker/inspector; cancel a working turn; clear an idle draft; exit if idle and empty |
+| `Ctrl-D` | Exit only from an idle, empty composer; preserve nonempty drafts |
+| `Ctrl-L` | Redraw without clearing the conversation |
 
-Cancelling a turn with a permission prompt open **denies it**. A cancel is never read as consent.
+Bracketed paste preserves line breaks and does not submit. Queued prompts are
+local to this UI process, dispatch serially only after normal `end_turn`, and
+pause after refusal, limits, errors, cancellation, or disconnect. Resolve queued
+work before switching agents or sessions. Queueing does not claim native
+mid-turn steering support.
 
-Routing flags are shared with `run` and `acp serve`. The Sessions view shows
-the native identity and the lifecycle features advertised by the harness;
-unsupported lifecycle operations are not offered. `tui` and `chat` remain
-hidden compatibility aliases for the unified shell.
+Permissions show the agent's actual labels and never preselect approval.
+Dismissing a permission uses its offered reject-once option, otherwise the ACP
+cancelled outcome. Cancelling the turn resolves outstanding requests as
+`Cancelled`, retains the original prompt until settlement or bounded teardown,
+and does not imply effects were rolled back.
+
+Agent settings come from initial ACP metadata and later updates. They are
+separate from session `/route` and `/route reset` controls. Route controls need
+advertised session-scoped extension methods; `/preview` only inspects configured
+resolution. Cost is cumulative native-session usage, labelled router-attributed
+or agent-reported; missing or unknown provenance is unreported.
+
+**Open session** uses native listing when advertised and native-ID entry for
+load/resume-only agents. `--load` replays native history; `--resume` continues
+without replay and labels that distinction. BitRouter keeps no durable session
+catalog. `tui` and `chat` remain hidden compatibility aliases; interactive paths
+share this loop and piped compatibility output remains plain text.
 
 ### ACP workers, local CLI discovery, and native launch
 

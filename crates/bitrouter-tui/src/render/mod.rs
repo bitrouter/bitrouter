@@ -29,6 +29,7 @@
 
 pub mod content;
 pub mod diff;
+pub mod markdown;
 pub mod session;
 
 use std::collections::HashMap;

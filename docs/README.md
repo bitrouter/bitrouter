@@ -20,6 +20,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — authoritative boundary
   for ACP controller topology, harness-owned sessions, endpoint configuration,
   native identity, and session-scoped routing.
+- [`CODE_TUI_UX_SPEC.md`](CODE_TUI_UX_SPEC.md) — **implemented; locally verified.**
+  Replaces the seven-view Code dashboard with a conversation, contextual
+  pickers/inspectors, and agent/route/activity/attributed-cost status; defines
+  shared interaction behavior, ACP boundaries, and acceptance criteria.
 - [`AGENT_INTERFACE_UNIFICATION_SPEC.md`](AGENT_INTERFACE_UNIFICATION_SPEC.md) —
   **proposed for review.** Unifies the public agent UX around native
   `claude`/`codex` shortcuts, the `code` TUI, headless `run`, and one raw
@@ -27,7 +31,7 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   and reduces MCP CLI to stdio serving plus one diagnostic while direct remote
   MCP moves into the daemon.
 - [`REMOTE_CONTROL_MVP_SPEC.md`](REMOTE_CONTROL_MVP_SPEC.md) — **implemented.**
-  Read-only remote status/models/route/requests and dashboard views over an
+  Read-only remote status/models/route/requests and operations inspectors over an
   authenticated, loopback-only HTTP control listener; ACP stays local.
 - [`REMOTE_CLI_TUI_SUPPORT_SPEC.md`](REMOTE_CLI_TUI_SUPPORT_SPEC.md) — **Phase 2
   RFD, deferred.** Remote ACP sessions over a versioned WebSocket transport,

@@ -68,6 +68,7 @@
 //! broker for that one is still there. Teardown is the case that genuinely is
 //! connection-wide, because the transport is what goes.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -75,11 +76,14 @@ use std::time::Duration;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthCapabilities, AuthMethod, AuthMethodId, AuthenticateRequest,
-    CancelNotification, ClientCapabilities, ContentBlock, Implementation, InitializeRequest,
-    InitializeResponse, LoadSessionRequest, McpServer, NewSessionRequest, PermissionOption,
+    CancelNotification, ClientCapabilities, ConfigOptionUpdate, ContentBlock, CurrentModeUpdate,
+    Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
+    ListSessionsResponse, LoadSessionRequest, McpServer, Meta, NewSessionRequest, PermissionOption,
     PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, ResumeSessionRequest, SessionId, SessionNotification, SessionUpdate,
-    TextContent, ToolCallUpdate,
+    RequestPermissionResponse, ResumeSessionRequest, SessionConfigId, SessionConfigOption,
+    SessionConfigOptionValue, SessionId, SessionModeId, SessionModeState, SessionNotification,
+    SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    SetSessionModeRequest, SetSessionModeResponse, TextContent, ToolCallUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, JsonRpcRequest, Responder};
 use futures::channel::{mpsc, oneshot};
@@ -260,6 +264,23 @@ impl PermissionLedger {
     /// client carrying two native sessions must not deny the second session's
     /// question because the first one's turn timed out.
     fn deny_outstanding(&self, scope: Option<&str>) -> usize {
+        self.resolve_outstanding(scope, |entry| entry.reject.clone())
+    }
+
+    /// Answer still-outstanding requests with ACP's explicit cancellation
+    /// outcome. This is deliberately separate from denial: an interactive
+    /// user interrupted the turn rather than rejecting the operation.
+    fn cancel_outstanding(&self, scope: Option<&str>) -> usize {
+        self.resolve_outstanding(scope, |_| RequestPermissionOutcome::Cancelled)
+    }
+
+    /// Take outstanding requests in `scope`, resolve each with the supplied
+    /// outcome, and return the number that had not already been answered.
+    fn resolve_outstanding(
+        &self,
+        scope: Option<&str>,
+        outcome: impl Fn(&OutstandingPermission) -> RequestPermissionOutcome,
+    ) -> usize {
         let entries = {
             let mut outstanding = match self.outstanding.lock() {
                 Ok(outstanding) => outstanding,
@@ -283,7 +304,7 @@ impl PermissionLedger {
             .filter_map(|entry| {
                 let resolver = entry.resolver.upgrade()?;
                 let already = resolver.tx.lock().map(|g| g.is_none()).unwrap_or(true);
-                resolver.answer(entry.reject);
+                resolver.answer(outcome(&entry));
                 (!already).then_some(())
             })
             .count()
@@ -314,7 +335,205 @@ impl PermissionLedger {
     }
 }
 
-/// The wire identity minted by the agent's `session/new`.
+/// Fan-out for the raw notification stream used during session lifecycle
+/// operations. Unlike the legacy broadcast streams, this retains every update
+/// for each subscriber until that subscriber consumes it or drops its receiver.
+#[derive(Default)]
+struct RawNotificationSubscribers {
+    state: Mutex<RawNotificationState>,
+}
+
+#[derive(Default)]
+struct RawNotificationState {
+    subscribers: Vec<mpsc::UnboundedSender<SequencedSessionNotification>>,
+    last_sequence: u64,
+    closed: bool,
+}
+
+#[derive(Clone)]
+struct SequencedSessionNotification {
+    sequence: u64,
+    notification: SessionNotification,
+}
+
+/// A reliable notification subscription made before a session lifecycle call.
+///
+/// [`session_updates`](Self::session_updates) uses the response boundary held
+/// in [`SessionIds`] to place replay ahead of the response's confirmed
+/// settings, then follows with later live updates. It is intentionally
+/// session-scoped at conversion time because `session/new` does not reveal the
+/// native session id until its response arrives.
+pub struct LifecycleNotifications {
+    receiver: mpsc::UnboundedReceiver<SequencedSessionNotification>,
+    subscription_boundary: u64,
+}
+
+struct LifecycleUpdateState {
+    receiver: mpsc::UnboundedReceiver<SequencedSessionNotification>,
+    session_id: String,
+    response_boundary: u64,
+    replay_complete: bool,
+    initial_updates: VecDeque<SessionUpdate>,
+    pending: Option<SequencedSessionNotification>,
+}
+
+impl LifecycleNotifications {
+    /// Retain updates for the lifecycle response's native session in wire
+    /// order: replay received before the response, response settings, then
+    /// later live updates. Consume this subscription once the lifecycle call
+    /// has returned; raw use that does not need this ordering belongs on
+    /// [`AcpClient::subscribe_raw_notifications`].
+    pub fn session_updates(
+        self,
+        ids: &SessionIds,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = SessionUpdate> + Send>> {
+        let state = LifecycleUpdateState {
+            receiver: self.receiver,
+            session_id: ids.acp_session_id.clone(),
+            response_boundary: ids.response_boundary,
+            replay_complete: ids.response_boundary <= self.subscription_boundary,
+            initial_updates: ids.initial_updates.clone().into(),
+            pending: None,
+        };
+        Box::pin(futures::stream::unfold(state, |mut state| async move {
+            loop {
+                if state.replay_complete
+                    && let Some(update) = state.initial_updates.pop_front()
+                {
+                    return Some((update, state));
+                }
+
+                let entry = match state.pending.take() {
+                    Some(entry) => Some(entry),
+                    None => state.receiver.next().await,
+                };
+                let Some(entry) = entry else {
+                    if !state.replay_complete {
+                        // A successful lifecycle response should have queued
+                        // every notification at or below its boundary. If the
+                        // connection ends first, do not hide the settings it
+                        // did confirm.
+                        state.replay_complete = true;
+                        continue;
+                    }
+                    return None;
+                };
+
+                if !state.replay_complete {
+                    if entry.sequence > state.response_boundary {
+                        state.replay_complete = true;
+                        state.pending = Some(entry);
+                        continue;
+                    }
+                    if entry.sequence == state.response_boundary {
+                        state.replay_complete = true;
+                    }
+                    if entry.notification.session_id.0.as_ref() == state.session_id.as_str() {
+                        return Some((entry.notification.update, state));
+                    }
+                    continue;
+                }
+
+                if entry.notification.session_id.0.as_ref() == state.session_id.as_str() {
+                    return Some((entry.notification.update, state));
+                }
+            }
+        }))
+    }
+}
+
+impl RawNotificationSubscribers {
+    fn subscribe(&self) -> (mpsc::UnboundedReceiver<SequencedSessionNotification>, u64) {
+        let (sender, receiver) = mpsc::unbounded();
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if !state.closed {
+            state.subscribers.push(sender);
+        }
+        (receiver, state.last_sequence)
+    }
+
+    fn publish(&self, notification: SessionNotification) {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if state.closed {
+            return;
+        }
+        state.last_sequence = state.last_sequence.saturating_add(1);
+        let entry = SequencedSessionNotification {
+            sequence: state.last_sequence,
+            notification,
+        };
+        state.subscribers = std::mem::take(&mut state.subscribers)
+            .into_iter()
+            .filter_map(|sender| sender.unbounded_send(entry.clone()).ok().map(|()| sender))
+            .collect();
+    }
+
+    /// Mark the last notification known to be before a lifecycle response.
+    /// The command handler calls this immediately after the response is read,
+    /// so the channel order gives a stable replay/live boundary.
+    fn response_boundary(&self) -> u64 {
+        match self.state.lock() {
+            Ok(state) => state.last_sequence,
+            Err(poisoned) => poisoned.into_inner().last_sequence,
+        }
+    }
+
+    /// Close all current receivers and make later subscriptions immediately
+    /// terminate. A live `AcpClient` may outlast its driver after an abrupt
+    /// adapter exit, so merely dropping the driver-local sender is insufficient.
+    fn close(&self) {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        state.closed = true;
+        state.subscribers.clear();
+    }
+}
+
+/// Initial settings returned by a successful session lifecycle operation.
+///
+/// ACP returns these settings in the lifecycle response rather than as a
+/// `session/update`. They therefore need to travel with [`SessionIds`] so a
+/// consumer can render the initial state before handling later updates.
+#[derive(Debug, Clone, Default)]
+pub struct SessionInitialSettings {
+    /// The initial current mode and all mode choices, when the agent reports
+    /// them. The choices are only available in this response, not in a
+    /// `CurrentModeUpdate` notification.
+    pub modes: Option<SessionModeState>,
+    /// The complete initial configuration-option set, when the agent reports
+    /// it. `Some(Vec::new())` is distinct from an omitted setting surface.
+    pub config_options: Option<Vec<SessionConfigOption>>,
+}
+
+impl SessionInitialSettings {
+    /// Convert the portions of the response that have notification forms into
+    /// updates suitable for a retained session journal. The full mode state is
+    /// still retained above because `CurrentModeUpdate` carries only its id.
+    pub fn updates(&self) -> Vec<SessionUpdate> {
+        let mut updates = Vec::new();
+        if let Some(modes) = &self.modes {
+            updates.push(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(
+                modes.current_mode_id.clone(),
+            )));
+        }
+        if let Some(config_options) = &self.config_options {
+            updates.push(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(
+                config_options.clone(),
+            )));
+        }
+        updates
+    }
+}
+
+/// The wire identity minted or selected by a session lifecycle operation.
 #[derive(Debug, Clone)]
 pub struct SessionIds {
     /// The ACP wire session id — harness-native, forwarded verbatim by a
@@ -323,6 +542,44 @@ pub struct SessionIds {
     /// The provider-native id from `_meta.agentSessionId`, when the agent
     /// exposes one. Never synthesized.
     pub agent_session_id: Option<String>,
+    /// Initial configuration and mode metadata from the lifecycle response.
+    pub initial_settings: SessionInitialSettings,
+    /// Initial settings represented as raw ACP updates where possible. Apply
+    /// these after lifecycle replay and before later live updates. Use
+    /// [`LifecycleNotifications::session_updates`] for that ordering; a plain
+    /// raw subscription deliberately has no response boundary.
+    pub initial_updates: Vec<SessionUpdate>,
+    /// Last reliable notification sequence observed when the lifecycle
+    /// response was processed. Private because it is only meaningful to the
+    /// matching [`LifecycleNotifications`] subscription.
+    response_boundary: u64,
+}
+
+impl SessionIds {
+    fn new(
+        acp_session_id: String,
+        agent_session_id: Option<String>,
+        initial_settings: SessionInitialSettings,
+        response_boundary: u64,
+    ) -> Self {
+        let initial_updates = initial_settings.updates();
+        Self {
+            acp_session_id,
+            agent_session_id,
+            initial_settings,
+            initial_updates,
+            response_boundary,
+        }
+    }
+}
+
+/// Read the optional harness-native identity from ACP extension metadata. The
+/// key is an agent-owned fact; failure to provide it is never filled from a
+/// selected catalog name or a session id.
+fn agent_session_id(meta: Option<&Meta>) -> Option<String> {
+    meta.and_then(|metadata| metadata.get("agentSessionId"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
 }
 
 /// Per-connection client settings.
@@ -614,6 +871,10 @@ pub struct AcpClient {
     updates_tx: broadcast::Sender<SessionUpdateKind>,
     /// Source of raw ACP [`SessionUpdate`]s; cloned per `subscribe_raw_updates`.
     raw_updates_tx: broadcast::Sender<SessionUpdate>,
+    /// Reliable raw notification fan-out for lifecycle consumers. Carries the
+    /// native session id because callers subscribe before `session/load` tells
+    /// them which session's replay they need to retain.
+    raw_notifications: Arc<RawNotificationSubscribers>,
     /// Single permissions receiver, handed out once by `subscribe_permissions`.
     permissions_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<PendingPermission>>>>,
     /// Latest context-window usage from the agent's `UsageUpdate`s.
@@ -639,6 +900,7 @@ impl AcpClient {
         let (cmd_tx, cmd_rx) = mpsc::unbounded::<Command>();
         let (updates_tx, _) = broadcast::channel::<SessionUpdateKind>(UPDATE_CHANNEL_CAPACITY);
         let (raw_updates_tx, _) = broadcast::channel::<SessionUpdate>(UPDATE_CHANNEL_CAPACITY);
+        let raw_notifications = Arc::new(RawNotificationSubscribers::default());
         let (perm_tx, perm_rx) = mpsc::unbounded::<PendingPermission>();
         let (handshake_tx, handshake_rx) =
             oneshot::channel::<anyhow::Result<Box<InitializeResponse>>>();
@@ -651,6 +913,7 @@ impl AcpClient {
             CallbackPlane {
                 updates_tx: updates_tx.clone(),
                 raw_updates_tx: raw_updates_tx.clone(),
+                raw_notifications: Arc::clone(&raw_notifications),
                 usage: usage.clone(),
                 perm_tx,
                 permissions: Arc::clone(&permissions),
@@ -680,6 +943,7 @@ impl AcpClient {
             cmd_tx,
             updates_tx,
             raw_updates_tx,
+            raw_notifications,
             permissions_rx: Arc::new(Mutex::new(Some(perm_rx))),
             usage,
             permissions,
@@ -761,6 +1025,61 @@ impl AcpClient {
         reply_rx
             .await
             .map_err(|_| anyhow::anyhow!("the agent dropped the session/resume reply"))?
+    }
+
+    /// List harness-native sessions from one ACP page.
+    ///
+    /// `cursor` is opaque and must be passed back unchanged from a prior
+    /// response's `next_cursor`. `cwd` is an optional agent-side filter; the
+    /// client neither normalizes it nor infers a session filter from local
+    /// state. Refused locally unless initialize advertised
+    /// `sessionCapabilities.list`.
+    pub async fn list_sessions(
+        &self,
+        cwd: Option<PathBuf>,
+        cursor: Option<String>,
+    ) -> anyhow::Result<ListSessionsResponse> {
+        if self.agent_capabilities.session_capabilities.list.is_none() {
+            anyhow::bail!("the agent does not advertise session/list");
+        }
+        self.request(
+            ListSessionsRequest::new().cwd(cwd).cursor(cursor),
+            "session/list",
+        )
+        .await
+    }
+
+    /// Set one advertised mode for `session_id` and return the agent's
+    /// confirmation. ACP v1 has no independent mode capability bit, so callers
+    /// must offer this only for an id from [`SessionInitialSettings::modes`].
+    pub async fn set_session_mode(
+        &self,
+        session_id: &str,
+        mode_id: impl Into<SessionModeId>,
+    ) -> anyhow::Result<SetSessionModeResponse> {
+        self.request(
+            SetSessionModeRequest::new(session_id.to_string(), mode_id),
+            "session/set_mode",
+        )
+        .await
+    }
+
+    /// Set one advertised configuration option for `session_id` and return
+    /// the agent's full confirmed option set. ACP v1 has no separate
+    /// configuration capability bit, so callers must use an id and value shape
+    /// supplied by the current settings metadata rather than guessing from an
+    /// agent identity.
+    pub async fn set_session_config_option(
+        &self,
+        session_id: &str,
+        config_id: impl Into<SessionConfigId>,
+        value: impl Into<SessionConfigOptionValue>,
+    ) -> anyhow::Result<SetSessionConfigOptionResponse> {
+        self.request(
+            SetSessionConfigOptionRequest::new(session_id.to_string(), config_id, value),
+            "session/set_config_option",
+        )
+        .await
     }
 
     /// Session lifecycle capabilities negotiated during initialize.
@@ -920,6 +1239,38 @@ impl AcpClient {
         )
     }
 
+    /// Subscribe to raw ACP session notifications without the broadcast
+    /// channel's lag dropping. Each subscription is unbounded and includes the
+    /// native session id, so a lifecycle owner can subscribe before
+    /// `session/load`, then retain only the replay for the id returned by that
+    /// operation.
+    ///
+    /// This is intentionally separate from [`subscribe_raw_updates`](Self::subscribe_raw_updates):
+    /// the latter remains the bounded, lossy stream suitable for ordinary live
+    /// rendering. A caller of this method must keep draining or drop the
+    /// receiver once its lifecycle operation has settled.
+    pub fn subscribe_raw_notifications(
+        &self,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = SessionNotification> + Send>> {
+        let (receiver, _) = self.raw_notifications.subscribe();
+        Box::pin(receiver.map(|entry| entry.notification))
+    }
+
+    /// Subscribe before one `session/new`, `session/load`, or `session/resume`
+    /// call whose replay must remain ordered with settings returned in the
+    /// response. After that call returns, pass its [`SessionIds`] to
+    /// [`LifecycleNotifications::session_updates`].
+    ///
+    /// This stream is reliable per subscriber and closes when the ACP driver
+    /// ends, even if another `AcpClient` clone remains alive.
+    pub fn subscribe_lifecycle_notifications(&self) -> LifecycleNotifications {
+        let (receiver, subscription_boundary) = self.raw_notifications.subscribe();
+        LifecycleNotifications {
+            receiver,
+            subscription_boundary,
+        }
+    }
+
     /// Take the stream of pending permission requests. Single-consumer: the
     /// first call returns the receiver; later calls return an empty stream.
     pub fn subscribe_permissions(
@@ -951,6 +1302,26 @@ impl AcpClient {
         self.permissions.deny_outstanding(Some(session_id))
     }
 
+    /// Answer every outstanding permission for `session_id` with ACP's
+    /// explicit cancelled outcome. This is for an interactive user who
+    /// interrupted the turn; it is deliberately different from
+    /// [`deny_session_permissions`](Self::deny_session_permissions), which is
+    /// the safe outcome when a broker abandons the request.
+    ///
+    /// The caller keeps the original prompt future alive, sends
+    /// [`cancel`](Self::cancel) once, and waits at most
+    /// [`cancellation_grace`](Self::cancellation_grace) for the agent's actual
+    /// prompt response.
+    pub fn cancel_session_permissions(&self, session_id: &str) -> usize {
+        self.permissions.cancel_outstanding(Some(session_id))
+    }
+
+    /// The shared bounded time an interactive caller gives an agent to settle
+    /// a prompt after `session/cancel`. A client timeout uses this same grace.
+    pub const fn cancellation_grace() -> Duration {
+        TURN_CANCEL_GRACE
+    }
+
     /// Send a typed `PromptRequest` and return the typed `PromptResponse`.
     ///
     /// Under [`ClientOptions::turn_timeout`] a turn that blows its deadline is
@@ -973,11 +1344,12 @@ impl AcpClient {
                     // connection is still being brokered.
                     self.deny_session_permissions(&session_id);
                     let _ = self.cancel(&session_id).await;
-                    match tokio::time::timeout(TURN_CANCEL_GRACE, &mut run).await {
+                    match tokio::time::timeout(Self::cancellation_grace(), &mut run).await {
                         Ok(result) => result,
                         Err(_) => Err(anyhow::anyhow!(
                             "turn timed out after {deadline:?} and the agent did not cancel \
-                             within {TURN_CANCEL_GRACE:?}"
+                             within {:?}",
+                            Self::cancellation_grace()
                         )),
                     }
                 }
@@ -1004,6 +1376,32 @@ impl AcpClient {
         reply_rx
             .await
             .map_err(|_| anyhow::anyhow!("the agent dropped the prompt reply"))?
+    }
+
+    /// Run one ordinary ACP request through the connection loop. Session
+    /// lifecycle commands retain dedicated variants because they have special
+    /// replay and response-metadata handling; ordinary typed settings/list
+    /// methods share this path.
+    async fn request<R>(&self, request: R, method: &'static str) -> anyhow::Result<R::Response>
+    where
+        R: JsonRpcRequest + Send + 'static,
+        R::Response: Send + 'static,
+    {
+        let (reply, reply_rx) = oneshot::channel();
+        let call: ExtensionCall = Box::new(move |connection: &ConnectionTo<Agent>| {
+            let sent = connection.send_request(request);
+            connection.spawn(async move {
+                let _ = reply.send(sent.block_task().await);
+                Ok(())
+            })
+        });
+        self.cmd_tx
+            .unbounded_send(Command::Extension(call))
+            .map_err(|_| anyhow::anyhow!("acp command loop closed"))?;
+        reply_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("the agent dropped the {method} reply"))?
+            .map_err(anyhow::Error::from)
     }
 
     /// Text convenience over [`prompt_typed`](Self::prompt_typed).
@@ -1079,6 +1477,7 @@ impl AcpClient {
 struct CallbackPlane {
     updates_tx: broadcast::Sender<SessionUpdateKind>,
     raw_updates_tx: broadcast::Sender<SessionUpdate>,
+    raw_notifications: Arc<RawNotificationSubscribers>,
     usage: SharedContextUsage,
     perm_tx: mpsc::UnboundedSender<PendingPermission>,
     permissions: Arc<PermissionLedger>,
@@ -1096,10 +1495,12 @@ async fn drive(
 ) {
     let notif_updates = plane.updates_tx.clone();
     let notif_raw_updates = plane.raw_updates_tx.clone();
+    let notif_raw_notifications = Arc::clone(&plane.raw_notifications);
     let notif_usage = plane.usage.clone();
     let handler_perm_tx = plane.perm_tx.clone();
     let handler_permissions = Arc::clone(&plane.permissions);
     let loop_permissions = Arc::clone(&plane.permissions);
+    let lifecycle_raw_notifications = Arc::clone(&plane.raw_notifications);
 
     // The handshake oneshot is consumed exactly once. The `connect_with`
     // closure reports `Ok` on success then enters the command loop; if the
@@ -1121,8 +1522,10 @@ async fn drive(
             move |notification: SessionNotification, _cx| {
                 let notif_updates = notif_updates.clone();
                 let notif_raw_updates = notif_raw_updates.clone();
+                let notif_raw_notifications = Arc::clone(&notif_raw_notifications);
                 let notif_usage = notif_usage.clone();
                 async move {
+                    notif_raw_notifications.publish(notification.clone());
                     let raw = notification.update;
                     // Forward the raw ACP update verbatim, and — when it maps
                     // to one — the translated kind. A `send` error just means
@@ -1239,7 +1642,16 @@ async fn drive(
             // so the loop stays responsive while a turn (and its mid-turn
             // permission requests) is in flight. Ends when the command channel
             // closes or an explicit `Shutdown` arrives.
-            while let Some(cmd) = cmd_rx.next().await {
+            // `connect_with` reports incoming EOF to its context but does not
+            // cancel this application future. If an adapter dies while no
+            // command is pending, waiting only on `cmd_rx` would keep every
+            // reliable subscriber alive behind a retained `AcpClient` clone.
+            // End this loop as soon as the transport has closed so the shared
+            // notification fan-out reaches its terminal state below.
+            while let Some(cmd) = tokio::select! {
+                _ = connection.incoming_closed() => None,
+                command = cmd_rx.next() => command,
+            } {
                 match cmd {
                     Command::Extension(call) => call(&connection)?,
                     Command::NewSession {
@@ -1247,29 +1659,32 @@ async fn drive(
                         mcp_servers,
                         reply,
                     } => {
-                        let session_connection = connection.clone();
-                        connection.spawn(async move {
-                            let mut req = NewSessionRequest::new(cwd);
-                            req.mcp_servers = mcp_servers;
-                            let result = session_connection
-                                .send_request(req)
-                                .block_task()
-                                .await
-                                .map(|resp| SessionIds {
-                                    acp_session_id: resp.session_id.0.to_string(),
-                                    // `_meta.agentSessionId`, when the agent
-                                    // exposes one. Never synthesized.
-                                    agent_session_id: resp
-                                        .meta
-                                        .as_ref()
-                                        .and_then(|m| m.get("agentSessionId"))
-                                        .and_then(|v| v.as_str())
-                                        .map(str::to_string),
-                                })
-                                .map_err(anyhow::Error::from);
-                            let _ = reply.send(result);
-                            Ok(())
-                        })?;
+                        let raw_notifications = Arc::clone(&lifecycle_raw_notifications);
+                        let mut req = NewSessionRequest::new(cwd);
+                        req.mcp_servers = mcp_servers;
+                        connection
+                            .send_request(req)
+                            .on_receiving_result(move |response| {
+                                let result = response
+                                    .map(|resp| {
+                                        let agent_session_id = agent_session_id(resp.meta.as_ref());
+                                        let initial_settings = SessionInitialSettings {
+                                            modes: resp.modes,
+                                            config_options: resp.config_options,
+                                        };
+                                        SessionIds::new(
+                                            resp.session_id.0.to_string(),
+                                            agent_session_id,
+                                            initial_settings,
+                                            raw_notifications.response_boundary(),
+                                        )
+                                    })
+                                    .map_err(anyhow::Error::from);
+                                async move {
+                                    let _ = reply.send(result);
+                                    Ok(())
+                                }
+                            })?;
                     }
                     Command::LoadSession {
                         session_id,
@@ -1277,22 +1692,32 @@ async fn drive(
                         mcp_servers,
                         reply,
                     } => {
-                        let session_connection = connection.clone();
-                        connection.spawn(async move {
-                            let req = LoadSessionRequest::new(session_id.clone(), cwd)
-                                .mcp_servers(mcp_servers);
-                            let result = session_connection
-                                .send_request(req)
-                                .block_task()
-                                .await
-                                .map(|_| SessionIds {
-                                    acp_session_id: session_id,
-                                    agent_session_id: None,
-                                })
-                                .map_err(anyhow::Error::from);
-                            let _ = reply.send(result);
-                            Ok(())
-                        })?;
+                        let raw_notifications = Arc::clone(&lifecycle_raw_notifications);
+                        let req = LoadSessionRequest::new(session_id.clone(), cwd)
+                            .mcp_servers(mcp_servers);
+                        connection
+                            .send_request(req)
+                            .on_receiving_result(move |response| {
+                                let result = response
+                                    .map(|resp| {
+                                        let agent_session_id = agent_session_id(resp.meta.as_ref());
+                                        let initial_settings = SessionInitialSettings {
+                                            modes: resp.modes,
+                                            config_options: resp.config_options,
+                                        };
+                                        SessionIds::new(
+                                            session_id,
+                                            agent_session_id,
+                                            initial_settings,
+                                            raw_notifications.response_boundary(),
+                                        )
+                                    })
+                                    .map_err(anyhow::Error::from);
+                                async move {
+                                    let _ = reply.send(result);
+                                    Ok(())
+                                }
+                            })?;
                     }
                     Command::ResumeSession {
                         session_id,
@@ -1300,22 +1725,32 @@ async fn drive(
                         mcp_servers,
                         reply,
                     } => {
-                        let session_connection = connection.clone();
-                        connection.spawn(async move {
-                            let req = ResumeSessionRequest::new(session_id.clone(), cwd)
-                                .mcp_servers(mcp_servers);
-                            let result = session_connection
-                                .send_request(req)
-                                .block_task()
-                                .await
-                                .map(|_| SessionIds {
-                                    acp_session_id: session_id,
-                                    agent_session_id: None,
-                                })
-                                .map_err(anyhow::Error::from);
-                            let _ = reply.send(result);
-                            Ok(())
-                        })?;
+                        let raw_notifications = Arc::clone(&lifecycle_raw_notifications);
+                        let req = ResumeSessionRequest::new(session_id.clone(), cwd)
+                            .mcp_servers(mcp_servers);
+                        connection
+                            .send_request(req)
+                            .on_receiving_result(move |response| {
+                                let result = response
+                                    .map(|resp| {
+                                        let agent_session_id = agent_session_id(resp.meta.as_ref());
+                                        let initial_settings = SessionInitialSettings {
+                                            modes: resp.modes,
+                                            config_options: resp.config_options,
+                                        };
+                                        SessionIds::new(
+                                            session_id,
+                                            agent_session_id,
+                                            initial_settings,
+                                            raw_notifications.response_boundary(),
+                                        )
+                                    })
+                                    .map_err(anyhow::Error::from);
+                                async move {
+                                    let _ = reply.send(result);
+                                    Ok(())
+                                }
+                            })?;
                     }
                     Command::Authenticate { method_id, reply } => {
                         let auth_connection = connection.clone();
@@ -1375,6 +1810,10 @@ async fn drive(
     // Whatever ended the connection (transport error, agent death, a dropped
     // client), a request that survived the loop's sweep is answered now.
     plane.permissions.deny_outstanding(None);
+    // A retained client clone must still observe that its reliable lifecycle
+    // stream has ended. Drop every sender under the shared state before any
+    // shutdown confirmation/handshake reporting can retain this driver.
+    plane.raw_notifications.close();
 
     // An explicit shutdown was requested and the connection is now fully torn
     // down (transport dropped, agent process killed by its own component):
@@ -1400,13 +1839,30 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use agent_client_protocol::schema::v1::{
-        AgentCapabilities, ContentChunk, InitializeResponse, NewSessionResponse, PermissionOption,
-        PermissionOptionKind, PromptRequest, PromptResponse, SelectedPermissionOutcome, StopReason,
+        AgentCapabilities, ContentChunk, InitializeResponse, ListSessionsRequest,
+        ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, NewSessionResponse,
+        PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
+        ResumeSessionRequest, ResumeSessionResponse, SelectedPermissionOutcome,
+        SessionCapabilities, SessionConfigOption, SessionConfigOptionValue, SessionInfo,
+        SessionListCapabilities, SessionMode, SessionModeState, SessionNotification,
+        SessionResumeCapabilities, SessionUpdate, SetSessionConfigOptionRequest,
+        SetSessionConfigOptionResponse, SetSessionModeRequest, SetSessionModeResponse, StopReason,
         ToolCallUpdate, ToolCallUpdateFields,
     };
-    use agent_client_protocol::{Agent, Client, ConnectTo};
+    use agent_client_protocol::{Agent, Client, ConnectTo, RawJsonRpcMessage, TransportFrame};
 
     use super::*;
+
+    const REPLAY_UPDATE_COUNT: usize = UPDATE_CHANNEL_CAPACITY + 1;
+
+    async fn next_lifecycle_update(
+        updates: &mut (impl futures::Stream<Item = SessionUpdate> + Unpin),
+    ) -> anyhow::Result<SessionUpdate> {
+        tokio::time::timeout(Duration::from_secs(5), updates.next())
+            .await
+            .map_err(|_| anyhow::anyhow!("ordered lifecycle update did not arrive"))?
+            .ok_or_else(|| anyhow::anyhow!("ordered lifecycle stream ended"))
+    }
 
     /// The permission options every stub agent below offers: one allow, one
     /// reject. `select_option(Deny, …)` must land on `rej`.
@@ -1453,6 +1909,17 @@ mod tests {
             match self.cancellations.lock() {
                 Ok(seen) => seen.clone(),
                 Err(poisoned) => poisoned.into_inner().clone(),
+            }
+        }
+
+        async fn await_cancellations(&self, expected: usize) -> Vec<String> {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let cancellations = self.cancellations();
+                if cancellations.len() >= expected || std::time::Instant::now() >= deadline {
+                    return cancellations;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
         }
 
@@ -1567,6 +2034,229 @@ mod tests {
         }
     }
 
+    /// A capability-complete fixture for the standard session methods added to
+    /// the client. Its records let tests assert the exact opaque cursor and
+    /// advertised setting ids that reached the wire.
+    #[derive(Default)]
+    struct SettingsLog {
+        list_requests: Mutex<Vec<(Option<PathBuf>, Option<String>)>>,
+        modes: Mutex<Vec<String>>,
+        config_values: Mutex<Vec<(String, SessionConfigOptionValue)>>,
+    }
+
+    impl SettingsLog {
+        fn record_list(&self, cwd: Option<PathBuf>, cursor: Option<String>) {
+            match self.list_requests.lock() {
+                Ok(mut requests) => requests.push((cwd, cursor)),
+                Err(poisoned) => poisoned.into_inner().push((cwd, cursor)),
+            }
+        }
+
+        fn list_requests(&self) -> Vec<(Option<PathBuf>, Option<String>)> {
+            match self.list_requests.lock() {
+                Ok(requests) => requests.clone(),
+                Err(poisoned) => poisoned.into_inner().clone(),
+            }
+        }
+
+        fn record_mode(&self, mode: String) {
+            match self.modes.lock() {
+                Ok(mut modes) => modes.push(mode),
+                Err(poisoned) => poisoned.into_inner().push(mode),
+            }
+        }
+
+        fn modes(&self) -> Vec<String> {
+            match self.modes.lock() {
+                Ok(modes) => modes.clone(),
+                Err(poisoned) => poisoned.into_inner().clone(),
+            }
+        }
+
+        fn record_config(&self, config_id: String, value: SessionConfigOptionValue) {
+            match self.config_values.lock() {
+                Ok(mut values) => values.push((config_id, value)),
+                Err(poisoned) => poisoned.into_inner().push((config_id, value)),
+            }
+        }
+
+        fn config_values(&self) -> Vec<(String, SessionConfigOptionValue)> {
+            match self.config_values.lock() {
+                Ok(values) => values.clone(),
+                Err(poisoned) => poisoned.into_inner().clone(),
+            }
+        }
+    }
+
+    fn fixture_modes() -> SessionModeState {
+        SessionModeState::new(
+            "chat",
+            vec![
+                SessionMode::new("chat", "Chat"),
+                SessionMode::new("plan", "Plan"),
+            ],
+        )
+    }
+
+    fn fixture_config_options() -> Vec<SessionConfigOption> {
+        vec![
+            SessionConfigOption::select(
+                "model",
+                "Model",
+                "fast",
+                vec![
+                    agent_client_protocol::schema::v1::SessionConfigSelectOption::new(
+                        "fast", "Fast",
+                    ),
+                    agent_client_protocol::schema::v1::SessionConfigSelectOption::new(
+                        "careful", "Careful",
+                    ),
+                ],
+            ),
+            SessionConfigOption::boolean("safe", "Safe mode", true),
+        ]
+    }
+
+    fn fixture_meta() -> Meta {
+        Meta::from_iter([(
+            "agentSessionId".to_string(),
+            serde_json::Value::String("agent-native-1".to_string()),
+        )])
+    }
+
+    fn fixture_new_session() -> NewSessionResponse {
+        let mut response = NewSessionResponse::new("native-new")
+            .modes(fixture_modes())
+            .config_options(fixture_config_options());
+        response.meta = Some(fixture_meta());
+        response
+    }
+
+    fn fixture_load_session() -> LoadSessionResponse {
+        let mut response = LoadSessionResponse::new()
+            .modes(fixture_modes())
+            .config_options(fixture_config_options());
+        response.meta = Some(fixture_meta());
+        response
+    }
+
+    fn fixture_resume_session() -> ResumeSessionResponse {
+        let mut response = ResumeSessionResponse::new()
+            .modes(fixture_modes())
+            .config_options(fixture_config_options());
+        response.meta = Some(fixture_meta());
+        response
+    }
+
+    struct SettingsAgent {
+        log: Arc<SettingsLog>,
+    }
+
+    impl ConnectTo<Client> for SettingsAgent {
+        async fn connect_to(
+            self,
+            client: impl ConnectTo<Agent>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            let list_log = Arc::clone(&self.log);
+            let mode_log = Arc::clone(&self.log);
+            let config_log = Arc::clone(&self.log);
+            Agent
+                .builder()
+                .name("settings-agent")
+                .on_receive_request(
+                    async move |request: InitializeRequest, responder, _connection| {
+                        responder.respond(
+                            InitializeResponse::new(request.protocol_version).agent_capabilities(
+                                AgentCapabilities::new()
+                                    .load_session(true)
+                                    .session_capabilities(
+                                        SessionCapabilities::new()
+                                            .list(SessionListCapabilities::new())
+                                            .resume(SessionResumeCapabilities::new()),
+                                    ),
+                            ),
+                        )
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_request: NewSessionRequest, responder, _connection| {
+                        responder.respond(fixture_new_session())
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: LoadSessionRequest, responder, connection| {
+                        for _ in 0..REPLAY_UPDATE_COUNT {
+                            connection.send_notification(SessionNotification::new(
+                                request.session_id.clone(),
+                                SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                                    ContentBlock::Text(TextContent::new("replayed history")),
+                                )),
+                            ))?;
+                        }
+                        // A historical mode update may disagree with the
+                        // response's authoritative current mode. The ordered
+                        // lifecycle subscription must apply this first.
+                        connection.send_notification(SessionNotification::new(
+                            request.session_id.clone(),
+                            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new("plan")),
+                        ))?;
+                        responder.respond(fixture_load_session())?;
+                        // This update is after the response, so it must follow
+                        // the response settings even though it changes the
+                        // same current-mode field as the replay above.
+                        connection.send_notification(SessionNotification::new(
+                            request.session_id,
+                            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new("plan")),
+                        ))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_request: ResumeSessionRequest, responder, _connection| {
+                        responder.respond(fixture_resume_session())
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: ListSessionsRequest, responder, _connection| {
+                        let cursor = request.cursor.clone();
+                        list_log.record_list(request.cwd, cursor.clone());
+                        let response = match cursor.as_deref() {
+                            None => ListSessionsResponse::new(vec![
+                                SessionInfo::new("native-first", "/workspace").title("First"),
+                            ])
+                            .next_cursor("opaque-page-2"),
+                            Some("opaque-page-2") => ListSessionsResponse::new(vec![
+                                SessionInfo::new("native-second", "/workspace").title("Second"),
+                            ]),
+                            Some(_) => ListSessionsResponse::new(Vec::new()),
+                        };
+                        responder.respond(response)
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: SetSessionModeRequest, responder, _connection| {
+                        mode_log.record_mode(request.mode_id.0.to_string());
+                        responder.respond(SetSessionModeResponse::new())
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: SetSessionConfigOptionRequest, responder, _connection| {
+                        config_log.record_config(request.config_id.0.to_string(), request.value);
+                        responder
+                            .respond(SetSessionConfigOptionResponse::new(fixture_config_options()))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(client)
+                .await
+        }
+    }
+
     /// Connect a client to an in-process stub agent over a duplex channel —
     /// the same shape `acp prompt` uses for the in-process controller.
     async fn connect_to_stub(
@@ -1582,6 +2272,18 @@ mod tests {
             .await
             .expect("connect to the stub agent");
         (client, log)
+    }
+
+    async fn connect_to_settings_stub() -> anyhow::Result<(AcpClient, Arc<SettingsLog>)> {
+        let log = Arc::new(SettingsLog::default());
+        let client = AcpClient::connect(
+            SettingsAgent {
+                log: Arc::clone(&log),
+            },
+            ClientOptions::default(),
+        )
+        .await?;
+        Ok((client, log))
     }
 
     #[tokio::test]
@@ -1600,7 +2302,296 @@ mod tests {
             .err()
             .map(|error| error.to_string());
         assert!(resume.is_some_and(|error| error.contains("session/resume")));
+        let list = client
+            .list_sessions(None, None)
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert!(list.is_some_and(|error| error.contains("session/list")));
         assert!(client.shutdown().await.is_ok());
+    }
+
+    /// Lifecycle responses carry settings directly, while a load may also
+    /// replay history before its response. Both must reach a consumer that
+    /// subscribes before opening the native session.
+    #[tokio::test]
+    async fn lifecycle_settings_and_load_replay_remain_visible() -> anyhow::Result<()> {
+        let (client, _) = connect_to_settings_stub().await?;
+
+        let created = client
+            .new_session(PathBuf::from("/workspace"), Vec::new())
+            .await?;
+        assert_eq!(created.acp_session_id, "native-new");
+        assert_eq!(created.agent_session_id.as_deref(), Some("agent-native-1"));
+        let created_modes = created
+            .initial_settings
+            .modes
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("session/new omitted fixture modes"))?;
+        assert_eq!(created_modes.current_mode_id.0.as_ref(), "chat");
+        assert_eq!(created_modes.available_modes.len(), 2);
+        let created_options = created
+            .initial_settings
+            .config_options
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("session/new omitted fixture config options"))?;
+        assert_eq!(created_options.len(), 2);
+        assert!(matches!(
+            created.initial_updates.as_slice(),
+            [
+                SessionUpdate::CurrentModeUpdate(_),
+                SessionUpdate::ConfigOptionUpdate(_)
+            ]
+        ));
+        let mode_only = SessionIds::new(
+            "native-mode-only".to_string(),
+            None,
+            SessionInitialSettings {
+                modes: created.initial_settings.modes.clone(),
+                config_options: None,
+            },
+            0,
+        );
+        assert!(matches!(
+            mode_only.initial_updates.as_slice(),
+            [SessionUpdate::CurrentModeUpdate(update)]
+                if update.current_mode_id.0.as_ref() == "chat"
+        ));
+
+        let mut updates = client.subscribe_raw_notifications();
+        let lifecycle_updates = client.subscribe_lifecycle_notifications();
+        let loaded = client
+            .load_session("native-loaded", PathBuf::from("/workspace"), Vec::new())
+            .await?;
+        assert_eq!(loaded.acp_session_id, "native-loaded");
+        assert_eq!(loaded.agent_session_id.as_deref(), Some("agent-native-1"));
+        assert!(loaded.initial_settings.modes.is_some());
+        assert!(loaded.initial_settings.config_options.is_some());
+        assert_eq!(loaded.initial_updates.len(), 2);
+
+        let replay_count = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut count = 0_usize;
+            while count < REPLAY_UPDATE_COUNT {
+                let notification = updates.next().await.ok_or_else(|| {
+                    anyhow::anyhow!("raw notification stream ended during replay")
+                })?;
+                assert_eq!(notification.session_id.0.as_ref(), "native-loaded");
+                assert!(matches!(
+                    notification.update,
+                    SessionUpdate::AgentMessageChunk(_)
+                ));
+                count = count.saturating_add(1);
+            }
+            Ok::<usize, anyhow::Error>(count)
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("session/load replay did not arrive"))??;
+        assert_eq!(replay_count, REPLAY_UPDATE_COUNT);
+
+        let mut ordered = lifecycle_updates.session_updates(&loaded);
+        for _ in 0..REPLAY_UPDATE_COUNT {
+            assert!(matches!(
+                next_lifecycle_update(&mut ordered).await?,
+                SessionUpdate::AgentMessageChunk(_)
+            ));
+        }
+        let stale_mode = next_lifecycle_update(&mut ordered).await?;
+        assert!(matches!(
+            stale_mode,
+            SessionUpdate::CurrentModeUpdate(update)
+                if update.current_mode_id.0.as_ref() == "plan"
+        ));
+        let confirmed_mode = next_lifecycle_update(&mut ordered).await?;
+        assert!(matches!(
+            confirmed_mode,
+            SessionUpdate::CurrentModeUpdate(update)
+                if update.current_mode_id.0.as_ref() == "chat"
+        ));
+        assert!(matches!(
+            next_lifecycle_update(&mut ordered).await?,
+            SessionUpdate::ConfigOptionUpdate(update) if update.config_options.len() == 2
+        ));
+        let live_mode = next_lifecycle_update(&mut ordered).await?;
+        assert!(matches!(
+            live_mode,
+            SessionUpdate::CurrentModeUpdate(update)
+                if update.current_mode_id.0.as_ref() == "plan"
+        ));
+
+        let quiet_resume = client.subscribe_lifecycle_notifications();
+        let resumed = client
+            .resume_session("native-resumed", PathBuf::from("/workspace"), Vec::new())
+            .await?;
+        assert_eq!(resumed.acp_session_id, "native-resumed");
+        assert_eq!(resumed.agent_session_id.as_deref(), Some("agent-native-1"));
+        assert!(resumed.initial_settings.modes.is_some());
+        assert!(resumed.initial_settings.config_options.is_some());
+        let mut quiet_updates = quiet_resume.session_updates(&resumed);
+        assert!(matches!(
+            next_lifecycle_update(&mut quiet_updates).await?,
+            SessionUpdate::CurrentModeUpdate(update)
+                if update.current_mode_id.0.as_ref() == "chat"
+        ));
+        assert!(matches!(
+            next_lifecycle_update(&mut quiet_updates).await?,
+            SessionUpdate::ConfigOptionUpdate(update) if update.config_options.len() == 2
+        ));
+
+        client.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reliable_raw_subscribers_close_when_the_driver_dies() -> anyhow::Result<()> {
+        // A raw peer owns the only remote endpoint. Dropping it after the
+        // handshake proves the client driver's close path rather than merely
+        // cancelling a task that may have spawned protocol children.
+        let (manager_side, mut peer_side) = agent_client_protocol::Channel::duplex();
+        let (close_tx, close_rx) = tokio::sync::oneshot::channel::<()>();
+        let peer_task = tokio::spawn(async move {
+            let request = peer_side
+                .rx
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("client closed before initialize"))?;
+            let TransportFrame::Single(RawJsonRpcMessage::Request(request)) = request else {
+                anyhow::bail!("expected initialize request from client");
+            };
+            if request.method.as_ref() != "initialize" {
+                anyhow::bail!("expected initialize request, got {}", request.method);
+            }
+            let initialize = serde_json::to_value(
+                InitializeResponse::new(ProtocolVersion::V1)
+                    .agent_capabilities(AgentCapabilities::new()),
+            )?;
+            peer_side
+                .tx
+                .unbounded_send(TransportFrame::Single(RawJsonRpcMessage::response(
+                    request.id,
+                    Ok(initialize),
+                )))
+                .map_err(|_| anyhow::anyhow!("client closed before initialize response"))?;
+            let _ = close_rx.await;
+            Ok::<(), anyhow::Error>(())
+        });
+        let client = AcpClient::connect(manager_side, ClientOptions::default()).await?;
+        let retained = client.clone();
+        let mut existing = client.subscribe_raw_notifications();
+
+        close_tx
+            .send(())
+            .map_err(|_| anyhow::anyhow!("test peer exited before close signal"))?;
+        tokio::time::timeout(Duration::from_secs(5), peer_task)
+            .await
+            .map_err(|_| anyhow::anyhow!("test peer did not release its transport"))?
+            .map_err(anyhow::Error::from)??;
+
+        let existing_end = tokio::time::timeout(Duration::from_secs(5), existing.next())
+            .await
+            .map_err(|_| anyhow::anyhow!("existing reliable raw subscriber did not close"))?;
+        assert!(existing_end.is_none());
+
+        let mut late = retained.subscribe_raw_notifications();
+        let late_end = tokio::time::timeout(Duration::from_secs(5), late.next())
+            .await
+            .map_err(|_| anyhow::anyhow!("late reliable raw subscriber did not close"))?;
+        assert!(late_end.is_none());
+        Ok(())
+    }
+
+    /// Session listing preserves opaque pagination and settings setters relay
+    /// only ids and value shapes supplied by ACP metadata.
+    #[tokio::test]
+    async fn session_list_and_settings_round_trip() -> anyhow::Result<()> {
+        let (client, log) = connect_to_settings_stub().await?;
+        let cwd = Some(PathBuf::from("/workspace"));
+        let first = client.list_sessions(cwd.clone(), None).await?;
+        assert_eq!(first.sessions.len(), 1);
+        assert_eq!(first.sessions[0].session_id.0.as_ref(), "native-first");
+        let next_cursor = first
+            .next_cursor
+            .ok_or_else(|| anyhow::anyhow!("first session page omitted its cursor"))?;
+        let second = client
+            .list_sessions(cwd.clone(), Some(next_cursor.clone()))
+            .await?;
+        assert_eq!(second.sessions.len(), 1);
+        assert_eq!(second.sessions[0].session_id.0.as_ref(), "native-second");
+        assert_eq!(second.next_cursor, None);
+        assert_eq!(
+            log.list_requests(),
+            vec![
+                (cwd.clone(), None),
+                (cwd.clone(), Some(next_cursor.clone())),
+            ]
+        );
+
+        client.set_session_mode("native-first", "plan").await?;
+        let configured = client
+            .set_session_config_option(
+                "native-first",
+                "model",
+                SessionConfigOptionValue::value_id("careful"),
+            )
+            .await?;
+        assert_eq!(configured.config_options.len(), 2);
+        assert_eq!(log.modes(), vec!["plan".to_string()]);
+        assert_eq!(
+            log.config_values(),
+            vec![(
+                "model".to_string(),
+                SessionConfigOptionValue::value_id("careful"),
+            ),]
+        );
+
+        client.shutdown().await?;
+        Ok(())
+    }
+
+    /// A user cancelling an interactive turn tells the agent that its pending
+    /// question was cancelled. The prompt future remains alive long enough to
+    /// report the agent's actual terminal response.
+    #[tokio::test]
+    async fn interactive_cancellation_uses_cancelled_permission_outcome() -> anyhow::Result<()> {
+        let (client, log) =
+            connect_to_stub(PromptBehaviour::AskPermission, ClientOptions::default()).await;
+        let session = client.new_session(PathBuf::from("/"), Vec::new()).await?;
+        let mut permissions = client.subscribe_permissions();
+
+        {
+            let turn = client.prompt(&session.acp_session_id, "interrupt this turn");
+            tokio::pin!(turn);
+            let pending = tokio::time::timeout(Duration::from_secs(1), async {
+                tokio::select! {
+                    pending = permissions.next() => pending
+                        .ok_or_else(|| anyhow::anyhow!("permission stream ended")),
+                    _ = &mut turn => Err(anyhow::anyhow!(
+                        "prompt settled before it asked for permission"
+                    )),
+                }
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("permission request did not arrive"))??;
+            assert!(!pending.is_resolved());
+            assert_eq!(
+                client.cancel_session_permissions(&session.acp_session_id),
+                1,
+                "the held request receives the cancelled outcome"
+            );
+            client.cancel(&session.acp_session_id).await?;
+
+            let response = tokio::time::timeout(AcpClient::cancellation_grace(), &mut turn)
+                .await
+                .map_err(|_| anyhow::anyhow!("cancelled turn did not settle within the grace"))??;
+            assert!(matches!(response.stop_reason, StopReason::EndTurn));
+        }
+
+        assert_eq!(log.await_answers(1).await, vec!["Cancelled".to_string()]);
+        assert_eq!(
+            log.await_cancellations(1).await,
+            vec![session.acp_session_id.clone()]
+        );
+        client.shutdown().await?;
+        Ok(())
     }
 
     /// I4: the first answer wins and every later one — across clones, and from

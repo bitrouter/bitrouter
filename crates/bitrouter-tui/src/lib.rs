@@ -53,8 +53,8 @@
 //! the application, so drawing can never become a second implementation of an
 //! action.
 
+pub mod code;
 pub mod cost;
-pub mod dashboard;
 pub mod editor;
 pub mod journal;
 pub mod lifecycle;

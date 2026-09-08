@@ -168,7 +168,7 @@ struct NativeLaunchArgs {
 
 #[derive(Args)]
 struct CodeArgs {
-    /// ACP agent id. Omit to open the operations home screen.
+    /// ACP agent id. Omit to choose an agent in the conversation.
     agent: Option<String>,
     /// Load a harness-native session and replay its history.
     #[arg(
@@ -191,10 +191,10 @@ struct CodeArgs {
     turn_timeout: Option<u64>,
     #[command(flatten)]
     routing: bitrouter::acp_cli::RoutingOptions,
-    /// Path to `bitrouter.yaml` for a local dashboard or agent session.
+    /// Path to `bitrouter.yaml` for a local Code session.
     #[arg(short, long)]
     config: Option<PathBuf>,
-    /// Explicit local control socket for the operations dashboard.
+    /// Explicit local control socket for read-only operations.
     #[arg(long)]
     socket: Option<PathBuf>,
 }
@@ -663,7 +663,7 @@ enum Command {
         #[command(subcommand)]
         cmd: AcpCmd,
     },
-    /// Open BitRouter's operations dashboard, or an ACP session when an agent
+    /// Open BitRouter's coding conversation, or connect directly when an agent
     /// id is supplied.
     Code {
         #[command(flatten)]
@@ -5682,7 +5682,7 @@ async fn run_code(
         if turn_timeout.is_some() || routing != bitrouter::acp_cli::RoutingOptions::default() {
             return Err(bitrouter_sdk::BitrouterError::bad_request(
                 "--turn-timeout, --direct, --base-url, --model, and --no-start apply to \
-                 `code <agent>`, not the operations home screen",
+                 `code <agent>`, not the agent-selection screen",
             )
             .into());
         }

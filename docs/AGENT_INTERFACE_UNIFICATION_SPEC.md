@@ -1,5 +1,11 @@
 # Spec: unified agent interfaces — native shortcuts, Code TUI, headless run, and one ACP bridge
 
+> Code presentation update (2026-09-08):
+> [CODE_TUI_UX_SPEC.md](CODE_TUI_UX_SPEC.md) supersedes permanent dashboard
+> navigation and independent interactive drivers. It preserves public CLI names,
+> native-session ownership, typed action boundaries, and read-only remote scope.
+> [Implementation verification](CODE_TUI_UX_PROGRESS.md) is tracked separately.
+
 Status: **proposed for review** · Date: 2026-09-07  
 Baseline: `45ac00bd` (`codex/remote-control-tui`)
 

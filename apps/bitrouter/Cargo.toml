@@ -91,3 +91,8 @@ serde-saphyr.workspace = true
 # the root `[workspace.dependencies]` alongside the rest of the 0.32.x stack.
 opentelemetry-proto.workspace = true
 prost.workspace = true
+# Real-terminal acceptance coverage: the process under test must see a PTY,
+# while the test controls its size, input bytes, output, and child lifetime.
+portable-pty = "0.9"
+# Reconstructs cursor-addressed ratatui frames for semantic PTY assertions.
+vt100 = "0.15"

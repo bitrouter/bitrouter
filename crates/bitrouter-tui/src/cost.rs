@@ -74,13 +74,16 @@ impl Cost {
         let figure = format!("{} {:.4}", self.currency, self.amount);
         match self.provenance {
             Provenance::Router => Line::from(Span::styled(
-                figure,
+                format!("{figure} (router)"),
                 Style::default().add_modifier(Modifier::DIM),
             )),
             // The qualifier is part of the figure, not a footnote: whatever
             // truncates this line must lose the number before the caveat.
             Provenance::Harness => Line::from(vec![
-                Span::styled("agent ", Style::default().add_modifier(Modifier::DIM)),
+                Span::styled(
+                    "agent-reported ",
+                    Style::default().add_modifier(Modifier::DIM),
+                ),
                 Span::styled(figure, Style::default().add_modifier(Modifier::DIM)),
             ]),
         }
