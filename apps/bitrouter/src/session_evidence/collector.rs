@@ -540,6 +540,23 @@ impl NativeCollector {
             0
         };
         let mut version = None;
+        let mut copied_metadata = None;
+        if node.harness == Harness::Codex && next_sequence > 0 {
+            let first = self
+                .store
+                .records(&SourceRange {
+                    source_id: source.id.clone(),
+                    generation: generation.clone(),
+                    start: 0,
+                    end: 1,
+                })
+                .await?;
+            let first = first
+                .first()
+                .context("native source metadata unavailable")?;
+            verify_identity(&node, &first.input.raw, 0)?;
+            copied_metadata = copied_metadata_boundary(&first.input.raw);
+        }
         loop {
             if offset >= max_offset {
                 break;
@@ -571,15 +588,31 @@ impl NativeCollector {
                     break;
                 }
             };
-            if let Err(error) = verify_identity(&node, &raw, next_sequence) {
+            // A full-history subagent contains ancestor metadata inside its
+            // copied prefix. This exception is anchored to the original owner
+            // metadata and exact local ordinal, never a later metadata claim.
+            // https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/protocol.rs
+            let inherited_metadata = node.harness == Harness::Codex
+                && next_sequence > 0
+                && raw["type"] == "session_meta"
+                && copied_metadata.is_some_and(|(base, cut)| {
+                    raw["ordinal"].as_u64().is_some_and(|ordinal| {
+                        ordinal < cut && base.checked_add(next_sequence) == Some(ordinal)
+                    })
+                });
+            if !inherited_metadata && let Err(error) = verify_identity(&node, &raw, next_sequence) {
                 tracing::warn!(%error, "native transcript identity rejected");
                 gaps.insert("native_identity_mismatch".into());
                 break;
             }
-            if let Some(producer) = raw
-                .get("version")
-                .and_then(Value::as_str)
-                .or_else(|| raw.pointer("/payload/cli_version").and_then(Value::as_str))
+            if next_sequence == 0 && node.harness == Harness::Codex {
+                copied_metadata = copied_metadata_boundary(&raw);
+            }
+            if !inherited_metadata
+                && let Some(producer) = raw
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .or_else(|| raw.pointer("/payload/cli_version").and_then(Value::as_str))
             {
                 version = Some(producer.to_owned());
             }
@@ -926,6 +959,14 @@ fn verify_identity(node: &NodeKey, raw: &Value, sequence: u64) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn copied_metadata_boundary(raw: &Value) -> Option<(u64, u64)> {
+    Some((
+        raw.get("ordinal")?.as_u64()?,
+        raw.pointer("/payload/subagent_history_start_ordinal")?
+            .as_u64()?,
+    ))
 }
 
 fn safe_native_component(value: &str) -> Result<()> {

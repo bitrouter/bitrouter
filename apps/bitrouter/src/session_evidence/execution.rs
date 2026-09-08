@@ -15,6 +15,7 @@ use crate::eval::types::canonical_digest;
 
 mod claude;
 pub mod input_runs;
+pub mod rollout_runs;
 pub mod runs;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +131,10 @@ pub struct ExecutionGraph {
     pub facts: Vec<NativeFact>,
     #[serde(default)]
     pub codex_runs: Vec<runs::CodexRun>,
+    /// Copied records excluded from execution facts, keyed by original record
+    /// id with the owning source metadata that proves their inherited boundary.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inherited_records: BTreeMap<String, RecordRef>,
     pub gaps: BTreeSet<String>,
 }
 

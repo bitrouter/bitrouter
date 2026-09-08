@@ -3,8 +3,16 @@
 use sea_orm::Condition;
 
 use super::super::execution::{ExecutionGraph, FactKind, NativeFact, extract};
-use super::super::types::{MAX_RECORDS, NodeKey, PARSER_VERSION};
+use super::super::types::{MAX_RECORDS, NodeKey, PARSER_VERSION, RecordRef, SourceFormat};
 use super::*;
+
+struct CopiedBoundary {
+    base: u64,
+    cut: u64,
+    metadata: RecordRef,
+}
+
+type CopiedSourceCache = BTreeMap<(String, String), Option<CopiedBoundary>>;
 
 mod fact_entity {
     use sea_orm::entity::prelude::*;
@@ -180,6 +188,7 @@ impl EvidenceStore {
         let mut pending = roots.clone();
         let mut facts = BTreeMap::new();
         let mut scanned = 0;
+        let mut copied_sources = BTreeMap::new();
         while let Some(node) = pending.pop_first() {
             if graph.nodes.contains(&node) {
                 continue;
@@ -211,6 +220,21 @@ impl EvidenceStore {
                     return Ok(finish_graph(graph, facts));
                 }
                 for fact in &page {
+                    match self.copied_fact_metadata(fact, &mut copied_sources).await {
+                        Ok(Some(metadata)) => {
+                            // Keep immutable node_facts readable; this is an
+                            // execution view with verified context boundaries.
+                            graph
+                                .inherited_records
+                                .insert(fact.record_id.clone(), metadata);
+                            continue;
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(%error,"native copied fact boundary unavailable");
+                            graph.gaps.insert("native_graph_evidence_invalid".into());
+                        }
+                    }
                     match &fact.event {
                         FactKind::Relation {
                             relation: EdgeKind::Spawn,
@@ -259,6 +283,90 @@ impl EvidenceStore {
             }
         }
         Ok(finish_graph(graph, facts))
+    }
+
+    async fn copied_fact_metadata(
+        &self,
+        fact: &NativeFact,
+        cache: &mut CopiedSourceCache,
+    ) -> Result<Option<RecordRef>> {
+        let Some(reference) = fact.record.as_ref().filter(|reference| {
+            fact.source_format == Some(SourceFormat::CodexRollout) && reference.range.start > 0
+        }) else {
+            return Ok(None);
+        };
+        let key = (
+            reference.range.source_id.clone(),
+            reference.range.generation.clone(),
+        );
+        if !cache.contains_key(&key) {
+            ensure!(cache.len() < MAX_GRAPH_ITEMS, "native copied source limit");
+            let first = self
+                .records(&SourceRange {
+                    start: 0,
+                    end: 1,
+                    ..reference.range.clone()
+                })
+                .await?;
+            let first = first.first().context("native source metadata missing")?;
+            let raw = &first.input.raw;
+            let source = self
+                .source(&reference.range.source_id)
+                .await?
+                .context("native source missing")?;
+            let boundary = if raw["type"] == "session_meta"
+                && source
+                    .descriptor
+                    .node
+                    .as_ref()
+                    .is_some_and(|node| raw["payload"]["id"].as_str() == Some(&node.native_id))
+            {
+                raw["ordinal"]
+                    .as_u64()
+                    .zip(
+                        raw.pointer("/payload/subagent_history_start_ordinal")
+                            .and_then(serde_json::Value::as_u64),
+                    )
+                    .filter(|(base, _)| {
+                        *base
+                            == raw
+                                .pointer("/payload/history_base/end_ordinal_exclusive")
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0)
+                    })
+                    .map(|(base, cut)| {
+                        Ok::<_, anyhow::Error>(CopiedBoundary {
+                            base,
+                            cut,
+                            metadata: RecordRef::from_record(first)?,
+                        })
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
+            cache.insert(key.clone(), boundary);
+        }
+        let Some(Some(boundary)) = cache.get(&key) else {
+            return Ok(None);
+        };
+        // Full-history child files contain copied parent metadata and bookends.
+        // Filter only records proven inside that prefix; parser/index bytes do
+        // not change, and own-source invalid metadata keeps its original gap.
+        // https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/protocol.rs
+        let records = self.records(&reference.range).await?;
+        let record = records.first().context("native copied record missing")?;
+        ensure!(
+            RecordRef::from_record(record)? == *reference,
+            "native copied record changed"
+        );
+        Ok(record.input.raw["ordinal"]
+            .as_u64()
+            .filter(|ordinal| {
+                *ordinal < boundary.cut
+                    && boundary.base.checked_add(reference.range.start) == Some(*ordinal)
+            })
+            .map(|_| boundary.metadata.clone()))
     }
 }
 

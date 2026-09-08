@@ -1,6 +1,7 @@
 //! Corroborate connection-local rollout selections against owned file sources.
 
 use super::*;
+use crate::session_evidence::execution::rollout_runs::{self, OwnHistory};
 use crate::session_evidence::native_inputs::rollouts::CodexHistoryEvidence;
 use crate::session_evidence::store::rollouts::RolloutIdentity;
 
@@ -10,6 +11,7 @@ struct Inspection {
     turns: BTreeMap<String, Vec<RecordRef>>,
     ranges: Vec<SourceRange>,
     gaps: BTreeSet<String>,
+    runs: BTreeMap<String, rollout_runs::RolloutRun>,
 }
 
 impl ControllerEvidence {
@@ -170,6 +172,7 @@ impl ControllerEvidence {
                     .get(&binding.native_id)
                     .map(Vec::as_slice)
                     .unwrap_or_default();
+                let execution = inspection.runs.get(&binding.native_id);
                 if contexts.is_empty() {
                     history
                         .gaps
@@ -181,6 +184,7 @@ impl ControllerEvidence {
                     &history.lifecycle,
                     &inspection.identity,
                     contexts,
+                    execution,
                     &inspection.ranges,
                     &history.gaps,
                 ))?
@@ -195,6 +199,7 @@ impl ControllerEvidence {
                     lifecycle: history.lifecycle.clone(),
                     source: inspection.identity.clone(),
                     turn_contexts: contexts.to_vec(),
+                    execution: execution.cloned(),
                     inspected: inspection.ranges.clone(),
                     gaps: history.gaps.clone(),
                 };
@@ -232,7 +237,8 @@ impl ControllerEvidence {
         }
         *budget -= end;
         let mut start = 0;
-        let mut own_ordinal = None;
+        let mut ownership = OwnHistory::Unknown;
+        let mut executions = rollout_runs::Scanner::new(identity.node.clone());
         while start < end {
             let range = SourceRange {
                 source_id: source.id.clone(),
@@ -246,6 +252,7 @@ impl ControllerEvidence {
                 "native rollout records missing"
             );
             for record in records {
+                executions.push(&record, details_budget);
                 let raw = &record.input.raw;
                 if record.input.sequence == 0 {
                     ensure!(
@@ -253,20 +260,7 @@ impl ControllerEvidence {
                         "native rollout metadata changed"
                     );
                     let payload = &raw["payload"];
-                    // Native ordinals distinguish a child's copied history
-                    // from its own records. TurnContext carries the turn id:
-                    // https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/protocol.rs
-                    for field in [
-                        "subagent_history_start_ordinal",
-                        "forked_from_ordinal_exclusive",
-                    ] {
-                        if let Some(value) = payload.get(field).filter(|value| !value.is_null()) {
-                            let ordinal = value
-                                .as_u64()
-                                .context("native own-history ordinal invalid")?;
-                            own_ordinal = Some(own_ordinal.unwrap_or(0).max(ordinal));
-                        }
-                    }
+                    ownership = OwnHistory::read(payload)?;
                 }
                 if raw["type"] != "turn_context" {
                     continue;
@@ -278,14 +272,8 @@ impl ControllerEvidence {
                 else {
                     continue;
                 };
-                if let Some(cut) = own_ordinal {
-                    let ordinal = raw
-                        .get("ordinal")
-                        .and_then(Value::as_u64)
-                        .context("native own-history ordinal missing")?;
-                    if ordinal < cut {
-                        continue;
-                    }
+                if !ownership.owns(&record)? {
+                    continue;
                 }
                 let references = inspection.turns.entry(turn.into()).or_default();
                 ensure!(
@@ -312,6 +300,14 @@ impl ControllerEvidence {
             end,
         });
         inspection.identity = Some(identity);
+        let executions = executions.finish();
+        inspection.gaps.extend(executions.gaps);
+        inspection.runs = executions
+            .runs
+            .into_iter()
+            .filter(|run| turns.contains(&run.turn_id))
+            .map(|run| (run.turn_id.clone(), run))
+            .collect();
         Ok(())
     }
 }

@@ -375,6 +375,45 @@ async fn v3_run_bookends_recover_from_raw_without_rewriting_v2_facts() -> Result
 }
 
 #[tokio::test]
+async fn copied_fact_filter_requires_the_original_owner_cut_and_exact_ordinal() -> Result<()> {
+    for case in 0..5 {
+        let store = store().await?;
+        let source = SourceDescriptor {
+            format: SourceFormat::CodexRollout,
+            node: Some(node("root")),
+            ..descriptor()
+        };
+        let mut first = json!({"ordinal":0,"type":"session_meta","payload":{"id":"root","subagent_history_start_ordinal":2}});
+        let mut copied = json!({"ordinal":1,"type":"session_meta","payload":{"id":"parent"}});
+        match case {
+            1 => first["payload"]["subagent_history_start_ordinal"] = json!(1),
+            2 => copied["ordinal"] = json!(0),
+            3 => first["payload"]["id"] = json!("foreign-owner"),
+            4 => {
+                first["ordinal"] = json!(4);
+                first["payload"]["subagent_history_start_ordinal"] = json!(8);
+                copied["ordinal"] = json!(5);
+            }
+            _ => {}
+        }
+        append(&store, source.clone(), first).await?;
+        append(&store, source, copied).await?;
+        let graph = store
+            .execution_graph(&BTreeSet::from([node("root")]))
+            .await?;
+        assert_eq!(
+            graph.gaps.contains("native_lifecycle_invalid"),
+            case != 0,
+            "case {case}"
+        );
+        assert_eq!(graph.inherited_records.len(), usize::from(case == 0));
+        assert!(store.node_facts(&node("root"),None,100).await?.iter().any(|fact|
+            matches!(&fact.event,FactKind::Gap {reason} if reason=="native_lifecycle_invalid")));
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn adding_process_identity_preserves_legacy_fact_bytes_and_digests() -> Result<()> {
     let store = store().await?;
     append(&store, descriptor(), thread("root", None, "group")).await?;

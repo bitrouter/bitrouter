@@ -48,6 +48,7 @@ pub struct Projector {
     codex_turn_starts: Vec<usize>,
     codex_ordinals: Option<bool>,
     codex_next_ordinal: u64,
+    codex_copied_history_end: Option<u64>,
 }
 
 struct ClaudeEntry {
@@ -93,6 +94,7 @@ impl Projector {
             codex_turn_starts: vec![],
             codex_ordinals: None,
             codex_next_ordinal: 0,
+            codex_copied_history_end: None,
         })
     }
 
@@ -202,6 +204,22 @@ impl Projector {
             .context("Codex rollout record has no payload")?;
         match raw.get("type").and_then(Value::as_str) {
             Some("session_meta") => {
+                if record.input.sequence == 0 {
+                    self.codex_copied_history_end = payload
+                        .get("subagent_history_start_ordinal")
+                        .filter(|value| !value.is_null())
+                        .map(|value| value.as_u64().context("invalid subagent history cut"))
+                        .transpose()?;
+                } else if self
+                    .codex_copied_history_end
+                    .zip(ordinal)
+                    .is_some_and(|(cut, ordinal)| ordinal < cut)
+                {
+                    // Full-history subagents copy ancestor metadata as context.
+                    // Only the source's first metadata record identifies its owner.
+                    // https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/protocol.rs
+                    return Ok(());
+                }
                 self.identity_observed = true;
                 ensure!(
                     payload.get("id").and_then(Value::as_str)

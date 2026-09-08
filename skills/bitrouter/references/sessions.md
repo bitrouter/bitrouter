@@ -193,6 +193,11 @@ and source-local turn-context records. A later revert cannot rewrite that input'
 selection. Delayed lifecycle notifications, overlapping requests, missing or
 ambiguous sources and unsupported history remain explicit gaps. This association
 does not establish complete execution ranges, settlement or coding quality.
+Resolved Codex histories and selected inputs also expose source-local execution
+observations: own turn bookends, explicitly addressed records and root-turn
+claims. Copied ancestor records are excluded using original native boundaries;
+unaddressed records remain unassigned. These observations do not establish task
+membership, full context semantics or descendant completion.
 An observation sequence without gaps does not cover all native work: auxiliary
 Codex title generation and file audits, among other paths, still need their own
 causal attribution and cost coverage.

@@ -274,6 +274,62 @@ async fn copied_context_inside_compaction_does_not_prove_an_input_executed_in_a_
 }
 
 #[tokio::test]
+async fn invalid_rollout_execution_identity_revokes_the_input_source_association() -> Result<()> {
+    for foreign_thread in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let handle = fixture(directory.path(), Harness::Codex).await?;
+        let service = &handle.service;
+        create(service, directory.path()).await?;
+        let evidence = producer(service, "turn").await?;
+        let path = service
+            .collector
+            .root()
+            .directory
+            .join("rollout-native.jsonl");
+        let mut context = json!({"ordinal":1,"type":"turn_context","payload":{"turn_id":"turn"}});
+        if foreign_thread {
+            context["payload"]["thread_id"] = json!("foreign");
+        } else {
+            context["ordinal"] = json!(7);
+        }
+        write_rows(&path,vec![json!({"ordinal":0,"type":"session_meta","payload":{"id":"native","cli_version":"0.153.4"}}),context]).await?;
+        service
+            .collector
+            .reconcile(
+                NodeKey {
+                    namespace: service.collector.root().namespace.clone(),
+                    harness: Harness::Codex,
+                    native_id: "native".into(),
+                    agent_id: None,
+                },
+                &path,
+                None,
+            )
+            .await?;
+        let mut rows = lifecycle("thread/start", "create", &path);
+        rows.extend(turn("turn"));
+        spool(service, rows).await?;
+        let result = service
+            .native_inputs(
+                &BTreeMap::from([("attempt".into(), evidence)]),
+                &BTreeSet::new(),
+            )
+            .await?;
+        let history = result["attempt"].bindings[0]
+            .codex_history
+            .as_ref()
+            .context("history")?;
+        assert!(history.source.is_none());
+        assert!(
+            history.gaps.contains("native_rollout_execution_invalid"),
+            "{:?}",
+            history.gaps
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn duplicate_rollout_inventory_retains_only_bounded_ambiguity_and_budget_gaps() -> Result<()>
 {
     let directory = tempfile::tempdir()?;
@@ -456,6 +512,17 @@ async fn captured_codex_proxy_records_bind_input_rollouts() -> Result<()> {
         );
         let source = history.source.as_ref().context("source")?;
         assert!(!history.turn_contexts.is_empty());
+        let execution = history
+            .execution
+            .as_ref()
+            .context("source-local execution")?;
+        assert!(execution.gaps.is_empty(), "{:?}", execution.gaps);
+        assert_eq!(execution.turn_id, binding.native_id);
+        assert!(execution.observed_span.is_some());
+        assert_eq!(
+            execution.outcome,
+            Some(crate::session_evidence::execution::runs::RunOutcome::Completed)
+        );
         by_thread
             .entry(binding.node.native_id.clone())
             .or_default()

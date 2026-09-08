@@ -3,6 +3,8 @@ use super::*;
 use serde_json::{Value, json};
 use std::path::Path;
 
+mod own_runs;
+
 fn row(ordinal: u64, kind: &str, payload: Value) -> Result<String> {
     Ok(format!(
         "{}\n",
@@ -947,6 +949,7 @@ async fn sibling_rollouts_share_import_budget_before_their_records_are_written()
         tokio::fs::write(directory.path().join(name), bytes).await?;
     }
     let mut budget = Budget {
+        execution_bytes: MAX_OBJECT_BYTES,
         nodes: 0,
         records: 0,
         remaining_import: 5,

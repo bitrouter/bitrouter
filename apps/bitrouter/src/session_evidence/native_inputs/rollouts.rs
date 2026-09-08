@@ -28,6 +28,8 @@ pub struct CodexHistoryEvidence {
     /// Original, source-local turn context records; copied replacement messages
     /// and a parent's inherited prefix cannot substitute for these records.
     pub turn_contexts: Vec<RecordRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<crate::session_evidence::execution::rollout_runs::RolloutRun>,
     pub inspected: Vec<SourceRange>,
     pub gaps: BTreeSet<String>,
 }

@@ -6,11 +6,12 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::collector::{CollectedSource, FileBound, NativeCollector, codex_parent};
+use super::execution::rollout_runs;
 use super::projection::{Projection, Projector};
 use super::store::EvidenceStore;
 use super::types::{
-    EdgeKind, ExecutionEdge, ForkBinding, Harness, MAX_GRAPH_ITEMS, MAX_RECORDS, NodeKey,
-    RECORD_PAGE_SIZE, RegisteredSource, RolloutPair, SourceRange, StoredRecord,
+    EdgeKind, ExecutionEdge, ForkBinding, Harness, MAX_GRAPH_ITEMS, MAX_OBJECT_BYTES, MAX_RECORDS,
+    NodeKey, RECORD_PAGE_SIZE, RegisteredSource, RolloutPair, SourceRange, StoredRecord,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +19,8 @@ pub struct ResolvedHistory {
     pub node: NodeKey,
     pub source: Option<CollectedSource>,
     pub projection: Option<Projection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_executions: Option<rollout_runs::RolloutExecutions>,
     /// Dependencies are context ancestry, not additional task executions.
     pub parent: Option<Box<ResolvedHistory>>,
     pub edge: Option<ExecutionEdge>,
@@ -34,6 +37,7 @@ impl ResolvedHistory {
             node,
             source: None,
             projection: None,
+            codex_executions: None,
             parent: None,
             edge: None,
             gaps: BTreeSet::from([gap.into()]),
@@ -52,6 +56,7 @@ struct Budget {
     nodes: usize,
     records: usize,
     remaining_import: usize,
+    execution_bytes: usize,
 }
 
 impl HistoryResolver {
@@ -68,6 +73,7 @@ impl HistoryResolver {
                 nodes: 0,
                 records: 0,
                 remaining_import: MAX_RECORDS,
+                execution_bytes: MAX_OBJECT_BYTES,
             },
         )
         .await
@@ -152,6 +158,7 @@ impl HistoryResolver {
             node: node.clone(),
             source: Some(source.clone()),
             projection: None,
+            codex_executions: None,
             parent: None,
             edge: None,
             gaps: source.gaps.clone(),
@@ -166,6 +173,8 @@ impl HistoryResolver {
         }
         budget.records += (range.end - range.start) as usize;
         let mut projector = Projector::new(node.clone(), source.source.descriptor.format)?;
+        let mut executions =
+            (node.harness == Harness::Codex).then(|| rollout_runs::Scanner::new(node.clone()));
         if node.harness == Harness::Codex
             && let Some(metadata) = &source.metadata
         {
@@ -359,12 +368,16 @@ impl HistoryResolver {
                 .await?;
             for record in &records {
                 projector.push(record)?;
+                if let Some(executions) = &mut executions {
+                    executions.push(record, &mut budget.execution_bytes);
+                }
             }
             start = end;
         }
         let projection = projector.finish();
         history.gaps.extend(projection.gaps.iter().cloned());
         history.projection = Some(projection);
+        history.codex_executions = executions.map(rollout_runs::Scanner::finish);
         Ok(history)
     }
 

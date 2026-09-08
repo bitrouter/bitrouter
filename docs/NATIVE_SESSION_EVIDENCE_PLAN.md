@@ -8,8 +8,8 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Layer | Implemented boundary | Remaining boundary |
 |---|---|---|
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
-| History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex physical rollout dependencies bind immutable prefixes separately from stable threads and logical fork ancestry; observed revert variants survive file removal. Codex input receipts select a rollout through original native lifecycle and turn-context records. | Complete own-execution ranges, unmatched/replaced rollout histories, Claude independent-fork UUID remapping and unsupported native history formats. |
-| Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and exact resumed-child execution ranges. |
+| History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex physical rollout dependencies bind immutable prefixes separately from stable threads and logical fork ancestry; observed revert variants survive file removal. Codex input receipts select a rollout through original native lifecycle and turn-context records; source-local execution views retain own turn bookends, explicit records and root-turn claims across copied subagent prefixes. | Complete execution/context coverage, unmatched/replaced rollout histories, Claude independent-fork UUID remapping and unsupported native history formats. |
+| Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and resumed-child task membership and execution coverage. |
 | Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Pinned adapter producer observations retain original prompt provenance; native input receipts connect inspected requests, acknowledgements and explicitly addressed execution events. | Complete execution membership, exact per-attempt execution ranges and manager intent recovery after a Code process restart. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
 | Evaluation | Manifest persistence/validation and request-set accounting primitives exist. | Production manifest construction, coding evaluation, authoritative Eval admission and human feedback. |
@@ -29,6 +29,55 @@ old cursor. Unix source identities are unchanged. Filesystems that cannot supply
 the required identity produce a collection error rather than a guessed source.
 
 ## Implementation checkpoint
+
+The current own-execution stage adds source-local Codex execution views to
+resolved histories and selected input receipts. Original metadata and contiguous
+ordinals separate copied subagent prefixes from local records; a logical fork's
+parent ordinal is not reused as an offset into a copied child file. The collector
+and context projector accept ancestor metadata only inside the declared copied
+prefix. Recovery reads this boundary from the original stored owner metadata.
+
+Each execution retains explicitly addressed records, turn contexts, root-turn
+claims and original start/end observations. A bookend span describes those
+observations; it does not assign intervening records without native turn IDs.
+Such records remain available as unassigned source ranges. Missing, repeated,
+reversed or overlapping bookends, root conflicts and source/ordinal failures
+withhold a confirmed span. Synthetic snapshot aborts cannot supply an execution
+start. Shared detail budgets apply across history dependencies and input scans.
+The candidate execution graph excludes proven copied records while exposing
+their original owner-metadata references. Stored parser facts remain immutable
+and independently readable, including older context-insensitive interpretations.
+These views do not populate attempt membership or establish final settlement.
+
+A real Codex CLI 0.153.4 capture through the BitRouter proxy completed a
+full-history subagent spawn and a later follow-up in the same child thread.
+The child stored two distinct own turn IDs with different root-turn claims,
+matching the two parent inputs; its copied prefix included ancestor metadata
+and a parent turn. This is evidence for native execution identity, not complete
+controller causality, descendant settlement or the full runtime/version matrix.
+The local Responses fixture invokes the producer's `collaboration` namespace;
+an unqualified `spawn_agent` call is unsupported by this runtime.
+
+The capture is reproducible with
+`python3 apps/bitrouter/tests/fixtures/codex_subagent_capture.py --codex <native-cli>
+--bitrouter <built-bitrouter>`. It requires Codex CLI 0.153.4 and prints its isolated
+capture directory. Set `BITROUTER_TEST_CODEX_SUBAGENT_CAPTURE` to that directory
+and run `cargo test -p bitrouter --lib --all-features
+captured_codex_subagent_followups_keep_distinct_own_turns -- --ignored`.
+The preceding lifecycle capture test also checks each selected input's original
+execution bookends. Independent review passed after correcting copied metadata
+collection and graph filtering, ambiguous open tails, and propagation of source
+integrity failures to input associations. Regression tests include database
+reopen, immutable original facts, invalid cuts, foreign owners and invalid ordinals.
+All 3,403 workspace tests passed with 17 skipped. Both real-native capture tests
+and the pinned-adapter binary fixture passed separately; the adapter fixture
+passed on its first run at this checkpoint. Workspace Clippy with tests and denied
+warnings, doctests, rustdoc, distribution checks, Windows cross-target Clippy,
+formatting and diff checks passed. Preceding commit `6737686b` also completed full
+CI successfully. These checks validate this stage, not the remaining full-feature
+requirements.
+
+### Preceding input-to-rollout checkpoint
 
 Codex input receipts now carry `codex_history`: a connection-local lifecycle
 observation, an independently verified owned rollout identity, original
