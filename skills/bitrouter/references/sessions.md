@@ -229,3 +229,45 @@ observed native IDs. They preserve known model/provider, route-ledger evidence,
 and charge provenance. Tool-to-request relationships that ACP does not expose
 remain unresolved. Direct/remote or unmetered requests cannot be claimed as
 complete local cost; observed costs are summed over unique request IDs.
+
+### Checkpoints and imported assessments
+
+Read the native session's `head` from `acp recordings show`, then freeze that
+exact prefix. The agent source is the configured ID used when recording.
+
+```sh
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH create --watermark N
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH list
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH show CHECKPOINT_ID
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH resources CHECKPOINT_ID --refresh
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH submit assessment.json
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH history
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH effective
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH family
+```
+
+Creation rejects an outdated watermark. Existing checkpoints keep original tool
+versions when a session appends. Resource refresh reads existing local records
+only; omit `--refresh` to inspect observation history. No judge, harness, test,
+PR query, or routing publication is started by these commands.
+
+An assessment JSON object requires `submission_id`, `checkpoint_id`,
+`expected_revision` (null only for the first selection), `source` (`human` or
+`agentic`), `evaluator_id`, `evaluator_version`, `reason`, and `assessment`.
+The assessment contains SHA-256 `pipeline_config_digest` and `selection_digest`,
+`scores`, `evidence`, and `explanation`. Scores map criterion IDs to
+`{"status":"scored","value_ppm":500000}`, `{"status":"unknown"}`, or
+`{"status":"not_applicable"}`. Evidence entries identify a checkpoint's
+`node_id` and `digest`. This store validates references and ranges, not rubric
+applicability or semantic correctness.
+
+For a correction, read `effective`, use its `current_revision`, and supply a new
+submission ID. Identical retries are idempotent. A stale expected revision is
+rejected; an automatic result cannot displace a Human correction on the same
+checkpoint. `assessment: null` explicitly retracts the current assessment and
+requires Human source and a reason. Old results do not automatically revive.
+
+An append marks the previous label stale. Fork views expose related labels as
+one family and union request costs rather than adding checkpoint totals. Deleting
+recordings also invalidates referencing checkpoints and removes their assessment
+text, including inherited references in descendant checkpoints.

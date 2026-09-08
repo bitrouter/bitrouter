@@ -109,7 +109,7 @@ early notifications, reconnect/load replay, and durable shutdown. Storage tests
 cover failure latching, owner/source separation, fork boundaries, deletion,
 principal-scoped request unions, and unknown costs.
 
-This layer does not yet provide immutable checkpoint manifests, assessment
-revisions, effective evaluation selection, or inherited family projections.
-Those belong to the subsequent checkpoint layer. It also does not establish
-judge accuracy or a causal reward for individual model choices.
+The [checkpoint layer](ACP_CHECKPOINT_SPEC.md) builds immutable prefix manifests,
+assessment revisions, effective selection and inherited family projections on
+these observations. Neither layer establishes judge accuracy or a causal reward
+for individual model choices.
