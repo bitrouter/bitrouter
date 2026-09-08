@@ -682,6 +682,11 @@ cursor visible. Bracketed paste preserves newlines. A rotating thinking
 indicator runs while waiting for the agent, including before its first chunk.
 Exiting clears the controls and leaves the transcript in terminal history.
 
+User messages have blank lines above and below. Agent replies render Markdown
+headings, emphasis, lists, links, tables, and code blocks. Tables too wide for
+the terminal fall back to labeled fields. Action descriptions are bright white;
+shell commands use subdued code frames. ACP terminal IDs are not displayed.
+
 **Keys**
 
 | Key | Effect |

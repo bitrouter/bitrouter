@@ -220,6 +220,11 @@ transcript, and restores terminal state. The composer grows to eight visible
 lines, preserves pasted newlines, and keeps the cursor visible. A rotating
 thinking indicator continues while the agent is waiting for a response.
 
+User messages have blank lines above and below. Agent replies render Markdown
+headings, emphasis, lists, links, tables, and code blocks. Tables too wide for
+the terminal fall back to labeled fields. Action descriptions are bright white;
+shell commands use subdued code frames. ACP terminal IDs are not displayed.
+
 **Keys**
 
 | Key | Effect |

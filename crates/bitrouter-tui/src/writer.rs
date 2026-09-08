@@ -602,8 +602,8 @@ impl Cache {
                 .is_some_and(|cached| cached.size == size && cached.revision == item.revision);
             if !fresh {
                 let rows = match item.entry {
-                    Entry::Message(message) => render::message(message),
-                    Entry::Tool(call) => registry.render(&ToolContext::new(call, size.height)),
+                    Entry::Message(message) => render::message(message, size.width),
+                    Entry::Tool(call) => registry.render(&ToolContext::new(call, size)),
                     Entry::Plan(plan) => render::session::plan(plan),
                 };
                 self.rows.insert(
