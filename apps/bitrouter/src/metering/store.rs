@@ -1229,6 +1229,12 @@ impl MeteringStore {
             native_turn_id: Set(
                 session_identity.and_then(|identity| identity.native_turn_id.clone())
             ),
+            native_parent_turn_id: Set(
+                session_identity.and_then(|identity| identity.native_parent_turn_id.clone())
+            ),
+            native_root_turn_id: Set(
+                session_identity.and_then(|identity| identity.native_root_turn_id.clone())
+            ),
             route_lease_id: Set(
                 session_identity.and_then(|identity| identity.route_lease_id.clone())
             ),
@@ -1276,6 +1282,8 @@ impl MeteringStore {
                         requests::Column::NativeAgentThreadId,
                         requests::Column::NativeParentAgentThreadId,
                         requests::Column::NativeTurnId,
+                        requests::Column::NativeParentTurnId,
+                        requests::Column::NativeRootTurnId,
                         requests::Column::RouteLeaseId,
                         requests::Column::SessionIdentityJson,
                         requests::Column::ModelId,

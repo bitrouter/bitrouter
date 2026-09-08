@@ -30,6 +30,16 @@ the required identity produce a collection error rather than a guessed source.
 
 ## Implementation checkpoint
 
+Metered Codex requests now retain explicit parent-turn and root-turn claims in
+addition to their exact turn and thread identities. The normalization event,
+settlement recorder and nullable request columns preserve each request's scope
+across resumed child executions. Header/body conflicts retain both reviewed
+observations and their actual transport; missing ancestry is not reconstructed
+from session grouping or historical rows. These fields do not select route
+leases or independently prove task membership. Matching them against native
+turn metadata, unique gateway request attribution and attempt settlement still
+requires the production evidence compiler.
+
 Storage, source-local projection, recursive Codex history dependencies, native
 spool ingestion, and durable ACP observation are implemented. The collector is
 wired into both controller construction paths (`serve` and `launch_controlled`),

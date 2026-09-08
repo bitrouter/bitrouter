@@ -55,6 +55,10 @@ pub struct MeteringSessionIdentity {
     pub native_parent_agent_thread_id: Option<String>,
     /// Native turn identity.
     pub native_turn_id: Option<String>,
+    /// Immediate initiating native turn, when explicitly observed.
+    pub native_parent_turn_id: Option<String>,
+    /// Frozen native root turn attribution, when explicitly observed.
+    pub native_root_turn_id: Option<String>,
     /// Matching ephemeral route lease.
     pub route_lease_id: Option<String>,
     /// Redaction-reviewed normalized event JSON.

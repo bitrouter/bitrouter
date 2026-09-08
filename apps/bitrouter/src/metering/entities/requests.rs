@@ -34,6 +34,10 @@ pub struct Model {
     pub native_parent_agent_thread_id: Option<String>,
     /// Native harness turn identity.
     pub native_turn_id: Option<String>,
+    /// Immediate initiating turn explicitly reported by the native runtime.
+    pub native_parent_turn_id: Option<String>,
+    /// Root turn attribution explicitly reported by the native runtime.
+    pub native_root_turn_id: Option<String>,
     /// Applied or matched ephemeral route lease identity.
     pub route_lease_id: Option<String>,
     /// Redaction-reviewed normalized identity evidence and conflicts.

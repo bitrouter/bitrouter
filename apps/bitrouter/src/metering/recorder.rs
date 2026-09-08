@@ -226,6 +226,8 @@ impl SettlementRecorder for MeteringRecorder {
                         native_agent_thread_id: event.native_agent_thread_id.clone(),
                         native_parent_agent_thread_id: event.native_parent_agent_thread_id.clone(),
                         native_turn_id: event.native_turn_id.clone(),
+                        native_parent_turn_id: event.native_parent_turn_id.clone(),
+                        native_root_turn_id: event.native_root_turn_id.clone(),
                         route_lease_id: event.route_lease_id.clone(),
                         serialized,
                     },
@@ -339,6 +341,14 @@ fn session_span_attributes(
             event.native_parent_agent_thread_id.as_ref(),
         ),
         ("bitrouter.agent.turn_id", event.native_turn_id.as_ref()),
+        (
+            "bitrouter.agent.parent_turn_id",
+            event.native_parent_turn_id.as_ref(),
+        ),
+        (
+            "bitrouter.agent.root_turn_id",
+            event.native_root_turn_id.as_ref(),
+        ),
         (
             "bitrouter.acp.route_lease_id",
             event.route_lease_id.as_ref(),

@@ -29,6 +29,7 @@ pub mod m20240101_000016_add_acp_metering_identity;
 pub mod m20240101_000017_add_metering_route_scope;
 pub mod m20240101_000018_native_session_evidence;
 pub mod m20240101_000019_native_execution_facts;
+pub mod m20240101_000020_add_native_turn_attribution;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -58,6 +59,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000017_add_metering_route_scope::Migration),
             Box::new(m20240101_000018_native_session_evidence::Migration),
             Box::new(m20240101_000019_native_execution_facts::Migration),
+            Box::new(m20240101_000020_add_native_turn_attribution::Migration),
         ]
     }
 }
@@ -105,6 +107,8 @@ mod tests {
             "native_agent_thread_id",
             "native_parent_agent_thread_id",
             "native_turn_id",
+            "native_parent_turn_id",
+            "native_root_turn_id",
             "route_lease_id",
             "session_identity_json",
         ] {
