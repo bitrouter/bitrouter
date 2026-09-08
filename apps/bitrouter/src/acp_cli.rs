@@ -960,6 +960,9 @@ async fn apply_routing_with_diagnostics(
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
     diagnostics: &mut dyn FnMut(String),
 ) -> std::result::Result<Routed, RoutingError> {
+    // Every controlled entrypoint shares this preparation. Preserve the config
+    // home's database location even when the coding working directory differs.
+    config.database.url = crate::db::anchor_url(&config.database.url, source.home());
     // A catalog-known id needs no `agents:` entry — synthesize its invocation.
     if !config.agents.contains_key(agent_id)
         && let Some(h) = crate::harness::by_id(agent_id)
@@ -2133,6 +2136,9 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
             .route_control(binding.route_control())
             .session_cost(binding.session_cost());
     }
+    if let Some(capture) = open_capture(&host.config, agent_id, host.binding.as_ref()).await? {
+        controller = controller.capture(capture);
+    }
     controller
         .run(agent_client_protocol::Stdio::new())
         .await
@@ -2646,6 +2652,30 @@ impl ControlledCleanup {
     }
 }
 
+async fn open_capture(
+    config: &Config,
+    agent_id: &str,
+    binding: Option<&LocalControllerBinding>,
+) -> Result<Option<Arc<dyn bitrouter_sdk::acp::capture::CapturePort>>> {
+    if !config.acp_recording.enabled {
+        return Ok(None);
+    }
+    let db = crate::db::connect(&config.database.url)
+        .await
+        .context("opening the opt-in ACP content store")?;
+    crate::db::run_migrations(&db).await?;
+    let store = crate::acp_trajectory::CanonicalStore::new(db);
+    let recorder = store
+        .recorder(crate::acp_trajectory::RecordingScope {
+            owner: "local".into(),
+            source: agent_id.to_owned(),
+            controller_instance_id: binding.map(|value| value.controller_instance_id.clone()),
+            route_scope_id: binding.map(|value| value.api_principal.clone()),
+        })
+        .await?;
+    Ok(Some(recorder))
+}
+
 /// Launch `agent_id` behind an in-process controller and connect the shared
 /// client to it. The controller carries the same identity and endpoint plan
 /// `acp serve` gives it, so a routed session configures the harness's
@@ -2706,6 +2736,10 @@ async fn launch_controlled_with_cancel(
         controller = controller
             .route_control(binding.route_control())
             .session_cost(binding.session_cost());
+    }
+
+    if let Some(capture) = open_capture(config, agent_id, binding.as_ref()).await? {
+        controller = controller.capture(capture);
     }
 
     // In-process duplex: no bytes, no pipe, no second process between the

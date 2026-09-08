@@ -124,8 +124,9 @@ inference goes to the daemon HTTP API.
 For an ACP client, use `bitrouter acp serve claude` or
 `bitrouter acp serve codex`. Stable ACP v1 on exact adapter pins,
 initializing the harness with the client's capabilities and transparently
-carrying multiple harness-native sessions on one connection; BitRouter owns
-none of their IDs, transcripts, or storage. Route leases
+carrying multiple harness-native sessions on one connection. Native IDs and
+history remain harness-owned; `acp_recording.enabled` optionally records the
+observable ACP transcript locally. Route leases
 (`_bitrouter/route/list|set|reset`) and session-attributed cost are
 capability-gated and need a local control binding, which an explicit remote
 `--base-url` does not provide. Read `references/sessions.md` — the pins and the

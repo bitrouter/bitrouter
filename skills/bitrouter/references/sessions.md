@@ -17,8 +17,9 @@ One controller process owns one live harness connection, not one conversation.
 The manager may call `session/new` repeatedly and may list, load, resume, fork,
 close, or delete sessions when the harness advertises those capabilities.
 Every manager-visible `sessionId` is the opaque ID returned by the harness.
-BitRouter does not generate an alias, store a session catalog or transcript,
-or read Claude/Codex session files.
+BitRouter does not generate an alias or read Claude/Codex private session
+files. Optional local recording mirrors observable ACP content; it does not
+replace the harness's native session catalog or persistence.
 
 `bitrouter run` runs the **same controller**, in-process: it launches the
 harness behind a connection-level controller and drives it over an in-process
@@ -184,3 +185,47 @@ and a `result` line. `--no-wait` emits `submitted`. This NDJSON presentation is
 `--format ndjson`, the default (`json` remains an alias); `--format text` and `quiet` print the transcript
 or the assistant text instead. It belongs to `prompt` only; it is not the
 `acp serve` wire format.
+
+## Local ACP recording
+
+Recording is opt-in and independent of the content-free `trajectory.enabled`
+route ledger. In `bitrouter.yaml`:
+
+```yaml
+acp_recording:
+  enabled: true
+```
+
+The shared controller records observed prompts, session updates, tool inputs
+and outputs, permission/terminal/filesystem callbacks, responses, and lifecycle
+facts before forwarding them. It applies to `code`, `run`, and `acp serve`,
+including direct sessions. Content stays in the configured local database;
+this setting does not invoke a judge or publish transcripts. Initialization,
+authentication, provider configuration, and MCP launch credentials are excluded.
+Recorded user/tool content can itself contain sensitive information.
+
+```bash
+bitrouter acp recordings list --agent codex-acp
+bitrouter acp recordings show --agent codex-acp NATIVE_SESSION_ID
+bitrouter acp recordings delete --agent codex-acp NATIVE_SESSION_ID
+```
+
+Use the resolved configured agent ID as the source namespace. Add `--config`
+before `list`, `show`, or `delete` to select another configuration. JSON is the
+default; `--human` renders a readable timeline. Data is retained until explicitly
+deleted. Deletion removes local content and fences subsequent writes for that
+recorded identity; native harness history and model metering remain intact.
+Disable recording to continue using a deleted native session without recording.
+
+Load replay is retained separately from live canonical events. It is never a
+new model execution or additional cost. A gap is reported when history across
+load/resume cannot be verified; equal text is never sufficient to deduplicate
+legitimate repeated prompts. Interrupted/unclosed captures remain explicit.
+With recording enabled, a durable-write failure stops forwarding with an error;
+it must not silently produce an apparently complete record.
+
+Request links use the locally established controller/principal namespace and
+observed native IDs. They preserve known model/provider, route-ledger evidence,
+and charge provenance. Tool-to-request relationships that ACP does not expose
+remain unresolved. Direct/remote or unmetered requests cannot be claimed as
+complete local cost; observed costs are summed over unique request IDs.

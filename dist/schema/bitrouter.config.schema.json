@@ -33,6 +33,17 @@
       ],
       "type": "object"
     },
+    "AcpRecordingConfig": {
+      "description": "Local ACP conversation content recording, independent of routing evidence.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Store observable session messages and tool results until explicitly deleted.\nNo content is recorded or sent to an evaluator by default.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "AcpTransport": {
       "description": "How to dial one upstream ACP agent.\n\nv1.0 ships stdio only — the spec lists stdio as the primary transport for\nagent processes spawned by an IDE / CLI client.",
       "oneOf": [
@@ -2056,6 +2067,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "The top-level configuration.",
   "properties": {
+    "acp_recording": {
+      "$ref": "#/$defs/AcpRecordingConfig",
+      "default": {
+        "enabled": false
+      },
+      "description": "Opt-in local storage of observable ACP conversation content."
+    },
     "agents": {
       "additionalProperties": {
         "$ref": "#/$defs/AcpAgentConfig"

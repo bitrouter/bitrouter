@@ -12,6 +12,7 @@
 
 pub mod acp_cli;
 pub mod acp_runtime;
+pub mod acp_trajectory;
 pub mod actions;
 pub mod adequacy;
 pub mod administration_target;
