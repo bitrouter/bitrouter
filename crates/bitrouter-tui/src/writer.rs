@@ -120,6 +120,7 @@ pub struct Writer<B> {
     anchor: u16,
     width: u16,
     height: u16,
+    footer_rows: usize,
 }
 
 impl<B: Backend + SyncSink> Writer<B> {
@@ -151,6 +152,7 @@ impl<B: Backend + SyncSink> Writer<B> {
             anchor,
             width: size.width.max(1),
             height,
+            footer_rows: 0,
         })
     }
 
@@ -159,7 +161,62 @@ impl<B: Backend + SyncSink> Writer<B> {
     /// Renderers need it: a diff is capped at a terminal height, and what a
     /// row costs depends on the width.
     pub fn size(&self) -> Size {
-        Size::new(self.width, self.height)
+        self.backend
+            .size()
+            .unwrap_or(Size::new(self.width, self.height))
+    }
+
+    /// Keep transient controls at the bottom while only transcript rows enter
+    /// native scrollback. Space released by a shrinking footer stays blank;
+    /// it must not pull already-scrolled transcript rows back onto the screen.
+    /// Both inputs are physical rows, already wrapped to the terminal width.
+    pub fn docked_frame(
+        &mut self,
+        transcript: &[Line<'static>],
+        footer: &[Line<'static>],
+    ) -> io::Result<()> {
+        let size = self.size();
+        let rows = usize::from(size.height.max(1));
+        let footer = &footer[footer.len().saturating_sub(rows)..];
+        let mut document = transcript.to_vec();
+        let minimum = if size.width == self.width && size.height == self.height {
+            self.viewport_top + self.capacity()
+        } else {
+            rows.saturating_sub(usize::from(self.anchor.min(size.height.saturating_sub(1))))
+        };
+        document.resize(
+            document.len().max(minimum.saturating_sub(footer.len())),
+            Line::default(),
+        );
+        document.extend_from_slice(footer);
+        self.physical_frame(document)?;
+        self.footer_rows = footer.len();
+        Ok(())
+    }
+
+    /// Move the visible input cursor without querying stdin.
+    pub fn cursor(&mut self, position: Option<Position>) -> io::Result<()> {
+        if let Some(position) = position {
+            self.position(
+                position.x.min(self.width.saturating_sub(1)),
+                position.y.min(self.height.saturating_sub(1)),
+            )?;
+            self.backend.show_cursor()?;
+        } else {
+            self.backend.hide_cursor()?;
+        }
+        self.backend.flush()
+    }
+
+    /// Begin another native session below the previous transcript.
+    pub fn new_document(&mut self) -> io::Result<()> {
+        self.finish()?;
+        self.anchor = self
+            .screen_row(self.prev.len())
+            .unwrap_or(self.height.saturating_sub(1));
+        self.prev.clear();
+        self.viewport_top = 0;
+        Ok(())
     }
 
     /// Paint one frame of `lines`, which are logical lines — the writer wraps
@@ -169,10 +226,15 @@ impl<B: Backend + SyncSink> Writer<B> {
     /// optimisation but the contract the scheduler is built on: it may call
     /// this on every tick.
     pub fn frame(&mut self, lines: &[Line<'static>]) -> io::Result<()> {
+        let width = self.backend.size()?.width.max(1);
+        let next = lines.iter().flat_map(|line| wrap(line, width)).collect();
+        self.physical_frame(next)
+    }
+
+    fn physical_frame(&mut self, next: Vec<Line<'static>>) -> io::Result<()> {
         let size = self.backend.size()?;
         let width = size.width.max(1);
         let height = size.height.max(1);
-        let next: Vec<Line<'static>> = lines.iter().flat_map(|line| wrap(line, width)).collect();
 
         // A resize invalidates every row position we hold: the terminal has
         // reflowed underneath us and the old `viewport_top` describes a
@@ -250,6 +312,15 @@ impl<B: Backend + SyncSink> Writer<B> {
     /// nothing, which is why `Ctrl-C` leaves a readable transcript rather than
     /// a blank screen.
     pub fn finish(&mut self) -> io::Result<()> {
+        if self.footer_rows > 0 {
+            let end = self.prev.len().saturating_sub(self.footer_rows);
+            if let Some(row) = self.screen_row(end) {
+                self.position(0, row)?;
+                self.backend.clear_region(ClearType::AfterCursor)?;
+            }
+            self.prev.truncate(end);
+            self.footer_rows = 0;
+        }
         let below = self.prev.len();
         match self.screen_row(below) {
             Some(row) => self.position(0, row)?,
@@ -531,8 +602,8 @@ impl Cache {
                 .is_some_and(|cached| cached.size == size && cached.revision == item.revision);
             if !fresh {
                 let rows = match item.entry {
-                    Entry::Message(message) => render::message(message),
-                    Entry::Tool(call) => registry.render(&ToolContext::new(call, size.height)),
+                    Entry::Message(message) => render::message(message, size.width),
+                    Entry::Tool(call) => registry.render(&ToolContext::new(call, size)),
                     Entry::Plan(plan) => render::session::plan(plan),
                 };
                 self.rows.insert(
@@ -603,6 +674,7 @@ mod tests {
                 // `TestBackend` cannot fail; returning a fresh one keeps this
                 // helper total without a panic.
                 Writer {
+                    footer_rows: 0,
                     backend: TestBackend::new(width, height),
                     prev: Vec::new(),
                     viewport_top: 0,
@@ -620,6 +692,81 @@ mod tests {
         let mut writer = writer(20, 6);
         writer.frame(&document(&["one", "two", "three"]))?;
         assert_eq!(screen(&writer)[..3], ["one", "two", "three"]);
+        Ok(())
+    }
+
+    #[test]
+    fn docked_controls_stay_at_the_bottom_and_out_of_history() -> io::Result<()> {
+        let mut writer = writer(32, 12);
+        let mut transcript = Vec::new();
+        for index in 0..80 {
+            transcript.push(Line::from(format!("row:{index:03}")));
+            let footer = vec![Line::from("CONTROL"); [2, 5, 3][index % 3]];
+            writer.docked_frame(&transcript, &footer)?;
+            assert_eq!(screen(&writer).last().map(String::as_str), Some("CONTROL"));
+            assert!(
+                scrollback(&writer)
+                    .iter()
+                    .all(|row| !row.contains("CONTROL"))
+            );
+        }
+        let before = scrollback(&writer);
+        writer.docked_frame(&transcript, &document(&["CONTROL"]))?;
+        assert_eq!(
+            scrollback(&writer),
+            before,
+            "shrinking input cannot replay history"
+        );
+        writer.finish()?;
+        let rendered: Vec<_> = scrollback(&writer)
+            .into_iter()
+            .chain(screen(&writer))
+            .filter(|row| row.starts_with("row:"))
+            .collect();
+        assert_eq!(
+            rendered,
+            (0..80)
+                .map(|index| format!("row:{index:03}"))
+                .collect::<Vec<_>>()
+        );
+        assert!(screen(&writer).iter().all(|row| !row.contains("CONTROL")));
+        Ok(())
+    }
+
+    #[test]
+    fn pre_rendered_footer_rows_are_not_wrapped_again() -> io::Result<()> {
+        let mut writer = writer(32, 12);
+        let footer = document(&[&" ".repeat(32), &"═".repeat(32), " Message"]);
+        writer.docked_frame(&document(&["transcript"]), &footer)?;
+        assert_eq!(screen(&writer)[0], "transcript");
+        assert_eq!(screen(&writer)[10], "═".repeat(32));
+        assert_eq!(screen(&writer)[11], " Message");
+        assert!(scrollback(&writer).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn switching_documents_preserves_the_previous_transcript() -> io::Result<()> {
+        let mut writer = writer(32, 8);
+        let first: Vec<_> = (0..20).map(|i| Line::from(format!("first:{i}"))).collect();
+        writer.docked_frame(&first, &document(&["OLD CONTROL"]))?;
+        writer.new_document()?;
+        writer.docked_frame(&document(&["second session"]), &document(&["NEW CONTROL"]))?;
+        writer.finish()?;
+        let all = scrollback(&writer)
+            .into_iter()
+            .chain(screen(&writer))
+            .collect::<Vec<_>>();
+        for i in 0..20 {
+            assert_eq!(
+                all.iter()
+                    .filter(|row| **row == format!("first:{i}"))
+                    .count(),
+                1
+            );
+        }
+        assert!(all.iter().any(|row| row == "second session"));
+        assert!(all.iter().all(|row| !row.contains("CONTROL")));
         Ok(())
     }
 

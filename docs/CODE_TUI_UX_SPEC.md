@@ -273,7 +273,7 @@ History is process-local for this release. Bracketed paste preserves line
 breaks and never submits. A large paste may have a collapsed display, but its
 complete contents must be inspectable and sent unchanged.
 
-Enter sends at idle. Shift-Enter inserts a newline where supported; Ctrl-J is
+Enter sends at idle. Shift-Enter or Alt-Enter inserts a newline where supported; Ctrl-J is
 the documented fallback. Ctrl-G opens `$VISUAL` or `$EDITOR` when configured,
 using a deliberate terminal suspend/restore path. This handoff is available
 only at idle with no pending question in the first release; drafting inside

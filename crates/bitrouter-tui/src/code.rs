@@ -11,11 +11,8 @@ use agent_client_protocol_schema::v1::{
     TextContent, ToolCall, ToolCallStatus, ToolCallUpdate,
 };
 use crossterm::cursor::Hide;
-use crossterm::event::{
-    EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
-use crossterm::terminal::EnterAlternateScreen;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -961,7 +958,12 @@ impl CodeState {
                     }
                 };
             }
-            KeyCode::Enter if matches!(self.turn, TurnState::Submitting | TurnState::Working) => {
+            KeyCode::Enter
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
+                    && matches!(self.turn, TurnState::Submitting | TurnState::Working) =>
+            {
                 self.notice = Some("Tab queues for the next turn; Esc interrupts".to_string());
                 return Vec::new();
             }
@@ -2345,7 +2347,10 @@ impl CodeView {
         crate::lifecycle::install_panic_restore();
         crate::lifecycle::enter_raw()?;
         let mut stdout = std::io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableBracketedPaste, Hide) {
+        if let Err(error) = crate::lifecycle::enter_alternate_screen()
+            .and_then(|()| crate::lifecycle::enable_session_keys())
+            .and_then(|()| execute!(stdout, Hide))
+        {
             crate::lifecycle::restore();
             return Err(error);
         }
@@ -2392,12 +2397,10 @@ impl CodeView {
             return Ok(());
         }
         crate::lifecycle::enter_raw()?;
-        if let Err(error) = execute!(
-            self.terminal.backend_mut(),
-            EnterAlternateScreen,
-            EnableBracketedPaste,
-            Hide
-        ) {
+        if let Err(error) = crate::lifecycle::enter_alternate_screen()
+            .and_then(|()| crate::lifecycle::enable_session_keys())
+            .and_then(|()| execute!(self.terminal.backend_mut(), Hide))
+        {
             crate::lifecycle::restore();
             return Err(error);
         }
@@ -2787,17 +2790,17 @@ fn document_rows_for_entry(
     let mut rows = Vec::new();
     let (lines, source_offsets) = match entry {
         Entry::Message(message) if message.voice == Voice::Agent => {
-            let lines = render::markdown::render(&message.text);
+            let lines = render::markdown::source_lines(&message.text);
             let offsets = source_line_offsets(&message.text, lines.len());
             (lines, offsets)
         }
         Entry::Message(message) => {
-            let lines = render::message(message);
+            let lines = render::source_message(message);
             let offsets = source_line_offsets(&message.text, lines.len());
             (lines, offsets)
         }
         Entry::Tool(call) => {
-            let lines = compact_tool_lines(call, height, registry);
+            let lines = compact_tool_lines(call, width, height, registry);
             let offsets = (0..lines.len()).collect();
             (lines, offsets)
         }
@@ -2821,8 +2824,16 @@ fn document_rows_for_entry(
     rows
 }
 
-fn compact_tool_lines(call: &ToolCall, height: u16, registry: &Registry) -> Vec<Line<'static>> {
-    let mut lines = registry.render(&ToolContext::new(call, height));
+fn compact_tool_lines(
+    call: &ToolCall,
+    width: u16,
+    height: u16,
+    registry: &Registry,
+) -> Vec<Line<'static>> {
+    let mut lines = registry.render(&ToolContext::new(
+        call,
+        ratatui::layout::Size::new(width, height),
+    ));
     let limit = match call.status {
         ToolCallStatus::Completed => 4,
         ToolCallStatus::Failed => 8,
@@ -3713,6 +3724,26 @@ mod tests {
     }
 
     #[test]
+    fn modified_enter_edits_a_follow_up_without_submitting_or_queueing() {
+        let mut state = active_state();
+        start_working(&mut state, "first prompt");
+        let _ = state.step(paste("follow up"));
+        for modifiers in [KeyModifiers::SHIFT, KeyModifiers::ALT] {
+            assert!(
+                state
+                    .step(CodeAction::Event(Event::Key(KeyEvent::new(
+                        KeyCode::Enter,
+                        modifiers,
+                    ))))
+                    .is_empty()
+            );
+        }
+        assert_eq!(state.editor().text(), "follow up\n\n");
+        assert_eq!(state.queue_len(), 0);
+        assert_eq!(state.turn, TurnState::Working);
+    }
+
+    #[test]
     fn completion_waits_for_the_last_permission_before_dispatching_queue() {
         let mut state = active_state();
         start_working(&mut state, "first prompt");
@@ -4596,7 +4627,7 @@ mod tests {
             );
             return;
         };
-        let compact = compact_tool_lines(call, 24, &Registry::default());
+        let compact = compact_tool_lines(call, 80, 24, &Registry::default());
         let compact_text = compact.iter().map(line_text).collect::<Vec<_>>().join("\n");
         assert!(compact_text.contains("F4 inspects full tool output"));
         assert!(!compact_text.contains("command output line 12"));

@@ -674,7 +674,7 @@ mutation. Closing their root inspector exits.
 | Key | Effect |
 | --- | --- |
 | `Enter` | Send at idle; while working, preserve the draft and explain queueing |
-| `Shift-Enter` / `Ctrl-J` | Insert a newline (`Ctrl-J` is the fallback) |
+| `Shift-Enter` / `Alt-Enter` / `Ctrl-J` | Insert a newline (`Ctrl-J` is the fallback) |
 | `Tab` | Accept open completion; otherwise queue a follow-up during work |
 | `Ctrl-P` / leading `/` | Search the command palette / slash completions |
 | Arrows, Home/End | Edit at the grapheme cursor; Up/Down at draft boundaries visits process-local history |

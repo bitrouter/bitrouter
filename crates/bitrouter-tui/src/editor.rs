@@ -194,7 +194,7 @@ impl Editor {
             // Ctrl-J is the fallback for terminals that cannot distinguish
             // Shift-Enter. Shift-Enter remains a normal multiline edit.
             KeyCode::Char('j') if ctrl => self.insert_text("\n"),
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) && !ctrl => {
+            KeyCode::Enter if (alt || key.modifiers.contains(KeyModifiers::SHIFT)) && !ctrl => {
                 self.insert_text("\n")
             }
             KeyCode::Enter => Edit::Submitted,
@@ -686,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_enter_and_ctrl_j_insert_newlines() {
+    fn modified_enter_and_ctrl_j_insert_newlines() {
         let mut editor = Editor::default();
         typed(&mut editor, "one");
         assert_eq!(
@@ -698,6 +698,11 @@ mod tests {
         typed(&mut editor, "three");
         assert_eq!(editor.text(), "one\ntwo\nthree");
         assert_eq!(editor.cursor(), Cursor { line: 2, column: 5 });
+        assert_eq!(
+            editor.apply(modified(KeyCode::Enter, KeyModifiers::ALT)),
+            Edit::Changed
+        );
+        assert_eq!(editor.text(), "one\ntwo\nthree\n");
     }
 
     #[test]

@@ -22,14 +22,27 @@ The implementation and its validation evidence are prepared for pull-request rev
   visible scope and errors. The presentation crate remains free of daemon and
   storage access; operational services own those dependencies.
 
+## Integration with current main
+
+PR #899 merged while this pull request was being published. The conflict
+resolution keeps the approved full-screen conversation surface and removes
+the superseded dashboard driver. It retains compatible shared-renderer work:
+width-aware command frames, Markdown/table rendering for the existing writer,
+and terminal keyboard enhancements. Code's journal keeps source-preserving
+Markdown lines so reading anchors remain stable during streaming and resize.
+Alternate-screen and enhanced-key ownership are restored on every cleanup
+path, including external-editor suspension. Alt-Enter joins Shift-Enter and
+Ctrl-J for multiline editing; modified Enter also edits follow-up drafts
+while a turn is running.
+
 ## Final gates
 
-Checks ran on macOS after rebasing the implementation onto `main` at
-`6f10d528`, including the managed-update and Codex Responses fixes.
+Checks ran on macOS after integrating `main` at `a59bd6b3`, including
+the managed-update, Codex Responses, and shared-rendering changes.
 
 | Check | Result |
 | --- | --- |
-| `cargo nextest run --workspace --all-features --status-level fail` | 3,196 passed; 11 existing tests skipped |
+| `cargo nextest run --workspace --all-features --status-level fail --no-fail-fast -j 4` | 3,208 passed; 11 existing tests skipped |
 | `cargo clippy --workspace --all-features --tests -- -D warnings` | Passed |
 | `cargo fmt --all -- --check` | Passed |
 | `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps` | Passed |
@@ -38,7 +51,12 @@ Checks ran on macOS after rebasing the implementation onto `main` at
 | Newly introduced repository-relative Markdown targets and `git diff --check` | Passed |
 | New Rust panic/bypass patterns and ignored tests | None introduced |
 
-The final full nextest run was `a7d031cf-d557-4fb9-83e5-ed4879f3bac4`.
+The final full nextest run was `250bf73b-af3e-443a-834a-c6fc0ab3c8a2`.
+An initial run at default concurrency timed out in the existing two-second
+local-worker probe test. The complete rerun used four test workers and passed
+without changing that test or its timeout. All 76 repository-relative Markdown
+targets in changed documents were checked.
+
 The existing large-test-binary linker warning and `proc-macro-error2`
 future-compatibility notice remain; neither caused a gate failure.
 

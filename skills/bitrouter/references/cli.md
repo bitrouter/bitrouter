@@ -213,7 +213,7 @@ persistent status fields. Missing cost remains unreported, never zero.
 | Key | Effect |
 | --- | --- |
 | `Enter` | Send at idle; preserve draft and explain queueing during work |
-| `Shift-Enter` / `Ctrl-J` | Newline |
+| `Shift-Enter` / `Alt-Enter` / `Ctrl-J` | Newline |
 | `Tab` | Complete the open popup, otherwise queue next during work |
 | `Ctrl-P` / leading `/` | Command palette / slash completion, labelled by owner |
 | Arrows, Home/End, Up/Down at draft boundaries | Cursor editing and process-local history |
