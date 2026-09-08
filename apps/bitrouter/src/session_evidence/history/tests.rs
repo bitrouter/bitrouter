@@ -3,6 +3,8 @@ use super::*;
 use serde_json::{Value, json};
 use std::path::Path;
 
+mod claude_capture;
+mod claude_history;
 mod own_runs;
 
 fn row(ordinal: u64, kind: &str, payload: Value) -> Result<String> {

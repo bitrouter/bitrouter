@@ -1027,12 +1027,37 @@ async fn corrupt_registry_and_recovery_root_limit_do_not_block_live_collection()
         !hook.exists(),
         "live hook collection and retirement must still run"
     );
+    let history = snapshot
+        .histories
+        .iter()
+        .find(|history| history.node.native_id == "live")
+        .context("live history retained")?;
+    // The undecodable registration could name another source for this node.
+    // Keep the healthy live variant inspectable without claiming uniqueness.
+    assert!(history.projection.is_none());
+    assert!(history.gaps.contains("native_history_ambiguous"));
     assert!(
-        snapshot
-            .histories
-            .iter()
-            .any(|history| history.node.native_id == "live" && history.projection.is_some())
+        history
+            .gaps
+            .contains("claude_history_inventory_registration_invalid")
     );
+    assert_eq!(history.variants.len(), 1);
+    let variant = &history.variants[0];
+    let projection = variant
+        .projection
+        .as_ref()
+        .context("live projection retained")?;
+    assert!(projection.gaps.is_empty());
+    assert_eq!(projection.effective_context.len(), 1);
+    let range = variant
+        .source
+        .as_ref()
+        .and_then(|source| source.range.as_ref())
+        .context("live range")?;
+    let raw = live.service.store.records(range).await?;
+    assert_eq!(raw.len(), 1);
+    assert_eq!(raw[0].input.raw["uuid"], "user-live");
+    assert_eq!(projection.effective_context[0].record_id, raw[0].id);
     assert!(
         live.service
             .state

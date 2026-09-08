@@ -99,6 +99,50 @@ fn identical_claude_uuid_replay_updates_leaf_position_without_erasing_raw() -> R
 }
 
 #[test]
+fn claude_rewritten_observation_metadata_keeps_message_identity_and_original_records() -> Result<()>
+{
+    let original = json!({"type":"user","uuid":"u","parentUuid":null,
+        "promptId":"original-prompt","message":{"role":"user","content":"original"}});
+    let mut rewritten = original.clone();
+    rewritten["promptId"] = json!("compact-prompt");
+    rewritten["slug"] = json!("native-session-title");
+    let first = record(0, original)?;
+    let second = record(1, rewritten.clone())?;
+    let mut context = projector(Harness::ClaudeCode)?;
+    context.push(&first)?;
+    context.push(&second)?;
+    let projection = context.finish();
+    assert!(projection.gaps.is_empty(), "{:?}", projection.gaps);
+    assert_eq!(
+        projection.raw_record_ids,
+        [first.id.clone(), second.id.clone()]
+    );
+    assert_eq!(projection.effective_context[0].record_id, second.id);
+    assert_ne!(first.digest, second.digest);
+
+    for (key, value) in [
+        ("message", json!({"role":"user","content":"different"})),
+        ("parentUuid", json!("different-parent")),
+        (
+            "compactMetadata",
+            json!({"preservedMessages":{"uuids":["different"]}}),
+        ),
+        ("futureNativeField", json!("uninterpreted change")),
+    ] {
+        let mut changed = rewritten.clone();
+        changed[key] = value;
+        let mut context = projector(Harness::ClaudeCode)?;
+        context.push(&first)?;
+        context.push(&record(1, changed)?)?;
+        assert!(
+            context.finish().gaps.contains("conflicting_message_uuid"),
+            "{key}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn consecutive_claude_compactions_relink_preserved_messages_without_erasing_audit() -> Result<()> {
     let rows = [
         json!({"type":"user","uuid":"u0","parentUuid":null,"message":{"content":"original"}}),

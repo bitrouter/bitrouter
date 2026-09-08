@@ -106,6 +106,53 @@ doctests, rustdoc, distribution checks, Windows cross-target Clippy, formatting
 and diff checks passed. These results validate this stage; the full-feature
 requirements below remain open.
 
+### Claude native conformance checkpoint
+
+A reproducible Claude Code 2.1.220 capture now runs through the actual BitRouter
+CLI proxy with an isolated profile and deterministic local Anthropic SSE. It
+exercises two prompts in one process, CLI `--fork-session`, parent continuation,
+two manual compactions with preserved messages, and resume after compaction.
+Transcript writes can lag command completion; the fixture closes each native
+process before freezing its durable history boundary.
+
+The real capture exposed two implementation gaps. Native compaction rewrites
+old message UUIDs with updated `promptId` and `slug` metadata; source-local
+projection now excludes those two observation fields from message-conflict
+comparison while preserving every original record. Content, ancestry, compact
+metadata and unknown fields still participate in conflict detection. Imported
+Claude histories also now participate in durable source inventory after native
+files disappear. Recovery preserves owner, profile and agent scope, competing
+sources, invalid-registration gaps and the missing-file observation. It cannot
+claim that the native source has no unseen tail.
+
+The opt-in tests import the original transcripts and proxy spools into the
+evidence database. They check all nine input identities across four native
+processes, exact command/result references, two compact transitions, preserved
+context without duplicate UUIDs, an unchanged CLI fork, and database reopen
+after file removal. A local `/compact` result in this producer omits its
+`user_message_uuid`; it remains unattributed rather than borrowing a neighboring
+result. Such results still affect execution completeness in the shared process.
+
+Generate the capture with `python3
+apps/bitrouter/tests/fixtures/claude_lifecycle_capture.py --claude <native-cli>
+--bitrouter <built-bitrouter>`. Set `BITROUTER_TEST_CLAUDE_LIFECYCLE_CAPTURE` to
+the printed directory and run `cargo test -p bitrouter --lib --all-features
+captured_claude_ -- --ignored`. This fixture does not run the ACP controller or
+certify prompt-producer attachment, complete settlement or evaluation. CLI
+`--fork-session` preserves inherited UUIDs in this producer; the separate SDK
+`forkSession` API remaps them and remains an outstanding conformance case.
+
+Independent stage review passed, including stricter recovery and execution-gap
+assertions. An existing controller-recovery test now checks the healthy live
+variant's original message while retaining ambiguity from an undecodable
+registration. All 3,419 workspace tests passed with 19 skipped; one unrelated
+schema-rendering test reported a nextest leak and passed an isolated rerun
+without that report. Both Claude capture tests passed on a freshly generated
+capture, as did the two Codex capture tests, pinned-adapter binary fixture,
+workspace and Windows Clippy, doctests, rustdoc, distribution, formatting and
+diff checks. Full native settlement, request attribution, evaluation and TUI
+feedback remain outstanding.
+
 ### Preceding own-execution checkpoint
 
 The own-execution stage adds source-local Codex execution views to

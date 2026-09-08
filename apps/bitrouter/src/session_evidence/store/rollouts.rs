@@ -116,6 +116,43 @@ impl EvidenceStore {
         node: Option<&NodeKey>,
         rollout: Option<&str>,
     ) -> Result<(Vec<RegisteredSource>, BTreeSet<String>)> {
+        self.history_inventory(
+            namespace,
+            node,
+            rollout,
+            SourceFormat::CodexRollout,
+            "rollout_inventory",
+        )
+        .await
+    }
+
+    pub(crate) async fn claude_transcript_inventory(
+        &self,
+        node: &NodeKey,
+    ) -> Result<(Vec<RegisteredSource>, BTreeSet<String>)> {
+        node.validate()?;
+        ensure!(
+            node.harness == Harness::ClaudeCode,
+            "Claude inventory scope"
+        );
+        self.history_inventory(
+            &node.namespace,
+            Some(node),
+            None,
+            SourceFormat::ClaudeTranscript,
+            "claude_history_inventory",
+        )
+        .await
+    }
+
+    async fn history_inventory(
+        &self,
+        namespace: &str,
+        node: Option<&NodeKey>,
+        rollout: Option<&str>,
+        format: SourceFormat,
+        gap_prefix: &str,
+    ) -> Result<(Vec<RegisteredSource>, BTreeSet<String>)> {
         let mut after = None;
         let mut found = vec![];
         let mut gaps = BTreeSet::new();
@@ -124,7 +161,7 @@ impl EvidenceStore {
             let page = self.source_inventory(after.as_deref(), 128).await?;
             scanned += page.len();
             if scanned > MAX_RECORDS {
-                gaps.insert("rollout_inventory_limit".into());
+                gaps.insert(format!("{gap_prefix}_limit"));
                 break;
             }
             after = page.last().map(|(id, _)| id.clone());
@@ -133,13 +170,13 @@ impl EvidenceStore {
                 let source = match candidate {
                     Ok(source) => source,
                     Err(error) => {
-                        tracing::warn!(%error, "rollout inventory registration invalid");
-                        gaps.insert("rollout_inventory_registration_invalid".into());
+                        tracing::warn!(%error, "native history inventory registration invalid");
+                        gaps.insert(format!("{gap_prefix}_registration_invalid"));
                         continue;
                     }
                 };
                 if source.descriptor.namespace != namespace
-                    || source.descriptor.format != SourceFormat::CodexRollout
+                    || source.descriptor.format != format
                     || node.is_some_and(|node| source.descriptor.node.as_ref() != Some(node))
                 {
                     continue;
@@ -149,18 +186,18 @@ impl EvidenceStore {
                         Ok(Some(identity)) if identity.rollout_id == rollout => {}
                         Ok(Some(_)) => continue,
                         Ok(None) => {
-                            gaps.insert("rollout_inventory_identity_unavailable".into());
+                            gaps.insert(format!("{gap_prefix}_identity_unavailable"));
                             continue;
                         }
                         Err(error) => {
                             tracing::warn!(%error, "rollout inventory identity invalid");
-                            gaps.insert("rollout_inventory_identity_invalid".into());
+                            gaps.insert(format!("{gap_prefix}_identity_invalid"));
                             continue;
                         }
                     }
                 }
                 if found.len() >= MAX_GRAPH_ITEMS {
-                    gaps.insert("rollout_inventory_limit".into());
+                    gaps.insert(format!("{gap_prefix}_limit"));
                     return Ok((found, gaps));
                 }
                 found.push(source);

@@ -220,6 +220,14 @@ An observation sequence without gaps does not cover all native work: auxiliary
 Codex title generation and file audits, among other paths, still need their own
 causal attribution and cost coverage.
 
+Claude history projection retains original compacted records and recognizes
+native rewrites of observation metadata without treating them as new messages.
+Imported histories remain inspectable after their files disappear, with explicit
+missing-file and conflicting-source gaps. This covers stored evidence, not an
+unseen native tail. Claude Code 2.1.220 has separate native capture coverage for
+CLI fork, two compactions and resume; independent SDK fork UUID remapping,
+complete child membership and evaluation readiness remain unfinished.
+
 When routing is active, one endpoint plan drives both provider setup and its
 launch fallback:
 

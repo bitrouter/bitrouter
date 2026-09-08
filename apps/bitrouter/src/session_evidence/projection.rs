@@ -363,7 +363,19 @@ impl Projector {
             .unwrap_or_default()
             .to_owned();
         ensure!(timestamp.len() <= 64, "native timestamp exceeds limit");
-        let digest = canonical_digest(raw)?;
+        // Claude Code 2.1.220 rewrites preserved UUIDs with a new promptId
+        // and session slug during compaction. These describe the observation,
+        // not a new message. Keep all original records; compare every other
+        // field, including content, ancestry and compact metadata. The SDK's
+        // session loader also indexes the latest occurrence of each UUID:
+        // https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.257
+        let message: BTreeMap<_, _> = raw
+            .as_object()
+            .context("Claude transcript record is not an object")?
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "promptId" | "slug"))
+            .collect();
+        let digest = canonical_digest(&message)?;
         if let Some(previous) = self.claude_messages.get_mut(uuid) {
             if previous.digest != digest {
                 self.gap("conflicting_message_uuid");

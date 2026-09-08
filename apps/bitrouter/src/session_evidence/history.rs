@@ -417,44 +417,50 @@ impl HistoryResolver {
                 }
             }
         }
-        if node.harness == Harness::Codex {
-            let (inventory, inventory_gaps) = self
-                .store
-                .rollout_inventory(&node.namespace, Some(node), None)
-                .await?;
-            gaps.extend(inventory_gaps);
-            for source in inventory {
-                if sources.contains_key(&source.id) {
-                    continue;
-                }
-                let restored = match self.stored_current(source.clone()).await {
-                    Ok(restored) => restored,
-                    Err(error) => {
-                        tracing::warn!(%error, "stored native history invalid");
-                        CollectedSource {
-                            source: source.clone(),
-                            range: None,
-                            path: None,
-                            metadata: None,
-                            rollout_id: None,
-                            gaps: BTreeSet::from(["native_stored_history_invalid".into()]),
-                        }
-                    }
-                };
-                sources.insert(source.id, restored);
+        let (inventory, inventory_gaps) = match node.harness {
+            Harness::Codex => {
+                self.store
+                    .rollout_inventory(&node.namespace, Some(node), None)
+                    .await?
             }
+            Harness::ClaudeCode => self.store.claude_transcript_inventory(node).await?,
+        };
+        gaps.extend(inventory_gaps);
+        for source in inventory {
+            if sources.contains_key(&source.id) {
+                continue;
+            }
+            let restored = match self.stored_current(source.clone()).await {
+                Ok(restored) => restored,
+                Err(error) => {
+                    tracing::warn!(%error, "stored native history invalid");
+                    CollectedSource {
+                        source: source.clone(),
+                        range: None,
+                        path: None,
+                        metadata: None,
+                        rollout_id: None,
+                        gaps: BTreeSet::from(["native_stored_history_invalid".into()]),
+                    }
+                }
+            };
+            sources.insert(source.id, restored);
         }
         Ok((sources, gaps))
     }
 
     async fn stored_current(&self, source: RegisteredSource) -> Result<CollectedSource> {
         let mut gaps = BTreeSet::from(["native_source_file_unavailable".into()]);
-        let rollout_id = self
-            .store
-            .rollout_identity(&source.id)
-            .await?
-            .map(|identity| identity.rollout_id);
-        if rollout_id.is_none() {
+        let codex = source.descriptor.harness == Harness::Codex;
+        let rollout_id = if codex {
+            self.store
+                .rollout_identity(&source.id)
+                .await?
+                .map(|identity| identity.rollout_id)
+        } else {
+            None
+        };
+        if codex && rollout_id.is_none() {
             gaps.insert("native_rollout_identity_unavailable".into());
         }
         let range = (source.cursor.next_sequence > 0).then(|| SourceRange {
@@ -463,7 +469,9 @@ impl HistoryResolver {
             start: 0,
             end: source.cursor.next_sequence,
         });
-        let metadata = if let Some(range) = &range {
+        let metadata = if let Some(range) = &range
+            && codex
+        {
             let records = self
                 .store
                 .records(&SourceRange {
