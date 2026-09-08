@@ -25,9 +25,17 @@ from pathlib import Path
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--claude', type=Path, required=True)
 parser.add_argument('--bitrouter', type=Path, required=True)
+parser.add_argument('--sdk-module', type=Path,
+                    help='Also capture standalone SDK 0.3.257 forks and native resumes')
+parser.add_argument('--node', default='node')
 args = parser.parse_args()
 native = args.claude.resolve(strict=True)
 router = args.bitrouter.resolve(strict=True)
+sdk_module = args.sdk_module.resolve(strict=True) if args.sdk_module else None
+if sdk_module:
+    package = json.loads((sdk_module.parent / 'package.json').read_text())
+    if (package.get('name'), package.get('version')) != ('@anthropic-ai/claude-agent-sdk', '0.3.257'):
+        raise RuntimeError('Standalone fork capture requires the published SDK 0.3.257')
 root = Path(tempfile.mkdtemp(prefix='bitrouter-claude-lifecycle-conformance-')).resolve()
 profile, workspace, spool = (root / name for name in ('profile', 'workspace', 'proxy'))
 for path in (profile, workspace, spool, root / 'snapshots'):
@@ -132,11 +140,11 @@ class Peer:
         self.reader = threading.Thread(target=read, daemon=True)
         self.reader.start()
 
-    def send(self, label, compact=False):
+    def send(self, label, compact=False, prompt=None):
         command = str(uuid.uuid4())
         message = {'type': 'user', 'session_id': self.session, 'uuid': command,
                    'parent_tool_use_id': None, 'message': {'role': 'user', 'content': [
-                       {'type': 'text', 'text': '/compact' if compact else 'Run the fixture task.'}]}}
+                       {'type': 'text', 'text': '/compact' if compact else (prompt or 'Run the fixture task.')}]}}
         self.process.stdin.write(json.dumps(message) + '\n')
         self.process.stdin.flush()
         deadline, observed = time.monotonic() + 45, []
@@ -195,6 +203,80 @@ class Peer:
                           'spool': str(path.relative_to(root))})
 
 
+def sdk_observe(session, label, fork_options=None):
+    # The standalone export differs from query({forkSession:true}) and the
+    # CLI --fork-session switch. Invoke the published implementation itself.
+    # https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.257
+    script = '''
+const {pathToFileURL} = await import('node:url');
+const sdk = await import(pathToFileURL(process.argv[1]));
+const options = JSON.parse(process.argv[4]);
+const fork = options === null ? null : await sdk.forkSession(process.argv[2], {
+  dir: process.argv[3], ...options
+});
+const sessionId = fork?.sessionId ?? process.argv[2];
+const messages = await sdk.getSessionMessages(sessionId, {
+  dir: process.argv[3], includeSystemMessages: true
+});
+process.stdout.write(JSON.stringify({sessionId, fork, messages}));
+'''
+    output = subprocess.run([args.node, '--input-type=module', '-e', script,
+                             str(sdk_module), session, str(workspace), json.dumps(fork_options)],
+                            cwd=workspace, env=env, capture_output=True, text=True, timeout=30)
+    (root / (label + '-sdk-stderr.txt')).write_text(output.stderr)
+    output.check_returncode()
+    result = json.loads(output.stdout)
+    path = root / (label + '-sdk.json')
+    path.write_text(json.dumps(result, indent=2))
+    return result, str(path.relative_to(root))
+
+
+def sdk_snapshot(session, label):
+    path = root / 'snapshots' / (label + '.jsonl')
+    path.write_bytes(transcript(session).read_bytes())
+    _, reader = sdk_observe(session, label)
+    return {'transcript': str(path.relative_to(root)), 'reader': reader}
+
+
+def sdk_case(source, label, up_to=None, compact=False):
+    global peer
+    parent_bytes = transcript(source).read_bytes()
+    parent_path = root / 'snapshots' / (label + '-parent.jsonl')
+    parent_path.write_bytes(parent_bytes)
+    options = {'title': 'Fixture ' + label}
+    if up_to:
+        options['upToMessageId'] = up_to
+    forked, fork_result = sdk_observe(source, label + '-fork', options)
+    session = forked['sessionId']
+    before = sdk_snapshot(session, label + '-before')
+    with request_lock:
+        start = len(requests)
+    peer = Peer(session, ['--resume', session])
+    peer.send(label + '-resume', prompt='Continue ' + label + '.')
+    peer.close()
+    peer = None
+    with request_lock:
+        indices = [i for i in range(start, len(requests))
+                   if '/messages' in requests[i]['path'] and 'count_tokens' not in requests[i]['path']]
+    if len(indices) != 1:
+        raise RuntimeError('Expected one model request for SDK fork resume')
+    after = sdk_snapshot(session, label + '-after')
+    local_compact = None
+    if compact:
+        peer = Peer(session, ['--resume', session])
+        peer.send(label + '-compact', compact=True)
+        peer.send(label + '-after-compact', prompt='Continue after the SDK fork compaction.')
+        peer.close()
+        peer = None
+        local_compact = sdk_snapshot(session, label + '-compacted')
+    if transcript(source).read_bytes() != parent_bytes:
+        raise RuntimeError('SDK fork or native child continuation changed its parent transcript')
+    return {'label': label, 'parent': source, 'session': session, 'up_to': up_to,
+            'parent_transcript': str(parent_path.relative_to(root)), 'fork_result': fork_result,
+            'before': before, 'after': after, 'compacted': local_compact,
+            'request_index': indices[0]}
+
+
 parent, fork = str(uuid.uuid4()), str(uuid.uuid4())
 peer = None
 try:
@@ -226,6 +308,19 @@ try:
         'parent': parent, 'fork': fork, 'operations': operations, 'processes': processes,
         'transcripts': {s: str(transcript(s).relative_to(root)) for s in (parent, fork)},
     }, indent=2))
+    if sdk_module:
+        first = sdk_case(parent, 'sdk-full', compact=True)
+        nested = sdk_case(first['session'], 'sdk-nested')
+        parent_rows = list(map(json.loads, transcript(parent).read_text().splitlines()))
+        compact_index = next(i for i, row in enumerate(parent_rows)
+                             if row.get('subtype') == 'compact_boundary')
+        cut = next(row['uuid'] for row in parent_rows[compact_index + 1:]
+                   if row.get('type') == 'assistant')
+        bounded = sdk_case(parent, 'sdk-bounded', up_to=cut)
+        (root / 'sdk-forks.json').write_text(json.dumps({
+            'schema': 'claude-sdk-fork-capture/1', 'version': version, 'sdk_version': '0.3.257',
+            'namespace': namespace, 'cases': [first, nested, bounded],
+        }, indent=2))
 finally:
     try:
         if peer is not None and peer.process.poll() is None:

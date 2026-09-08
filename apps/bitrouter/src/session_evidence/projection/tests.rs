@@ -2,6 +2,8 @@ use super::*;
 use crate::session_evidence::types::RecordInput;
 use serde_json::json;
 
+mod claude_forks;
+
 fn projector(harness: Harness) -> Result<Projector> {
     Projector::new(
         NodeKey {

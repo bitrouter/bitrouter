@@ -8,7 +8,7 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Layer | Implemented boundary | Remaining boundary |
 |---|---|---|
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
-| History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex physical rollout dependencies bind immutable prefixes separately from stable threads and logical fork ancestry; observed revert variants survive file removal. Codex input receipts select a rollout through original native lifecycle and turn-context records; source-local execution views retain own turn bookends, explicit records and root-turn claims across copied subagent prefixes. | Complete execution/context coverage, unmatched/replaced rollout histories, Claude independent-fork UUID remapping and unsupported native history formats. |
+| History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex physical rollout dependencies bind immutable prefixes separately from stable threads and logical fork ancestry; observed revert variants survive file removal. Codex input receipts select a rollout through original native lifecycle and turn-context records; source-local execution views retain own turn bookends, explicit records and root-turn claims across copied subagent prefixes. | Complete execution/context coverage, unmatched/replaced rollout histories, verified Claude independent-fork parent cuts and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and resumed-child task membership and execution coverage. |
 | Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Immutable attempt execution observations join verified direct inputs and selected Codex descendant turns, including unfinished child observations and late work on archived attempts. | Complete execution membership, resumed descendant coverage, durable task-scoped paging and manager intent recovery after a Code process restart. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
@@ -140,7 +140,7 @@ the printed directory and run `cargo test -p bitrouter --lib --all-features
 captured_claude_ -- --ignored`. This fixture does not run the ACP controller or
 certify prompt-producer attachment, complete settlement or evaluation. CLI
 `--fork-session` preserves inherited UUIDs in this producer; the separate SDK
-`forkSession` API remaps them and remains an outstanding conformance case.
+`forkSession` API remaps them; its source-local conformance is described below.
 
 Independent stage review passed, including stricter recovery and execution-gap
 assertions. An existing controller-recovery test now checks the healthy live
@@ -152,6 +152,57 @@ capture, as did the two Codex capture tests, pinned-adapter binary fixture,
 workspace and Windows Clippy, doctests, rustdoc, distribution, formatting and
 diff checks. Full native settlement, request attribution, evaluation and TUI
 feedback remain outstanding.
+
+### Claude standalone SDK fork checkpoint
+
+Source-local projection now retains each record's explicit `forkedFrom`
+session/message UUID pair separately from current UUIDs. A repeated origin
+claim remains inspectable in every original record. Conflicting aliases or
+malformed origins produce gaps. These claims do not establish a verified
+parent checkpoint, execution membership or complete lineage.
+
+The published SDK 0.3.257 standalone `forkSession` export rewrites message UUIDs
+and parent links but leaves compact metadata's preserved UUID references
+unchanged. When an inherited `preservedMessages` list names absent UUIDs, its
+native loader skips that entire boundary. Projection records the absent
+references without rebinding them through the copy aliases. This can restore
+older context, but it does not always do so: a later local compaction may have
+already changed the raw parent chain. New compactions with source-local UUIDs
+still use the existing preserved-context path. Unsupported missing legacy
+`preservedSegment` references remain a gap.
+
+The optional `--sdk-module <published-sdk.mjs>` argument on
+`tests/fixtures/claude_lifecycle_capture.py` adds full, nested and checkpoint-cut
+standalone forks to the isolated native fixture. It calls the real SDK export,
+resumes every fork through Claude Code 2.1.220 and the BitRouter proxy, and
+captures a further local compaction before creating the nested fork. Parent
+transcript bytes must remain unchanged. The optional `--node` selects the Node
+executable. No SDK download or user-session discovery occurs in the fixture.
+
+Set `BITROUTER_TEST_CLAUDE_SDK_FORK_CAPTURE` to its capture directory and run
+`cargo test -p bitrouter --lib --all-features captured_claude_sdk_forks --
+--ignored`. The test compares the projected display chain with the real SDK
+reader and separately compares all projected dialogue blocks, including meta
+command caveats, with the actual native model request. The SDK display API
+filters `isMeta` records even when the model request includes them. Request
+comparison permits the fixture's date reminder and surrounding whitespace;
+it does not certify reconstruction of every model-input field. Append, local
+compaction, native file removal and database reopen retain the original frozen
+source prefixes and copy claims.
+
+This conformance uses text-only deterministic model responses. Tool blocks,
+content replacement, history suppression and the full native version/capability
+matrix remain outside this capture. Verified independent-fork ancestry, Claude
+child execution membership, settlement, costs, evaluation and TUI feedback
+remain required by the full plan.
+
+Independent review passed after strengthening resource-limit behavior and
+separating SDK display filtering from the full native-request comparison.
+All 3,426 workspace tests passed with 20 skipped. The three opt-in Claude
+capture tests, both Codex captures and pinned-adapter binary fixture passed.
+Workspace and Windows Clippy with denied warnings, doctests, rustdoc,
+distribution checks, formatting and diff checks passed. These checks validate
+this increment; the full-feature requirements remain open.
 
 ### Preceding own-execution checkpoint
 
@@ -927,7 +978,7 @@ session and explicit dependencies. It is not an automatic importer of every
 standalone native session on the machine. Missing history, ambiguous fork cuts,
 unsupported records and source replacement remain visible gaps. Supported
 projection tests do not certify arbitrary native runtime versions, complete
-Claude independent-fork UUID remapping, or filesystem rewind recovery.
+Claude independent-fork ancestry, or filesystem rewind recovery.
 
 ## Outcome
 

@@ -5,6 +5,7 @@ use std::path::Path;
 
 mod claude_capture;
 mod claude_history;
+mod claude_sdk_forks;
 mod own_runs;
 
 fn row(ordinal: u64, kind: &str, payload: Value) -> Result<String> {

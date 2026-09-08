@@ -225,8 +225,12 @@ native rewrites of observation metadata without treating them as new messages.
 Imported histories remain inspectable after their files disappear, with explicit
 missing-file and conflicting-source gaps. This covers stored evidence, not an
 unseen native tail. Claude Code 2.1.220 has separate native capture coverage for
-CLI fork, two compactions and resume; independent SDK fork UUID remapping,
-complete child membership and evaluation readiness remain unfinished.
+CLI fork, two compactions and resume. Source-local standalone SDK 0.3.257 fork
+projection also retains remapped message origins and records inherited compact
+references skipped by the native loader. Full, nested and message-cut forks
+have text-only native capture coverage, including another local compaction.
+These copy claims do not establish a verified parent cut or task membership;
+complete Claude child membership and evaluation readiness remain unfinished.
 
 When routing is active, one endpoint plan drives both provider setup and its
 launch fallback:

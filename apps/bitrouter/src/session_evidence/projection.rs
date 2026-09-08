@@ -23,6 +23,14 @@ pub struct ContextTransition {
     pub record_id: String,
 }
 
+/// A source-local copy claim, not verified parent history or task membership.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaudeForkOrigin {
+    pub message_uuid: String,
+    pub source_session_id: String,
+    pub source_message_uuid: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Projection {
     pub node: NodeKey,
@@ -31,6 +39,14 @@ pub struct Projection {
     pub transitions: Vec<ContextTransition>,
     pub producer_versions: BTreeSet<String>,
     pub gaps: BTreeSet<String>,
+    /// Original record id -> the copied message's explicit native origin.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub claude_fork_origins: BTreeMap<String, ClaudeForkOrigin>,
+    /// Inherited boundaries ignored by the native loader because their
+    /// preserved message UUIDs are absent in this source. Values retain those
+    /// absent references; this is not proof that parent history is complete.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub claude_unapplied_compactions: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// Only one native source/generation is projected at a time. ACP and native
@@ -41,7 +57,7 @@ pub struct Projector {
     source: Option<(String, String)>,
     next_sequence: Option<u64>,
     claude_messages: BTreeMap<String, ClaudeEntry>,
-    claude_compactions: Vec<Value>,
+    claude_compactions: Vec<ClaudeCompaction>,
     retained_bytes: usize,
     identity_observed: bool,
     inherited: bool,
@@ -49,6 +65,12 @@ pub struct Projector {
     codex_ordinals: Option<bool>,
     codex_next_ordinal: u64,
     codex_copied_history_end: Option<u64>,
+}
+
+struct ClaudeCompaction {
+    record_id: String,
+    metadata: Value,
+    forked: bool,
 }
 
 struct ClaudeEntry {
@@ -82,6 +104,8 @@ impl Projector {
                 transitions: vec![],
                 producer_versions: BTreeSet::new(),
                 gaps: BTreeSet::new(),
+                claude_fork_origins: BTreeMap::new(),
+                claude_unapplied_compactions: BTreeMap::new(),
             },
             format,
             source: None,
@@ -346,6 +370,27 @@ impl Projector {
             return Ok(());
         }
         super::types::identifier(uuid)?;
+        let forked = match self.claude_fork_origin(raw, uuid) {
+            Ok(Some(origin)) => {
+                self.retain_claude_bytes(
+                    record.id.len()
+                        + uuid.len()
+                        + origin.source_session_id.len()
+                        + origin.source_message_uuid.len()
+                        + 256,
+                )?;
+                self.projection
+                    .claude_fork_origins
+                    .insert(record.id.clone(), origin);
+                true
+            }
+            Ok(None) => false,
+            Err(error) => {
+                tracing::debug!(%error, "Claude fork origin invalid");
+                self.gap("claude_fork_origin_invalid");
+                false
+            }
+        };
         let parent = raw
             .get("parentUuid")
             .and_then(Value::as_str)
@@ -434,7 +479,11 @@ impl Projector {
                         && self.claude_compactions.len() < super::types::MAX_GRAPH_ITEMS,
                     "compaction graph limit"
                 );
-                self.claude_compactions.push(metadata.clone());
+                self.claude_compactions.push(ClaudeCompaction {
+                    record_id: record.id.clone(),
+                    metadata: metadata.clone(),
+                    forked,
+                });
             } else {
                 self.gap("compact_metadata_unavailable");
             }
@@ -447,8 +496,21 @@ impl Projector {
         // children can appear after the compact boundary. Native keys differ
         // from SDK wire keys. Contract verified against the published SDK's
         // session message loader: https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.232
-        for metadata in std::mem::take(&mut self.claude_compactions) {
-            if let Err(error) = self.preserve_claude(&metadata) {
+        let mut aliases = BTreeMap::new();
+        for origin in self.projection.claude_fork_origins.values() {
+            let key = (&origin.source_session_id, &origin.source_message_uuid);
+            if aliases
+                .insert(key, &origin.message_uuid)
+                .is_some_and(|previous| previous != &origin.message_uuid)
+            {
+                self.projection
+                    .gaps
+                    .insert("claude_fork_alias_ambiguous".into());
+            }
+        }
+        for compact in std::mem::take(&mut self.claude_compactions) {
+            let result = self.preserve_claude_compaction(&compact);
+            if let Err(error) = result {
                 tracing::debug!(%error, "native compaction projection incomplete");
                 self.gap("preserved_context_unavailable");
             }
@@ -580,12 +642,99 @@ impl Projector {
         }
     }
 
-    fn preserve_claude(&mut self, metadata: &Value) -> Result<()> {
+    fn claude_fork_origin(&self, raw: &Value, uuid: &str) -> Result<Option<ClaudeForkOrigin>> {
+        let Some(origin) = raw.get("forkedFrom").filter(|value| !value.is_null()) else {
+            return Ok(None);
+        };
+        // The independent SDK forkSession API generates new UUIDs, rewrites
+        // parentUuid/logicalParentUuid and retains the immediate origin here.
+        // It does not remap compactMetadata's preserved UUIDs. In particular,
+        // those references can name a grandparent after another fork.
+        // https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.257
+        let session = origin
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .context("fork session missing")?;
+        let message = origin
+            .get("messageUuid")
+            .and_then(Value::as_str)
+            .context("fork message missing")?;
+        super::types::identifier(session)?;
+        super::types::identifier(message)?;
         ensure!(
-            metadata.get("preserved_messages").is_none()
-                && metadata.get("preserved_segment").is_none(),
+            session != self.projection.node.native_id && message != uuid,
+            "fork origin is not remapped"
+        );
+        Ok(Some(ClaudeForkOrigin {
+            message_uuid: uuid.into(),
+            source_session_id: session.into(),
+            source_message_uuid: message.into(),
+        }))
+    }
+
+    fn retain_claude_bytes(&mut self, bytes: usize) -> Result<()> {
+        let retained = self
+            .retained_bytes
+            .checked_add(bytes)
+            .context("native fork byte overflow")?;
+        ensure!(
+            retained <= super::types::MAX_OBJECT_BYTES,
+            "native fork byte limit"
+        );
+        self.retained_bytes = retained;
+        Ok(())
+    }
+
+    fn preserve_claude_compaction(&mut self, compact: &ClaudeCompaction) -> Result<()> {
+        ensure!(
+            compact.metadata.get("preserved_messages").is_none()
+                && compact.metadata.get("preserved_segment").is_none(),
             "SDK wire metadata cannot substitute for native compact metadata"
         );
+        if compact.forked
+            && let Some(messages) = compact.metadata.get("preservedMessages")
+        {
+            let anchor = messages
+                .get("anchorUuid")
+                .and_then(Value::as_str)
+                .context("invalid preserved anchor")?;
+            super::types::identifier(anchor)?;
+            let ids = messages
+                .get("uuids")
+                .and_then(Value::as_array)
+                .context("invalid preserved messages")?;
+            ensure!(
+                !ids.is_empty() && ids.len() <= MAX_RECORDS,
+                "invalid preserved message count"
+            );
+            let mut missing = BTreeSet::new();
+            let mut unique = BTreeSet::new();
+            for id in ids {
+                let id = id.as_str().context("invalid preserved UUID")?;
+                super::types::identifier(id)?;
+                ensure!(unique.insert(id), "duplicate preserved UUID");
+                if !self.claude_messages.contains_key(id) {
+                    missing.insert(id.to_owned());
+                }
+            }
+            if !missing.is_empty() {
+                // Both the published SDK loader and a real CLI 2.1.220 resume
+                // skip this boundary. Rebinding through forkedFrom would
+                // invent context the native process did not actually use.
+                // https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk/v/0.3.257
+                self.retain_claude_bytes(
+                    compact.record_id.len() + missing.iter().map(|id| id.len() + 64).sum::<usize>(),
+                )?;
+                self.projection
+                    .claude_unapplied_compactions
+                    .insert(compact.record_id.clone(), missing);
+                return Ok(());
+            }
+        }
+        self.preserve_claude(&compact.metadata)
+    }
+
+    fn preserve_claude(&mut self, metadata: &Value) -> Result<()> {
         let (head, tail, anchor) = if let Some(messages) = metadata.get("preservedMessages") {
             let anchor = messages
                 .get("anchorUuid")
