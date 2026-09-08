@@ -1971,6 +1971,7 @@ async fn streamed_settlement_carries_finish_reason() {
                 id: "call-1".into(),
                 name: Some("lookup".into()),
                 arguments: "{}".into(),
+                provider_metadata: Default::default(),
             },
             StreamPart::Finish {
                 reason: FinishReason::ToolCalls,
@@ -2081,6 +2082,7 @@ async fn streamed_hook_abort_finalizes_timing_before_settlement() {
                 id: "call-1".into(),
                 name: Some("lookup".into()),
                 arguments: "{}".into(),
+                provider_metadata: Default::default(),
             },
             StreamPart::TextDelta {
                 text: "blocked".into(),
@@ -3971,6 +3973,7 @@ async fn server_tool_streaming_settles_the_final_turn_winner()
                     id: "c1".into(),
                     name: Some("search".into()),
                     arguments: "{}".into(),
+                    provider_metadata: Default::default(),
                 },
                 StreamPart::Finish {
                     reason: FinishReason::ToolCalls,
@@ -4256,6 +4259,7 @@ async fn server_tool_loop_streams_router_tool_activity() {
                 id: "c1".to_string(),
                 name: Some("search".to_string()),
                 arguments: "{}".to_string(),
+                provider_metadata: Default::default(),
             },
             StreamPart::Finish {
                 reason: FinishReason::ToolCalls,

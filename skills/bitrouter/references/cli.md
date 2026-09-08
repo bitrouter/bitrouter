@@ -209,11 +209,11 @@ See `references/sessions.md` for the controller/native-session boundary and what
 
 ## Interactive interface (`bitrouter code`)
 
-Bare `bitrouter code` opens the full-screen unified shell on Home with Agents,
+Bare `bitrouter code` opens the unified terminal shell on Home with Agents,
 Conversation, Sessions, Models, Requests, Route, Providers, Telemetry, Policy,
 and Reload views. Each read panel refreshes independently every two seconds and
 keeps its last successful data and its own stale/error time. `bitrouter code
-<agent>` enters Conversation in that same alternate-screen app, backed by the
+<agent>` enters Conversation in that same terminal app, backed by the
 same ACP session host as `run`. Under `--context`, the Agents view is catalog
 only and has no launch controls.
 
@@ -221,9 +221,18 @@ only and has no launch controls.
 |---|---|
 | `bitrouter code [<agent>] [--load ID\|--resume ID] [--turn-timeout SECS] [routing flags] [--config PATH]` | With no agent, open Home/operations. With an agent, open or restore one harness-native ACP session in Conversation. Friendly aliases such as `claude` and `codex` resolve to their ACP adapters unless shadowed by an exact configured id. `tui` and `chat` are hidden compatibility aliases. |
 
-**Terminal ownership**: Code uses raw mode and an alternate screen for its
-whole lifetime. Changing views does not end the ACP session or lose the draft;
-normal terminal state is restored when the shell exits or unwinds.
+**Terminal ownership**: Code uses raw mode on the main terminal screen. The
+unframed transcript has left/right padding and uses native terminal scrollback.
+Controls and operations views are docked at the bottom. Changing views keeps
+the session and multiline draft; exiting clears the controls, preserves the
+transcript, and restores terminal state. The composer grows to eight visible
+lines, preserves pasted newlines, and keeps the cursor visible. A rotating
+thinking indicator continues while the agent is waiting for a response.
+
+User messages have blank lines above and below. Agent replies render Markdown
+headings, emphasis, lists, links, tables, and code blocks. Tables too wide for
+the terminal fall back to labeled fields. Action descriptions are bright white;
+shell commands use subdued code frames. ACP terminal IDs are not displayed.
 
 **Keys**
 
@@ -231,7 +240,10 @@ normal terminal state is restored when the shell exits or unwinds.
 |---|---|
 | `Enter` | Send the composer text, or connect to the selected agent |
 | `Tab` | Move to the next view while keeping the session alive |
-| `PageUp` / `PageDown` | Scroll the transcript |
+| `Shift+Enter`, `Alt+Enter`, `Ctrl+J` | Insert a newline; `Ctrl+J` works without enhanced key reporting |
+| Arrow keys, `Home` / `End` | Edit within the multiline draft |
+| Terminal scroll wheel / scrollback keys | Scroll the transcript |
+| `Ctrl-L` | Repaint the view |
 | `1`–`9` | Choose an open permission option |
 | `Esc` | Deny the open permission request |
 | `Ctrl-C` | Cancel a running turn; otherwise exit |

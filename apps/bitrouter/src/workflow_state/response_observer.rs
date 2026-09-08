@@ -294,6 +294,7 @@ impl StreamObservationBuffer {
                 id,
                 name,
                 arguments,
+                ..
             } => self.observe_tool_delta(id, name.as_deref(), arguments),
             _ => {}
         }
@@ -1194,11 +1195,13 @@ mod tests {
                 id: "call-1".into(),
                 name: Some("exec_command".into()),
                 arguments: r#"{"cmd":"cargo "#.into(),
+                provider_metadata: Default::default(),
             },
             StreamPart::ToolCallDelta {
                 id: "call-1".into(),
                 name: None,
                 arguments: r#"test --all-features"}"#.into(),
+                provider_metadata: Default::default(),
             },
             StreamPart::Finish {
                 reason: FinishReason::Stop,
@@ -1239,6 +1242,7 @@ mod tests {
                     id: "call-1".into(),
                     name: Some("exec_command".into()),
                     arguments: "x".repeat(8_192),
+                    provider_metadata: Default::default(),
                 },
             )
             .await;
@@ -1287,6 +1291,7 @@ mod tests {
                         id: format!("read-{index}"),
                         name: Some("read_file".into()),
                         arguments: r#"{"path":"src/lib.rs"}"#.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -1298,6 +1303,7 @@ mod tests {
                     id: "mutation-after-limit".into(),
                     name: Some("apply_patch".into()),
                     arguments: r#"{"patch":"private"}"#.into(),
+                    provider_metadata: Default::default(),
                 },
             )
             .await;
@@ -1337,6 +1343,7 @@ mod tests {
                         id: format!("read-{index}"),
                         name: Some("read_file".into()),
                         arguments: r#"{"path":"src/lib.rs"}"#.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -1352,6 +1359,7 @@ mod tests {
                         id: "command-mutation-after-limit".into(),
                         name,
                         arguments: arguments.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -1403,6 +1411,7 @@ mod tests {
                         id: format!("read-{index}"),
                         name: Some("read_file".into()),
                         arguments: r#"{"path":"src/lib.rs"}"#.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -1423,6 +1432,7 @@ mod tests {
                         id: id.into(),
                         name,
                         arguments: arguments.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -1470,6 +1480,7 @@ mod tests {
                         id: format!("unknown-{index}"),
                         name: Some("opaque_capability".into()),
                         arguments: r#"{}"#.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -1482,6 +1493,7 @@ mod tests {
                         id: id.into(),
                         name: Some("exec_command".into()),
                         arguments: r#"{"cmd":"echo harmless"}"#.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -1536,6 +1548,7 @@ mod tests {
                     id: "nested-command".into(),
                     name: Some("exec_command".into()),
                     arguments: arguments.into(),
+                    provider_metadata: Default::default(),
                 },
             )
             .await;
@@ -1583,6 +1596,7 @@ mod tests {
                         id: format!("unknown-{index}"),
                         name: Some("opaque_capability".into()),
                         arguments: r#"{}"#.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -1598,6 +1612,7 @@ mod tests {
                         id: id.into(),
                         name,
                         arguments: arguments.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -1715,6 +1730,7 @@ mod tests {
                     id: "unknown-large".into(),
                     name: Some("opaque_capability".into()),
                     arguments: "x".repeat(8_192),
+                    provider_metadata: Default::default(),
                 },
             )
             .await;
@@ -1725,6 +1741,7 @@ mod tests {
                     id: "mutation-after-bytes".into(),
                     name: Some("apply_patch".into()),
                     arguments: r#"{"patch":"private"}"#.into(),
+                    provider_metadata: Default::default(),
                 },
             )
             .await;
@@ -1771,6 +1788,7 @@ mod tests {
                     id: "unknown-large".into(),
                     name: Some("opaque_capability".into()),
                     arguments: "x".repeat(8_192),
+                    provider_metadata: Default::default(),
                 },
             )
             .await;
@@ -1786,6 +1804,7 @@ mod tests {
                         id: "command-mutation-after-bytes".into(),
                         name,
                         arguments: arguments.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -1831,6 +1850,7 @@ mod tests {
                     id: "private-call".into(),
                     name: Some("exec_command".into()),
                     arguments: r#"{"cmd":"private-command"}"#.into(),
+                    provider_metadata: Default::default(),
                 },
             )
             .await;
@@ -1867,6 +1887,7 @@ mod tests {
                     id: "removed-terminal".into(),
                     name: Some("exec_command".into()),
                     arguments: r#"{"cmd":"private-command"}"#.into(),
+                    provider_metadata: Default::default(),
                 },
             )
             .await;
@@ -1922,6 +1943,7 @@ mod tests {
                     id: "call-a".into(),
                     name: Some("apply_patch".into()),
                     arguments: r#"{"patch":"private-a"}"#.into(),
+                    provider_metadata: Default::default(),
                 },
             ),
             (
@@ -1930,6 +1952,7 @@ mod tests {
                     id: "call-b".into(),
                     name: Some("read_file".into()),
                     arguments: r#"{"path":"private-b"}"#.into(),
+                    provider_metadata: Default::default(),
                 },
             ),
         ] {
@@ -2015,6 +2038,7 @@ mod tests {
                     id: "unknown-large".into(),
                     name: Some("opaque_capability".into()),
                     arguments: "x".repeat(8_192),
+                    provider_metadata: Default::default(),
                 },
             )
             .await;
@@ -2026,6 +2050,7 @@ mod tests {
                         id: "streamed-command".into(),
                         name: (index == 0).then(|| "exec_command".into()),
                         arguments: (*fragment).into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -2071,6 +2096,7 @@ mod tests {
                         id: format!("retained-{index}"),
                         name: Some("opaque_capability".into()),
                         arguments: r#"{}"#.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;
@@ -2086,6 +2112,7 @@ mod tests {
                         id: id.into(),
                         name: Some(name.into()),
                         arguments: arguments.into(),
+                        provider_metadata: Default::default(),
                     },
                 )
                 .await;

@@ -699,7 +699,7 @@ enum Command {
     /// session to an ACP client over stdio, this renders it for you — messages,
     /// tool calls, permission prompts, and what the turn cost.
     ///
-    /// The session opens in the same full-screen shell as bare `bitrouter code`.
+    /// The session opens in the same terminal shell as bare `bitrouter code`.
     #[command(hide = true)]
     Chat {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,

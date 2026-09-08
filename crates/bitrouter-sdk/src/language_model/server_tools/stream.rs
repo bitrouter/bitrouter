@@ -36,6 +36,7 @@ struct BufferedCall {
     id: String,
     name: String,
     args: String,
+    provider_metadata: ProviderMetadata,
 }
 
 impl ServerToolLoop {
@@ -127,17 +128,20 @@ impl ServerToolLoop {
                             id,
                             name,
                             arguments,
+                            provider_metadata,
                         } => match buffered.iter_mut().find(|b| b.id == id) {
                             Some(b) => {
                                 if let Some(n) = name.as_deref().filter(|n| !n.is_empty()) {
                                     b.name = n.to_string();
                                 }
                                 b.args.push_str(&arguments);
+                                b.provider_metadata.extend(provider_metadata);
                             }
                             None => buffered.push(BufferedCall {
                                 id,
                                 name: name.unwrap_or_default(),
                                 args: arguments,
+                                provider_metadata,
                             }),
                         },
                         StreamPart::TextDelta { text } => {
@@ -158,10 +162,10 @@ impl ServerToolLoop {
                 // force a spurious hand-back of an empty-named tool call.
                 buffered.retain(|b| !b.name.is_empty());
 
-                let has_client = buffered.iter().any(|b| !owned.contains(&b.name));
+                let has_client = buffered.iter().any(|b| !owned.contains(&b.name) || !b.provider_metadata.is_empty());
                 let router: Vec<RouterCall> = buffered
                     .iter()
-                    .filter(|b| owned.contains(&b.name))
+                    .filter(|b| owned.contains(&b.name) && b.provider_metadata.is_empty())
                     .map(|b| RouterCall {
                         id: b.id.clone(),
                         name: b.name.clone(),
@@ -178,6 +182,7 @@ impl ServerToolLoop {
                                 id: b.id.clone(),
                                 name: Some(b.name.clone()),
                                 arguments: b.args.clone(),
+                                provider_metadata: b.provider_metadata.clone(),
                             });
                         }
                     }
@@ -374,6 +379,7 @@ mod tests {
                         id: "c1".into(),
                         name: Some("search".into()),
                         arguments: "{}".into(),
+                        provider_metadata: Default::default(),
                     },
                     StreamPart::Finish {
                         reason: FinishReason::ToolCalls,
@@ -479,6 +485,7 @@ mod tests {
                     id: "c1".into(),
                     name: Some("search".into()),
                     arguments: "{}".into(),
+                    provider_metadata: Default::default(),
                 },
                 StreamPart::Finish {
                     reason: FinishReason::ToolCalls,
@@ -547,6 +554,7 @@ mod tests {
                 id: "x".into(),
                 name: Some("client_fn".into()),
                 arguments: "{}".into(),
+                provider_metadata: Default::default(),
             },
             StreamPart::Finish {
                 reason: FinishReason::ToolCalls,
@@ -696,6 +704,7 @@ mod tests {
                     id: "c1".into(),
                     name: Some("search".into()),
                     arguments: "{}".into(),
+                    provider_metadata: Default::default(),
                 },
                 StreamPart::Finish {
                     reason: FinishReason::ToolCalls,

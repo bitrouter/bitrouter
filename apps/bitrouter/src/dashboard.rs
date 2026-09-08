@@ -140,6 +140,8 @@ async fn drive(
     // The initial snapshot was fetched before opening the terminal; do not
     // immediately repeat it on Interval's eager first tick.
     refresh_tick.tick().await;
+    let mut animation_tick = tokio::time::interval(std::time::Duration::from_millis(100));
+    animation_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut shutdown = crate::chat::signals::Shutdown::install();
     let mut reload_task = None;
     view.draw(dashboard)
@@ -160,7 +162,6 @@ async fn drive(
             update = session.updates.next() => {
                 if let Some(update) = update {
                     dashboard.conversation.journal.apply(update);
-                    dashboard.conversation.scroll = 0;
                     view.draw(dashboard).context("drawing ACP update")?;
                 }
             }
@@ -189,6 +190,10 @@ async fn drive(
                     }
                 };
                 view.draw(dashboard).context("drawing completed turn")?;
+            }
+            _ = animation_tick.tick(), if session.turn.is_some() && session.pending_permission.is_none() => {
+                view.tick();
+                view.draw(dashboard).context("drawing thinking indicator")?;
             }
             _ = refresh_tick.tick() => {
                 refresh(target, dashboard).await;
@@ -249,6 +254,9 @@ async fn handle_event(
             }
             if exit_key(&key, view.page()) {
                 return Ok(true);
+            }
+            if bitrouter_tui::editor::is_redraw(&Event::Key(key)) {
+                view.invalidate();
             }
             if key.code == KeyCode::Tab {
                 view.next_page();
@@ -364,7 +372,7 @@ async fn open_session(
         options: crate::acp_cli::launch_options(request.turn_timeout),
         routing: request.routing,
     };
-    // The full-screen shell cannot relinquish the terminal for an external
+    // The live shell cannot relinquish the terminal for an external
     // authentication flow, so advertise only the capabilities it can honor.
     let mut diagnostics = Vec::new();
     let prepared =
@@ -499,72 +507,46 @@ async fn handle_conversation_key(
     driver: &mut SessionDriver,
     key: KeyEvent,
 ) -> Result<()> {
-    match key.code {
-        KeyCode::PageUp => {
-            let _ = bitrouter_tui::dashboard::step(
-                dashboard,
-                bitrouter_tui::dashboard::Action::ScrollUp,
-            );
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let (Some(handle), Some(turn)) = (driver.handle.as_ref(), driver.turn.take()) {
+            turn.abort();
+            handle.client.deny_session_permissions(&handle.session_id);
+            handle.client.cancel(&handle.session_id).await?;
+            dashboard.conversation.status = "cancelled".to_string();
         }
-        KeyCode::PageDown => {
-            let _ = bitrouter_tui::dashboard::step(
-                dashboard,
-                bitrouter_tui::dashboard::Action::ScrollDown,
-            );
-        }
-        KeyCode::Backspace if driver.turn.is_none() => {
-            let _ = bitrouter_tui::dashboard::step(
-                dashboard,
-                bitrouter_tui::dashboard::Action::Backspace,
-            );
-        }
-        KeyCode::Enter if driver.turn.is_none() => {
-            let Some(bitrouter_tui::dashboard::Effect::Prompt(prompt)) =
-                bitrouter_tui::dashboard::step(
-                    dashboard,
-                    bitrouter_tui::dashboard::Action::SubmitPrompt,
-                )
-            else {
-                return Ok(());
-            };
-            let Some(handle) = driver.handle.as_ref() else {
-                dashboard.error = Some("Select an ACP agent before sending a prompt.".to_string());
-                return Ok(());
-            };
-            dashboard
-                .conversation
-                .journal
-                .apply(SessionUpdate::UserMessageChunk(ContentChunk::new(
-                    ContentBlock::Text(TextContent::new(prompt.clone())),
-                )));
-            dashboard.conversation.scroll = 0;
-            dashboard.conversation.status = "working".to_string();
-            let client = handle.client.clone();
-            let session_id = handle.session_id.clone();
-            driver.turn = Some(tokio::spawn(async move {
-                client.prompt(&session_id, &prompt).await
-            }));
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            if let (Some(handle), Some(turn)) = (driver.handle.as_ref(), driver.turn.take()) {
-                turn.abort();
-                handle.client.deny_session_permissions(&handle.session_id);
-                handle.client.cancel(&handle.session_id).await?;
-                dashboard.conversation.status = "cancelled".to_string();
-            }
-        }
-        KeyCode::Esc => {}
-        KeyCode::Char(character)
-            if driver.turn.is_none()
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
-        {
-            let _ = bitrouter_tui::dashboard::step(
-                dashboard,
-                bitrouter_tui::dashboard::Action::Type(character),
-            );
-        }
-        _ => {}
+        return Ok(());
     }
+    // Keep a draft editable during a turn, but submission waits for the agent.
+    if driver.turn.is_some()
+        && key.code == KeyCode::Enter
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
+    {
+        return Ok(());
+    }
+    let Some(bitrouter_tui::dashboard::Effect::Prompt(prompt)) =
+        bitrouter_tui::dashboard::step(dashboard, bitrouter_tui::dashboard::Action::Key(key))
+    else {
+        return Ok(());
+    };
+    let Some(handle) = driver.handle.as_ref() else {
+        dashboard.error = Some("Select an ACP agent before sending a prompt.".to_string());
+        dashboard.conversation.input.paste(&prompt);
+        return Ok(());
+    };
+    dashboard
+        .conversation
+        .journal
+        .apply(SessionUpdate::UserMessageChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new(prompt.clone())),
+        )));
+    dashboard.conversation.status = "working".to_string();
+    let client = handle.client.clone();
+    let session_id = handle.session_id.clone();
+    driver.turn = Some(tokio::spawn(async move {
+        client.prompt(&session_id, &prompt).await
+    }));
     Ok(())
 }
 
@@ -1423,6 +1405,41 @@ fn route_line(report: RouteReport) -> bitrouter_tui::dashboard::RouteLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_busy_composer_keeps_one_turn_and_preserves_the_draft() -> Result<()> {
+        let mut dashboard = bitrouter_tui::dashboard::Dashboard::default();
+        dashboard.conversation.input.paste("first line");
+        let mut driver = SessionDriver {
+            turn: Some(tokio::spawn(std::future::pending())),
+            ..Default::default()
+        };
+        let turn_id = driver.turn.as_ref().map(tokio::task::JoinHandle::id);
+        for modifiers in [KeyModifiers::NONE, KeyModifiers::CONTROL] {
+            handle_conversation_key(
+                &mut dashboard,
+                &mut driver,
+                KeyEvent::new(KeyCode::Enter, modifiers),
+            )
+            .await?;
+            assert_eq!(dashboard.conversation.input.line(), "first line");
+            assert_eq!(
+                driver.turn.as_ref().map(tokio::task::JoinHandle::id),
+                turn_id
+            );
+        }
+        handle_conversation_key(
+            &mut dashboard,
+            &mut driver,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+        )
+        .await?;
+        assert_eq!(dashboard.conversation.input.line(), "first line\n");
+        if let Some(turn) = driver.turn.take() {
+            turn.abort();
+        }
+        Ok(())
+    }
 
     #[test]
     fn control_inventory_dashboard_contract_matches_reachable_pages() -> anyhow::Result<()> {
