@@ -119,8 +119,28 @@ impl ConfigRoutingTable {
         let _guard = self.reload_lock.lock().await;
         let mut fresh = fresh;
         crate::config::discover_models(&mut fresh).await;
-        *self.config.write().expect("config lock poisoned") = fresh;
+        self.replace_prepared_config_locked(fresh);
         Ok(())
+    }
+
+    /// Swap a configuration whose model discovery has already completed.
+    ///
+    /// The app reload coordinator prepares provider discovery alongside every
+    /// other reload participant before it mutates live state. This entry point
+    /// preserves that prepared-candidate boundary while retaining the routing
+    /// table's own serialization with callers outside that coordinator.
+    pub async fn replace_prepared_config(&self, fresh: Config) -> Result<()> {
+        let _guard = self.reload_lock.lock().await;
+        self.replace_prepared_config_locked(fresh);
+        Ok(())
+    }
+
+    fn replace_prepared_config_locked(&self, fresh: Config) {
+        let mut current = match self.config.write() {
+            Ok(current) => current,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *current = fresh;
     }
 }
 

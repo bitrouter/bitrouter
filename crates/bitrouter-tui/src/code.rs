@@ -667,7 +667,7 @@ impl CodeState {
         self.open_inspector_returning_to(inspector, None);
     }
 
-    /// Toggle read-only operations mode when no ACP session exists.
+    /// Toggle operations-only mode when no ACP session exists.
     pub fn set_operations_only(&mut self, operations_only: bool) {
         self.operations_only = operations_only;
         if !operations_only {
@@ -2659,7 +2659,7 @@ fn render_operations_base(frame: &mut Frame<'_>, area: Rect, state: &CodeState) 
         header,
     );
     frame.render_widget(
-        Paragraph::new("Read-only operations\nLoading target status…")
+        Paragraph::new("Operations only\nLoading target status…")
             .style(Style::default().fg(Color::DarkGray)),
         body,
     );
@@ -4665,7 +4665,7 @@ mod tests {
         let screen = grid(terminal.backend());
 
         assert!(screen.contains("Remote operations"));
-        assert!(screen.contains("Read-only operations"));
+        assert!(screen.contains("Operations only"));
         assert!(screen.contains("Loading target status"));
         for local_marker in ["agent:", "route:", "activity:", "session cost:", "› "] {
             assert!(

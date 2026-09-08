@@ -146,29 +146,16 @@ and the rollup reads `unreported` rather than `$0.00` when none does. Canonical
 ids use slashes and a pin uses a colon (`openrouter:openai/gpt-4o`);
 `references/diagnose.md` has the full spelling rules.
 
-For read-only control from another computer, add a named context and select it
-explicitly:
-
-```bash
-bitrouter context add workstation \
-  --endpoint https://router.example/control/v1 \
-  --token-env WORKSTATION_BITROUTER_TOKEN
-bitrouter --context workstation status
-bitrouter --context workstation requests
-bitrouter --context workstation models
-bitrouter --context workstation route openai/gpt-5
-bitrouter --context workstation code
-```
-
-The context stores only the environment-variable name. Remote errors never
-fall back to this machine. The HTTP-only MVP supports those reads; agent
-sessions and lifecycle commands remain local (use SSH for a remote native TUI).
+For administration from another computer, use a named `--context`; see
+`references/remote-administration.md` for token scopes, tunnel setup, and host
+boundaries. Remote errors never fall back to this machine's configuration.
 
 ## References — read on demand, not upfront
 
 | File | When to read |
 |---|---|
 | `references/cli.md` | Full subcommand reference — the primary reference |
+| `references/remote-administration.md` | Remote contexts, operator credentials, and host boundaries |
 | `references/providers.md` | Add / configure providers, multi-account, custom endpoints, model-id spelling |
 | `references/cloud-setup.md` | Cloud signup, key mint, billing, wallet path |
 | `references/diagnose.md` | Install issues, daemon won't start, connection refused, model ids |
@@ -185,11 +172,11 @@ sessions and lifecycle commands remain local (use SSH for a remote native TUI).
 - **Hosted sign-in is `cloud login` or `providers login bitrouter`** (same flow),
   everything else `providers login <id>`; there is no top-level `login`.
 - **Remote control is separate from inference and ACP.** `control.enabled: true`
-  starts a read-only API on `127.0.0.1:4358` and requires a dedicated
-  `BITROUTER_CONTROL_TOKEN` of at least 32 bytes. Keep it loopback-only behind a
+  starts a control API on `127.0.0.1:4358` with dedicated operator credentials
+  (legacy `BITROUTER_CONTROL_TOKEN` grants reads only). Keep it loopback-only behind a
   private tunnel or TLS reverse proxy. `server.skip_auth` never disables this
   authentication, changes under `control:` require a daemon restart, and the
-  HTTP-only MVP does not run remote ACP sessions.
+  control API does not run remote ACP sessions.
 - **`init --harness` only accepts `claude` and `codex`**; `launch <agent>`
   accepts the native facets listed by `launch --help`.
 - **`providers add/remove/use/test/stats` and `bitrouter doctor` do not exist.**

@@ -3,7 +3,7 @@
 //! The interactive loop receives this boundary; configuration and target
 //! selection remain here, outside the conversation's state machine.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -14,25 +14,16 @@ use tokio_util::sync::CancellationToken;
 use crate::acp_cli::{
     SessionHandle, SessionHost, SessionSelection, SpawnContext, lifecycle_cancelled,
 };
+use crate::actions::administration::{PolicyInput, PolicyView};
+use crate::administration_target::{InspectionTarget, ReloadSubmission};
 use crate::contexts::RemoteContext;
 use crate::dashboard::SessionRequest;
 use crate::output::{CliReport, Format, Output};
-use crate::paths::ConfigSource;
 
 /// A selectable ACP facet, with its exact configured/catalog identity.
 pub(crate) struct AgentChoice {
     pub id: String,
     pub description: String,
-}
-
-enum Target {
-    Local {
-        source: ConfigSource,
-        socket: PathBuf,
-    },
-    Remote {
-        client: crate::remote_control::HttpControlClient,
-    },
 }
 
 /// The exact launch inputs a legacy interactive entry already resolved.
@@ -59,9 +50,10 @@ impl InitialLaunch {
 
 /// Immutable ports shared by asynchronous interactive effects.
 pub(crate) struct CodeServices {
-    target: Target,
+    target: InspectionTarget,
     pub label: String,
     pub operations_only: bool,
+    pub can_reload: bool,
     initial_launch: Mutex<Option<InitialLaunch>>,
 }
 
@@ -107,40 +99,31 @@ impl CodeServices {
         socket: Option<&Path>,
     ) -> Result<Arc<Self>> {
         let operations_only = remote.is_some() || socket.is_some();
-        let (target, label) = match remote {
-            Some((name, context)) => {
-                ensure!(
-                    config.is_none() && socket.is_none(),
-                    "remote `code` does not accept --config or --socket; the named context is the complete target"
-                );
-                (
-                    Target::Remote {
-                        client: context.client()?,
-                    },
-                    format!("Remote operations · read-only · {name}"),
+        let target = InspectionTarget::resolve(remote, config, socket).await?;
+        let can_reload = target.control_authority().await?.reload;
+        let label = if operations_only {
+            if target.is_remote() {
+                format!(
+                    "Remote operations · reports read-only · reload explicit · {}",
+                    target.label()
+                )
+            } else {
+                format!(
+                    "Local operations · reports read-only · reload explicit · {}",
+                    target
+                        .local_socket()
+                        .context("local operations target has no socket")?
+                        .display()
                 )
             }
-            None => {
-                let source = crate::paths::resolve_config(config)?;
-                let socket = match socket {
-                    Some(path) => path.to_path_buf(),
-                    None => crate::daemon::socket_path_for(
-                        &source,
-                        &crate::paths::load_config(&source).await?,
-                    ),
-                };
-                let label = if operations_only {
-                    format!("Local operations · read-only · {}", socket.display())
-                } else {
-                    format!("bitrouter code · {}", std::env::current_dir()?.display())
-                };
-                (Target::Local { source, socket }, label)
-            }
+        } else {
+            format!("bitrouter code · {}", std::env::current_dir()?.display())
         };
         Ok(Arc::new(Self {
             target,
             label,
             operations_only,
+            can_reload,
             initial_launch: Mutex::new(None),
         }))
     }
@@ -176,9 +159,10 @@ impl CodeServices {
         };
         Ok((
             Arc::new(Self {
-                target: Target::Local { source, socket },
+                target: InspectionTarget::Local { source, socket },
                 label,
                 operations_only: false,
+                can_reload: true,
                 initial_launch: Mutex::new(Some(initial_launch)),
             }),
             request,
@@ -189,7 +173,7 @@ impl CodeServices {
         if self.operations_only {
             return Ok(Vec::new());
         }
-        let Target::Local { source, .. } = &self.target else {
+        let Some(source) = self.target.local_source() else {
             return Ok(Vec::new());
         };
         let config = crate::paths::load_config(source).await?;
@@ -217,9 +201,9 @@ impl CodeServices {
         }
         ensure!(
             !self.operations_only,
-            "This target offers read-only operations; ACP execution is unavailable"
+            "This target is operations-only; ACP execution is unavailable"
         );
-        let Target::Local { source, .. } = &self.target else {
+        let Some(source) = self.target.local_source() else {
             bail!("Remote ACP execution is unavailable");
         };
         let initial = self.take_initial_launch(&request)?;
@@ -298,44 +282,73 @@ impl CodeServices {
 
     /// Render the same typed reports as the CLI, only when explicitly requested.
     pub async fn report(&self, action: &str, args: &[String]) -> Result<String> {
-        let report: Box<dyn CliReport> = match &self.target {
-            Target::Local { source, socket } => {
-                if action == "requests" {
-                    ensure!(args.is_empty(), "Host requests takes no arguments in Code");
-                    Box::new(
-                        super::requests::RequestsAction::new(source.clone(), socket.clone())
-                            .report(100)
-                            .await?,
-                    )
-                } else {
-                    super::session::SessionPorts::open(source.clone(), socket.clone())
-                        .run(action, args)
-                        .await?
+        let report: Box<dyn CliReport> = match action {
+            "status" => {
+                ensure!(args.is_empty(), "usage: /status");
+                Box::new(self.target.status().await?)
+            }
+            "list_models" => Box::new(self.target.models(args.first().map(String::as_str)).await?),
+            "requests" => {
+                ensure!(args.is_empty(), "Host requests takes no arguments in Code");
+                Box::new(
+                    self.target
+                        .requests(crate::actions::requests::RequestFilters {
+                            limit: 100,
+                            ..Default::default()
+                        })
+                        .await?,
+                )
+            }
+            "route" => {
+                let model = args.first().context("usage: /preview <model>")?;
+                Box::new(
+                    self.target
+                        .route(RouteInput {
+                            model: model.clone(),
+                            prompt: None,
+                        })
+                        .await?,
+                )
+            }
+            "providers_list" => {
+                ensure!(args.is_empty(), "usage: /providers list");
+                Box::new(self.target.providers().await?)
+            }
+            "observe_status" => {
+                ensure!(args.is_empty(), "usage: /observe status");
+                Box::new(self.target.observe().await?)
+            }
+            "policy_status" => {
+                ensure!(args.is_empty(), "usage: /policy status");
+                Box::new(self.target.policy(PolicyInput::default()).await?)
+            }
+            "policy_show" => {
+                ensure!(args.len() <= 1, "usage: /policy show [name]");
+                Box::new(
+                    self.target
+                        .policy(PolicyInput {
+                            view: PolicyView::Active,
+                            name: args.first().cloned(),
+                        })
+                        .await?,
+                )
+            }
+            "agents_list" => {
+                ensure!(args.is_empty(), "usage: /agents list");
+                Box::new(self.target.agents().await?)
+            }
+            "reload_state" => {
+                ensure!(args.is_empty(), "usage: /reload state");
+                Box::new(self.target.reload_state().await?)
+            }
+            "reload" => {
+                ensure!(args.is_empty(), "usage: /reload");
+                match self.target.reload().await? {
+                    ReloadSubmission::Local(report) => Box::new(report),
+                    ReloadSubmission::Remote(report) => Box::new(report),
                 }
             }
-            Target::Remote { client } => match action {
-                "status" => {
-                    ensure!(args.is_empty(), "usage: /status");
-                    Box::new(client.status().await?)
-                }
-                "list_models" => Box::new(client.models(args.first().map(String::as_str)).await?),
-                "requests" => {
-                    ensure!(args.is_empty(), "Host requests takes no arguments in Code");
-                    Box::new(client.requests(Some(100)).await?)
-                }
-                "route" => {
-                    let model = args.first().context("usage: /preview <model>")?;
-                    Box::new(
-                        client
-                            .route(&RouteInput {
-                                model: model.clone(),
-                                prompt: None,
-                            })
-                            .await?,
-                    )
-                }
-                _ => bail!("This remote target does not offer `{action}`"),
-            },
+            _ => bail!("This target does not offer `{action}`"),
         };
         String::from_utf8(Output::new(Format::Human).render_to_vec(report.as_ref()))
             .context("rendering the requested report")

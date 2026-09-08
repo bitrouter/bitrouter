@@ -1,22 +1,22 @@
 //! Canonical Code entry point and target assembly.
-//!
-//! The former permanent dashboard now delegates to one conversation loop.
 
 use std::path::Path;
 
 use anyhow::Result;
 
+use crate::acp_cli::{RoutingOptions, SessionSelection};
 use crate::contexts::RemoteContext;
 
-/// Optional initial ACP session selected by `bitrouter code <agent>`.
+/// An optional ACP session to open when Code starts.
 pub struct SessionRequest {
     pub agent: String,
-    pub selection: crate::acp_cli::SessionSelection,
+    pub selection: SessionSelection,
     pub turn_timeout: Option<u64>,
-    pub routing: crate::acp_cli::RoutingOptions,
+    pub routing: RoutingOptions,
 }
 
-/// Open a coding conversation or the target's read-only operations inspector.
+/// Open the shared conversation surface for a local coding session or an
+/// operations-only local/remote target.
 pub async fn run(
     remote: Option<(String, RemoteContext)>,
     config: Option<&Path>,

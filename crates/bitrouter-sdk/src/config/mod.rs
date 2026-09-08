@@ -167,19 +167,47 @@ impl Default for Config {
     }
 }
 
-/// Read-only operator control API settings.
+/// Scoped operator administration API settings.
 ///
 /// The control API is deliberately separate from the inference listener and
 /// the local control socket. It is disabled by default, may bind only to a
-/// loopback address, and always authenticates with the token held in
-/// `BITROUTER_CONTROL_TOKEN`; [`ServerConfig::skip_auth`] never applies to it.
+/// loopback address, and authenticates named credentials when configured.
+/// Otherwise `BITROUTER_CONTROL_TOKEN` grants read-only access.
+/// [`ServerConfig::skip_auth`] never applies to it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ControlConfig {
     /// Whether to start the HTTP control listener.
     pub enabled: bool,
     /// Loopback `host:port` to listen on.
     pub listen: String,
+    /// Explicit operator credentials. Empty keeps the legacy read-only token.
+    pub credentials: Vec<ControlCredentialConfig>,
+}
+
+/// Authority granted by a host operator, independently of inference credentials.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+pub enum ControlScope {
+    /// Host-wide operational inspection, including usage and policy metadata.
+    #[serde(rename = "control:read")]
+    Read,
+    /// Reload server-owned configuration; requires the read grant as well.
+    #[serde(rename = "control:reload")]
+    Reload,
+}
+
+/// A token reference only; configuration never stores the bearer value.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ControlCredentialConfig {
+    /// Non-secret operator identifier used for ownership and audit events.
+    pub id: String,
+    /// Host environment variable that contains this credential's bearer token.
+    pub token_env: String,
+    /// Explicit management authority, unrelated to inference authentication.
+    pub scopes: Vec<ControlScope>,
 }
 
 impl Default for ControlConfig {
@@ -187,6 +215,7 @@ impl Default for ControlConfig {
         Self {
             enabled: false,
             listen: "127.0.0.1:4358".to_string(),
+            credentials: Vec::new(),
         }
     }
 }

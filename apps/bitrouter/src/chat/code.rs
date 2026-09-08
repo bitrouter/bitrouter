@@ -323,7 +323,7 @@ impl Runtime {
             CodeEffect::Submit { prompt } | CodeEffect::AgentPrompt { prompt } => {
                 ensure!(
                     !self.services.operations_only,
-                    "This is a read-only operations target"
+                    "This target is operations-only"
                 );
                 ensure!(
                     !self.job_blocks_prompt && self.cleanup.is_empty(),
@@ -406,6 +406,10 @@ impl Runtime {
                     self.selector(
                         picker("preview", "Route preview", Vec::new())
                             .allow_custom("Model to preview"),
+                    );
+                } else if id == "policy_show" {
+                    self.selector(
+                        picker("policy", "Policy detail", Vec::new()).allow_custom("Policy name"),
                     );
                 } else {
                     self.report(&id, Vec::new());
@@ -532,6 +536,7 @@ impl Runtime {
                 });
             }
             "preview" => self.report("route", vec![id]),
+            "policy" => self.report("policy_show", vec![id]),
             "route" => self.local_action("route_set", vec![id])?,
             "settings" => {
                 self.state.open_selector(&id);
@@ -1014,13 +1019,36 @@ impl Runtime {
                 "Configured resolution for a model",
                 "route",
             ),
+            ("Providers", "Accepted provider inventory", "providers_list"),
+            ("Telemetry", "Live exporter status", "observe_status"),
+            ("Policy status", "Active policy summary", "policy_status"),
+            (
+                "Policy detail",
+                "Inspect a named active policy",
+                "policy_show",
+            ),
+            (
+                "Agent catalog",
+                "Configured and catalog agents",
+                "agents_list",
+            ),
+            (
+                "Reload state",
+                "Coordinator generation and outcome",
+                "reload_state",
+            ),
+            ("Reload now", "Submit a live configuration reload", "reload"),
         ] {
-            commands.push(Command::new(
+            let mut command = Command::new(
                 label,
                 detail,
                 CommandOwner::BitRouter,
                 CommandTarget::Report { id: id.into() },
-            ));
+            );
+            if matches!(id, "reload" | "reload_state") && !self.services.can_reload {
+                command = command.unavailable("Selected credential has no reload scope");
+            }
+            commands.push(command);
         }
         let typed = self
             .services
@@ -1068,6 +1096,13 @@ fn report_title(id: &str) -> &str {
         "requests" => "Host requests · latest 100",
         "list_models" => "Routable models",
         "route" => "Route preview · configured resolution",
+        "providers_list" => "Providers · accepted inventory",
+        "observe_status" => "Telemetry · live exporter",
+        "policy_status" => "Policy · active status",
+        "policy_show" => "Policy · active detail",
+        "agents_list" => "Agent catalog",
+        "reload_state" => "Reload · coordinator state",
+        "reload" => "Reload · submitted operation",
         _ => id,
     }
 }

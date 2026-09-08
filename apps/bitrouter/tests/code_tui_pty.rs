@@ -813,7 +813,7 @@ fn remote_response(scenario: RemoteScenario, request: &RemoteRequest) -> (u16, &
         ),
         ("GET", "/control/v1/requests") => (
             200,
-            r#"{"mode":"live","daemon":{"pid":4242,"listen":"REMOTE_A12_REQUESTS","models":1},"window":"REMOTE_A12_WINDOW","scope":"REMOTE_A12_SCOPE","spend_micro_usd":0,"requests":1,"unpriced_requests":0,"requests_per_minute":1.0,"tokens_per_minute":2.0,"rows":[]}"#,
+            r#"{"mode":"live","daemon":{"pid":4242,"listen":"REMOTE_A12_REQUESTS","models":1},"window":"REMOTE_A12_WINDOW","scope":"REMOTE_A12_SCOPE","spend_micro_usd":0,"requests":1,"unpriced_requests":0,"requests_per_minute":1.0,"tokens_per_minute":2.0,"rows":[],"filters":{"since":"2026-01-01T00:00:00Z","until":"2026-01-02T00:00:00Z","model":null,"provider":null},"truncated":false,"metering":{"summary":"available","rate":"available","rows":"available"},"rate_scope":"all callers, trailing minute"}"#,
         ),
         ("POST", "/control/v1/route/preview") => (
             200,
@@ -2128,7 +2128,9 @@ fn code_remote_operations_use_authenticated_remote_read_actions() -> Result<()> 
     ensure!(
         palette.contains("Status")
             && palette.contains("Host requests")
-            && palette.contains("Route preview"),
+            && palette.contains("Route preview")
+            && palette.contains("Providers")
+            && palette.contains("Telemetry"),
         "remote palette omitted a supported read action: {palette:?}"
     );
     ensure!(
