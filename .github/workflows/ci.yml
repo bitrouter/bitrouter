@@ -143,7 +143,7 @@ jobs:
           - shard: interfaces
             retries: "0"
             targets: >-
-              --test acp --test cloud_api --test daemon --test e2e
+              --test acp --test acp_checkpoints --test cloud_api --test daemon --test e2e
               --test full_stack
           - shard: observability
             retries: "0"

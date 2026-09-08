@@ -1563,7 +1563,44 @@ enum AcpRecordingAction {
 }
 
 #[derive(Subcommand)]
+enum AcpCheckpointAction {
+    /// Freeze exactly the currently observed prefix; rejects a stale watermark.
+    Create {
+        #[arg(long)]
+        watermark: i64,
+    },
+    /// List immutable prefixes for this native session.
+    List,
+    /// Read the original content versions referenced by a checkpoint.
+    Show { checkpoint: String },
+    /// Inspect resource snapshots, or refresh them from existing local records.
+    Resources {
+        checkpoint: String,
+        #[arg(long)]
+        refresh: bool,
+    },
+    /// Import an idempotent assessment revision or explicit retraction from JSON.
+    Submit { file: PathBuf },
+    /// Read immutable assessment revisions and their selection decisions.
+    History,
+    /// Inspect the selected assessment, including unassessed appends.
+    Effective,
+    /// Inspect related native forks with a union of observed request costs.
+    Family,
+}
+
+#[derive(Subcommand)]
 enum AcpCmd {
+    /// Freeze and evaluate already recorded native-session prefixes locally.
+    Checkpoints {
+        #[arg(long)]
+        agent: String,
+        session: String,
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        #[command(subcommand)]
+        action: AcpCheckpointAction,
+    },
     /// Inspect or delete locally recorded ACP conversation content.
     Recordings {
         #[command(subcommand)]
@@ -6140,6 +6177,76 @@ async fn resolve_prompt_input(
 
 async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
     match cmd {
+        AcpCmd::Checkpoints {
+            agent,
+            session,
+            config,
+            action,
+        } => {
+            use bitrouter::acp_trajectory::checkpoint::types::{CheckpointReport, RevisionInput};
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            let db = bitrouter::db::connect(&bitrouter::db::anchor_url(
+                &cfg.database.url,
+                source.home(),
+            ))
+            .await?;
+            bitrouter::db::run_migrations(&db).await?;
+            let store = bitrouter::acp_trajectory::CanonicalStore::new(db);
+            let identity = bitrouter::acp_trajectory::SessionIdentity {
+                owner: "local".into(),
+                source: agent,
+                native_session_id: session,
+            };
+            let report = match action {
+                AcpCheckpointAction::Create { watermark } => CheckpointReport::Checkpoint(
+                    store.freeze_checkpoint(&identity, watermark).await?,
+                ),
+                AcpCheckpointAction::List => {
+                    CheckpointReport::Checkpoints(store.checkpoints(&identity).await?)
+                }
+                AcpCheckpointAction::Show { checkpoint } => CheckpointReport::Content(Box::new(
+                    store.checkpoint_content(&identity, &checkpoint).await?,
+                )),
+                AcpCheckpointAction::Resources {
+                    checkpoint,
+                    refresh,
+                } => {
+                    if refresh {
+                        CheckpointReport::Resources(
+                            store
+                                .observe_checkpoint_resources(&identity, &checkpoint)
+                                .await?,
+                        )
+                    } else {
+                        CheckpointReport::ResourceHistory(
+                            store
+                                .checkpoint_resource_history(&identity, &checkpoint)
+                                .await?,
+                        )
+                    }
+                }
+                AcpCheckpointAction::Submit { file } => {
+                    let input: RevisionInput = serde_json::from_slice(
+                        &tokio::fs::read(&file)
+                            .await
+                            .context("reading assessment JSON")?,
+                    )?;
+                    CheckpointReport::Revision(store.submit_assessment(&identity, input).await?)
+                }
+                AcpCheckpointAction::History => {
+                    CheckpointReport::History(store.assessment_history(&identity).await?)
+                }
+                AcpCheckpointAction::Effective => CheckpointReport::Effective(Box::new(
+                    store.effective_assessment(&identity).await?,
+                )),
+                AcpCheckpointAction::Family => {
+                    CheckpointReport::Family(Box::new(store.checkpoint_family(&identity).await?))
+                }
+            };
+            output.emit(&report)?;
+            Ok(())
+        }
         AcpCmd::Recordings { action, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;

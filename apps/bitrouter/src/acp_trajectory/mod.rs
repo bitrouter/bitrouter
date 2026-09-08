@@ -3,6 +3,7 @@
 //! Native IDs remain the harness's authority. Transport replays are retained
 //! for audit, separately from live canonical events and model execution costs.
 
+pub mod checkpoint;
 pub mod entities;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -16,7 +17,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
     QueryOrder, Set, TransactionTrait,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
@@ -26,7 +27,7 @@ use entities::{connections, events, sessions};
 pub const CANONICAL_VERSION: u32 = 1;
 
 /// The complete native identity scope; `key()` is only a storage index.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionIdentity {
     pub owner: String,
     pub source: String,
@@ -61,7 +62,7 @@ pub struct CanonicalStore {
 }
 
 /// An immutable observed event with a stable connection reference.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanonicalEvent {
     pub node_id: String,
     pub sequence: i64,
@@ -70,7 +71,7 @@ pub struct CanonicalEvent {
 }
 
 /// Setup evidence whose native identity became known when its response arrived.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetupEvidence {
     pub node_id: String,
     pub response_node_id: String,
@@ -79,7 +80,7 @@ pub struct SetupEvidence {
 }
 
 /// Session-level correlation does not claim a tool-to-model causal join.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestAssociation {
     pub request_id: String,
     pub model_id: String,
@@ -88,6 +89,8 @@ pub struct RequestAssociation {
     pub native_agent_thread_id: Option<String>,
     pub basis: String,
     pub charge_micro_usd: Option<i64>,
+    /// First local metering observation, not an inferred model start time.
+    pub first_metered_at: String,
     pub identity_evidence: Option<serde_json::Value>,
     pub route_events: Vec<crate::trajectory::types::TrajectoryEvent>,
 }
@@ -388,6 +391,7 @@ impl CanonicalStore {
                         basis: "scoped_declared_session_identity; tool_to_request_unresolved"
                             .into(),
                         charge_micro_usd: charge,
+                        first_metered_at: row.created_at,
                         identity_evidence: evidence,
                         route_events,
                     },
@@ -408,6 +412,7 @@ impl CanonicalStore {
             .filter(sessions::Column::SessionKey.eq(&key))
             .exec(&tx)
             .await?;
+        checkpoint::delete_dependents(&tx, &key).await?;
         let rows = events::Entity::find()
             .filter(events::Column::SessionKey.eq(&key))
             .all(&tx)

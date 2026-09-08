@@ -1460,3 +1460,64 @@ convention. Content persists until explicit deletion; deletion fences further
 recording for that native identity and does not touch native harness history
 or metering. See [the recording contract](ACP_CANONICAL_CAPTURE_SPEC.md) for
 visibility, write-failure, and cost-accounting semantics.
+
+## ACP checkpoints and assessment history
+
+Use the source and native ID from `acp recordings list`, and the current `head`
+from `acp recordings show`. Creation rejects a stale expected watermark.
+
+```bash
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] create --watermark N
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] list
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] show CHECKPOINT_ID
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] resources CHECKPOINT_ID [--refresh]
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] submit assessment.json
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] history
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] effective
+bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] family
+```
+
+These commands use existing local records only. `create` freezes event references
+and observes local resource records. `show` verifies and resolves original source
+versions. `resources` lists immutable metering observations; `--refresh` adds an
+observation if local data changed, without changing the content checkpoint.
+
+`submit` imports a JSON revision envelope. Copy checkpoint and current revision
+IDs from command output. The pipeline and selection digests identify the scoring
+configuration that produced the imported labels; this layer does not generate
+templates or scores. For example (replace identifiers and digest placeholders):
+
+```json
+{
+  "submission_id": "human-review-1",
+  "checkpoint_id": "CHECKPOINT_ID",
+  "expected_revision": null,
+  "source": "human",
+  "evaluator_id": "local-user",
+  "evaluator_version": "1",
+  "assessment": {
+    "pipeline_config_digest": "LOWERCASE_SHA256_DIGEST",
+    "selection_digest": "LOWERCASE_SHA256_DIGEST",
+    "scores": {
+      "completion": { "status": "scored", "value_ppm": 1000000 },
+      "correctness": { "status": "unknown" },
+      "pr_delivery": { "status": "not_applicable" }
+    },
+    "evidence": [],
+    "explanation": "Judgment based on the recorded checkpoint."
+  },
+  "reason": "Initial manual assessment"
+}
+```
+
+Use `expected_revision: null` only when no selection exists. For a correction,
+provide the current revision ID and a new submission ID. A retraction uses
+`assessment: null`, the current checkpoint/revision IDs, Human source and a
+reason. Evidence entries have `node_id` and `digest`, matching checkpoint
+references. Scores range from 0 to 1,000,000 ppm; unknown is not zero.
+
+Retries with the same submission ID and input are idempotent. Older workers
+cannot overwrite a newer selection. Appending a session marks its previous
+assessment stale, while preserving the old checkpoint. Deletion invalidates
+dependent checkpoints and removes associated assessment text. No command here
+invokes a judge or publishes a route. See [the checkpoint contract](ACP_CHECKPOINT_SPEC.md).

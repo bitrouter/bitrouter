@@ -16,7 +16,7 @@ use serde_json::json;
 
 use super::{CanonicalStore, RecordingScope, SessionIdentity, connections, events};
 
-fn identity(id: &str) -> SessionIdentity {
+pub(super) fn identity(id: &str) -> SessionIdentity {
     SessionIdentity {
         owner: "local".into(),
         source: "test-agent".into(),
@@ -24,7 +24,7 @@ fn identity(id: &str) -> SessionIdentity {
     }
 }
 
-fn scope() -> RecordingScope {
+pub(super) fn scope() -> RecordingScope {
     RecordingScope {
         owner: "local".into(),
         source: "test-agent".into(),
@@ -33,13 +33,13 @@ fn scope() -> RecordingScope {
     }
 }
 
-async fn store() -> anyhow::Result<CanonicalStore> {
+pub(super) async fn store() -> anyhow::Result<CanonicalStore> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
     Ok(CanonicalStore::new(db))
 }
 
-fn event(
+pub(super) fn event(
     kind: CaptureKind,
     call_id: Option<u64>,
     method: &str,
@@ -54,7 +54,7 @@ fn event(
     }
 }
 
-async fn new_session(recorder: &dyn CapturePort, session: &str) -> anyhow::Result<()> {
+pub(super) async fn new_session(recorder: &dyn CapturePort, session: &str) -> anyhow::Result<()> {
     recorder
         .record(event(
             CaptureKind::Request,
@@ -373,7 +373,7 @@ async fn delete_removes_content_and_fences_an_active_recorder() -> anyhow::Resul
     Ok(())
 }
 
-async fn seed_request(
+pub(super) async fn seed_request(
     store: &CanonicalStore,
     id: &str,
     principal: &str,
