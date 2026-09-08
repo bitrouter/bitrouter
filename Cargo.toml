@@ -64,6 +64,7 @@ similar = "3.1"
 # the same ones ratatui measures with, which is why this tracks the version
 # ratatui itself depends on. Adds no crate to the build graph.
 unicode-width = "0.2"
+unicode-segmentation = "1.12"
 # `unstable_llm_providers` gives the draft `providers/*` schema types used only
 # for controller-to-harness endpoint setup. `unstable_session_fork` lets tests
 # exercise the advertised lifecycle method. We deliberately do not enable

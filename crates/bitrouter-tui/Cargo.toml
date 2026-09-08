@@ -21,3 +21,4 @@ serde_json.workspace = true
 crossterm.workspace = true
 similar.workspace = true
 unicode-width.workspace = true
+unicode-segmentation.workspace = true

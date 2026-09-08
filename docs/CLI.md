@@ -650,7 +650,7 @@ bitrouter code [-c <path>] [--socket <path>]
 bitrouter --context <name> code
 ```
 
-Opens a full-screen dashboard over the same status, models, recent-requests,
+Opens a terminal dashboard over the same status, models, recent-requests,
 and route-preview actions the headless CLI uses. `Tab` switches pages, `1`–`7`
 jump directly, `r` refreshes, and `q`/`Esc`/`Ctrl-C` exits. On the Route page,
 type a model selector and press `Enter`; `Ctrl-U` clears it. Status, model, and
@@ -666,7 +666,7 @@ starts or mutates a daemon.
 bitrouter code <agent> [--load <id>|--resume <id>] [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
 ```
 
-Opens the same full-screen, alternate-screen shell as bare `bitrouter code`,
+Opens the same terminal shell as bare `bitrouter code`,
 initially focused on Conversation with a harness-native ACP session. `Tab`
 moves between Conversation and the Home, Agents, Sessions, Models, Requests,
 and Route operations views without ending the session or losing the draft.
@@ -674,13 +674,24 @@ and Route operations views without ending the session or losing the draft.
 replay when the harness advertises the selected operation. BitRouter does not
 create a second session database.
 
+The transcript uses the terminal’s main screen and native scrollback, with
+left/right padding and no surrounding frame. Navigation, status, permissions,
+and the composer stay at the bottom; operations views open in that same dock.
+The composer grows to eight visible lines and scrolls internally to keep the
+cursor visible. Bracketed paste preserves newlines. A rotating thinking
+indicator runs while waiting for the agent, including before its first chunk.
+Exiting clears the controls and leaves the transcript in terminal history.
+
 **Keys**
 
 | Key | Effect |
 |---|---|
-| `Enter` | Send the composer text, or open the selected agent from Agents |
+| `Enter` | Send the composer text when idle, or open the selected agent from Agents |
 | `Tab` | Move to the next view while preserving the active conversation |
-| `PageUp` / `PageDown` | Scroll the conversation transcript |
+| `Shift+Enter`, `Alt+Enter`, `Ctrl+J` | Insert a newline (`Ctrl+J` also works in terminals without enhanced key reporting) |
+| Arrow keys, `Home` / `End` | Move within the multiline draft |
+| Terminal scroll wheel / scrollback keys | Scroll the transcript |
+| `Ctrl-L` | Repaint the current view |
 | `1`–`9` | Choose an open permission option |
 | `Esc` | Deny the open permission request |
 | `Ctrl-C` | Cancel the running turn; outside a running turn, exit |

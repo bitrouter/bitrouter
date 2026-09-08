@@ -1,4 +1,4 @@
-//! Full-screen operations dashboard renderer.
+//! ACP transcript in native scrollback, with a docked operations shell.
 //!
 //! The application owns every read and every async effect. This module accepts
 //! plain display data, owns terminal lifecycle, and renders it; it cannot reach
@@ -6,15 +6,18 @@
 
 use std::io::{self, IsTerminal};
 
-use crossterm::cursor::Hide;
-use crossterm::execute;
-use crossterm::terminal::EnterAlternateScreen;
-use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Layout};
+use crossterm::event::KeyEvent;
+use ratatui::backend::{CrosstermBackend, TestBackend};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Layout, Margin, Position, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, Tabs, Wrap};
 use ratatui::{Frame, Terminal};
+use unicode_width::UnicodeWidthStr as _;
+
+use crate::editor::{Edit, Editor};
+use crate::writer::{Cache, Writer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -97,25 +100,20 @@ pub struct Conversation {
     pub lifecycle: Option<String>,
     pub route: Option<String>,
     pub status: String,
-    pub input: String,
-    pub scroll: usize,
+    pub input: Editor,
     pub journal: crate::journal::Journal,
     pub permission: Option<crate::permission::Prompt>,
 }
 
 /// Pure Code-shell state transition. Async launch/prompt effects stay in the
-/// application driver; this reducer owns selection, drafts, and scrolling.
+/// application driver; this reducer owns selection and the multiline draft.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     SelectPreviousAgent,
     SelectNextAgent,
     ActivateSelectedAgent,
-    Type(char),
+    Key(KeyEvent),
     Paste(String),
-    Backspace,
-    SubmitPrompt,
-    ScrollUp,
-    ScrollDown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,31 +139,15 @@ pub fn step(dashboard: &mut Dashboard, action: Action) -> Option<Effect> {
             .agents
             .get(dashboard.selected_agent)
             .map(|agent| Effect::StartAgent(agent.id.clone())),
-        Action::Type(character) => {
-            dashboard.conversation.input.push(character);
+        Action::Key(key) => {
+            if dashboard.conversation.input.apply(key) == Edit::Submitted {
+                let prompt = dashboard.conversation.input.take();
+                return (!prompt.trim().is_empty()).then_some(Effect::Prompt(prompt));
+            }
             None
         }
         Action::Paste(text) => {
-            dashboard
-                .conversation
-                .input
-                .push_str(&text.replace(['\n', '\r'], " "));
-            None
-        }
-        Action::Backspace => {
-            dashboard.conversation.input.pop();
-            None
-        }
-        Action::SubmitPrompt => {
-            let prompt = std::mem::take(&mut dashboard.conversation.input);
-            (!prompt.trim().is_empty()).then_some(Effect::Prompt(prompt))
-        }
-        Action::ScrollUp => {
-            dashboard.conversation.scroll = dashboard.conversation.scroll.saturating_add(10);
-            None
-        }
-        Action::ScrollDown => {
-            dashboard.conversation.scroll = dashboard.conversation.scroll.saturating_sub(10);
+            dashboard.conversation.input.paste(&text);
             None
         }
     }
@@ -196,39 +178,41 @@ pub struct RouteLine {
 }
 
 pub struct DashboardView {
-    terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+    writer: Writer<CrosstermBackend<io::Stdout>>,
     page: Page,
-    conversation_cache: crate::writer::Cache,
+    conversation_cache: Cache,
     conversation_registry: crate::render::Registry,
+    session: Option<String>,
+    animation: usize,
     finished: bool,
 }
 
 impl DashboardView {
     pub fn open() -> io::Result<Self> {
-        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return Err(io::Error::other(
                 "bitrouter tui requires an interactive stdin and stdout",
             ));
         }
         crate::lifecycle::install_panic_restore();
         crate::lifecycle::enter_raw()?;
-        let mut stdout = std::io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen, Hide) {
-            crate::lifecycle::restore();
-            return Err(error);
-        }
-        let terminal = match Terminal::new(CrosstermBackend::new(stdout)) {
-            Ok(terminal) => terminal,
+        let writer = match (|| {
+            crate::lifecycle::enable_session_keys()?;
+            Writer::new(CrosstermBackend::new(io::stdout()))
+        })() {
+            Ok(writer) => writer,
             Err(error) => {
                 crate::lifecycle::restore();
                 return Err(error);
             }
         };
         Ok(Self {
-            terminal,
+            writer,
             page: Page::Home,
-            conversation_cache: crate::writer::Cache::default(),
+            conversation_cache: Cache::default(),
             conversation_registry: crate::render::Registry::default(),
+            session: None,
+            animation: 0,
             finished: false,
         })
     }
@@ -236,39 +220,59 @@ impl DashboardView {
     pub fn page(&self) -> Page {
         self.page
     }
-
     pub fn set_page(&mut self, page: Page) {
         self.page = page;
     }
-
     pub fn next_page(&mut self) {
         self.page = self.page.next();
     }
+    pub fn tick(&mut self) {
+        self.animation = (self.animation + 1) % SPINNER.len();
+    }
+    pub fn invalidate(&mut self) {
+        self.writer.invalidate();
+    }
 
-    pub fn draw(&mut self, dashboard: &Dashboard) -> io::Result<()> {
-        let page = self.page;
-        let cache = &mut self.conversation_cache;
-        let registry = &self.conversation_registry;
-        self.terminal
-            .draw(|frame| {
-                let conversation = (page == Page::Conversation).then(|| {
-                    cache.document(
-                        &dashboard.conversation.journal,
-                        registry,
-                        ratatui::layout::Size::new(
-                            frame.area().width.max(1),
-                            frame.area().height.max(1),
-                        ),
-                        &[],
-                    )
-                });
-                draw(frame, page, dashboard, conversation.as_deref());
-            })
-            .map(|_| ())
+    pub fn draw(&mut self, dashboard: &mut Dashboard) -> io::Result<()> {
+        if self.session != dashboard.conversation.native_session_id {
+            self.writer.new_document()?;
+            self.conversation_cache = Cache::default();
+            self.session
+                .clone_from(&dashboard.conversation.native_session_id);
+        }
+        let size = self.writer.size();
+        let padding = padding(size.width);
+        let width = size.width.saturating_sub(padding * 2).max(1);
+        dashboard
+            .conversation
+            .input
+            .set_width(width.saturating_sub(2));
+        let document = self.conversation_cache.document(
+            &dashboard.conversation.journal,
+            &self.conversation_registry,
+            Size::new(width, size.height),
+            &[],
+        );
+        let transcript = padded_transcript(&document, size.width);
+        let height = dock_height(dashboard, self.page, size);
+        // Off-screen ratatui rendering keeps widgets reusable while the writer
+        // owns the real terminal and its native scrollback.
+        let mut dock = Terminal::new(TestBackend::new(size.width.max(1), height))?;
+        let mut cursor = None;
+        let frame = dock.draw(|frame| {
+            cursor = draw(frame, self.page, dashboard, self.animation);
+        })?;
+        let cursor = cursor.map(|position| {
+            Position::new(position.x, size.height.saturating_sub(height) + position.y)
+        });
+        let footer = buffer_lines(frame.buffer);
+        self.writer.docked_frame(&transcript, &footer)?;
+        self.writer.cursor(cursor)
     }
 
     pub fn finish(&mut self) {
         if !self.finished {
+            let _ = self.writer.finish();
             crate::lifecycle::restore();
             self.finished = true;
         }
@@ -281,80 +285,167 @@ impl Drop for DashboardView {
     }
 }
 
-fn draw(
-    frame: &mut Frame<'_>,
-    page: Page,
-    dashboard: &Dashboard,
-    conversation: Option<&[Line<'static>]>,
-) {
-    let area = frame.area();
-    let error_messages = dashboard
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+fn padding(width: u16) -> u16 {
+    width.saturating_sub(4).saturating_div(2).min(2)
+}
+
+fn buffer_lines(buffer: &Buffer) -> Vec<Line<'static>> {
+    (buffer.area.top()..buffer.area.bottom())
+        .map(|y| {
+            let mut spans = Vec::new();
+            let mut x = buffer.area.left();
+            while x < buffer.area.right() {
+                let cell = &buffer[(x, y)];
+                spans.push(Span::styled(cell.symbol().to_string(), cell.style()));
+                x = x.saturating_add(u16::try_from(cell.symbol().width()).unwrap_or(1).max(1));
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
+fn padded_transcript(document: &[Line<'static>], width: u16) -> Vec<Line<'static>> {
+    let padding = padding(width);
+    let inner = width.saturating_sub(2 * padding).max(1);
+    document
+        .iter()
+        .flat_map(|line| {
+            let rows = crate::wrap::wrap(line, inner);
+            if rows.iter().all(|row| row.width() <= usize::from(inner)) {
+                return rows;
+            }
+            // The word wrapper can overflow by a wide cluster. Fall back to
+            // grapheme wrapping for this line instead of clipping CJK/emoji or
+            // painting into the right gutter.
+            let mut rows = Vec::new();
+            let mut row = Line::default();
+            let mut used = 0;
+            for grapheme in line.styled_graphemes(Style::default()) {
+                let cells = grapheme.symbol.width();
+                if used > 0 && used + cells > usize::from(inner) {
+                    rows.push(std::mem::take(&mut row));
+                    used = 0;
+                }
+                row.spans
+                    .push(Span::styled(grapheme.symbol.to_string(), grapheme.style));
+                used += cells;
+            }
+            rows.push(row);
+            rows
+        })
+        .map(|mut line| {
+            line.spans
+                .insert(0, Span::raw(" ".repeat(usize::from(padding))));
+            line
+        })
+        .collect()
+}
+
+fn composer_height(dashboard: &Dashboard, width: u16, height: u16) -> u16 {
+    let rows = dashboard
+        .conversation
+        .input
+        .layout(width.saturating_sub(2))
+        .rows
+        .len();
+    let max_rows = height.saturating_sub(7).clamp(1, 8);
+    u16::try_from(rows).unwrap_or(u16::MAX).clamp(1, max_rows) + 2
+}
+
+fn dock_height(dashboard: &Dashboard, page: Page, size: Size) -> u16 {
+    let width = size.width.saturating_sub(2 * padding(size.width));
+    let input = if page == Page::Conversation {
+        composer_height(dashboard, width, size.height)
+    } else {
+        0
+    };
+    let notice = u16::from(dashboard.notice.is_some()) * 3;
+    let errors = dashboard
         .error
         .iter()
         .chain(dashboard.refresh_error.iter())
         .cloned()
-        .collect::<Vec<_>>();
-    let error_message = error_messages.join("\n");
+        .collect::<Vec<_>>()
+        .join("\n");
+    let error = error_layout(&errors, Rect::new(0, 0, width, size.height), notice).0;
+    let controls =
+        input + notice + error + 3 + u16::from(dashboard.conversation.permission.is_some());
+    let panel = if page == Page::Conversation {
+        0
+    } else {
+        size.height.saturating_sub(controls + 1).min(14)
+    };
+    (controls + panel)
+        .min(size.height.saturating_sub(1).max(1))
+        .max(1)
+}
+
+fn draw(
+    frame: &mut Frame<'_>,
+    page: Page,
+    dashboard: &Dashboard,
+    animation: usize,
+) -> Option<Position> {
+    let area = frame
+        .area()
+        .inner(Margin::new(padding(frame.area().width), 0));
+    let error_message = dashboard
+        .error
+        .iter()
+        .chain(dashboard.refresh_error.iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
     let notice_height = u16::from(dashboard.notice.is_some()) * 3;
     let (error_height, error_scroll) = error_layout(&error_message, area, notice_height);
-    let [header, content, notice, error, footer] = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(4),
+    let input_height = if page == Page::Conversation {
+        composer_height(dashboard, area.width, area.height + 7)
+    } else {
+        0
+    };
+    let [
+        content,
+        notice,
+        error,
+        permission,
+        status,
+        input,
+        tabs,
+        help,
+    ] = Layout::vertical([
+        Constraint::Min(0),
         Constraint::Length(notice_height),
         Constraint::Length(error_height),
+        Constraint::Length(u16::from(dashboard.conversation.permission.is_some())),
+        Constraint::Length(1),
+        Constraint::Length(input_height),
+        Constraint::Length(1),
         Constraint::Length(1),
     ])
     .areas(area);
-
-    let titles = [
-        "Home",
-        "Agents",
-        "Conversation",
-        "Sessions",
-        "Models",
-        "Requests",
-        "Route",
-    ]
-    .into_iter()
-    .map(Line::from);
-    let tabs = Tabs::new(titles)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(" BitRouter · {} ", dashboard.target)),
-        )
-        .select(page.index())
-        .highlight_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .divider("│");
-    frame.render_widget(tabs, header);
-
+    let mut cursor = None;
     match page {
         Page::Home => draw_home(frame, content, dashboard),
         Page::Agents => draw_agents(frame, content, dashboard),
         Page::Conversation => {
-            draw_conversation(frame, content, dashboard, conversation.unwrap_or_default())
+            cursor = draw_composer(frame, input, &dashboard.conversation);
         }
         Page::Sessions => draw_sessions(frame, content, dashboard),
         Page::Models => draw_models(frame, content, dashboard),
         Page::Requests => draw_requests(frame, content, dashboard),
         Page::Route => draw_route(frame, content, dashboard),
     }
-
     if let Some(message) = &dashboard.notice {
         frame.render_widget(
             Paragraph::new(message.as_str())
                 .style(Style::default().fg(Color::Yellow))
-                .block(Block::default().borders(Borders::TOP).title(" Notice "))
                 .wrap(Wrap { trim: true }),
             notice,
         );
     }
-
-    if !error_messages.is_empty() {
+    if !error_message.is_empty() {
         frame.render_widget(
             Paragraph::new(error_message)
                 .style(Style::default().fg(Color::Red))
@@ -364,19 +455,53 @@ fn draw(
             error,
         );
     }
-
-    let help = match page {
-        Page::Agents => "↑/↓ select · Enter connect · Tab pages · Esc/Ctrl-C quit",
-        Page::Conversation => {
-            "type prompt · Enter send · PgUp/PgDn scroll · Tab views · Ctrl-D quit"
-        }
-        Page::Route => "Tab pages · type model · Enter preview · Ctrl-U clear · Esc/Ctrl-C quit",
-        _ => "Tab pages · r refresh · 1-7 jump · q/Esc/Ctrl-C quit",
+    if let Some(prompt) = &dashboard.conversation.permission {
+        frame.render_widget(Paragraph::new(prompt.render()), permission);
+    }
+    let busy =
+        dashboard.conversation.status == "working" && dashboard.conversation.permission.is_none();
+    let activity = if busy {
+        format!("{} Thinking…", SPINNER[animation % SPINNER.len()])
+    } else if dashboard.conversation.permission.is_some() {
+        "Waiting for permission".to_string()
+    } else {
+        conversation_status(&dashboard.conversation)
     };
     frame.render_widget(
-        Paragraph::new(help).style(Style::default().fg(Color::DarkGray)),
-        footer,
+        Paragraph::new(format!("BitRouter · {} · {activity}", dashboard.target))
+            .style(Style::default().fg(if busy { Color::Cyan } else { Color::DarkGray })),
+        status,
     );
+    frame.render_widget(
+        Tabs::new([
+            "Home",
+            "Agents",
+            "Conversation",
+            "Sessions",
+            "Models",
+            "Requests",
+            "Route",
+        ])
+        .select(page.index())
+        .highlight_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .divider("│"),
+        tabs,
+    );
+    let hint = match page {
+        Page::Agents => "↑/↓ select · Enter connect · Tab views · Ctrl-C quit",
+        Page::Conversation => "Enter send · Shift+Enter/Ctrl+J newline · Tab views · Ctrl-D quit",
+        Page::Route => "type model · Enter preview · Ctrl-U clear · Tab views · Ctrl-C quit",
+        _ => "Tab views · r refresh · 1-7 jump · q/Esc/Ctrl-C quit",
+    };
+    frame.render_widget(
+        Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+        help,
+    );
+    cursor
 }
 
 /// Size a diagnostic pane from its wrapped rows while reserving the main view.
@@ -492,48 +617,41 @@ fn draw_agents(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &D
     frame.render_widget(table, area);
 }
 
-fn draw_conversation(
+fn draw_composer(
     frame: &mut Frame<'_>,
-    area: ratatui::layout::Rect,
-    dashboard: &Dashboard,
-    document: &[Line<'static>],
-) {
-    let [transcript, status, input] = Layout::vertical([
-        Constraint::Min(4),
-        Constraint::Length(2),
-        Constraint::Length(3),
-    ])
-    .areas(area);
-    let visible = usize::from(transcript.height.saturating_sub(2));
-    let end = document.len().saturating_sub(dashboard.conversation.scroll);
-    let start = end.saturating_sub(visible);
-    frame.render_widget(
-        Paragraph::new(document.get(start..end).unwrap_or_default().to_vec())
-            .block(Block::default().borders(Borders::ALL).title(" Transcript "))
-            .wrap(Wrap { trim: false }),
-        transcript,
-    );
-    let status_line = conversation_status(&dashboard.conversation);
-    frame.render_widget(
-        Paragraph::new(status_line).style(Style::default().fg(Color::DarkGray)),
-        status,
-    );
-    let title =
-        dashboard
-            .conversation
-            .permission
-            .as_ref()
-            .map_or(" Message ".to_string(), |permission| {
-                format!(
-                    " Permission: {} · choose 1-9, Esc denies ",
-                    permission.title()
-                )
-            });
-    frame.render_widget(
-        Paragraph::new(dashboard.conversation.input.as_str())
-            .block(Block::default().borders(Borders::ALL).title(title)),
-        input,
-    );
+    area: Rect,
+    conversation: &Conversation,
+) -> Option<Position> {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" Message ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.is_empty() {
+        return None;
+    }
+    let layout = conversation.input.layout(inner.width);
+    let offset = layout
+        .cursor
+        .0
+        .saturating_sub(usize::from(inner.height).saturating_sub(1));
+    let lines: Vec<Line<'static>> = layout
+        .rows
+        .iter()
+        .skip(offset)
+        .take(usize::from(inner.height))
+        .cloned()
+        .map(Line::from)
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+    if conversation.permission.is_none() {
+        return Some(Position::new(
+            inner.x + layout.cursor.1.min(inner.width.saturating_sub(1)),
+            inner.y + u16::try_from(layout.cursor.0.saturating_sub(offset)).unwrap_or(0),
+        ));
+    }
+    None
 }
 
 fn conversation_status(conversation: &Conversation) -> String {
@@ -702,9 +820,73 @@ mod tests {
             ..Dashboard::default()
         };
         for page in Page::ALL {
-            terminal.draw(|frame| draw(frame, page, &dashboard, None))?;
+            terminal.draw(|frame| {
+                draw(frame, page, &dashboard, 0);
+            })?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn multiline_dock_keeps_the_cursor_visible_at_small_sizes() -> io::Result<()> {
+        let mut dashboard = Dashboard::default();
+        dashboard
+            .conversation
+            .input
+            .paste("first line\n你好 👩‍💻\nthird\nfourth\nfifth\nsixth\nseventh\neighth\nlast line");
+        for (width, height) in [(110, 38), (40, 16), (20, 10), (8, 5), (1, 1)] {
+            let height = dock_height(&dashboard, Page::Conversation, Size::new(width, height));
+            let mut terminal = Terminal::new(TestBackend::new(width, height))?;
+            let mut cursor = None;
+            terminal.draw(|frame| {
+                cursor = draw(frame, Page::Conversation, &dashboard, 0);
+            })?;
+            if let Some(cursor) = cursor {
+                assert!(
+                    cursor.x < width && cursor.y < height,
+                    "{width}x{height}: {cursor:?}"
+                );
+                assert!(rendered_text(&terminal).contains("last line") || width < 20);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn thinking_animates_without_new_agent_chunks_and_stops_when_idle() -> io::Result<()> {
+        let mut dashboard = Dashboard::default();
+        dashboard.conversation.status = "working".to_string();
+        let mut terminal = Terminal::new(TestBackend::new(100, 12))?;
+        terminal.draw(|frame| {
+            draw(frame, Page::Conversation, &dashboard, 0);
+        })?;
+        let first = rendered_text(&terminal);
+        terminal.draw(|frame| {
+            draw(frame, Page::Conversation, &dashboard, 1);
+        })?;
+        let second = rendered_text(&terminal);
+        assert!(first.contains("⠋ Thinking…"));
+        assert!(second.contains("⠙ Thinking…"));
+        dashboard.conversation.status = "idle".to_string();
+        terminal.draw(|frame| {
+            draw(frame, Page::Conversation, &dashboard, 2);
+        })?;
+        assert!(!rendered_text(&terminal).contains("Thinking…"));
+        Ok(())
+    }
+
+    #[test]
+    fn transcript_keeps_both_gutters_without_dropping_wide_graphemes() {
+        let content = "你好世界这是一个终端测试 👩‍💻 hello world";
+        for width in [9, 13, 20, 31, 80] {
+            let rows = padded_transcript(&[Line::from(content)], width);
+            let text = rows.iter().map(crate::plain::text).collect::<String>();
+            assert_eq!(text.replace(' ', ""), content.replace(' ', ""));
+            for row in rows {
+                assert!(crate::plain::text(&row).starts_with("  "));
+                assert!(row.width() <= usize::from(width - 2));
+            }
+        }
     }
 
     #[test]
@@ -738,7 +920,9 @@ mod tests {
             ..Dashboard::default()
         };
 
-        terminal.draw(|frame| draw(frame, Page::Agents, &dashboard, None))?;
+        terminal.draw(|frame| {
+            draw(frame, Page::Agents, &dashboard, 0);
+        })?;
         let rendered = rendered_text(&terminal);
         assert!(rendered.contains("routing fallback remains visible"));
         assert!(rendered.contains("Missing optional dependency"));
@@ -747,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn reducer_preserves_draft_while_agents_and_scroll_change() {
+    fn reducer_preserves_multiline_draft_while_agents_change() {
         let mut dashboard = Dashboard {
             agents: vec![
                 AgentLine {
@@ -767,13 +951,17 @@ mod tests {
             ],
             ..Dashboard::default()
         };
-        let _ = step(&mut dashboard, Action::Type('d'));
+        let _ = step(
+            &mut dashboard,
+            Action::Key(KeyEvent::new(
+                crossterm::event::KeyCode::Char('d'),
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        );
         let _ = step(&mut dashboard, Action::Paste("raft\ntext".to_string()));
         let _ = step(&mut dashboard, Action::SelectNextAgent);
-        let _ = step(&mut dashboard, Action::ScrollUp);
-        assert_eq!(dashboard.conversation.input, "draft text");
+        assert_eq!(dashboard.conversation.input.line(), "draft\ntext");
         assert_eq!(dashboard.selected_agent, 1);
-        assert_eq!(dashboard.conversation.scroll, 10);
         assert_eq!(
             step(&mut dashboard, Action::ActivateSelectedAgent),
             Some(Effect::StartAgent("codex".to_string()))
@@ -785,11 +973,26 @@ mod tests {
         let mut dashboard = Dashboard::default();
         let _ = step(&mut dashboard, Action::Paste("review this".to_string()));
         assert_eq!(
-            step(&mut dashboard, Action::SubmitPrompt),
+            step(
+                &mut dashboard,
+                Action::Key(KeyEvent::new(
+                    crossterm::event::KeyCode::Enter,
+                    crossterm::event::KeyModifiers::NONE
+                ))
+            ),
             Some(Effect::Prompt("review this".to_string()))
         );
-        assert!(dashboard.conversation.input.is_empty());
-        assert_eq!(step(&mut dashboard, Action::SubmitPrompt), None);
+        assert!(dashboard.conversation.input.line().is_empty());
+        assert_eq!(
+            step(
+                &mut dashboard,
+                Action::Key(KeyEvent::new(
+                    crossterm::event::KeyCode::Enter,
+                    crossterm::event::KeyModifiers::NONE
+                ))
+            ),
+            None
+        );
     }
 
     #[test]
