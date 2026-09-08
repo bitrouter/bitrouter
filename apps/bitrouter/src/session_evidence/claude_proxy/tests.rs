@@ -213,7 +213,9 @@ fn invalid_configuration_env_is_bounded_and_never_copied() -> Result<()> {
 
 #[tokio::test]
 async fn bundled_runtime_resolves_inside_the_selected_sdk() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = tempfile::Builder::new()
+        .prefix("adapter space # % ")
+        .tempdir()?;
     let modules = directory.path().join("node_modules");
     let bin = modules.join(".bin");
     let adapter = modules.join("@agentclientprotocol/claude-agent-acp");
@@ -266,7 +268,7 @@ async fn bundled_runtime_resolves_inside_the_selected_sdk() -> Result<()> {
     let ambient = std::env::var_os("PATH").context("PATH")?;
     let search = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&ambient)))?;
     assert_eq!(
-        resolve_upstream(None, Some(search), None).await?,
+        std::fs::canonicalize(resolve_upstream(None, Some(search), None).await?)?,
         std::fs::canonicalize(native)?
     );
     Ok(())

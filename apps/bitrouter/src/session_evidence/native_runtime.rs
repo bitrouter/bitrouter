@@ -32,6 +32,15 @@ pub(super) fn node(search: Option<std::ffi::OsString>) -> Result<PathBuf> {
         })
 }
 
+/// Match the maintained adapters' createRequire(import.meta.url) boundary.
+/// Rust canonical paths can carry Windows verbatim prefixes; use the file URL
+/// contract instead of exposing that platform-specific spelling to Node.
+/// https://nodejs.org/api/module.html#modulecreaterequirefilename
+pub(super) fn module_url(entry: &Path) -> Result<url::Url> {
+    url::Url::from_file_path(entry)
+        .map_err(|()| anyhow::anyhow!("native adapter entry has no file URL representation"))
+}
+
 pub(super) fn adapter_entry(
     spec: Adapter,
     explicit: Option<PathBuf>,

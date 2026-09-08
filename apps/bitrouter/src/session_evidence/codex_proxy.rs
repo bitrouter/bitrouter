@@ -199,7 +199,7 @@ async fn resolve_upstream(
         Command::new(&node)
             .arg("-e")
             .arg(resolver)
-            .arg(&entry)
+            .arg(super::native_runtime::module_url(&entry)?.as_str())
             .stdin(Stdio::null())
             .stderr(Stdio::null())
             .kill_on_drop(true)

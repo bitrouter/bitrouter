@@ -145,7 +145,9 @@ async fn resolved_server_requests_retire_pending_correlations() -> Result<()> {
 
 #[tokio::test]
 async fn bundled_npm_runtime_uses_node_with_a_literal_script_argument() -> Result<()> {
-    let directory = tempfile::tempdir()?;
+    let directory = tempfile::Builder::new()
+        .prefix("adapter space # % ")
+        .tempdir()?;
     let modules = directory.path().join("node_modules");
     let bin = modules.join(".bin");
     let package = modules.join("@agentclientprotocol/codex-acp");
@@ -171,7 +173,11 @@ async fn bundled_npm_runtime_uses_node_with_a_literal_script_argument() -> Resul
         std::iter::once(bin.clone()).chain(std::env::split_paths(&native_path)),
     )?;
     let runtime = resolve_upstream(None, Some(search.clone()), None).await?;
-    assert_eq!(runtime.args, vec![std::fs::canonicalize(script)?]);
+    assert_eq!(runtime.args.len(), 1);
+    assert_eq!(
+        std::fs::canonicalize(&runtime.args[0])?,
+        std::fs::canonicalize(script)?
+    );
     assert!(runtime.program.is_file());
     let explicit =
         resolve_upstream(Some(runtime.program.clone()), Some(search.clone()), None).await?;
