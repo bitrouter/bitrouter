@@ -698,6 +698,15 @@ struct HttpClientSet {
     provider_clients: HashMap<String, (HttpTimeouts, reqwest::Client)>,
 }
 
+/// A fully constructed upstream-client replacement that has not yet become
+/// visible to requests.
+///
+/// Building a `reqwest::Client` can fail, while installing an already-built
+/// set only swaps a lock-protected value. Keeping those stages separate lets a
+/// caller validate an entire reload candidate before changing another live
+/// subsystem.
+pub struct PreparedProviderTimeouts(HttpClientSet);
+
 /// Immutable inputs reused each time an authenticated upstream request is
 /// rebuilt, including after a provider refreshes an expired credential.
 struct RequestBuildInput<'a> {
@@ -804,13 +813,29 @@ impl HttpExecutor {
         default_timeouts: HttpTimeouts,
         per_provider: HashMap<String, HttpTimeouts>,
     ) -> Result<()> {
+        let prepared = self.prepare_provider_timeouts(default_timeouts, per_provider)?;
+        self.commit_provider_timeouts(prepared);
+        Ok(())
+    }
+
+    /// Build replacement timeout clients without making them live.
+    pub fn prepare_provider_timeouts(
+        &self,
+        default_timeouts: HttpTimeouts,
+        per_provider: HashMap<String, HttpTimeouts>,
+    ) -> Result<PreparedProviderTimeouts> {
         let clients = build_http_client_set(default_timeouts, per_provider)?;
+        Ok(PreparedProviderTimeouts(clients))
+    }
+
+    /// Make a previously prepared timeout-client set visible to new requests.
+    /// Existing requests retain the client they selected before this swap.
+    pub fn commit_provider_timeouts(&self, prepared: PreparedProviderTimeouts) {
         let mut guard = match self.clients.write() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        *guard = clients;
-        Ok(())
+        *guard = prepared.0;
     }
 
     /// Pick the client + timeouts for `target`: a per-provider override when one

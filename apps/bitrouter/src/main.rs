@@ -20,6 +20,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use bitrouter::actions::administration::{PolicyInput, PolicyView};
+use bitrouter::actions::requests::RequestFilters;
+use bitrouter::administration_target::{InspectionTarget, ReloadSubmission};
 use bitrouter::commands;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse};
 use bitrouter::output::reports::admin::{
@@ -40,7 +43,6 @@ use bitrouter::output::reports::optimization::{
     ArmReport, OptimizationControllerReport, TreatmentReport,
 };
 use bitrouter::output::reports::policy::PolicyReport;
-use bitrouter::output::reports::requests::RequestsReport;
 use bitrouter::output::reports::routing::{ProviderRow, ProvidersReport};
 use bitrouter::output::reports::tools::{
     ServerStatusView, ServerToolsView, ToolInfo, ToolsDiscoverReport, ToolsListReport,
@@ -51,9 +53,8 @@ use bitrouter::output::reports::trajectory::{
     replay_report as trajectory_replay_report,
 };
 use bitrouter::output::{CliReport, Output};
-use bitrouter_mcp::actions::models::ModelsReport;
-use bitrouter_mcp::actions::route::{RouteInput, RouteReport};
-use bitrouter_mcp::actions::status::StatusReport;
+use bitrouter::remote_control::operations::{OperationReport, OperationStatus};
+use bitrouter_mcp::actions::route::RouteInput;
 use bitrouter_sdk::config;
 
 async fn supervise_http_shutdown<Http, Control, Hup, Term>(
@@ -259,6 +260,11 @@ enum Command {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
+    /// Inspect a retained remote administration operation.
+    Operations {
+        #[command(subcommand)]
+        action: OperationsAction,
+    },
     /// Report a running daemon's status (pid, listen address, model count).
     /// Prints `running: no` when no daemon is reachable.
     ///
@@ -285,6 +291,18 @@ enum Command {
         /// Maximum number of recent requests to return.
         #[arg(long, default_value_t = bitrouter::actions::requests::MAX_REQUEST_ROWS)]
         limit: u64,
+        /// Inclusive RFC3339 lower bound. Requires `--until`.
+        #[arg(long)]
+        since: Option<String>,
+        /// Exclusive RFC3339 upper bound. Requires `--since`.
+        #[arg(long)]
+        until: Option<String>,
+        /// Keep only requests resolved to this model id.
+        #[arg(long)]
+        model: Option<String>,
+        /// Keep only requests served by this provider id.
+        #[arg(long)]
+        provider: Option<String>,
         /// Path to `bitrouter.yaml` (used to locate the local control socket).
         #[arg(short, long)]
         config: Option<PathBuf>,
@@ -1052,6 +1070,9 @@ enum AgentsAction {
         /// (`bitrouter init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
+        /// Explicit local control socket for the daemon's accepted catalog.
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
     /// Inspect commands advertised by a fresh ACP session.
     Inspect {
@@ -1175,6 +1196,18 @@ enum KeyAction {
 }
 
 #[derive(Subcommand)]
+enum OperationsAction {
+    /// Show one retained reload operation owned by this credential.
+    Show {
+        /// Reload request UUID returned by `bitrouter reload`.
+        request_id: String,
+        /// Daemon boot instance UUID returned with the operation.
+        #[arg(long)]
+        instance: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum PolicyAction {
     /// Write a starter access-control policy file to the policy dir.
     Create {
@@ -1221,14 +1254,26 @@ enum PolicyAction {
     },
     /// Show policy path, digest, runtime mode, and preset bindings.
     Status {
+        /// Read `disk` locally by default; a remote context defaults to `active`.
+        #[arg(long, value_enum)]
+        view: Option<PolicyViewArg>,
         #[arg(short, long)]
         config: Option<PathBuf>,
+        /// Explicit local control socket for an active policy read.
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
     /// Show one named policy after validation.
     Show {
         name: String,
+        /// Read `disk` locally by default; a remote context defaults to `active`.
+        #[arg(long, value_enum)]
+        view: Option<PolicyViewArg>,
         #[arg(short, long)]
         config: Option<PathBuf>,
+        /// Explicit local control socket for an active policy read.
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
     /// Hot-reload the policy lock through the daemon control socket.
     Reload {
@@ -1280,6 +1325,23 @@ enum PolicyAction {
         #[arg(long)]
         socket: Option<PathBuf>,
     },
+}
+
+/// CLI spelling for the typed policy source.  The action contract itself stays
+/// free of clap concerns in `actions::administration`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum PolicyViewArg {
+    Active,
+    Disk,
+}
+
+impl From<PolicyViewArg> for PolicyView {
+    fn from(view: PolicyViewArg) -> Self {
+        match view {
+            PolicyViewArg::Active => Self::Active,
+            PolicyViewArg::Disk => Self::Disk,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -1434,6 +1496,9 @@ enum ProviderAction {
         /// (`bitrouter init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
+        /// Explicit local control socket for the daemon's accepted provider catalog.
+        #[arg(long)]
+        socket: Option<PathBuf>,
     },
     /// Log in to an upstream provider — interactive credential setup.
     ///
@@ -1747,8 +1812,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     let Some(command) = cli.command else {
         if cli.context.as_deref().is_some_and(|name| name != "local") {
             return Err(bitrouter_sdk::BitrouterError::bad_request(
-                "a remote context requires an explicit supported action: `status`, `requests`, \
-                 `models`, `route`, or `code`",
+                "a remote context requires an explicit administration action",
             )
             .into());
         }
@@ -1772,27 +1836,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             .transpose()?
             .flatten()
     };
-    if remote_context.is_some()
-        && !matches!(
-            &command,
-            Command::Status { .. }
-                | Command::Requests { .. }
-                | Command::Route { .. }
-                | Command::Models { .. }
-                | Command::Code {
-                    options: CodeArgs { agent: None, .. },
-                }
-                | Command::Tui {
-                    options: CodeArgs { agent: None, .. },
-                }
-        )
-    {
-        return Err(bitrouter_sdk::BitrouterError::bad_request(
-            "this command is local-only; remote contexts support `status`, `requests`, \
-             `models`, `route`, and `code`",
-        )
-        .into());
-    }
+    validate_remote_invocation(&command, remote_context.is_some())?;
 
     match command {
         Command::Serve { config } => {
@@ -1822,9 +1866,40 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             Ok(())
         }
         Command::Reload { config, socket } => {
+            if remote_context.is_some() {
+                let target = inspection_target(
+                    remote_context.as_ref(),
+                    cli.context.as_deref(),
+                    config.as_deref(),
+                    socket.as_deref(),
+                )
+                .await?;
+                let ReloadSubmission::Remote(report) = target.reload().await? else {
+                    anyhow::bail!("remote reload resolved to a local control target")
+                };
+                return emit_operation_result(output, &report);
+            }
             let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
             output.emit(&reload(&socket).await?)?;
             Ok(())
+        }
+        Command::Operations { action } => {
+            let remote = remote_context.as_ref().ok_or_else(|| {
+                bitrouter_sdk::BitrouterError::bad_request(
+                    "`operations show` requires a named remote context",
+                )
+            })?;
+            let target =
+                inspection_target(Some(remote), cli.context.as_deref(), None, None).await?;
+            match action {
+                OperationsAction::Show {
+                    request_id,
+                    instance,
+                } => {
+                    let report = target.operation(&request_id, &instance).await?;
+                    emit_operation_result(output, &report)
+                }
+            }
         }
         Command::Status {
             config,
@@ -1837,42 +1912,47 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                      `bitrouter requests`."
                 );
             }
-            if let Some(context) = &remote_context {
-                reject_remote_local_target_flags(config.as_deref(), socket.as_deref())?;
-                if requests {
-                    output.emit(&context.client()?.requests(None).await?)?;
-                } else {
-                    output.emit(&context.client()?.status().await?)?;
-                }
-                return Ok(());
-            }
-            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            let target = inspection_target(
+                remote_context.as_ref(),
+                cli.context.as_deref(),
+                config.as_deref(),
+                socket.as_deref(),
+            )
+            .await?;
             if requests {
-                output.emit(
-                    &request_table(
-                        config.as_deref(),
-                        &socket,
-                        bitrouter::actions::requests::MAX_REQUEST_ROWS,
-                    )
-                    .await?,
-                )?;
+                output.emit(&target.requests(RequestFilters::default()).await?)?;
             } else {
-                output.emit(&status(config.as_deref(), &socket).await?)?;
+                output.emit(&target.status().await?)?;
             }
             Ok(())
         }
         Command::Requests {
             limit,
+            since,
+            until,
+            model,
+            provider,
             config,
             socket,
         } => {
-            if let Some(context) = &remote_context {
-                reject_remote_local_target_flags(config.as_deref(), socket.as_deref())?;
-                output.emit(&context.client()?.requests(Some(limit)).await?)?;
-                return Ok(());
-            }
-            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
-            output.emit(&request_table(config.as_deref(), &socket, limit).await?)?;
+            let target = inspection_target(
+                remote_context.as_ref(),
+                cli.context.as_deref(),
+                config.as_deref(),
+                socket.as_deref(),
+            )
+            .await?;
+            output.emit(
+                &target
+                    .requests(RequestFilters {
+                        limit,
+                        since,
+                        until,
+                        model,
+                        provider,
+                    })
+                    .await?,
+            )?;
             Ok(())
         }
         Command::Route {
@@ -1881,19 +1961,14 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             config,
             socket,
         } => {
-            if let Some(context) = &remote_context {
-                reject_remote_local_target_flags(config.as_deref(), socket.as_deref())?;
-                output.emit(
-                    &context
-                        .client()?
-                        .route(&RouteInput { model, prompt })
-                        .await?,
-                )?;
-                return Ok(());
-            }
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
-            output.emit(&route(RouteInput { model, prompt }, &source, &socket).await?)?;
+            let target = inspection_target(
+                remote_context.as_ref(),
+                cli.context.as_deref(),
+                config.as_deref(),
+                socket.as_deref(),
+            )
+            .await?;
+            output.emit(&target.route(RouteInput { model, prompt }).await?)?;
             Ok(())
         }
         Command::Init {
@@ -1940,13 +2015,14 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             Ok(())
         }
         Command::Models { config, provider } => {
-            if let Some(context) = &remote_context {
-                reject_remote_local_target_flags(config.as_deref(), None)?;
-                output.emit(&context.client()?.models(provider.as_deref()).await?)?;
-                return Ok(());
-            }
-            let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            output.emit(&models(&source, provider.as_deref()).await?)?;
+            let target = inspection_target(
+                remote_context.as_ref(),
+                cli.context.as_deref(),
+                config.as_deref(),
+                None,
+            )
+            .await?;
+            output.emit(&target.models(provider.as_deref()).await?)?;
             Ok(())
         }
         Command::Context { action } => {
@@ -1965,15 +2041,47 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             Ok(())
         }
         Command::Tools { action } => tools(action, output).await,
-        Command::Observe { action } => observe(action, output).await,
-        Command::Policy { action } => policy(action, output).await,
+        Command::Observe { action } => {
+            administration_observe(
+                action,
+                output,
+                remote_context.as_ref(),
+                cli.context.as_deref(),
+            )
+            .await
+        }
+        Command::Policy { action } => {
+            administration_policy(
+                action,
+                output,
+                remote_context.as_ref(),
+                cli.context.as_deref(),
+            )
+            .await
+        }
         Command::Eval { action } => eval(action, output).await,
         Command::Optimize { action } => optimize(action, output).await,
         Command::Trajectory { config, action } => {
             trajectory(config.as_deref(), action, output).await
         }
-        Command::Providers { action } => providers(action, output).await,
-        Command::Agents { action } => agents_cmd(action, output).await,
+        Command::Providers { action } => {
+            administration_providers(
+                action,
+                output,
+                remote_context.as_ref(),
+                cli.context.as_deref(),
+            )
+            .await
+        }
+        Command::Agents { action } => {
+            administration_agents(
+                action,
+                output,
+                remote_context.as_ref(),
+                cli.context.as_deref(),
+            )
+            .await
+        }
         Command::Launch {
             agent,
             agent_compat,
@@ -3273,14 +3381,149 @@ async fn resolve_client_socket_from(
 }
 
 fn reject_remote_local_target_flags(config: Option<&Path>, socket: Option<&Path>) -> Result<()> {
-    if config.is_some() || socket.is_some() {
-        return Err(bitrouter_sdk::BitrouterError::bad_request(
-            "a remote context does not accept --config or --socket; the named context is the \
-             complete target",
-        )
-        .into());
+    bitrouter::administration_target::reject_remote_local_flags(config, socket)
+}
+
+fn emit_operation_result(output: &Output, report: &OperationReport) -> Result<()> {
+    output.emit(report)?;
+    if report.succeeded() {
+        return Ok(());
     }
-    Ok(())
+    let status = match report.status {
+        OperationStatus::Running => "is still running",
+        OperationStatus::Failed => "failed",
+        OperationStatus::PartiallyApplied => "partially applied",
+        OperationStatus::Unknown => "has an unknown outcome",
+        OperationStatus::Succeeded => "succeeded",
+    };
+    anyhow::bail!(
+        "reload {status}; inspect `bitrouter --context <name> operations show {} --instance {}` before retrying",
+        report.request_id,
+        report.server_instance_id
+    )
+}
+
+/// Validate remote eligibility and target flags before any command branch can
+/// load a local config, provider environment, or database.  The named context
+/// is the complete target; administration reads are passive and explicitly
+/// represented by the control inventory rather than an independent CLI list.
+fn validate_remote_invocation(command: &Command, remote: bool) -> Result<()> {
+    if !remote {
+        return Ok(());
+    }
+    match command {
+        Command::Agents {
+            action:
+                AgentsAction::List {
+                    remote: true, ..
+                },
+        } => Err(bitrouter_sdk::BitrouterError::bad_request(
+            "`agents list --remote` fetches the external ACP registry and cannot run against a remote BitRouter context",
+        )
+        .into()),
+        Command::Agents {
+            action:
+                AgentsAction::List {
+                    remote: false,
+                    config,
+                    socket,
+                },
+        } => reject_remote_local_target_flags(config.as_deref(), socket.as_deref()),
+        Command::Agents {
+            action: AgentsAction::Check { .. },
+        } => Err(bitrouter_sdk::BitrouterError::bad_request(
+            "`agents check` launches an agent and is unavailable for a remote context",
+        )
+        .into()),
+        Command::Code { options } | Command::Tui { options } if options.agent.is_none() => {
+            reject_remote_local_target_flags(options.config.as_deref(), options.socket.as_deref())
+        }
+        _ => {
+            if let Some(leaf) = remote_cli_leaf(command) {
+                bitrouter::remote_control::inventory::by_cli(leaf).ok_or_else(|| {
+                    anyhow::anyhow!("control inventory has no action for CLI leaf `{leaf}`")
+                })?;
+                let (config, socket) = remote_target_flags(command).ok_or_else(|| {
+                    anyhow::anyhow!("remote CLI leaf `{leaf}` has no target-flag contract")
+                })?;
+                return reject_remote_local_target_flags(config, socket);
+            }
+            if let Some(leaf) = remote_resource_leaf(command) {
+                bitrouter::remote_control::inventory::RESOURCES
+                    .iter()
+                    .find(|resource| resource.cli_leaf == Some(leaf))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("control inventory has no resource for CLI leaf `{leaf}`")
+                    })?;
+                return Ok(());
+            }
+            Err(bitrouter_sdk::BitrouterError::bad_request(
+                "this command is local-only for a remote context",
+            )
+            .into())
+        }
+    }
+}
+
+fn remote_cli_leaf(command: &Command) -> Option<&'static str> {
+    match command {
+        Command::Reload { .. } => Some("reload"),
+        Command::Status { requests: true, .. } | Command::Requests { .. } => Some("requests"),
+        Command::Status {
+            requests: false, ..
+        } => Some("status"),
+        Command::Models { .. } => Some("models"),
+        Command::Route { .. } => Some("route"),
+        Command::Providers {
+            action: ProviderAction::List { .. },
+        } => Some("providers list"),
+        Command::Observe {
+            action: ObserveAction::Status { .. },
+        } => Some("observe status"),
+        Command::Policy {
+            action: PolicyAction::Status { .. },
+        } => Some("policy status"),
+        Command::Policy {
+            action: PolicyAction::Show { .. },
+        } => Some("policy show"),
+        Command::Agents {
+            action: AgentsAction::List { remote: false, .. },
+        } => Some("agents list"),
+        _ => None,
+    }
+}
+
+fn remote_resource_leaf(command: &Command) -> Option<&'static str> {
+    match command {
+        Command::Operations {
+            action: OperationsAction::Show { .. },
+        } => Some("operations show"),
+        _ => None,
+    }
+}
+
+fn remote_target_flags(command: &Command) -> Option<(Option<&Path>, Option<&Path>)> {
+    match command {
+        Command::Reload { config, socket }
+        | Command::Status { config, socket, .. }
+        | Command::Requests { config, socket, .. }
+        | Command::Route { config, socket, .. }
+        | Command::Providers {
+            action: ProviderAction::List { config, socket },
+        }
+        | Command::Observe {
+            action: ObserveAction::Status { config, socket },
+        }
+        | Command::Policy {
+            action:
+                PolicyAction::Status { config, socket, .. } | PolicyAction::Show { config, socket, .. },
+        }
+        | Command::Agents {
+            action: AgentsAction::List { config, socket, .. },
+        } => Some((config.as_deref(), socket.as_deref())),
+        Command::Models { config, .. } => Some((config.as_deref(), None)),
+        _ => None,
+    }
 }
 
 async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
@@ -3319,10 +3562,6 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         source.clone(),
         socket_path.clone(),
     )?;
-    let remote_control = match remote_control {
-        Some(server) => Some(server.bind().await?),
-        None => None,
-    };
 
     let config_path_for_reload = match source {
         bitrouter::paths::ConfigSource::File(path) => Some(path.as_path()),
@@ -3371,6 +3610,12 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         }
         bitrouter::paths::ConfigSource::Default { .. } => bitrouter::reload::ReloadSource::Default,
     };
+    let administration = bitrouter::actions::administration::Administration {
+        source: source.clone(),
+        routing: assembled.routing_table.clone(),
+        policy: assembled.policy_runtime.clone(),
+        observe: observe_provider.clone(),
+    };
     let acp_runtime_for_control = assembled.acp_runtime.clone();
     let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(
         bitrouter::reload::AppReloader::new(
@@ -3382,6 +3627,17 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         .with_policy_runtime(assembled.policy_runtime)
         .with_policy_table_router(assembled.policy_table_router),
     );
+
+    let remote_control = match remote_control {
+        Some(server) => Some(
+            server
+                .with_administration(administration.clone())
+                .with_reloader(reloader.clone())
+                .bind()
+                .await?,
+        ),
+        None => None,
+    };
 
     daemon::write_pid_file(&pid_path).await?;
     println!(
@@ -3489,7 +3745,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
             }
         }
     };
-    let control = daemon::run_control_socket_with_acp_runtime(
+    let control = daemon::run_control_socket_with_acp_runtime_and_administration(
         socket_path,
         app.clone(),
         listen,
@@ -3499,6 +3755,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
             runtime: acp_runtime_for_control,
             metering: bitrouter::metering::MeteringStore::new(assembled.db.clone()),
         },
+        Some(administration),
     );
 
     // SIGHUP triggers a config reload — reload should be available via either
@@ -3953,59 +4210,6 @@ async fn reload(socket: &Path) -> Result<DaemonActionReport> {
     }
 }
 
-/// `bitrouter status` — the control-socket probe, plus the CLI's own chrome.
-///
-/// The probe itself is the shared `status` action
-/// ([`bitrouter::actions::status`]), so this leaf and the origin MCP server's
-/// `status` tool return the same report from the same code — including the
-/// `spend` block, which both surfaces fill from the same metering database.
-async fn status(config: Option<&Path>, socket: &Path) -> Result<StatusReport> {
-    // Best-effort: an unresolvable config costs the `spend` block, not the
-    // command. `--config` is honoured so `status -c other.yaml` reads the
-    // metering database that config points at, not the default home's.
-    let source = bitrouter::paths::resolve_config(config).ok();
-    let report = bitrouter::actions::status::DaemonStatus::new(socket, source.clone())
-        .report()
-        .await?;
-    // #607 self-update nudge — emitted to stderr so stdout stays a pure JSON
-    // result (`status 2>/dev/null | jq` must not see the nudge). CLI-only:
-    // it is a prompt for the human at the terminal, not part of the answer.
-    if let Some(source) = source {
-        bitrouter::update::maybe_nudge(source.home(), &bitrouter::style::Palette::for_stderr())
-            .await;
-    }
-    Ok(report)
-}
-
-/// `bitrouter status --requests` — the settled-request table.
-///
-/// Never fails: every source degrades to absence, because a monitoring view
-/// that errors out is worse than one reporting less. The store opens read-only
-/// and works with no daemon running, which is why "nothing recorded" and
-/// "nothing listening" stay distinguishable in the report.
-async fn request_table(config: Option<&Path>, socket: &Path, limit: u64) -> Result<RequestsReport> {
-    let source = bitrouter::paths::resolve_config(config)?;
-    bitrouter::actions::requests::RequestsAction::new(source, socket.to_path_buf())
-        .report(limit)
-        .await
-}
-
-/// `bitrouter route` — the CLI surface of the shared `route` action.
-///
-/// The daemon-first / config-fallback behaviour, the policy table, and the
-/// report all live in [`bitrouter::actions::route`], which the MCP
-/// `route_preview` tool goes through too. This is the leaf, not a second
-/// implementation.
-async fn route(
-    input: RouteInput,
-    source: &bitrouter::paths::ConfigSource,
-    socket: &Path,
-) -> Result<RouteReport> {
-    bitrouter::actions::route::RouteAction::new(source.clone(), Some(socket.to_path_buf()))
-        .report(input)
-        .await
-}
-
 // ===== management commands =====
 
 /// Read a provider API key from stdin (for `providers login --key-stdin`).
@@ -4039,21 +4243,220 @@ async fn key(action: KeyAction) -> Result<KeySignReport> {
     }
 }
 
-/// `bitrouter models` — the CLI surface of the `list_models`
-/// [action](bitrouter::actions::models), so this leaf and the origin MCP
-/// server's `list_models` tool return the same report.
-///
-/// `--provider` narrows the shared report rather than the query, which is what
-/// keeps it the same filter the tool's `provider` argument applies.
-async fn models(
-    source: &bitrouter::paths::ConfigSource,
-    provider: Option<&str>,
-) -> Result<ModelsReport> {
-    let socket = resolve_client_socket_from(source, None).await.ok();
-    let report = bitrouter::actions::models::RoutableModels::new(source.clone(), socket)
-        .report()
-        .await?;
-    Ok(report.filtered(provider))
+async fn inspection_target(
+    remote_context: Option<&bitrouter::contexts::RemoteContext>,
+    context_name: Option<&str>,
+    config: Option<&Path>,
+    socket: Option<&Path>,
+) -> Result<InspectionTarget> {
+    let remote = match remote_context {
+        Some(context) => {
+            let name = context_name
+                .ok_or_else(|| anyhow::anyhow!("remote context name is unavailable"))?;
+            Some((name.to_string(), context.clone()))
+        }
+        None => None,
+    };
+    InspectionTarget::resolve(remote, config, socket).await
+}
+
+fn selected_policy_view(view: Option<PolicyViewArg>, remote: bool) -> PolicyView {
+    match view {
+        Some(view) => view.into(),
+        None if remote => PolicyView::Active,
+        None => PolicyView::Disk,
+    }
+}
+
+async fn administration_policy(
+    action: PolicyAction,
+    output: &Output,
+    remote_context: Option<&bitrouter::contexts::RemoteContext>,
+    context_name: Option<&str>,
+) -> Result<()> {
+    if remote_context.is_none() && is_legacy_local_policy_read(&action) {
+        return policy(action, output).await;
+    }
+    match action {
+        PolicyAction::Status {
+            view,
+            config,
+            socket,
+        } => {
+            let target = inspection_target(
+                remote_context,
+                context_name,
+                config.as_deref(),
+                socket.as_deref(),
+            )
+            .await?;
+            output.emit(
+                &target
+                    .policy(PolicyInput {
+                        view: selected_policy_view(view, remote_context.is_some()),
+                        name: None,
+                    })
+                    .await?,
+            )?;
+            Ok(())
+        }
+        PolicyAction::Show {
+            name,
+            view,
+            config,
+            socket,
+        } => {
+            let target = inspection_target(
+                remote_context,
+                context_name,
+                config.as_deref(),
+                socket.as_deref(),
+            )
+            .await?;
+            output.emit(
+                &target
+                    .policy(PolicyInput {
+                        view: selected_policy_view(view, remote_context.is_some()),
+                        name: Some(name),
+                    })
+                    .await?,
+            )?;
+            Ok(())
+        }
+        action => {
+            if remote_context.is_some() {
+                return Err(bitrouter_sdk::BitrouterError::bad_request(
+                    "this policy action is local-only for a remote context",
+                )
+                .into());
+            }
+            policy(action, output).await
+        }
+    }
+}
+
+fn is_legacy_local_policy_read(action: &PolicyAction) -> bool {
+    matches!(
+        action,
+        PolicyAction::Status { view: None, .. } | PolicyAction::Show { view: None, .. }
+    )
+}
+
+async fn administration_providers(
+    action: ProviderAction,
+    output: &Output,
+    remote_context: Option<&bitrouter::contexts::RemoteContext>,
+    context_name: Option<&str>,
+) -> Result<()> {
+    match action {
+        ProviderAction::List { config, socket } => {
+            let target = inspection_target(
+                remote_context,
+                context_name,
+                config.as_deref(),
+                socket.as_deref(),
+            )
+            .await?;
+            if let Some(source) = target.local_source() {
+                output.emit(&legacy_providers_report(source).await?)?;
+            } else {
+                output.emit(&target.providers().await?)?;
+            }
+            Ok(())
+        }
+        action => {
+            if remote_context.is_some() {
+                return Err(bitrouter_sdk::BitrouterError::bad_request(
+                    "provider credential administration is local-only for a remote context",
+                )
+                .into());
+            }
+            providers(action, output).await
+        }
+    }
+}
+
+async fn administration_observe(
+    action: ObserveAction,
+    output: &Output,
+    remote_context: Option<&bitrouter::contexts::RemoteContext>,
+    context_name: Option<&str>,
+) -> Result<()> {
+    match action {
+        ObserveAction::Status { config, socket } => {
+            let target = inspection_target(
+                remote_context,
+                context_name,
+                config.as_deref(),
+                socket.as_deref(),
+            )
+            .await?;
+            if let Some(socket) = target.local_socket() {
+                output.emit(&observe_status(socket).await?)?;
+            } else {
+                output.emit(&target.observe().await?)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Preserve the established local observe report, including its local socket
+/// and exporter endpoint fields. The redacted administration report is used
+/// for every remote target and by the dashboard.
+async fn observe_status(socket: &Path) -> Result<ObserveStatusReport> {
+    use bitrouter_telemetry::OTEL_ENABLED;
+
+    let (snapshot, daemon_reachable) =
+        match daemon::send_command(socket, &DaemonCommand::ObserveStatus).await {
+            Ok(DaemonResponse::ObserveStatus { payload }) => (payload, true),
+            Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
+            Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
+            Err(error) if daemon::is_not_reachable(&error) => {
+                (daemon::ObserveStatusPayload::unwired(OTEL_ENABLED), false)
+            }
+            Err(error) => return Err(error),
+        };
+
+    Ok(ObserveStatusReport {
+        daemon_reachable,
+        snapshot,
+        socket: socket.display().to_string(),
+    })
+}
+
+async fn administration_agents(
+    action: AgentsAction,
+    output: &Output,
+    remote_context: Option<&bitrouter::contexts::RemoteContext>,
+    context_name: Option<&str>,
+) -> Result<()> {
+    match action {
+        AgentsAction::List {
+            remote: false,
+            config,
+            socket,
+        } => {
+            let target = inspection_target(
+                remote_context,
+                context_name,
+                config.as_deref(),
+                socket.as_deref(),
+            )
+            .await?;
+            output.emit(&target.agents().await?)?;
+            Ok(())
+        }
+        action => {
+            if remote_context.is_some() {
+                return Err(bitrouter_sdk::BitrouterError::bad_request(
+                    "agent launch and external-registry actions are local-only for a remote context",
+                )
+                .into());
+            }
+            agents_cmd(action, output).await
+        }
+    }
 }
 
 async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
@@ -4129,6 +4532,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                 path: Some(config_path.display().to_string()),
                 candidate_path: None,
                 digest: Some(verification.policy_digest.clone()),
+                source: None,
                 mode: "n/a".into(),
                 policies: Vec::new(),
                 bindings: Default::default(),
@@ -4140,14 +4544,14 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                 applied: false,
             })?;
         }
-        PolicyAction::Status { config } => {
+        PolicyAction::Status { config, .. } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
             output.emit(
                 &routing_policy_report(config_path, "status", false, Vec::new(), None).await?,
             )?;
         }
-        PolicyAction::Show { name, config } => {
+        PolicyAction::Show { name, config, .. } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config_path = require_policy_config_path(&source)?;
             output.emit(
@@ -4205,6 +4609,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                 path: Some(active.display().to_string()),
                 candidate_path: Some(candidate.display().to_string()),
                 digest: Some(candidate_lock.digest),
+                source: None,
                 mode: "n/a".into(),
                 policies: candidate_lock.document.policies.keys().cloned().collect(),
                 bindings: Default::default(),
@@ -5134,6 +5539,7 @@ async fn routing_policy_report(
         path: path.map(|path| path.display().to_string()),
         candidate_path: None,
         digest: loaded.as_ref().map(|lock| lock.digest.clone()),
+        source: matches!(action, "status" | "show").then(|| "disk".to_string()),
         mode: match cfg.policy.mode {
             config::PolicyRuntimeMode::Frozen => "frozen",
             config::PolicyRuntimeMode::Adaptive => "adaptive",
@@ -5149,19 +5555,9 @@ async fn routing_policy_report(
 
 async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
     match action {
-        ProviderAction::List { config } => {
+        ProviderAction::List { config, .. } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            let cfg = bitrouter::paths::load_config(&source).await?;
-            let providers = commands::list_providers(&cfg)
-                .into_iter()
-                .map(|p| ProviderRow {
-                    id: p.id,
-                    models: p.model_count,
-                    active: p.active,
-                    api_base: p.api_base,
-                })
-                .collect();
-            output.emit(&ProvidersReport { providers })?;
+            output.emit(&legacy_providers_report(&source).await?)?;
             Ok(())
         }
         ProviderAction::Login {
@@ -5239,6 +5635,24 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
             }
         }
     }
+}
+
+/// Preserve the local `providers list` report shape. Remote administration
+/// never uses this adapter because provider API bases are not a remote read.
+async fn legacy_providers_report(
+    source: &bitrouter::paths::ConfigSource,
+) -> Result<ProvidersReport> {
+    let cfg = bitrouter::paths::load_config(source).await?;
+    let providers = commands::list_providers(&cfg)
+        .into_iter()
+        .map(|provider| ProviderRow {
+            id: provider.id,
+            models: provider.model_count,
+            active: provider.active,
+            api_base: provider.api_base,
+        })
+        .collect();
+    Ok(ProvidersReport { providers })
 }
 
 async fn tools(action: ToolsAction, output: &Output) -> Result<()> {
@@ -5321,49 +5735,11 @@ async fn tools(action: ToolsAction, output: &Output) -> Result<()> {
     }
 }
 
-// ===== observe =====
-
-async fn observe(action: ObserveAction, output: &Output) -> Result<()> {
-    match action {
-        ObserveAction::Status { config, socket } => {
-            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
-            output.emit(&observe_status(&socket).await?)?;
-            Ok(())
-        }
-    }
-}
-
-/// `bitrouter observe status` — ask the running daemon for the OTel
-/// exporter snapshot, pretty-print (or JSON-dump) the result. When no
-/// daemon is reachable, fall back to a "stopped" report that still
-/// carries the compile-time `OTEL_ENABLED` flag so the user can tell
-/// "feature off" from "daemon down."
-async fn observe_status(socket: &Path) -> Result<ObserveStatusReport> {
-    use bitrouter_telemetry::OTEL_ENABLED;
-
-    let (snapshot, daemon_reachable) =
-        match daemon::send_command(socket, &DaemonCommand::ObserveStatus).await {
-            Ok(DaemonResponse::ObserveStatus { payload }) => (payload, true),
-            Ok(DaemonResponse::Error { message }) => return Err(anyhow::anyhow!(message)),
-            Ok(other) => return Err(anyhow::anyhow!("unexpected response: {other:?}")),
-            Err(e) if daemon::is_not_reachable(&e) => {
-                (daemon::ObserveStatusPayload::unwired(OTEL_ENABLED), false)
-            }
-            Err(e) => return Err(e),
-        };
-
-    Ok(ObserveStatusReport {
-        daemon_reachable,
-        snapshot,
-        socket: socket.display().to_string(),
-    })
-}
-
 async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
     use bitrouter::agents as agents_cmd;
 
     match action {
-        AgentsAction::List { remote, config } => {
+        AgentsAction::List { remote, config, .. } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
             let agents = agents_cmd::list(&cfg)
@@ -6852,7 +7228,7 @@ mod tests {
     /// would hide exactly the tools a missing row would hide.
     fn every_tool() -> bitrouter_mcp::server::BitrouterMcp {
         use bitrouter_mcp::actions::models::{ModelsQuery, ModelsReport};
-        use bitrouter_mcp::actions::route::{ResolvedVia, RouteQuery};
+        use bitrouter_mcp::actions::route::{ResolvedVia, RouteQuery, RouteReport};
         use bitrouter_mcp::actions::skills::{SkillDetail, SkillsQuery, SkillsReport};
         use bitrouter_mcp::actions::status::{StatusQuery, StatusReport};
         use bitrouter_mcp::backend::CallerAuth;
@@ -7023,6 +7399,164 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn control_action_arguments(leaf: &str) -> Option<Vec<&'static str>> {
+        let args = match leaf {
+            "reload" => vec!["bitrouter", "--context", "workstation", "reload"],
+            "status" => vec!["bitrouter", "--context", "workstation", "status"],
+            "models" => vec![
+                "bitrouter",
+                "--context",
+                "workstation",
+                "models",
+                "--provider",
+                "openai",
+            ],
+            "route" => vec![
+                "bitrouter",
+                "--context",
+                "workstation",
+                "route",
+                "openai/gpt-5",
+            ],
+            "requests" => vec![
+                "bitrouter",
+                "--context",
+                "workstation",
+                "requests",
+                "--limit",
+                "100",
+                "--since",
+                "2026-01-01T00:00:00Z",
+                "--until",
+                "2026-01-01T01:00:00Z",
+                "--model",
+                "openai/gpt-5",
+                "--provider",
+                "openai",
+            ],
+            "providers list" => vec!["bitrouter", "--context", "workstation", "providers", "list"],
+            "observe status" => vec!["bitrouter", "--context", "workstation", "observe", "status"],
+            "policy status" => vec![
+                "bitrouter",
+                "--context",
+                "workstation",
+                "policy",
+                "status",
+                "--view",
+                "active",
+            ],
+            "policy show" => vec![
+                "bitrouter",
+                "--context",
+                "workstation",
+                "policy",
+                "show",
+                "default",
+                "--view",
+                "disk",
+            ],
+            "agents list" => vec!["bitrouter", "--context", "workstation", "agents", "list"],
+            _ => return None,
+        };
+        Some(args)
+    }
+
+    #[test]
+    fn every_control_action_parses_and_is_remote_eligible() -> anyhow::Result<()> {
+        for action in bitrouter::remote_control::inventory::ACTIONS {
+            let args = control_action_arguments(action.cli_leaf).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "control action `{}` has no Clap argument fixture for `{}`",
+                    action.id,
+                    action.cli_leaf
+                )
+            })?;
+            let cli = Cli::try_parse_from(args)
+                .with_context(|| format!("parse control action `{}`", action.id))?;
+            let command = cli.command.ok_or_else(|| {
+                anyhow::anyhow!("control action `{}` parsed without a command", action.id)
+            })?;
+            assert_eq!(remote_cli_leaf(&command), Some(action.cli_leaf));
+            validate_remote_invocation(&command, true)
+                .with_context(|| format!("validate control action `{}`", action.id))?;
+        }
+
+        for resource in bitrouter::remote_control::inventory::RESOURCES {
+            let Some(leaf) = resource.cli_leaf else {
+                continue;
+            };
+            let cli = Cli::try_parse_from([
+                "bitrouter",
+                "--context",
+                "workstation",
+                "operations",
+                "show",
+                "7ab707f8-50d1-4ba0-9aeb-8f4cb196712b",
+                "--instance",
+                "a68fed5e-18e0-4ed8-9023-9ad286a8351d",
+            ])?;
+            let command = cli.command.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "control resource `{}` parsed without a command",
+                    resource.id
+                )
+            })?;
+            assert_eq!(remote_resource_leaf(&command), Some(leaf));
+            validate_remote_invocation(&command, true)
+                .with_context(|| format!("validate control resource `{}`", resource.id))?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn remote_control_actions_reject_local_target_flags_before_execution() -> anyhow::Result<()> {
+        for action in bitrouter::remote_control::inventory::ACTIONS {
+            let mut args = control_action_arguments(action.cli_leaf).ok_or_else(|| {
+                anyhow::anyhow!("missing control fixture for `{}`", action.cli_leaf)
+            })?;
+            args.extend(["--config", "/must-not-be-read/bitrouter.yaml"]);
+            if action.cli_leaf != "models" {
+                args.extend(["--socket", "/must-not-be-read/bitrouter.sock"]);
+            }
+            let cli = Cli::try_parse_from(args)
+                .with_context(|| format!("parse target flags for `{}`", action.id))?;
+            let command = cli.command.ok_or_else(|| {
+                anyhow::anyhow!("control action `{}` parsed without a command", action.id)
+            })?;
+            let error = validate_remote_invocation(&command, true)
+                .err()
+                .ok_or_else(|| anyhow::anyhow!("{} accepted a local target flag", action.id))?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not accept --config or --socket"),
+                "{}: {error:#}",
+                action.id
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn local_policy_reads_without_view_keep_the_legacy_contract() {
+        assert!(is_legacy_local_policy_read(&PolicyAction::Status {
+            view: None,
+            config: None,
+            socket: None,
+        }));
+        assert!(is_legacy_local_policy_read(&PolicyAction::Show {
+            name: "default".to_string(),
+            view: None,
+            config: None,
+            socket: None,
+        }));
+        assert!(!is_legacy_local_policy_read(&PolicyAction::Status {
+            view: Some(PolicyViewArg::Disk),
+            config: None,
+            socket: None,
+        }));
     }
 
     /// The agreement itself: the tool advertises the row's schema, so a client

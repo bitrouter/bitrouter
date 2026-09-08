@@ -15,6 +15,10 @@ pub struct PolicyReport {
     pub candidate_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
+    /// Additive provenance for compatibility reads. Existing local
+    /// `status` and `show` continue to read the policy lock from disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub mode: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub policies: Vec<String>,
@@ -39,6 +43,9 @@ impl CliReport for PolicyReport {
         if let Some(digest) = &self.digest {
             h.line(&format!("  digest: {digest}"))?;
         }
+        if let Some(source) = &self.source {
+            h.line(&format!("  source: {source}"))?;
+        }
         h.line(&format!("  mode: {}", self.mode))?;
         if !self.policies.is_empty() {
             h.line(&format!("  policies: {}", self.policies.join(", ")))?;
@@ -59,6 +66,36 @@ impl CliReport for PolicyReport {
         if self.applied {
             h.line("  applied: yes")?;
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_disk_show_keeps_its_json_shape_and_marks_the_source() -> anyhow::Result<()> {
+        let report = PolicyReport {
+            action: "show".to_string(),
+            path: Some("/tmp/policy-lock.yaml".to_string()),
+            candidate_path: None,
+            digest: Some("digest".to_string()),
+            source: Some("disk".to_string()),
+            mode: "frozen".to_string(),
+            policies: vec!["default".to_string()],
+            bindings: BTreeMap::new(),
+            changes: Vec::new(),
+            policy: Some(serde_json::json!({"tiers": {"fast": "openai/gpt-5"}})),
+            applied: false,
+        };
+
+        let value = serde_json::to_value(report)?;
+        assert_eq!(value["action"], "show");
+        assert_eq!(value["path"], "/tmp/policy-lock.yaml");
+        assert_eq!(value["policy"]["tiers"]["fast"], "openai/gpt-5");
+        assert_eq!(value["applied"], false);
+        assert_eq!(value["source"], "disk");
         Ok(())
     }
 }

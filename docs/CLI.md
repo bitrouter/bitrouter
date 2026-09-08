@@ -99,7 +99,7 @@ Local router subcommands that load a config accept an optional `-c / --config <p
 
 Daemon-control subcommands (`stop`, `reload`, `status`) also accept `--socket <path>` to override the control socket path derived from the config.
 
-## Remote contexts (HTTP-only MVP)
+## Remote contexts
 
 ```console
 bitrouter context add workstation \
@@ -111,6 +111,12 @@ bitrouter --context workstation status
 bitrouter --context workstation requests
 bitrouter --context workstation models --provider openai
 bitrouter --context workstation route openai/gpt-5
+bitrouter --context workstation providers list
+bitrouter --context workstation observe status
+bitrouter --context workstation policy status       # active by default
+bitrouter --context workstation policy show default --view disk
+bitrouter --context workstation agents list
+bitrouter --context workstation reload
 bitrouter context remove workstation
 ```
 
@@ -121,13 +127,28 @@ plain HTTP is accepted only for `localhost`/loopback, including an SSH-forwarded
 port. The client performs the `/control/v1/capabilities` handshake before its
 first action (and caches it for a long-lived TUI), follows no redirects, and
 never falls back to this computer's config, socket, or database after a remote
-error.
+error. A named context is the complete target: supported remote commands reject
+local `--config` and `--socket` flags before opening local configuration,
+environment, or metering state.
 
-The MVP supports `status`, `requests`, `models`, `route`, and the operations
-`code` UI. Daemon mutations, configuration/provider/key administration,
-agent lifecycle, ACP sessions, native harness launch, and `code <agent>` remain
-local and reject a remote context before doing anything. Use SSH for an agent
-TUI on the server until remote ACP is implemented.
+Remote read actions are `status`, `requests`, `models`, `route`, `providers
+list`, `observe status`, `policy status`, `policy show`, and `agents list`, as
+well as the operations `code` dashboard. A remote policy command defaults to
+`--view active`; local policy reads default to `--view disk`. The dashboard
+always requests the active policy explicitly; its Policy page can switch sources
+with `v` and request a selected policy's typed detail with `Enter`.
+
+`agents list` is a catalog read only. `agents list --remote`, agent checks and
+launches, ACP sessions, native harness UIs, and `code <agent>` stay local. The
+only remote mutation is the explicit `reload` action; it reloads server-owned
+files and never uploads config or forwards the client's environment. Provider,
+key, configuration, policy-publication, and service lifecycle administration
+remain local.
+
+Local CLI compatibility adapters retain the established `providers list`
+`api_base` field and `observe status` socket, endpoint, and service fields.
+Those host details are omitted from remote administration and dashboard
+reports, which use the redacted typed read contracts.
 
 ---
 
@@ -143,23 +164,34 @@ bitrouter serve [-c <path>]
 
 Starts the proxy on the configured listen address (default `127.0.0.1:4356`) and opens a Unix domain control socket. Logs to stdout.
 
-An opt-in, read-only remote-control listener can expose the existing typed
-status/models/route/requests actions to a trusted operator through a private tunnel or
-TLS reverse proxy:
+An opt-in remote-control listener exposes typed administration reads and a
+separately authorized reload action to a trusted operator through a private
+tunnel or TLS reverse proxy:
 
 ```yaml
 control:
   enabled: true
   listen: 127.0.0.1:4358
+  credentials:
+    - id: workstation-admin
+      token_env: WORKSTATION_ADMIN_CONTROL_TOKEN
+      scopes: [control:read, control:reload]
 ```
 
-Set a dedicated bearer token of at least 32 bytes in
-`BITROUTER_CONTROL_TOKEN` before starting the daemon. This listener is disabled
-by default, accepts loopback addresses only, and is never affected by inference
-`server.skip_auth`. Its typed HTTP actions live under `/control/v1`, and the
-BitRouter origin MCP service is mounted at `/mcp-control` with the same bearer
-and browser-Origin checks. Remote ACP sessions are not part of this HTTP-only MVP. Changes under `control:` are
-restart-only because they govern listener creation and binding.
+`ControlConfig.credentials` is optional. When it is absent or empty, the legacy
+`BITROUTER_CONTROL_TOKEN` remains valid with `control:read` only. When explicit
+credentials are configured, only their `id`, `token_env`, and `scopes` entries
+are accepted; the legacy token is not an additional credential. Each token must
+be at least 32 bytes. `control:read` grants the host-wide operational reports;
+`control:reload` permits the guarded reload operation and requires the read
+scope alongside it.
+
+This listener is disabled by default, accepts loopback addresses only, and is
+never affected by inference `server.skip_auth`. Its typed HTTP actions live
+under `/control/v1`, and the BitRouter origin MCP service is mounted at
+`/mcp-control` with the same bearer and browser-Origin checks. Remote ACP
+sessions are not exposed. Changes under `control:` are restart-only because
+they govern listener creation and binding.
 
 ### `bitrouter start`
 
@@ -191,17 +223,24 @@ Stops the running daemon (waiting up to 30s for in-flight requests to drain), th
 
 ```
 bitrouter reload [-c <path>] [--socket <path>]
+bitrouter --context <name> reload
 ```
 
 Hot-reloads the running daemon's config and routing table without dropping connections. Also triggered by `SIGHUP`.
 
 Any provider API keys present in the current environment are forwarded to the daemon so `export OPENAI_API_KEY=…; bitrouter reload` takes effect immediately.
 
+With `--context`, reload submits a guarded operation against the server's own
+current configuration. It does not forward client environment variables. The
+report includes a request id, server instance, generation, and per-subsystem
+result. A running, failed, partially applied, or unknown operation exits
+non-zero; use its operation lookup details and the target's state before retrying.
+
 ### `bitrouter status`
 
 ```
 bitrouter status [-c <path>] [--socket <path>]
-bitrouter requests [--limit N]       # what the router has actually done
+bitrouter requests [--limit N] [--since RFC3339 --until RFC3339] [--model ID] [--provider ID]
 bitrouter requests --human           # the same, as a table
 ```
 
@@ -224,7 +263,14 @@ The figure is **machine-wide**, not per-caller: it rolls up every caller of this
 
 `bitrouter status --json` gained `spend` additively; every pre-existing key is unchanged.
 
-`bitrouter requests [--limit N]` reports what the router has actually done: newest-first settled requests — time, model, the provider that **actually** served, tokens in/out, cost, latency, status — plus daemon state and the window's spend and trailing-minute rate. It reads the metering store directly, so it also works with **no daemon running**. `status --requests` remains a hidden compatibility spelling.
+`bitrouter requests` reports what the router has actually done: newest-first
+settled requests — time, model, the provider that **actually** served, tokens
+in/out, cost, latency, status — plus daemon state and the window's spend and
+trailing-minute rate. It reads the metering store directly, so it also works
+with **no daemon running**. `--since` and `--until` are an RFC3339 pair with a
+maximum seven-day interval; absent both, the server selects today from UTC
+midnight. `--model` and `--provider` filter the same report before the limit.
+`status --requests` remains a hidden compatibility spelling.
 
 Like every other report it uses JSON by default and `--human` for the table. Repeat it with `watch -n1 bitrouter requests --human` for a live view.
 
@@ -381,10 +427,14 @@ Same report type as the origin MCP server's `list_models` tool, so
 ### `bitrouter providers list`
 
 ```
-bitrouter providers list [-c <path>]
+bitrouter providers list [-c <path>] [--socket <path>]
 ```
 
-Prints each configured provider's id, model count, active state, and API base URL.
+Local compatibility output prints each provider's id, model count,
+routing-active state, and `api_base`. Named remote contexts and the dashboard
+use the redacted accepted catalog, which omits API bases and credentials.
+`active` means the accepted routing configuration includes the provider, not
+that a connectivity probe succeeded.
 
 ---
 

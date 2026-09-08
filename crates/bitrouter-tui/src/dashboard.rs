@@ -25,10 +25,14 @@ pub enum Page {
     Models,
     Requests,
     Route,
+    Providers,
+    Telemetry,
+    Policy,
+    Reload,
 }
 
 impl Page {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 11] = [
         Self::Home,
         Self::Agents,
         Self::Conversation,
@@ -36,6 +40,10 @@ impl Page {
         Self::Models,
         Self::Requests,
         Self::Route,
+        Self::Providers,
+        Self::Telemetry,
+        Self::Policy,
+        Self::Reload,
     ];
 
     pub fn next(self) -> Self {
@@ -51,6 +59,10 @@ impl Page {
             Self::Models => 4,
             Self::Requests => 5,
             Self::Route => 6,
+            Self::Providers => 7,
+            Self::Telemetry => 8,
+            Self::Policy => 9,
+            Self::Reload => 10,
         }
     }
 }
@@ -66,6 +78,37 @@ pub struct Dashboard {
     pub spend: Option<String>,
     pub models: Vec<ModelLine>,
     pub requests: Vec<RequestLine>,
+    pub provider_inventory: Vec<ProviderLine>,
+    pub telemetry: Option<TelemetryLine>,
+    pub policy: Option<PolicyLine>,
+    pub policy_detail: Option<PolicyDetailLine>,
+    /// The requested source is explicit even before the first policy report
+    /// arrives, so toggling never silently falls back to a different source.
+    pub policy_view: PolicyViewSelection,
+    pub selected_policy: usize,
+    pub policy_scroll: u16,
+    pub reload: Option<ReloadLine>,
+    pub reload_operation: Option<ReloadOperationLine>,
+    /// Each passive read retains its last good data when a later refresh
+    /// fails, together with its own time and diagnostic.
+    pub status_refresh: RefreshState,
+    pub models_refresh: RefreshState,
+    pub requests_refresh: RefreshState,
+    pub providers_refresh: RefreshState,
+    pub agents_refresh: RefreshState,
+    pub telemetry_refresh: RefreshState,
+    pub policy_refresh: RefreshState,
+    pub policy_detail_refresh: RefreshState,
+    pub reload_refresh: RefreshState,
+    /// Cached discovery grants. `false` disables the corresponding control;
+    /// `None` means discovery itself has not answered yet.
+    pub control_read_authorized: Option<bool>,
+    pub control_reload_authorized: Option<bool>,
+    pub authority_refresh: RefreshState,
+    pub reload_action: RefreshState,
+    /// An operator explicitly initiated a reload and its bounded remote poll
+    /// or local socket call has not finished yet.
+    pub reload_in_flight: bool,
     pub route_input: String,
     pub route: Option<RouteLine>,
     /// Action failure retained until that action later succeeds.
@@ -75,8 +118,17 @@ pub struct Dashboard {
     /// Non-fatal action diagnostic, such as an ACP routing fallback.
     pub notice: Option<String>,
     pub agents: Vec<AgentLine>,
+    /// Remote administration exposes the catalog but never agent launch
+    /// controls or ACP sessions.
+    pub can_launch_agents: bool,
     pub selected_agent: usize,
     pub conversation: Conversation,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RefreshState {
+    pub updated_at: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +138,124 @@ pub struct AgentLine {
     pub acp: bool,
     pub configured: bool,
     pub description: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderLine {
+    pub id: String,
+    pub models: usize,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct TelemetryLine {
+    pub daemon_reachable: bool,
+    pub compiled_in: bool,
+    pub exporter_wired: bool,
+    pub sampler: Option<String>,
+    pub metrics_enabled: bool,
+    pub header_count: usize,
+    pub resource_attribute_count: usize,
+    pub api_key_count: usize,
+    pub api_key_cap: usize,
+    pub user_id_count: usize,
+    pub user_id_cap: usize,
+    pub active_spans: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct PolicyLine {
+    pub view: String,
+    pub availability: String,
+    pub digest: Option<String>,
+    pub mode: String,
+    pub policies: Vec<String>,
+    pub bindings: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PolicyViewSelection {
+    #[default]
+    Active,
+    Disk,
+}
+
+impl PolicyViewSelection {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Active => Self::Disk,
+            Self::Disk => Self::Active,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Disk => "disk",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PolicyDetailLine {
+    pub name: String,
+    pub tiers: Vec<PolicyTierLine>,
+    pub routes: Vec<PolicyRouteLine>,
+    pub default_tier: Option<String>,
+    pub tool_use_tier: Option<String>,
+    pub tool_safe_tiers: Vec<String>,
+    pub certificates: Vec<PolicyCertificateLine>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PolicyTierLine {
+    pub tier: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PolicyRouteLine {
+    pub route: String,
+    pub tier: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PolicyCertificateLine {
+    pub name: String,
+    pub selected_tier: String,
+    pub evidence_digest: String,
+    pub compiler_config_digest: String,
+    pub evaluator_config_digest: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReloadLine {
+    pub server_instance_id: String,
+    pub generation: u64,
+    pub running: bool,
+    pub running_generation: Option<u64>,
+    pub consistency: String,
+    pub last_outcome: Option<String>,
+    pub participants: Vec<ReloadParticipantLine>,
+    pub restart_required_fields: Vec<String>,
+    pub mixed_state_history: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReloadParticipantLine {
+    pub participant: String,
+    pub outcome: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReloadOperationLine {
+    pub request_id: String,
+    pub server_instance_id: String,
+    pub generation_before: u64,
+    pub status: String,
+    pub lookup: String,
+    pub completed_at_unix_ms: Option<i64>,
 }
 
 /// Presentation state for the one controller/session the Code process owns.
@@ -314,6 +484,10 @@ fn draw(
         "Models",
         "Requests",
         "Route",
+        "Providers",
+        "Telemetry",
+        "Policy",
+        "Reload",
     ]
     .into_iter()
     .map(Line::from);
@@ -342,6 +516,10 @@ fn draw(
         Page::Models => draw_models(frame, content, dashboard),
         Page::Requests => draw_requests(frame, content, dashboard),
         Page::Route => draw_route(frame, content, dashboard),
+        Page::Providers => draw_providers(frame, content, dashboard),
+        Page::Telemetry => draw_telemetry(frame, content, dashboard),
+        Page::Policy => draw_policy(frame, content, dashboard),
+        Page::Reload => draw_reload(frame, content, dashboard),
     }
 
     if let Some(message) = &dashboard.notice {
@@ -366,12 +544,19 @@ fn draw(
     }
 
     let help = match page {
-        Page::Agents => "↑/↓ select · Enter connect · Tab pages · Esc/Ctrl-C quit",
+        Page::Agents if dashboard.can_launch_agents => {
+            "↑/↓ select · Enter connect · Tab pages · Esc/Ctrl-C quit"
+        }
+        Page::Agents => "remote catalog is read-only · Tab pages · Esc/Ctrl-C quit",
         Page::Conversation => {
             "type prompt · Enter send · PgUp/PgDn scroll · Tab views · Ctrl-D quit"
         }
         Page::Route => "Tab pages · type model · Enter preview · Ctrl-U clear · Esc/Ctrl-C quit",
-        _ => "Tab pages · r refresh · 1-7 jump · q/Esc/Ctrl-C quit",
+        Page::Policy => {
+            "↑/↓ select · Enter detail · v active/disk · PgUp/PgDn scroll · r refresh · Tab pages"
+        }
+        Page::Reload => "Enter/Ctrl-R reload · r refresh · Tab pages · q/Esc/Ctrl-C quit",
+        _ => "Tab pages · r refresh · 1-0 jump · q/Esc/Ctrl-C quit",
     };
     frame.render_widget(
         Paragraph::new(help).style(Style::default().fg(Color::DarkGray)),
@@ -435,12 +620,18 @@ fn draw_home(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Das
         lines.push(field("spend", spend));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(
-        "Open Agents and press Enter to start an ACP conversation, or inspect operations views.",
-    ));
+    lines.push(Line::from(if dashboard.can_launch_agents {
+        "Open Agents and press Enter to start an ACP conversation, or inspect operations views."
+    } else {
+        "Inspect the remote agent catalog and operations views from this read-only dashboard."
+    }));
     frame.render_widget(
         Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL).title(" Status "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(panel_title("Status", &dashboard.status_refresh)),
+            )
             .wrap(Wrap { trim: false }),
         area,
     );
@@ -487,7 +678,7 @@ fn draw_agents(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &D
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Available agents "),
+            .title(panel_title("Agent catalog", &dashboard.agents_refresh)),
     );
     frame.render_widget(table, area);
 }
@@ -598,11 +789,10 @@ fn draw_models(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &D
         [Constraint::Percentage(45), Constraint::Percentage(55)],
     )
     .header(Row::new(["MODEL", "PROVIDERS"]).style(Style::default().add_modifier(Modifier::BOLD)))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" Models · {} ", dashboard.models.len())),
-    );
+    .block(Block::default().borders(Borders::ALL).title(panel_title(
+        &format!("Models · {}", dashboard.models.len()),
+        &dashboard.models_refresh,
+    )));
     frame.render_widget(table, area);
 }
 
@@ -632,11 +822,10 @@ fn draw_requests(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: 
         Row::new(["TIME", "MODEL", "PROVIDER", "TOKENS", "COST", "STATUS"])
             .style(Style::default().add_modifier(Modifier::BOLD)),
     )
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" Recent requests · {} ", dashboard.requests.len())),
-    );
+    .block(Block::default().borders(Borders::ALL).title(panel_title(
+        &format!("Recent requests · {}", dashboard.requests.len()),
+        &dashboard.requests_refresh,
+    )));
     frame.render_widget(table, area);
 }
 
@@ -665,6 +854,317 @@ fn draw_route(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Da
             .wrap(Wrap { trim: false }),
         result,
     );
+}
+
+fn draw_providers(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Dashboard) {
+    let rows = dashboard.provider_inventory.iter().map(|provider| {
+        Row::new(vec![
+            provider.id.clone(),
+            provider.models.to_string(),
+            (if provider.active { "yes" } else { "no" }).to_string(),
+        ])
+    });
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Percentage(50),
+            Constraint::Length(12),
+            Constraint::Length(10),
+        ],
+    )
+    .header(
+        Row::new(["PROVIDER", "MODELS", "ACTIVE"])
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+    )
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(panel_title("Providers", &dashboard.providers_refresh)),
+    );
+    frame.render_widget(table, area);
+}
+
+fn draw_telemetry(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Dashboard) {
+    let lines = match &dashboard.telemetry {
+        Some(telemetry) => {
+            let mut lines = vec![
+                field(
+                    "daemon",
+                    if telemetry.daemon_reachable {
+                        "reachable"
+                    } else {
+                        "stopped"
+                    },
+                ),
+                field("compiled", if telemetry.compiled_in { "yes" } else { "no" }),
+                field(
+                    "wired",
+                    if telemetry.exporter_wired {
+                        "yes"
+                    } else {
+                        "no"
+                    },
+                ),
+                field(
+                    "metrics",
+                    if telemetry.metrics_enabled {
+                        "on"
+                    } else {
+                        "off"
+                    },
+                ),
+                field("headers", &telemetry.header_count.to_string()),
+                field("res-attrs", &telemetry.resource_attribute_count.to_string()),
+                field(
+                    "api keys",
+                    &format!("{} / {}", telemetry.api_key_count, telemetry.api_key_cap),
+                ),
+                field(
+                    "users",
+                    &format!("{} / {}", telemetry.user_id_count, telemetry.user_id_cap),
+                ),
+                field("in-flight", &telemetry.active_spans.to_string()),
+            ];
+            if let Some(sampler) = &telemetry.sampler {
+                lines.insert(3, field("sampler", sampler));
+            }
+            lines
+        }
+        None => vec![Line::from("Telemetry has not returned a snapshot yet.")],
+    };
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(panel_title("Telemetry", &dashboard.telemetry_refresh)),
+            )
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn draw_policy(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Dashboard) {
+    let mut lines = match &dashboard.policy {
+        Some(policy) => {
+            let mut lines = vec![
+                field("view", &policy.view),
+                field("availability", &policy.availability),
+                field("mode", &policy.mode),
+            ];
+            if let Some(digest) = &policy.digest {
+                lines.push(field("digest", digest));
+            }
+            if !policy.policies.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from("Policies (Up/Down, Enter for typed detail):"));
+                for (index, name) in policy.policies.iter().enumerate() {
+                    let marker = if index == dashboard.selected_policy {
+                        ">"
+                    } else {
+                        " "
+                    };
+                    lines.push(Line::from(format!(" {marker} {name}")));
+                }
+            }
+            for (preset, policy) in &policy.bindings {
+                lines.push(Line::from(format!("  @{preset} -> {policy}")));
+            }
+            lines
+        }
+        None => vec![Line::from(format!(
+            "{} policy has not returned a snapshot yet.",
+            dashboard.policy_view.label()
+        ))],
+    };
+    if let Some(detail) = &dashboard.policy_detail {
+        lines.push(Line::from(""));
+        lines.push(Line::from(format!("Detail: {}", detail.name)));
+        if let Some(tier) = &detail.default_tier {
+            lines.push(field("default tier", tier));
+        }
+        if let Some(tier) = &detail.tool_use_tier {
+            lines.push(field("tool tier", tier));
+        }
+        if !detail.tool_safe_tiers.is_empty() {
+            lines.push(field("tool safe", &detail.tool_safe_tiers.join(", ")));
+        }
+        if !detail.tiers.is_empty() {
+            lines.push(Line::from("  Tiers:"));
+            for tier in &detail.tiers {
+                lines.push(Line::from(format!("    {} -> {}", tier.tier, tier.target)));
+            }
+        }
+        if !detail.routes.is_empty() {
+            lines.push(Line::from("  Routes:"));
+            for route in &detail.routes {
+                lines.push(Line::from(format!("    {} -> {}", route.route, route.tier)));
+            }
+        }
+        if !detail.certificates.is_empty() {
+            lines.push(Line::from("  Certificates:"));
+            for certificate in &detail.certificates {
+                lines.push(Line::from(format!(
+                    "    {}: tier={}",
+                    certificate.name, certificate.selected_tier
+                )));
+                lines.push(Line::from(format!(
+                    "      evidence={} compiler={}",
+                    certificate.evidence_digest, certificate.compiler_config_digest
+                )));
+                if let Some(evaluator) = &certificate.evaluator_config_digest {
+                    lines.push(Line::from(format!("      evaluator={evaluator}")));
+                }
+            }
+        }
+    }
+    if let Some(error) = &dashboard.policy_detail_refresh.error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(format!("Policy detail: {error}")));
+    } else if let Some(updated) = &dashboard.policy_detail_refresh.updated_at {
+        lines.push(Line::from(format!("Policy detail updated {updated}")));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(format!(
+        "Source: {} · press v to switch active/disk · PgUp/PgDn scroll detail",
+        dashboard.policy_view.label()
+    )));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(panel_title("Policy", &dashboard.policy_refresh)),
+            )
+            .wrap(Wrap { trim: false })
+            .scroll((dashboard.policy_scroll, 0)),
+        area,
+    );
+}
+
+fn draw_reload(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: &Dashboard) {
+    let mut lines = match &dashboard.reload {
+        Some(reload) => {
+            let mut lines = vec![
+                field("instance", &reload.server_instance_id),
+                field("generation", &reload.generation.to_string()),
+                field("running", if reload.running { "yes" } else { "no" }),
+                field("consistency", &reload.consistency),
+                field(
+                    "read scope",
+                    authority_text(dashboard.control_read_authorized),
+                ),
+                field(
+                    "reload scope",
+                    authority_text(dashboard.control_reload_authorized),
+                ),
+            ];
+            if let Some(generation) = reload.running_generation {
+                lines.push(field("running-gen", &generation.to_string()));
+            }
+            if let Some(outcome) = &reload.last_outcome {
+                lines.push(field("last outcome", outcome));
+            }
+            if !reload.restart_required_fields.is_empty() {
+                lines.push(field("restart", &reload.restart_required_fields.join(", ")));
+            }
+            if reload.mixed_state_history > 0 {
+                lines.push(field(
+                    "mixed history",
+                    &reload.mixed_state_history.to_string(),
+                ));
+            }
+            for participant in &reload.participants {
+                let detail = participant
+                    .detail
+                    .as_ref()
+                    .map_or_else(String::new, |detail| format!(" · {detail}"));
+                lines.push(Line::from(format!(
+                    "  {}: {}{detail}",
+                    participant.participant, participant.outcome
+                )));
+            }
+            lines
+        }
+        None => vec![
+            Line::from("Reload state has not returned a snapshot yet."),
+            field(
+                "read scope",
+                authority_text(dashboard.control_read_authorized),
+            ),
+            field(
+                "reload scope",
+                authority_text(dashboard.control_reload_authorized),
+            ),
+        ],
+    };
+    if let Some(operation) = &dashboard.reload_operation {
+        lines.push(Line::from(""));
+        lines.push(field("request", &operation.request_id));
+        lines.push(field("op status", &operation.status));
+        lines.push(field("op instance", &operation.server_instance_id));
+        lines.push(field(
+            "op generation",
+            &operation.generation_before.to_string(),
+        ));
+        if let Some(completed) = operation.completed_at_unix_ms {
+            lines.push(field("op completed", &completed.to_string()));
+        }
+        lines.push(field("lookup", &operation.lookup));
+    }
+    if dashboard.reload_in_flight {
+        lines.push(Line::from(
+            "Reload action: submitting or polling the retained operation…",
+        ));
+    } else if let Some(error) = &dashboard.reload_action.error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(format!("Reload action: {error}")));
+    } else if let Some(updated) = &dashboard.reload_action.updated_at {
+        lines.push(Line::from(format!("Reload action updated {updated}")));
+    }
+    if let Some(error) = &dashboard.authority_refresh.error {
+        lines.push(Line::from(format!("Capability discovery: {error}")));
+    } else if let Some(updated) = &dashboard.authority_refresh.updated_at {
+        lines.push(Line::from(format!(
+            "Capability discovery updated {updated}"
+        )));
+    }
+    if dashboard.control_reload_authorized == Some(false) {
+        lines.push(Line::from(
+            "Reload action is unavailable for this credential; refresh after a scope change.",
+        ));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "Press Enter or Ctrl-R to reload. Inspect failed, mixed, or unknown results before retrying.",
+    ));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(panel_title("Reload", &dashboard.reload_refresh)),
+            )
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn authority_text(authorized: Option<bool>) -> &'static str {
+    match authorized {
+        Some(true) => "granted",
+        Some(false) => "not granted",
+        None => "unknown",
+    }
+}
+
+fn panel_title(name: &str, state: &RefreshState) -> String {
+    match (&state.updated_at, &state.error) {
+        (Some(updated), Some(error)) => format!(" {name} · stale since {updated} · {error} "),
+        (None, Some(error)) => format!(" {name} · unavailable · {error} "),
+        (Some(updated), None) => format!(" {name} · updated {updated} "),
+        (None, None) => format!(" {name} "),
+    }
 }
 
 fn field(name: &str, value: &str) -> Line<'static> {
@@ -747,6 +1247,74 @@ mod tests {
     }
 
     #[test]
+    fn policy_page_renders_a_selected_typed_detail_and_source() -> io::Result<()> {
+        let backend = TestBackend::new(160, 60);
+        let mut terminal = Terminal::new(backend)?;
+        let dashboard = Dashboard {
+            target: "remote:workstation".to_string(),
+            policy_view: PolicyViewSelection::Disk,
+            policy: Some(PolicyLine {
+                view: "disk".to_string(),
+                availability: "available".to_string(),
+                digest: Some("policy-digest".to_string()),
+                mode: "frozen".to_string(),
+                policies: vec!["default".to_string()],
+                bindings: Vec::new(),
+            }),
+            policy_detail: Some(PolicyDetailLine {
+                name: "default".to_string(),
+                tiers: vec![PolicyTierLine {
+                    tier: "fast".to_string(),
+                    target: "openai/gpt-5".to_string(),
+                }],
+                routes: vec![PolicyRouteLine {
+                    route: "code".to_string(),
+                    tier: "fast".to_string(),
+                }],
+                default_tier: Some("fast".to_string()),
+                tool_use_tier: None,
+                tool_safe_tiers: Vec::new(),
+                certificates: vec![PolicyCertificateLine {
+                    name: "proof".to_string(),
+                    selected_tier: "fast".to_string(),
+                    evidence_digest: "evidence".to_string(),
+                    compiler_config_digest: "compiler".to_string(),
+                    evaluator_config_digest: Some("evaluator".to_string()),
+                }],
+            }),
+            ..Dashboard::default()
+        };
+
+        terminal.draw(|frame| draw(frame, Page::Policy, &dashboard, None))?;
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains("Detail: default"));
+        assert!(rendered.contains("fast -> openai/gpt-5"));
+        assert!(rendered.contains("code -> fast"));
+        assert!(rendered.contains("proof: tier=fast"));
+        assert!(rendered.contains("Source: disk"));
+        Ok(())
+    }
+
+    #[test]
+    fn reload_page_marks_a_missing_reload_scope_unavailable() -> io::Result<()> {
+        let backend = TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend)?;
+        let dashboard = Dashboard {
+            target: "remote:reader".to_string(),
+            control_read_authorized: Some(true),
+            control_reload_authorized: Some(false),
+            ..Dashboard::default()
+        };
+
+        terminal.draw(|frame| draw(frame, Page::Reload, &dashboard, None))?;
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains("reload scope"));
+        assert!(rendered.contains("not granted"));
+        assert!(rendered.contains("Reload action is unavailable"));
+        Ok(())
+    }
+
+    #[test]
     fn reducer_preserves_draft_while_agents_and_scroll_change() {
         let mut dashboard = Dashboard {
             agents: vec![
@@ -822,6 +1390,10 @@ mod tests {
             Page::Models,
             Page::Requests,
             Page::Route,
+            Page::Providers,
+            Page::Telemetry,
+            Page::Policy,
+            Page::Reload,
             Page::Home,
         ] {
             page = page.next();
