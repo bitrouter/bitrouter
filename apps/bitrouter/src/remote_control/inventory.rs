@@ -224,36 +224,6 @@ pub fn by_cli(leaf: &str) -> Option<&'static ControlActionSpec> {
     ACTIONS.iter().find(|row| row.cli_leaf == leaf)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::BTreeSet;
-
-    #[test]
-    fn exposure_reuses_shared_identity_and_report_schema() -> anyhow::Result<()> {
-        let mut paths = BTreeSet::new();
-        let mut ids = BTreeSet::new();
-        for row in ACTIONS {
-            assert!(paths.insert((row.method, row.path)));
-            assert!(ids.insert(row.id));
-            assert!((row.input_schema)().is_object());
-            assert!((row.output_schema)().is_object());
-            if let Some(shared_id) = row.shared_id {
-                let shared = bitrouter_mcp::actions::ACTIONS
-                    .iter()
-                    .find(|shared| shared.id == shared_id)
-                    .ok_or_else(|| anyhow::anyhow!("missing shared action"))?;
-                assert_eq!(row.id, shared.id);
-                let schema = shared
-                    .output_schema
-                    .ok_or_else(|| anyhow::anyhow!("missing shared schema"))?;
-                assert_eq!((row.output_schema)(), serde_json::Value::Object(schema()));
-            }
-        }
-        Ok(())
-    }
-}
-
 /// Resources have separate identities from executable actions.
 pub struct ControlResourceSpec {
     pub id: &'static str,
@@ -285,3 +255,33 @@ pub const RESOURCES: &[ControlResourceSpec] = &[
         requires_reload: true,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn exposure_reuses_shared_identity_and_report_schema() -> anyhow::Result<()> {
+        let mut paths = BTreeSet::new();
+        let mut ids = BTreeSet::new();
+        for row in ACTIONS {
+            assert!(paths.insert((row.method, row.path)));
+            assert!(ids.insert(row.id));
+            assert!((row.input_schema)().is_object());
+            assert!((row.output_schema)().is_object());
+            if let Some(shared_id) = row.shared_id {
+                let shared = bitrouter_mcp::actions::ACTIONS
+                    .iter()
+                    .find(|shared| shared.id == shared_id)
+                    .ok_or_else(|| anyhow::anyhow!("missing shared action"))?;
+                assert_eq!(row.id, shared.id);
+                let schema = shared
+                    .output_schema
+                    .ok_or_else(|| anyhow::anyhow!("missing shared schema"))?;
+                assert_eq!((row.output_schema)(), serde_json::Value::Object(schema()));
+            }
+        }
+        Ok(())
+    }
+}
