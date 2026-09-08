@@ -202,6 +202,12 @@ impl EvidenceStore {
     }
 
     pub async fn bind_fork(&self, binding: &ForkBinding) -> Result<()> {
+        self.verify_fork_binding(binding).await?;
+        self.insert_object(&self.db, "fork_binding", &binding.id, 0, binding)
+            .await
+    }
+
+    pub(crate) async fn verify_fork_binding(&self, binding: &ForkBinding) -> Result<()> {
         binding.validate()?;
         let child = record_entity::Entity::find_by_id(&binding.child_record_id)
             .filter(record_entity::Column::Owner.eq(&self.owner_key))
@@ -222,6 +228,22 @@ impl EvidenceStore {
             source.descriptor.node.as_ref() == Some(&binding.child)
                 && source.descriptor.format == SourceFormat::CodexRollout,
             "fork child source mismatch"
+        );
+        let child_rollout = binding
+            .rollouts
+            .as_ref()
+            .map_or(binding.child.native_id.as_str(), |ids| &ids.child);
+        let parent_rollout = binding
+            .rollouts
+            .as_ref()
+            .map_or(binding.parent.native_id.as_str(), |ids| &ids.parent);
+        let child_identity = self.rollout_identity(&source.id).await?;
+        ensure!(
+            child_identity
+                .as_ref()
+                .is_none_or(|identity| identity.rollout_id == child_rollout)
+                && (binding.rollouts.is_none() || child_identity.is_some()),
+            "bound child rollout identity mismatch"
         );
         // Bind only the native history-base fields, never a timestamp or a
         // similarly worded task. Public lifecycle: https://learn.chatgpt.com/docs/app-server
@@ -245,7 +267,7 @@ impl EvidenceStore {
                     .and_then(serde_json::Value::as_str)
                     == Some(binding.child.native_id.as_str())
                 && base.get("thread_id").and_then(serde_json::Value::as_str)
-                    == Some(binding.parent.native_id.as_str())
+                    == Some(parent_rollout)
                 && base
                     .get("end_ordinal_exclusive")
                     .and_then(serde_json::Value::as_u64)
@@ -263,6 +285,14 @@ impl EvidenceStore {
         ensure!(
             source.descriptor.node.as_ref() == Some(&binding.parent),
             "fork parent source mismatch"
+        );
+        let parent_identity = self.rollout_identity(&source.id).await?;
+        ensure!(
+            parent_identity
+                .as_ref()
+                .is_none_or(|identity| identity.rollout_id == parent_rollout)
+                && (binding.rollouts.is_none() || parent_identity.is_some()),
+            "bound parent rollout identity mismatch"
         );
         let first = self
             .records(&SourceRange {
@@ -284,7 +314,6 @@ impl EvidenceStore {
             prefix.range == binding.checkpoint && prefix.record_digests == binding.record_digests,
             "fork prefix digest mismatch"
         );
-        self.insert_object(&self.db, "fork_binding", &binding.id, 0, binding)
-            .await
+        Ok(())
     }
 }

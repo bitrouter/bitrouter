@@ -106,6 +106,91 @@ async fn file_links_share_evidence_but_identical_replacements_do_not() -> Result
 }
 
 #[tokio::test]
+async fn codex_discovery_separates_thread_and_reverted_rollout_ids() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let collector = collector(Harness::Codex, directory.path()).await?;
+    for name in [
+        "rollout-session-1.jsonl",
+        "rollout-session-1_revision-1.jsonl",
+        "rollout-other_revision-2.jsonl",
+    ] {
+        let id = if name.contains("other") {
+            "other"
+        } else {
+            "session-1"
+        };
+        tokio::fs::write(
+            directory.path().join(name),
+            jsonl(json!({"type":"session_meta","payload":{"id":id}}))?,
+        )
+        .await?;
+    }
+    assert_eq!(collector.discover("session-1").await?.len(), 2);
+    assert!(collector.discover("revision-1").await?.is_empty());
+    let dependency = collector.discover_rollout("revision-1").await?.0;
+    assert_eq!(dependency.len(), 1);
+    assert_eq!(dependency[0].0, node(Harness::Codex));
+    // A suffix collision must not attribute another thread to this session.
+    tokio::fs::write(
+        directory
+            .path()
+            .join("rollout-other-session-1_revision-3.jsonl"),
+        jsonl(json!({"type":"session_meta","payload":{"id":"other-session-1"}}))?,
+    )
+    .await?;
+    let candidate = collector.discover_rollout("revision-3").await?.0;
+    assert_eq!(candidate[0].0.native_id, "other-session-1");
+    let rejected = collector
+        .reconcile(node(Harness::Codex), &candidate[0].1, None)
+        .await?;
+    assert!(rejected.gaps.contains("native_identity_mismatch"));
+    assert!(rejected.range.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn codex_rollout_identity_survives_move_but_cannot_be_renamed_to_another_rollout()
+-> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let collector = collector(Harness::Codex, directory.path()).await?;
+    let path = directory.path().join("rollout-session-1_revision-1.jsonl");
+    tokio::fs::write(
+        &path,
+        jsonl(json!({"type":"session_meta","payload":{"id":"session-1"}}))?,
+    )
+    .await?;
+    let initial = collector
+        .reconcile(node(Harness::Codex), &path, None)
+        .await?;
+    assert_eq!(initial.rollout_id.as_deref(), Some("revision-1"));
+    let identity = collector
+        .store
+        .rollout_identity(&initial.source.id)
+        .await?
+        .context("stored identity")?;
+    let moved_path = directory.path().join("moved.jsonl");
+    tokio::fs::rename(&path, &moved_path).await?;
+    let moved = collector
+        .reconcile(node(Harness::Codex), &moved_path, None)
+        .await?;
+    assert_eq!(moved.rollout_id, initial.rollout_id);
+    assert_eq!(moved.source.id, initial.source.id);
+    let conflict = directory.path().join("rollout-session-1_revision-2.jsonl");
+    tokio::fs::rename(&moved_path, &conflict).await?;
+    assert!(
+        collector
+            .reconcile(node(Harness::Codex), &conflict, None)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        collector.store.rollout_identity(&initial.source.id).await?,
+        Some(identity)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn overwritten_prefix_starts_a_new_generation_without_erasing_old_records() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let collector = collector(Harness::ClaudeCode, directory.path()).await?;

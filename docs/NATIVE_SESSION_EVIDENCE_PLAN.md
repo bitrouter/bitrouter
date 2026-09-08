@@ -8,7 +8,7 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Layer | Implemented boundary | Remaining boundary |
 |---|---|---|
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
-| History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex bounded fork ancestry is immutable. | Complete Claude independent-fork UUID remapping and unsupported native history formats. |
+| History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex physical rollout dependencies bind immutable prefixes separately from stable threads and logical fork ancestry; observed revert variants survive file removal. | Active rollout selection from native lifecycle evidence, complete Claude independent-fork UUID remapping and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and exact resumed-child execution ranges. |
 | Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Pinned adapter producer observations retain original prompt provenance; native input receipts connect inspected requests, acknowledgements and explicitly addressed execution events. | Complete execution membership, exact per-attempt execution ranges and manager intent recovery after a Code process restart. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
@@ -29,6 +29,54 @@ old cursor. Unix source identities are unchanged. Filesystems that cannot supply
 the required identity produce a collection error rather than a guessed source.
 
 ## Implementation checkpoint
+
+Codex rollout identity is now persisted separately from its stable thread and
+the file handle's source identity. Native `history_base.thread_id` names a
+rollout, including the distinct suffix in a reverted thread's filename. The
+collector records that basename with an exact original metadata reference;
+moving a known source cannot change its native rollout ID. A bounded dependency
+resolves the rollout's own thread from verified metadata. Same-thread history
+dependencies are valid across distinct rollouts, and physical history ancestry
+does not invent a different logical fork parent.
+
+History snapshots retain separate variants when several sources belong to one
+thread. They include durable sources after files disappear and do not infer an
+active branch from filenames, timestamps, or the remaining file. Invalid sibling
+sources remain gaps while healthy histories stay inspectable. An unverified or
+conflicting candidate prevents a new permanent prefix binding; preferring a
+better source later in the scan cannot erase an earlier conflict. New bindings
+key the child and parent rollout IDs and preserve exact raw cuts and digests.
+Legacy ordinary-fork objects remain readable without rewriting their bytes,
+including after database reopen without the new identity objects.
+
+The resolver shares a new-record import budget across a thread's variants and
+recursive dependencies before committing their records. Exhaustion leaves a gap
+and subsequent passes resume the same durable cursors. This does not complete
+task-scoped persistent paging or bound every controller-wide prefix scan.
+Active native lifecycle selection, own-execution boundaries, complete attempt
+membership, costs and settlement remain separate work.
+
+The opt-in `native_codex_capture_preserves_revert_and_compaction_history` test
+imports copies of an isolated real native capture. Set
+`BITROUTER_TEST_CODEX_ROLLOUT_ROOT`, `BITROUTER_TEST_CODEX_THREAD_ID`,
+`BITROUTER_TEST_CODEX_FORK_ID` and `BITROUTER_TEST_CODEX_REVERT_FORK_ID`, then run `cargo test -p bitrouter --lib
+--all-features native_codex_capture_preserves_revert_and_compaction_history
+-- --ignored`. The capture must include a root revert and a fork with two
+compactions, plus another fork created after the root revert. This checks
+BitRouter ingestion of actual producer records, the fork's distinct physical
+parent rollout and immutable prefix replay after parent-file deletion. It does
+not certify the whole live controller flow, subagent execution, or full native
+version admission. Native `world_state` and `token_usage_record` records are
+retained but still produce an explicit context-semantics gap.
+
+Independent stage review passed after correcting durable top-level recovery,
+source failure isolation, shared import limits and persistent prefix ambiguity.
+All 3,380 workspace tests passed with 15 skipped. The pinned-adapter binary
+fixture, Clippy with denied warnings, doctests, rustdoc, distribution checks,
+Windows cross-target Clippy and formatting passed. An isolated Codex CLI 0.153.4
+capture using deterministic local Responses also passed the opt-in ingestion
+test, including fork-after-revert and both compactions. These checks validate
+this checkpoint, not the remaining full-feature requirements below.
 
 Metered Codex requests now retain explicit parent-turn and root-turn claims in
 addition to their exact turn and thread identities. The normalization event,

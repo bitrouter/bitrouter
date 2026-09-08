@@ -20,6 +20,7 @@ mod checkpoints;
 pub mod execution;
 pub mod forks;
 pub(crate) mod lifecycle;
+pub mod rollouts;
 pub(crate) mod sdk_messages;
 mod spools;
 pub(crate) mod tasks;
@@ -832,6 +833,7 @@ fn decode_object<T: serde::de::DeserializeOwned + serde::Serialize>(
         match row.kind.as_str() {
             "attempt"
             | "fork_binding"
+            | "rollout_identity"
             | "active_task"
             | "prompt_operation"
             | "prompt_bridge"

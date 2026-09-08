@@ -348,8 +348,8 @@ pub struct ExecutionEdge {
 }
 
 /// An immutable native history-base reference, bound to stored parent records.
-/// The key survives child file generations because native fork ancestry does
-/// not change when either file is compacted, moved, rewritten or removed.
+/// The key survives file generations. Revert can change the physical history
+/// base without changing either stable thread identity or logical fork ancestry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ForkBinding {
@@ -357,6 +357,8 @@ pub struct ForkBinding {
     pub revision: u64,
     pub child: NodeKey,
     pub parent: NodeKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollouts: Option<RolloutPair>,
     pub end_ordinal_exclusive: u64,
     pub end_byte_offset: u64,
     pub child_record_id: String,
@@ -367,9 +369,31 @@ pub struct ForkBinding {
     pub observed_path: Option<std::path::PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RolloutPair {
+    pub child: String,
+    pub parent: String,
+}
+
 impl ForkBinding {
     pub fn key(child: &NodeKey, parent: &NodeKey, ordinal: u64, bytes: u64) -> Result<String> {
         canonical_digest(&(child, parent, ordinal, bytes))
+    }
+
+    pub fn history_key(
+        child: &NodeKey,
+        parent: &NodeKey,
+        rollouts: Option<&RolloutPair>,
+        ordinal: u64,
+        bytes: u64,
+    ) -> Result<String> {
+        match rollouts {
+            Some(rollouts) => {
+                canonical_digest(&("rollout-prefix/2", child, rollouts, ordinal, bytes))
+            }
+            None => Self::key(child, parent, ordinal, bytes),
+        }
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -381,19 +405,27 @@ impl ForkBinding {
             self.child.harness == Harness::Codex
                 && self.parent.harness == Harness::Codex
                 && self.child.namespace == self.parent.namespace
-                && self.child != self.parent,
+                && self
+                    .rollouts
+                    .as_ref()
+                    .map_or(self.child != self.parent, |ids| ids.child != ids.parent),
             "invalid fork identity"
         );
         ensure!(
             self.id
-                == Self::key(
+                == Self::history_key(
                     &self.child,
                     &self.parent,
+                    self.rollouts.as_ref(),
                     self.end_ordinal_exclusive,
                     self.end_byte_offset
                 )?,
             "fork binding identity mismatch"
         );
+        if let Some(ids) = &self.rollouts {
+            identifier(&ids.child)?;
+            identifier(&ids.parent)?;
+        }
         digest_identifier(&self.child_record_id)?;
         digest_identifier(&self.child_record_digest)?;
         ensure!(

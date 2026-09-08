@@ -12,8 +12,9 @@ use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader, SeekFrom};
 
 use super::store::EvidenceStore;
+use super::store::rollouts::{RolloutIdentity, rollout_id};
 use super::types::{
-    Harness, MAX_GRAPH_ITEMS, MAX_RECORD_BYTES, MAX_RECORDS, NodeKey, RecordInput,
+    Harness, MAX_GRAPH_ITEMS, MAX_RECORD_BYTES, MAX_RECORDS, NodeKey, RecordInput, RecordRef,
     RegisteredSource, SourceCursor, SourceDescriptor, SourceFormat, SourceRange,
 };
 use crate::eval::types::canonical_digest;
@@ -37,6 +38,8 @@ pub struct CollectedSource {
     pub gaps: BTreeSet<String>,
     /// Codex's first rollout record, used for explicit bounded dependencies.
     pub metadata: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout_id: Option<String>,
 }
 
 /// A root is configured by the application, not by a model or transcript.
@@ -244,6 +247,7 @@ impl NativeCollector {
             path: Some(path),
             gaps: BTreeSet::new(),
             metadata: Some(raw),
+            rollout_id: None,
         }))
     }
 
@@ -269,6 +273,25 @@ impl NativeCollector {
     /// subagents. Search candidates by native filename, then verify identities
     /// from their contents before advancing any durable cursor.
     pub async fn discover(&self, native_id: &str) -> Result<Vec<(NodeKey, PathBuf)>> {
+        Ok(self.discover_target(native_id, false).await?.0)
+    }
+
+    pub(super) async fn discover_rollout(
+        &self,
+        id: &str,
+    ) -> Result<(Vec<(NodeKey, PathBuf)>, BTreeSet<String>)> {
+        ensure!(
+            self.root.harness == Harness::Codex,
+            "rollout discovery requires Codex"
+        );
+        self.discover_target(id, true).await
+    }
+
+    async fn discover_target(
+        &self,
+        native_id: &str,
+        by_rollout: bool,
+    ) -> Result<(Vec<(NodeKey, PathBuf)>, BTreeSet<String>)> {
         safe_native_component(native_id)?;
         let mut pending = vec![];
         for directory in self.directories() {
@@ -278,6 +301,7 @@ impl NativeCollector {
         }
         let mut count = 0;
         let mut found = vec![];
+        let mut gaps = BTreeSet::new();
         while let Some((directory, depth, child_tree)) = pending.pop() {
             ensure!(
                 depth <= MAX_SCAN_DEPTH,
@@ -314,8 +338,51 @@ impl NativeCollector {
                     continue;
                 }
                 let name = entry.file_name().to_string_lossy().into_owned();
+                let mut thread_id = native_id.to_owned();
                 let agent_id = match self.root.harness {
-                    Harness::Codex if name.ends_with(&format!("{native_id}.jsonl")) => None,
+                    Harness::Codex if by_rollout => {
+                        if !(name.ends_with(&format!("-{native_id}.jsonl"))
+                            || name.ends_with(&format!("_{native_id}.jsonl")))
+                        {
+                            continue;
+                        }
+                        // The history reference names a rollout. Read only its
+                        // first record to recover the stable thread; reconcile
+                        // checks that identity again on the handle it imports.
+                        let inspected = async {
+                            let file = File::open(&path).await?;
+                            let mut reader = BufReader::new(file.take(MAX_RECORD_BYTES as u64 + 1));
+                            let mut line = Vec::new();
+                            reader.read_until(b'\n', &mut line).await?;
+                            ensure!(
+                                line.len() <= MAX_RECORD_BYTES && line.last() == Some(&b'\n'),
+                                "rollout candidate metadata incomplete"
+                            );
+                            let raw = serde_json::from_slice::<Value>(&line)?;
+                            let thread = raw
+                                .pointer("/payload/id")
+                                .and_then(Value::as_str)
+                                .context("rollout candidate thread missing")?;
+                            ensure!(
+                                raw.get("type").and_then(Value::as_str) == Some("session_meta")
+                                    && rollout_id(&name, thread).as_deref() == Some(native_id),
+                                "rollout candidate identity mismatch"
+                            );
+                            safe_native_component(thread)?;
+                            anyhow::Ok(thread.to_owned())
+                        }
+                        .await;
+                        match inspected {
+                            Ok(thread) => thread_id = thread,
+                            Err(error) => {
+                                tracing::warn!(%error, "native rollout candidate unverified");
+                                gaps.insert("native_rollout_candidate_unverified".into());
+                                continue;
+                            }
+                        }
+                        None
+                    }
+                    Harness::Codex if rollout_id(&name, native_id).is_some() => None,
                     Harness::ClaudeCode if !child_tree && name == format!("{native_id}.jsonl") => {
                         None
                     }
@@ -339,7 +406,7 @@ impl NativeCollector {
                     NodeKey {
                         namespace: self.root.namespace.clone(),
                         harness: self.root.harness,
-                        native_id: native_id.into(),
+                        native_id: thread_id,
                         agent_id,
                     },
                     path,
@@ -347,7 +414,7 @@ impl NativeCollector {
             }
         }
         found.sort_by(|left, right| left.1.cmp(&right.1));
-        Ok(found)
+        Ok((found, gaps))
     }
 
     /// Ingest complete lines only. Replacement/truncation gets a new generation;
@@ -358,6 +425,18 @@ impl NativeCollector {
         node: NodeKey,
         path: &Path,
         bound: Option<FileBound>,
+    ) -> Result<CollectedSource> {
+        let mut remaining_records = MAX_RECORDS;
+        self.reconcile_limited(node, path, bound, &mut remaining_records)
+            .await
+    }
+
+    pub(super) async fn reconcile_limited(
+        &self,
+        node: NodeKey,
+        path: &Path,
+        bound: Option<FileBound>,
+        remaining_records: &mut usize,
     ) -> Result<CollectedSource> {
         node.validate()?;
         ensure!(
@@ -397,6 +476,10 @@ impl NativeCollector {
             })
             .await?;
         let mut gaps = BTreeSet::new();
+        if *remaining_records == 0 && source.cursor.offset < metadata.len() {
+            gaps.insert("native_import_budget_exhausted".into());
+            return self.finish_source(source, path, gaps, bound).await;
+        }
         let mut offset = source.cursor.offset;
         let mut hasher = Sha256::new();
         let mut generation = source.cursor.generation.clone();
@@ -458,6 +541,13 @@ impl NativeCollector {
         };
         let mut version = None;
         loop {
+            if offset >= max_offset {
+                break;
+            }
+            if *remaining_records == 0 {
+                gaps.insert("native_import_budget_exhausted".into());
+                break;
+            }
             let mut line = Vec::new();
             let bytes = (&mut reader)
                 .take(MAX_RECORD_BYTES as u64 + 1)
@@ -508,6 +598,7 @@ impl NativeCollector {
                 raw,
             };
             next_sequence += 1;
+            *remaining_records -= 1;
             source = self
                 .store
                 .append(
@@ -588,6 +679,7 @@ impl NativeCollector {
         }
         let mut end = source.cursor.next_sequence;
         let mut metadata = None;
+        let mut native_rollout_id = None;
         if end > 0 {
             let first = self
                 .store
@@ -605,6 +697,36 @@ impl NativeCollector {
                 })
                 .and_then(|record| record.input.raw.get("payload"))
                 .cloned();
+            if source.descriptor.format == SourceFormat::CodexRollout {
+                let node = source
+                    .descriptor
+                    .node
+                    .as_ref()
+                    .context("rollout node missing")?;
+                if let Some(name) = path.file_name().and_then(|name| name.to_str())
+                    && let Some(id) = rollout_id(name, &node.native_id)
+                    && let Some(first) = first.first()
+                {
+                    self.store
+                        .bind_rollout_identity(&RolloutIdentity {
+                            id: source.id.clone(),
+                            revision: 0,
+                            node: node.clone(),
+                            rollout_id: id,
+                            metadata: RecordRef::from_record(first)?,
+                            observed_name: name.into(),
+                        })
+                        .await?;
+                }
+                native_rollout_id = self
+                    .store
+                    .rollout_identity(&source.id)
+                    .await?
+                    .map(|identity| identity.rollout_id);
+                if native_rollout_id.is_none() {
+                    gaps.insert("native_rollout_identity_unavailable".into());
+                }
+            }
         }
         if let Some(bound) = bound {
             ensure!(
@@ -727,6 +849,7 @@ impl NativeCollector {
             path: Some(path),
             gaps,
             metadata,
+            rollout_id: native_rollout_id,
         })
     }
 }
@@ -742,6 +865,8 @@ pub fn codex_parent(metadata: &Value) -> Result<Option<(String, FileBound)>> {
     // Paginated rollouts reference a parent prefix instead of copying it.
     // These fields are internal/unstable; absent bounds cannot imply complete
     // fork provenance. Public lifecycle: https://learn.chatgpt.com/docs/app-server
+    // history_base.thread_id is a rollout ID, not necessarily SessionMeta.id:
+    // https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/protocol.rs
     if let Some(base) = metadata
         .get("history_base")
         .filter(|value| !value.is_null())

@@ -19,6 +19,19 @@ fn node(id: &str) -> NodeKey {
     }
 }
 
+fn binding_key(child: &NodeKey, parent: &NodeKey, ordinal: u64, bytes: u64) -> Result<String> {
+    ForkBinding::history_key(
+        child,
+        parent,
+        Some(&RolloutPair {
+            child: child.native_id.clone(),
+            parent: parent.native_id.clone(),
+        }),
+        ordinal,
+        bytes,
+    )
+}
+
 async fn resolver(path: &Path) -> Result<HistoryResolver> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
@@ -134,7 +147,7 @@ async fn bound_fork_never_rebinds_after_stored_parent_evidence_is_lost() -> Resu
         .await?;
         let initial = resolver.resolve(node("leaf")).await?;
         assert!(initial.gaps.is_empty(), "{:?}", initial.gaps);
-        let key = ForkBinding::key(&node("leaf"), &node("root"), 2, prefix.len() as u64)?;
+        let key = binding_key(&node("leaf"), &node("root"), 2, prefix.len() as u64)?;
         let binding = store.fork_binding(&key).await?.context("binding")?;
         let records = store.records(&binding.checkpoint).await?;
         let id = &records.last().context("parent record")?.id;
@@ -334,7 +347,7 @@ async fn bound_fork_survives_parent_rewrite_removal_and_resolver_restart() -> Re
         .projection
         .context("initial context")?
         .effective_context;
-    let binding_id = ForkBinding::key(&node("leaf"), &node("root"), 2, prefix.len() as u64)?;
+    let binding_id = binding_key(&node("leaf"), &node("root"), 2, prefix.len() as u64)?;
     let binding = resolver
         .store
         .fork_binding(&binding_id)
@@ -404,7 +417,7 @@ async fn unbound_fork_does_not_guess_between_different_historical_prefixes() -> 
     assert!(
         resolver
             .store
-            .fork_binding(&ForkBinding::key(
+            .fork_binding(&binding_key(
                 &node("leaf"),
                 &node("root"),
                 2,
@@ -412,6 +425,672 @@ async fn unbound_fork_does_not_guess_between_different_historical_prefixes() -> 
             )?)
             .await?
             .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn reverted_rollouts_keep_one_thread_but_distinct_bounded_histories() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let resolver = resolver(directory.path()).await?;
+    let root_path = directory.path().join("rollout-root.jsonl");
+    let reverted_path = directory.path().join("rollout-root_revision-1.jsonl");
+    let root = row(
+        0,
+        "session_meta",
+        json!({"id":"root","cli_version":"0.153.4"}),
+    )? + &row(
+        1,
+        "response_item",
+        json!({"type":"message","content":"before revert"}),
+    )?;
+    tokio::fs::write(
+        &root_path,
+        root.clone()
+            + &row(
+                2,
+                "response_item",
+                json!({"type":"message","content":"discarded parent tail"}),
+            )?,
+    )
+    .await?;
+    let reverted = row(
+        2,
+        "session_meta",
+        json!({"id":"root","cli_version":"0.153.4","history_base":{
+            "thread_id":"root","end_ordinal_exclusive":2,"end_byte_offset":root.len()
+        }}),
+    )? + &row(
+        3,
+        "response_item",
+        json!({"type":"message","content":"after revert"}),
+    )?;
+    tokio::fs::write(&reverted_path, &reverted).await?;
+    let observed = resolver.resolve(node("root")).await?;
+    assert_eq!(
+        observed.gaps,
+        BTreeSet::from(["native_active_rollout_unselected".into()])
+    );
+    assert!(observed.projection.is_none());
+    assert_eq!(observed.variants.len(), 2);
+    let revision = observed
+        .variants
+        .iter()
+        .find(|history| {
+            history
+                .source
+                .as_ref()
+                .and_then(|source| source.rollout_id.as_deref())
+                == Some("revision-1")
+        })
+        .context("reverted variant")?;
+    assert!(revision.gaps.is_empty(), "{:?}", revision.gaps);
+    assert_eq!(revision.node, node("root"));
+    assert_eq!(
+        revision.parent.as_ref().context("original history")?.node,
+        node("root")
+    );
+    assert_eq!(
+        revision.edge.as_ref().context("rewind edge")?.kind,
+        EdgeKind::Rewind
+    );
+    assert_eq!(
+        revision
+            .projection
+            .as_ref()
+            .context("reverted projection")?
+            .effective_context
+            .len(),
+        2
+    );
+
+    // A fork of the reverted rollout refers to revision-1, not to the stable
+    // thread root. Continuing either physical parent cannot extend its cut.
+    let leaf_path = directory.path().join("rollout-leaf.jsonl");
+    tokio::fs::write(&leaf_path, row(4, "session_meta", json!({"id":"leaf","cli_version":"0.153.4",
+        "forked_from_id":"root", "forked_from_ordinal_exclusive":4,
+        "history_base":{"thread_id":"revision-1","end_ordinal_exclusive":4,"end_byte_offset":reverted.len()}
+    }))? + &row(5, "response_item", json!({"type":"message","content":"fork work"}))?).await?;
+    tokio::fs::write(
+        &reverted_path,
+        reverted.clone()
+            + &row(
+                4,
+                "response_item",
+                json!({"type":"message","content":"later reverted tail"}),
+            )?,
+    )
+    .await?;
+    let fork = resolver.resolve(node("leaf")).await?;
+    assert!(fork.gaps.is_empty(), "{:?}", fork.gaps);
+    assert_eq!(
+        fork.edge.as_ref().context("logical fork edge")?.from,
+        node("root")
+    );
+    assert_eq!(
+        fork.projection
+            .as_ref()
+            .context("fork projection")?
+            .effective_context
+            .len(),
+        3
+    );
+    assert_eq!(
+        fork.parent
+            .as_ref()
+            .context("physical parent")?
+            .source
+            .as_ref()
+            .context("parent source")?
+            .rollout_id
+            .as_deref(),
+        Some("revision-1")
+    );
+    tokio::fs::remove_file(root_path).await?;
+    tokio::fs::remove_file(reverted_path).await?;
+    let restarted = HistoryResolver::new(resolver.store.clone(), resolver.collector.clone());
+    let restored = restarted.resolve(node("leaf")).await?;
+    assert_eq!(serde_json::to_value(restored)?, serde_json::to_value(fork)?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn physical_prefix_does_not_invent_a_different_logical_fork_parent() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let resolver = resolver(directory.path()).await?;
+    let parent = row(
+        0,
+        "session_meta",
+        json!({"id":"physical","cli_version":"0.153.4"}),
+    )?;
+    tokio::fs::write(directory.path().join("rollout-physical.jsonl"), &parent).await?;
+    tokio::fs::write(directory.path().join("rollout-leaf.jsonl"), row(1, "session_meta", json!({
+        "id":"leaf","cli_version":"0.153.4","forked_from_id":"logical","forked_from_ordinal_exclusive":9,
+        "history_base":{"thread_id":"physical","end_ordinal_exclusive":1,"end_byte_offset":parent.len()}
+    }))?).await?;
+    let history = resolver.resolve(node("leaf")).await?;
+    assert!(history.gaps.is_empty(), "{:?}", history.gaps);
+    assert_eq!(
+        history.parent.context("physical parent")?.node,
+        node("physical")
+    );
+    assert!(history.edge.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn old_fork_binding_remains_readable_without_rewriting_its_object() -> Result<()> {
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
+    let directory = tempfile::tempdir()?;
+    let database_url = format!("sqlite://{}", directory.path().join("legacy.db").display());
+    let db = crate::db::connect(&database_url).await?;
+    crate::db::run_migrations(&db).await?;
+    let make = |db| -> Result<HistoryResolver> {
+        let store = EvidenceStore::new(db, "local")?;
+        Ok(HistoryResolver::new(
+            store.clone(),
+            NativeCollector::new(
+                store,
+                NativeRoot {
+                    harness: Harness::Codex,
+                    namespace: "fixture".into(),
+                    directory: directory.path().into(),
+                },
+            )?,
+        ))
+    };
+    let resolver = make(db.clone())?;
+    let parent_path = directory.path().join("rollout-root.jsonl");
+    let parent = row(
+        0,
+        "session_meta",
+        json!({"id":"root","cli_version":"0.153.4"}),
+    )?;
+    tokio::fs::write(&parent_path, &parent).await?;
+    tokio::fs::write(directory.path().join("rollout-leaf.jsonl"), row(1, "session_meta", json!({
+        "id":"leaf","cli_version":"0.153.4","history_base":{"thread_id":"root","end_ordinal_exclusive":1,"end_byte_offset":parent.len()}
+    }))?).await?;
+    resolver.resolve(node("leaf")).await?;
+    let new_id = binding_key(&node("leaf"), &node("root"), 1, parent.len() as u64)?;
+    let mut legacy = resolver
+        .store
+        .fork_binding(&new_id)
+        .await?
+        .context("new binding")?;
+    legacy.rollouts = None;
+    legacy.id = ForkBinding::key(&legacy.child, &legacy.parent, 1, parent.len() as u64)?;
+    assert!(serde_json::to_value(&legacy)?.get("rollouts").is_none());
+    resolver.store.bind_fork(&legacy).await?;
+    db.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "DELETE FROM native_evidence_objects WHERE kind = 'fork_binding' AND object_key = ?",
+        [new_id.clone().into()],
+    ))
+    .await?;
+    // A pre-rollout-identity database has neither the new binding nor any
+    // identity objects. Its immutable ordinary fork still has original records.
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "DELETE FROM native_evidence_objects WHERE kind = 'rollout_identity'".to_owned(),
+    ))
+    .await?;
+    tokio::fs::remove_file(parent_path).await?;
+    drop(resolver);
+    db.close().await?;
+    let resolver = make(crate::db::connect(&database_url).await?)?;
+    let restored = resolver.resolve(node("leaf")).await?;
+    assert!(restored.gaps.is_empty(), "{:?}", restored.gaps);
+    assert!(
+        resolver
+            .store
+            .rollout_identity(&legacy.checkpoint.source_id)
+            .await?
+            .is_none()
+    );
+    assert_eq!(resolver.store.fork_binding(&legacy.id).await?, Some(legacy));
+    assert!(resolver.store.fork_binding(&new_id).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_top_level_rollout_survives_database_reopen_without_active_selection() -> Result<()>
+{
+    let directory = tempfile::tempdir()?;
+    let database_url = format!(
+        "sqlite://{}",
+        directory.path().join("evidence.db").display()
+    );
+    let make = |db| -> Result<HistoryResolver> {
+        let store = EvidenceStore::new(db, "local")?;
+        Ok(HistoryResolver::new(
+            store.clone(),
+            NativeCollector::new(
+                store,
+                NativeRoot {
+                    namespace: "fixture".into(),
+                    harness: Harness::Codex,
+                    directory: directory.path().into(),
+                },
+            )?,
+        ))
+    };
+    let db = crate::db::connect(&database_url).await?;
+    crate::db::run_migrations(&db).await?;
+    let initial = make(db.clone())?;
+    let root_path = directory.path().join("rollout-root.jsonl");
+    let root = row(
+        0,
+        "session_meta",
+        json!({"id":"root","cli_version":"0.153.4"}),
+    )?;
+    tokio::fs::write(&root_path, &root).await?;
+    tokio::fs::write(directory.path().join("rollout-root_revision-1.jsonl"), row(1, "session_meta", json!({
+        "id":"root","cli_version":"0.153.4","history_base":{"thread_id":"root","end_ordinal_exclusive":1,"end_byte_offset":root.len()}
+    }))?).await?;
+    let before = initial.resolve(node("root")).await?;
+    assert_eq!(before.variants.len(), 2);
+    tokio::fs::remove_file(root_path).await?;
+    drop(initial);
+    db.close().await?;
+    let reopened = make(crate::db::connect(&database_url).await?)?;
+    let after = reopened.resolve(node("root")).await?;
+    assert_eq!(after.variants.len(), 2);
+    assert!(after.projection.is_none());
+    assert!(after.gaps.contains("native_active_rollout_unselected"));
+    assert!(after.gaps.contains("native_source_file_unavailable"));
+    for variant in &after.variants {
+        let id = &variant.source.as_ref().context("source")?.source.id;
+        let previous = before
+            .variants
+            .iter()
+            .find(|item| {
+                item.source
+                    .as_ref()
+                    .is_some_and(|source| &source.source.id == id)
+            })
+            .context("same source")?;
+        assert_eq!(variant.projection, previous.projection);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn damaged_rollout_identity_does_not_hide_healthy_sibling_history() -> Result<()> {
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
+    let directory = tempfile::tempdir()?;
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let store = EvidenceStore::new(db.clone(), "local")?;
+    let resolver = HistoryResolver::new(
+        store.clone(),
+        NativeCollector::new(
+            store.clone(),
+            NativeRoot {
+                namespace: "fixture".into(),
+                harness: Harness::Codex,
+                directory: directory.path().into(),
+            },
+        )?,
+    );
+    for name in ["rollout-root.jsonl", "rollout-root_revision-1.jsonl"] {
+        tokio::fs::write(
+            directory.path().join(name),
+            row(
+                0,
+                "session_meta",
+                json!({"id":"root","cli_version":"0.153.4"}),
+            )?,
+        )
+        .await?;
+    }
+    let before = resolver.resolve(node("root")).await?;
+    let damaged = before
+        .variants
+        .iter()
+        .filter_map(|history| history.source.as_ref())
+        .find(|source| source.rollout_id.as_deref() == Some("revision-1"))
+        .context("damaged source")?;
+    db.execute(Statement::from_sql_and_values(DbBackend::Sqlite,
+        "UPDATE native_evidence_objects SET object_json = '{}' WHERE kind = 'rollout_identity' AND object_key = ?",
+        [damaged.source.id.clone().into()])).await?;
+    let after = resolver.resolve(node("root")).await?;
+    assert_eq!(after.variants.len(), 2);
+    assert!(after.gaps.contains("native_stored_history_invalid"));
+    assert!(after.gaps.contains("native_active_rollout_unselected"));
+    assert!(after.variants.iter().any(|history| {
+        history.projection.is_some()
+            && history
+                .source
+                .as_ref()
+                .is_some_and(|source| source.rollout_id.as_deref() == Some("root"))
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn unreadable_matching_parent_candidate_prevents_binding_but_keeps_healthy_prefix()
+-> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let resolver = resolver(directory.path()).await?;
+    let root = row(
+        0,
+        "session_meta",
+        json!({"id":"root","cli_version":"0.153.4"}),
+    )?;
+    tokio::fs::write(directory.path().join("rollout-root.jsonl"), &root).await?;
+    let another = directory.path().join("another");
+    tokio::fs::create_dir_all(&another).await?;
+    tokio::fs::write(another.join("rollout-root.jsonl"), "invalid json\n").await?;
+    tokio::fs::write(directory.path().join("rollout-leaf.jsonl"), row(1, "session_meta", json!({
+        "id":"leaf","cli_version":"0.153.4","history_base":{"thread_id":"root","end_ordinal_exclusive":1,"end_byte_offset":root.len()}
+    }))?).await?;
+    let history = resolver.resolve(node("leaf")).await?;
+    assert!(history.gaps.contains("native_rollout_candidate_unverified"));
+    assert!(
+        history
+            .parent
+            .context("healthy prefix")?
+            .projection
+            .is_some()
+    );
+    assert!(
+        resolver
+            .store
+            .fork_binding(&binding_key(
+                &node("leaf"),
+                &node("root"),
+                1,
+                root.len() as u64
+            )?)
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn preferred_prefix_replacement_cannot_erase_an_observed_conflict() -> Result<()> {
+    use crate::session_evidence::store::rollouts::RolloutIdentity;
+    use crate::session_evidence::types::{
+        RecordInput, RecordRef, SourceCursor, SourceDescriptor, SourceFormat,
+    };
+    use sha2::{Digest, Sha256};
+    let directory = tempfile::tempdir()?;
+    let resolver = resolver(directory.path()).await?;
+    let mut sources = vec![];
+    for index in 0..3 {
+        sources.push(
+            resolver
+                .store
+                .register(SourceDescriptor {
+                    namespace: "fixture".into(),
+                    harness: Harness::Codex,
+                    format: SourceFormat::CodexRollout,
+                    locator: format!("file:fixture-{index}"),
+                    node: Some(node("root")),
+                })
+                .await?,
+        );
+    }
+    // Set up deterministic database order: a replacement A, a conflicting B,
+    // then an original generation C matching A. C may improve the selected
+    // source's provenance, but cannot make the observed B conflict disappear.
+    sources.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut cut_bytes = 0;
+    for (index, source) in sources.into_iter().enumerate() {
+        let generation = if index == 0 {
+            "fixture/replacement/A"
+        } else {
+            "fixture/original"
+        };
+        let metadata = row(
+            0,
+            "session_meta",
+            json!({"id":"root","cli_version":"0.153.4"}),
+        )?;
+        let message = row(
+            1,
+            "response_item",
+            json!({"type":"message","content":if index == 1 {"prefixB"} else {"prefixA"}}),
+        )?;
+        let bytes = metadata.clone() + &message;
+        cut_bytes = bytes.len() as u64;
+        let mut records = vec![];
+        let mut offset = 0;
+        for (sequence, line) in [metadata, message].into_iter().enumerate() {
+            records.push(RecordInput {
+                generation: generation.into(),
+                sequence: sequence as u64,
+                byte_start: Some(offset),
+                byte_end: Some(offset + line.len() as u64),
+                producer_version: Some("0.153.4".into()),
+                raw: serde_json::from_str(&line)?,
+            });
+            offset += line.len() as u64;
+        }
+        let source = resolver
+            .store
+            .append(
+                &source,
+                &records,
+                SourceCursor {
+                    generation: generation.into(),
+                    offset,
+                    next_sequence: 2,
+                    anchor_digest: format!(
+                        "sha256:{}",
+                        hex::encode(Sha256::digest(bytes.as_bytes()))
+                    ),
+                },
+            )
+            .await?;
+        let first = resolver
+            .store
+            .records(&SourceRange {
+                source_id: source.id.clone(),
+                generation: generation.into(),
+                start: 0,
+                end: 1,
+            })
+            .await?;
+        resolver
+            .store
+            .bind_rollout_identity(&RolloutIdentity {
+                id: source.id,
+                revision: 0,
+                node: node("root"),
+                rollout_id: "root".into(),
+                metadata: RecordRef::from_record(first.first().context("metadata")?)?,
+                observed_name: "rollout-root.jsonl".into(),
+            })
+            .await?;
+    }
+    tokio::fs::write(directory.path().join("rollout-leaf.jsonl"), row(2, "session_meta", json!({
+        "id":"leaf","cli_version":"0.153.4","history_base":{"thread_id":"root","end_ordinal_exclusive":2,"end_byte_offset":cut_bytes}
+    }))?).await?;
+    let history = resolver.resolve(node("leaf")).await?;
+    assert!(history.gaps.contains("fork_history_ambiguous"));
+    assert!(
+        !history
+            .parent
+            .context("selected prefix")?
+            .gaps
+            .contains("source_replaced_or_truncated")
+    );
+    assert!(
+        resolver
+            .store
+            .fork_binding(&binding_key(&node("leaf"), &node("root"), 2, cut_bytes)?)
+            .await?
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sibling_rollouts_share_import_budget_before_their_records_are_written() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let resolver = resolver(directory.path()).await?;
+    for name in ["rollout-root.jsonl", "rollout-root_revision-1.jsonl"] {
+        let mut bytes = row(
+            0,
+            "session_meta",
+            json!({"id":"root","cli_version":"0.153.4"}),
+        )?;
+        for ordinal in 1..4 {
+            bytes += &row(
+                ordinal,
+                "response_item",
+                json!({"type":"message","content":"data"}),
+            )?;
+        }
+        tokio::fs::write(directory.path().join(name), bytes).await?;
+    }
+    let mut budget = Budget {
+        nodes: 0,
+        records: 0,
+        remaining_import: 5,
+    };
+    let first = resolver
+        .visit(node("root"), None, &mut BTreeSet::new(), &mut budget)
+        .await?;
+    assert!(first.gaps.contains("native_import_budget_exhausted"));
+    let sources = resolver.store.node_sources(&node("root")).await?;
+    assert_eq!(
+        sources
+            .iter()
+            .map(|source| source.cursor.next_sequence)
+            .sum::<u64>(),
+        5
+    );
+    assert!(
+        sources
+            .iter()
+            .any(|source| source.cursor.next_sequence == 1)
+    );
+    let complete = resolver.resolve(node("root")).await?;
+    assert_eq!(
+        complete.gaps,
+        BTreeSet::from(["native_active_rollout_unselected".into()])
+    );
+    assert_eq!(
+        resolver
+            .store
+            .node_sources(&node("root"))
+            .await?
+            .iter()
+            .map(|source| source.cursor.next_sequence)
+            .sum::<u64>(),
+        8
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated Codex capture with fork-after-revert and two compactions"]
+async fn native_codex_capture_preserves_revert_and_compaction_history() -> Result<()> {
+    let source_root = std::path::PathBuf::from(std::env::var("BITROUTER_TEST_CODEX_ROLLOUT_ROOT")?);
+    let root_id = std::env::var("BITROUTER_TEST_CODEX_THREAD_ID")?;
+    let fork_id = std::env::var("BITROUTER_TEST_CODEX_FORK_ID")?;
+    let reverted_fork_id = std::env::var("BITROUTER_TEST_CODEX_REVERT_FORK_ID")?;
+    let reader = resolver(&source_root).await?;
+    let directory = tempfile::tempdir()?;
+    // Work on copies: native producer files are never removed or modified.
+    let mut copied = BTreeSet::new();
+    for id in [&root_id, &fork_id, &reverted_fork_id] {
+        for (_, path) in reader.collector.discover(id).await? {
+            let name = path.file_name().context("native capture filename")?;
+            if copied.insert(name.to_owned()) {
+                tokio::fs::copy(&path, directory.path().join(name)).await?;
+            }
+        }
+    }
+    let resolver = resolver(directory.path()).await?;
+    let root = resolver.resolve(node(&root_id)).await?;
+    assert!(root.variants.len() >= 2);
+    assert!(root.gaps.contains("native_active_rollout_unselected"));
+    let reverted = root
+        .variants
+        .iter()
+        .find(|history| {
+            history
+                .edge
+                .as_ref()
+                .is_some_and(|edge| edge.kind == EdgeKind::Rewind)
+        })
+        .context("native reverted history")?;
+    assert_eq!(
+        reverted.parent.as_ref().context("revert parent")?.node,
+        node(&root_id)
+    );
+    assert!(!reverted.gaps.contains("history_dependency_cycle"));
+    let fork = resolver.resolve(node(&fork_id)).await?;
+    assert_eq!(
+        fork.projection
+            .as_ref()
+            .context("native fork projection")?
+            .transitions
+            .iter()
+            .filter(|transition| transition.kind == EdgeKind::Compact)
+            .count(),
+        2
+    );
+    // These native records remain outside the implemented context semantics;
+    // this test must not claim full version admission or cost attribution.
+    assert!(
+        fork.gaps.iter().all(|gap| gap == "unknown_rollout_record"),
+        "{:?}",
+        fork.gaps
+    );
+    let reverted_fork = resolver.resolve(node(&reverted_fork_id)).await?;
+    assert!(
+        reverted_fork
+            .gaps
+            .iter()
+            .all(|gap| gap == "unknown_rollout_record"),
+        "{:?}",
+        reverted_fork.gaps
+    );
+    let physical_parent = reverted_fork
+        .parent
+        .as_ref()
+        .context("reverted fork parent")?;
+    assert_eq!(physical_parent.node, node(&root_id));
+    assert_eq!(
+        physical_parent
+            .source
+            .as_ref()
+            .context("parent rollout")?
+            .rollout_id,
+        reverted
+            .source
+            .as_ref()
+            .context("reverted rollout")?
+            .rollout_id
+    );
+    assert_ne!(
+        physical_parent
+            .source
+            .as_ref()
+            .context("parent rollout")?
+            .rollout_id
+            .as_deref(),
+        Some(root_id.as_str())
+    );
+    assert_eq!(
+        reverted_fork.edge.as_ref().context("logical fork")?.kind,
+        EdgeKind::Fork
+    );
+    for (candidate, path) in resolver.collector.discover(&root_id).await? {
+        assert_eq!(candidate, node(&root_id));
+        tokio::fs::remove_file(path).await?;
+    }
+    let restored = resolver.resolve(node(&fork_id)).await?;
+    assert_eq!(serde_json::to_value(restored)?, serde_json::to_value(fork)?);
+    let restored = resolver.resolve(node(&reverted_fork_id)).await?;
+    assert_eq!(
+        serde_json::to_value(restored)?,
+        serde_json::to_value(reverted_fork)?
     );
     Ok(())
 }

@@ -10,7 +10,7 @@ use super::projection::{Projection, Projector};
 use super::store::EvidenceStore;
 use super::types::{
     EdgeKind, ExecutionEdge, ForkBinding, Harness, MAX_GRAPH_ITEMS, MAX_RECORDS, NodeKey,
-    RECORD_PAGE_SIZE, RegisteredSource, SourceRange, StoredRecord,
+    RECORD_PAGE_SIZE, RegisteredSource, RolloutPair, SourceRange, StoredRecord,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +22,10 @@ pub struct ResolvedHistory {
     pub parent: Option<Box<ResolvedHistory>>,
     pub edge: Option<ExecutionEdge>,
     pub gaps: BTreeSet<String>,
+    /// Several observed physical histories may belong to one stable thread.
+    /// Their filenames and mtimes do not select an active history.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<ResolvedHistory>,
 }
 
 impl ResolvedHistory {
@@ -33,6 +37,7 @@ impl ResolvedHistory {
             parent: None,
             edge: None,
             gaps: BTreeSet::from([gap.into()]),
+            variants: vec![],
         }
     }
 }
@@ -46,6 +51,7 @@ pub struct HistoryResolver {
 struct Budget {
     nodes: usize,
     records: usize,
+    remaining_import: usize,
 }
 
 impl HistoryResolver {
@@ -57,11 +63,11 @@ impl HistoryResolver {
         self.visit(
             node,
             None,
-            None,
             &mut BTreeSet::new(),
             &mut Budget {
                 nodes: 0,
                 records: 0,
+                remaining_import: MAX_RECORDS,
             },
         )
         .await
@@ -70,47 +76,78 @@ impl HistoryResolver {
     async fn visit(
         &self,
         node: NodeKey,
-        bound: Option<FileBound>,
         stored: Option<CollectedSource>,
-        ancestors: &mut BTreeSet<NodeKey>,
+        ancestors: &mut BTreeSet<(String, String)>,
         budget: &mut Budget,
     ) -> Result<ResolvedHistory> {
         node.validate()?;
-        if ancestors.contains(&node) {
-            return Ok(ResolvedHistory::missing(node, "history_dependency_cycle"));
-        }
         if ancestors.len() >= 64 || budget.nodes >= MAX_GRAPH_ITEMS {
             return Ok(ResolvedHistory::missing(node, "history_dependency_limit"));
         }
         budget.nodes += 1;
         let source = if let Some(source) = stored {
             source
-        } else if let Some(bound) = &bound {
-            match self.parent_source(&node, bound).await? {
-                Some(source) => source,
-                None => return Ok(ResolvedHistory::missing(node, "native_history_unavailable")),
-            }
         } else {
-            let candidates: Vec<_> = self
-                .collector
-                .discover(&node.native_id)
-                .await?
-                .into_iter()
-                .filter(|(candidate, _)| candidate == &node)
-                .collect();
-            if candidates.len() != 1 {
-                return Ok(ResolvedHistory::missing(
-                    node,
-                    if candidates.is_empty() {
-                        "native_history_unavailable"
-                    } else {
-                        "native_history_ambiguous"
-                    },
-                ));
+            let (sources, collection_gaps) = self.observed_sources(&node, budget).await?;
+            if sources.is_empty() {
+                let mut history = ResolvedHistory::missing(node, "native_history_unavailable");
+                history.gaps.extend(collection_gaps);
+                return Ok(history);
             }
-            let (_, path) = candidates.first().context("native source candidate")?;
-            self.collector.reconcile(node.clone(), path, None).await?
+            if sources.len() > 1 || !collection_gaps.is_empty() {
+                let gap = if node.harness == Harness::Codex {
+                    "native_active_rollout_unselected"
+                } else {
+                    "native_history_ambiguous"
+                };
+                let mut history = ResolvedHistory::missing(node.clone(), gap);
+                history.gaps.extend(collection_gaps);
+                for source in sources.into_values() {
+                    let result = Box::pin(self.visit(
+                        node.clone(),
+                        Some(source.clone()),
+                        &mut ancestors.clone(),
+                        budget,
+                    ))
+                    .await;
+                    let variant = match result {
+                        Ok(variant) => variant,
+                        Err(error) => {
+                            tracing::warn!(%error, "native history variant invalid");
+                            let mut invalid = ResolvedHistory::missing(
+                                node.clone(),
+                                "native_history_variant_invalid",
+                            );
+                            invalid.source = Some(source);
+                            invalid
+                        }
+                    };
+                    history.gaps.extend(variant.gaps.iter().cloned());
+                    history.variants.push(variant);
+                }
+                return Ok(history);
+            }
+            sources
+                .into_values()
+                .next()
+                .context("native source candidate")?
         };
+        let node = source
+            .source
+            .descriptor
+            .node
+            .clone()
+            .context("history source node missing")?;
+        let ancestry_key = (
+            node.namespace.clone(),
+            source
+                .rollout_id
+                .clone()
+                .unwrap_or_else(|| source.source.id.clone()),
+        );
+        if ancestors.contains(&ancestry_key) {
+            return Ok(ResolvedHistory::missing(node, "history_dependency_cycle"));
+        }
         let mut history = ResolvedHistory {
             node: node.clone(),
             source: Some(source.clone()),
@@ -118,6 +155,7 @@ impl HistoryResolver {
             parent: None,
             edge: None,
             gaps: source.gaps.clone(),
+            variants: vec![],
         };
         let Some(range) = &source.range else {
             return Ok(history);
@@ -132,29 +170,63 @@ impl HistoryResolver {
             && let Some(metadata) = &source.metadata
         {
             match codex_parent(metadata) {
-                Ok(Some((native_id, cut))) => {
-                    let parent_node = NodeKey {
-                        native_id,
+                Ok(Some((parent_rollout, cut))) => {
+                    let placeholder = NodeKey {
+                        native_id: parent_rollout.clone(),
                         ..node.clone()
                     };
                     let ordinal = cut.end_ordinal_exclusive.context("fork ordinal missing")?;
                     let bytes = cut.end_byte_offset.context("fork byte cut missing")?;
-                    let binding_id = ForkBinding::key(&node, &parent_node, ordinal, bytes)?;
-                    let binding = self.store.fork_binding(&binding_id).await?;
-                    let stored = match &binding {
-                        Some(binding) => Some(self.binding_source(binding).await?),
-                        None => None,
+                    let Some(child_rollout) = source.rollout_id.clone() else {
+                        history
+                            .gaps
+                            .insert("native_rollout_identity_unavailable".into());
+                        return Ok(history);
                     };
-                    ancestors.insert(node.clone());
-                    let parent = Box::pin(self.visit(
-                        parent_node.clone(),
-                        Some(cut),
-                        stored,
-                        ancestors,
-                        budget,
-                    ))
-                    .await?;
-                    ancestors.remove(&node);
+                    let rollouts = RolloutPair {
+                        child: child_rollout,
+                        parent: parent_rollout.clone(),
+                    };
+                    let binding_id = ForkBinding::history_key(
+                        &node,
+                        &placeholder,
+                        Some(&rollouts),
+                        ordinal,
+                        bytes,
+                    )?;
+                    let mut binding = self.store.fork_binding(&binding_id).await?;
+                    // Old ordinary-fork bindings remain immutable. Their key
+                    // predates distinct rollout IDs, so only that exact shape
+                    // is eligible for this compatibility read.
+                    if binding.is_none() && rollouts.child == node.native_id && placeholder != node
+                    {
+                        binding = self
+                            .store
+                            .fork_binding(&ForkBinding::key(&node, &placeholder, ordinal, bytes)?)
+                            .await?;
+                    }
+                    let parent_source = match &binding {
+                        Some(binding) => Some(self.binding_source(binding).await?),
+                        None => {
+                            self.parent_source(&node.namespace, &parent_rollout, &cut, budget)
+                                .await?
+                        }
+                    };
+                    ancestors.insert(ancestry_key.clone());
+                    let parent = match parent_source {
+                        Some(parent_source) => {
+                            Box::pin(self.visit(
+                                placeholder,
+                                Some(parent_source),
+                                ancestors,
+                                budget,
+                            ))
+                            .await?
+                        }
+                        None => ResolvedHistory::missing(placeholder, "native_history_unavailable"),
+                    };
+                    ancestors.remove(&ancestry_key);
+                    let parent_node = parent.node.clone();
                     history.gaps.extend(parent.gaps.iter().cloned());
                     if let Some(projection) = &parent.projection {
                         projector.inherit(projection)?;
@@ -171,7 +243,12 @@ impl HistoryResolver {
                                 ..range.clone()
                             })
                             .await?;
-                        if binding.is_none() && parent.gaps.is_empty() {
+                        if binding.is_none()
+                            && parent
+                                .source
+                                .as_ref()
+                                .is_some_and(|source| source.gaps.is_empty())
+                        {
                             let child_record =
                                 first.first().context("fork child metadata missing")?;
                             let parent_source = parent
@@ -201,6 +278,7 @@ impl HistoryResolver {
                                     revision: 0,
                                     child: node.clone(),
                                     parent: parent_node.clone(),
+                                    rollouts: Some(rollouts),
                                     end_ordinal_exclusive: ordinal,
                                     end_byte_offset: bytes,
                                     child_record_id: child_record.id.clone(),
@@ -211,8 +289,26 @@ impl HistoryResolver {
                                 })
                                 .await?;
                         }
-                        history.edge = Some(ExecutionEdge {
-                            kind: EdgeKind::Fork,
+                        // A physical history base is not necessarily the
+                        // logical fork parent. Revert can replace only the base.
+                        // https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/protocol.rs
+                        let kind = if parent_node == node {
+                            Some(EdgeKind::Rewind)
+                        } else if metadata
+                            .get("forked_from_id")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(parent_node.native_id.as_str())
+                            && metadata
+                                .get("forked_from_ordinal_exclusive")
+                                .and_then(serde_json::Value::as_u64)
+                                == Some(ordinal)
+                        {
+                            Some(EdgeKind::Fork)
+                        } else {
+                            None
+                        };
+                        history.edge = kind.map(|kind| ExecutionEdge {
+                            kind,
                             from: parent_node,
                             to: node.clone(),
                             checkpoint: Some(checkpoint),
@@ -272,7 +368,121 @@ impl HistoryResolver {
         Ok(history)
     }
 
+    async fn observed_sources(
+        &self,
+        node: &NodeKey,
+        budget: &mut Budget,
+    ) -> Result<(
+        std::collections::BTreeMap<String, CollectedSource>,
+        BTreeSet<String>,
+    )> {
+        let mut gaps = BTreeSet::new();
+        let candidates = match self.collector.discover(&node.native_id).await {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(%error, "native history discovery failed");
+                gaps.insert("native_history_discovery_failed".into());
+                vec![]
+            }
+        };
+        let mut sources = std::collections::BTreeMap::new();
+        for (candidate, path) in candidates {
+            if &candidate != node {
+                continue;
+            }
+            match self
+                .collector
+                .reconcile_limited(node.clone(), &path, None, &mut budget.remaining_import)
+                .await
+            {
+                Ok(source) => {
+                    sources.insert(source.source.id.clone(), source);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "native history candidate invalid");
+                    gaps.insert("native_history_candidate_invalid".into());
+                }
+            }
+        }
+        if node.harness == Harness::Codex {
+            let (inventory, inventory_gaps) = self
+                .store
+                .rollout_inventory(&node.namespace, Some(node), None)
+                .await?;
+            gaps.extend(inventory_gaps);
+            for source in inventory {
+                if sources.contains_key(&source.id) {
+                    continue;
+                }
+                let restored = match self.stored_current(source.clone()).await {
+                    Ok(restored) => restored,
+                    Err(error) => {
+                        tracing::warn!(%error, "stored native history invalid");
+                        CollectedSource {
+                            source: source.clone(),
+                            range: None,
+                            path: None,
+                            metadata: None,
+                            rollout_id: None,
+                            gaps: BTreeSet::from(["native_stored_history_invalid".into()]),
+                        }
+                    }
+                };
+                sources.insert(source.id, restored);
+            }
+        }
+        Ok((sources, gaps))
+    }
+
+    async fn stored_current(&self, source: RegisteredSource) -> Result<CollectedSource> {
+        let mut gaps = BTreeSet::from(["native_source_file_unavailable".into()]);
+        let rollout_id = self
+            .store
+            .rollout_identity(&source.id)
+            .await?
+            .map(|identity| identity.rollout_id);
+        if rollout_id.is_none() {
+            gaps.insert("native_rollout_identity_unavailable".into());
+        }
+        let range = (source.cursor.next_sequence > 0).then(|| SourceRange {
+            source_id: source.id.clone(),
+            generation: source.cursor.generation.clone(),
+            start: 0,
+            end: source.cursor.next_sequence,
+        });
+        let metadata = if let Some(range) = &range {
+            let records = self
+                .store
+                .records(&SourceRange {
+                    end: 1,
+                    ..range.clone()
+                })
+                .await?;
+            records
+                .first()
+                .context("stored history metadata missing")?
+                .input
+                .raw
+                .get("payload")
+                .cloned()
+        } else {
+            None
+        };
+        if source.cursor.generation.contains("/replacement/") {
+            gaps.insert("source_replaced_or_truncated".into());
+        }
+        Ok(CollectedSource {
+            source,
+            range,
+            path: None,
+            metadata,
+            rollout_id,
+            gaps,
+        })
+    }
+
     async fn binding_source(&self, binding: &ForkBinding) -> Result<CollectedSource> {
+        self.store.verify_fork_binding(binding).await?;
         let source = self
             .store
             .source(&binding.checkpoint.source_id)
@@ -309,6 +519,13 @@ impl HistoryResolver {
             first,
             prefix.range,
             binding.observed_path.clone(),
+            Some(
+                binding
+                    .rollouts
+                    .as_ref()
+                    .map_or(binding.parent.native_id.as_str(), |ids| &ids.parent)
+                    .into(),
+            ),
         ))
     }
 
@@ -317,82 +534,137 @@ impl HistoryResolver {
     /// differing prefixes cannot be resolved from the reference alone.
     async fn parent_source(
         &self,
-        node: &NodeKey,
+        namespace: &str,
+        rollout: &str,
         cut: &FileBound,
+        budget: &mut Budget,
     ) -> Result<Option<CollectedSource>> {
         let ordinal = cut
             .end_ordinal_exclusive
             .context("parent ordinal missing")?;
         let bytes = cut.end_byte_offset.context("parent byte cut missing")?;
         let mut current = None;
-        for (candidate, path) in self.collector.discover(&node.native_id).await? {
-            if &candidate == node {
-                current = Some(
-                    self.collector
-                        .reconcile(node.clone(), &path, Some(cut.clone()))
-                        .await?,
-                );
+        let (candidates, mut gaps) = match self.collector.discover_rollout(rollout).await {
+            Ok(discovery) => discovery,
+            Err(error) => {
+                tracing::warn!(%error, "parent rollout discovery failed");
+                (
+                    vec![],
+                    BTreeSet::from(["native_rollout_discovery_failed".into()]),
+                )
+            }
+        };
+        for (candidate, path) in candidates {
+            if candidate.namespace == namespace {
+                match self
+                    .collector
+                    .reconcile_limited(
+                        candidate,
+                        &path,
+                        Some(cut.clone()),
+                        &mut budget.remaining_import,
+                    )
+                    .await
+                {
+                    Ok(source) => {
+                        // Rewriting a later tail does not invalidate an older
+                        // verified prefix. Prefix comparison below still marks
+                        // conflicting or replacement-only generations.
+                        gaps.extend(
+                            source
+                                .gaps
+                                .iter()
+                                .filter(|gap| gap.as_str() != "source_replaced_or_truncated")
+                                .cloned(),
+                        );
+                        current = Some(source);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "parent rollout candidate invalid");
+                        gaps.insert("native_rollout_candidate_invalid".into());
+                    }
+                }
             }
         }
+        let (inventory, inventory_gaps) = self
+            .store
+            .rollout_inventory(namespace, None, Some(rollout))
+            .await?;
+        gaps.extend(inventory_gaps);
         let mut selected: Option<(String, CollectedSource)> = None;
         let mut generations = 0;
         let mut work = 0u64;
-        for source in self.store.node_sources(node).await? {
-            if source.descriptor.format != super::types::SourceFormat::CodexRollout {
-                continue;
-            }
-            let mut after = None;
-            loop {
-                let starts = self
-                    .store
-                    .generation_starts(&source.id, after.as_deref())
-                    .await?;
-                let done = starts.len() < RECORD_PAGE_SIZE as usize;
-                after = starts.last().map(|record| record.id.clone());
-                for first in starts {
-                    generations += 1;
-                    ensure!(generations <= MAX_GRAPH_ITEMS, "fork generation scan limit");
-                    let first_ordinal = first
-                        .input
-                        .raw
-                        .get("ordinal")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(ordinal);
-                    work = work.saturating_add(ordinal.saturating_sub(first_ordinal));
-                    ensure!(work <= MAX_RECORDS as u64, "fork prefix comparison limit");
-                    let Some(prefix) = self
+        for source in inventory {
+            let inspected = async {
+                let mut after = None;
+                loop {
+                    let starts = self
                         .store
-                        .fork_prefix(&source, &first, ordinal, bytes)
-                        .await?
-                    else {
-                        continue;
-                    };
-                    if let Some((fingerprint, selected)) = &mut selected {
-                        if fingerprint != &prefix.fingerprint {
-                            selected.gaps.insert("fork_history_ambiguous".into());
-                            return Ok(Some(selected.clone()));
-                        }
-                        if !selected.gaps.contains("source_replaced_or_truncated") {
+                        .generation_starts(&source.id, after.as_deref())
+                        .await?;
+                    let done = starts.len() < RECORD_PAGE_SIZE as usize;
+                    after = starts.last().map(|record| record.id.clone());
+                    for first in starts {
+                        generations += 1;
+                        ensure!(generations <= MAX_GRAPH_ITEMS, "fork generation scan limit");
+                        let first_ordinal = first
+                            .input
+                            .raw
+                            .get("ordinal")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(ordinal);
+                        work = work.saturating_add(ordinal.saturating_sub(first_ordinal));
+                        ensure!(work <= MAX_RECORDS as u64, "fork prefix comparison limit");
+                        let Some(prefix) = self
+                            .store
+                            .fork_prefix(&source, &first, ordinal, bytes)
+                            .await?
+                        else {
+                            gaps.insert("native_rollout_prefix_incomplete".into());
                             continue;
+                        };
+                        if let Some((fingerprint, selected)) = &mut selected {
+                            if fingerprint != &prefix.fingerprint {
+                                gaps.insert("fork_history_ambiguous".into());
+                                return anyhow::Ok(());
+                            }
+                            if !selected.gaps.contains("source_replaced_or_truncated") {
+                                continue;
+                            }
                         }
+                        let path = current
+                            .as_ref()
+                            .filter(|current| current.source.id == source.id)
+                            .and_then(|current| current.path.clone());
+                        let mut resolved = Self::stored_source(
+                            source.clone(),
+                            &first,
+                            prefix.range,
+                            path,
+                            Some(rollout.into()),
+                        );
+                        if first.input.generation.contains("/replacement/") {
+                            resolved.gaps.insert("source_replaced_or_truncated".into());
+                        }
+                        selected = Some((prefix.fingerprint, resolved));
                     }
-                    let path = current
-                        .as_ref()
-                        .filter(|current| current.source.id == source.id)
-                        .and_then(|current| current.path.clone());
-                    let mut resolved =
-                        Self::stored_source(source.clone(), &first, prefix.range, path);
-                    if first.input.generation.contains("/replacement/") {
-                        resolved.gaps.insert("source_replaced_or_truncated".into());
+                    if done {
+                        break;
                     }
-                    selected = Some((prefix.fingerprint, resolved));
                 }
-                if done {
-                    break;
-                }
+                anyhow::Ok(())
+            }
+            .await;
+            if let Err(error) = inspected {
+                tracing::warn!(%error, "parent rollout prefix invalid");
+                gaps.insert("native_rollout_prefix_invalid".into());
             }
         }
-        Ok(selected.map(|(_, source)| source).or(current))
+        let mut selected = selected.map(|(_, source)| source).or(current);
+        if let Some(source) = &mut selected {
+            source.gaps.extend(gaps);
+        }
+        Ok(selected)
     }
 
     fn stored_source(
@@ -400,6 +672,7 @@ impl HistoryResolver {
         first: &StoredRecord,
         range: SourceRange,
         path: Option<std::path::PathBuf>,
+        rollout_id: Option<String>,
     ) -> CollectedSource {
         CollectedSource {
             source,
@@ -407,6 +680,7 @@ impl HistoryResolver {
             path,
             gaps: BTreeSet::new(),
             metadata: first.input.raw.get("payload").cloned(),
+            rollout_id,
         }
     }
 }
