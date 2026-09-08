@@ -761,13 +761,14 @@ async fn concurrent_claude_profiles_bind_reverse_results_and_keep_hooks_scoped()
     .await?;
     let snapshot = service.reconcile().await?;
     // These profile directories are transcript fixtures, not Git workspaces.
-    assert_eq!(
-        snapshot.gaps,
-        BTreeSet::from([
-            "workspace_capture_failed".into(),
-            "native_attempt_membership_unavailable".into()
-        ])
-    );
+    let mut expected_gaps = BTreeSet::from([
+        "workspace_capture_failed".into(),
+        "native_attempt_membership_unavailable".into(),
+    ]);
+    if !cfg!(unix) {
+        expected_gaps.insert("native_process_capture_unavailable".into());
+    }
+    assert_eq!(snapshot.gaps, expected_gaps);
     assert_eq!(snapshot.histories.len(), 3);
     assert!(snapshot.graph.facts.iter().any(|fact| {
         matches!(
