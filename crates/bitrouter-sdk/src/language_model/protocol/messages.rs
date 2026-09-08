@@ -2300,6 +2300,7 @@ impl StreamDecoder for MessagesStreamDecoder {
                             id: tool_id,
                             name,
                             arguments: String::new(),
+                            provider_metadata: Default::default(),
                         });
                     }
                 }
@@ -2337,6 +2338,7 @@ impl StreamDecoder for MessagesStreamDecoder {
                                 id,
                                 name: None,
                                 arguments: partial.to_string(),
+                                provider_metadata: Default::default(),
                             });
                         }
                     }
@@ -2878,6 +2880,7 @@ impl StreamEncoder for MessagesStreamEncoder {
                 id,
                 name,
                 arguments,
+                ..
             } => {
                 self.pending_reasoning = None;
                 if let Some(name) = name.as_deref().filter(|n| !n.is_empty()) {

@@ -1561,6 +1561,7 @@ impl StreamDecoder for GenerateContentStreamDecoder {
                             id,
                             name: Some(name),
                             arguments,
+                            provider_metadata: Default::default(),
                         }),
                         Content::ToolResult { .. } => {}
                         // A generated file (e.g. an image) becomes one whole

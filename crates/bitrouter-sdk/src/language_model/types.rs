@@ -2023,6 +2023,10 @@ pub enum StreamPart {
         name: Option<String>,
         /// Arguments fragment.
         arguments: String,
+        /// Source-native call type and namespace, sent with the opening delta.
+        /// Responses custom tools use plain text input instead of JSON arguments.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        provider_metadata: ProviderMetadata,
     },
     /// A complete **provider/router-executed** tool call, emitted whole (not as
     /// [`Self::ToolCallDelta`] fragments). The server-side tool loop emits this
