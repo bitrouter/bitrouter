@@ -10,7 +10,7 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
 | History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex physical rollout dependencies bind immutable prefixes separately from stable threads and logical fork ancestry; observed revert variants survive file removal. Codex input receipts select a rollout through original native lifecycle and turn-context records; source-local execution views retain own turn bookends, explicit records and root-turn claims across copied subagent prefixes. | Complete execution/context coverage, unmatched/replaced rollout histories, Claude independent-fork UUID remapping and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and resumed-child task membership and execution coverage. |
-| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Immutable attempt execution observations join verified direct inputs and selected Codex descendant turns, including late work on archived attempts. | Complete execution membership, pending/resumed descendant coverage, durable task-scoped paging and manager intent recovery after a Code process restart. |
+| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Immutable attempt execution observations join verified direct inputs and selected Codex descendant turns, including unfinished child observations and late work on archived attempts. | Complete execution membership, resumed descendant coverage, durable task-scoped paging and manager intent recovery after a Code process restart. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
 | Evaluation | Manifest persistence/validation and request-set accounting primitives exist. | Production manifest construction, coding evaluation, authoritative Eval admission and human feedback. |
 | TUI | Code displays confirmed task/attempt state and pending reservations, with F2/F3 selection and F4 refresh through negotiated ACP methods. Collection state is also available in an application snapshot. | Settled checkpoint/evaluation status, human feedback and durable recovery of uncertain client intents. |
@@ -43,8 +43,8 @@ that no later input, competing source or execution exists.
 Direct inputs retain their native process and conversation identities. Claude
 can therefore retain one input acknowledged in multiple conversations across a
 native reset. Codex descendants need a unique root input, independently selected
-root rollout/turn, an unambiguous chain of original spawn metadata and a gap-free
-own child execution. A copied parent prefix or logical fork relation cannot supply
+root rollout/turn, an unambiguous chain of original spawn metadata and an
+independently observed own child execution. A copied parent prefix or logical fork relation cannot supply
 that execution. A reused child contributes its matching turn to each attempt,
 not its whole thread. Invalid sibling metadata, execution records or unavailable
 candidate identities withhold descendant membership.
@@ -66,8 +66,26 @@ reconciliation passes, with an explicit pending gap when the page is incomplete.
 This cursor is process-local. Persistent task-scoped paging and elimination of
 the existing controller-lifetime source/record limits remain required.
 
+An attributable Codex child with one ordered start and no observed terminal is
+retained with `native_attempt_descendant_unfinished`. Only a missing terminal
+is tolerated; conflicting, overlapping or incomplete source evidence still
+withholds attribution. This describes the frozen source cut, not whether the
+native process remains alive. A later terminal produces a new observation and
+does not alter the earlier open execution snapshot. Original execution records
+and their serialized parser facts are unchanged.
+
+Independent review of this increment passed. Tests cover open-to-terminal
+reconciliation and database reopen, both forged unfinished-gap directions,
+and malformed sibling sources with open and terminal executions. The actual
+Codex subagent capture also replays original prefixes ending before a terminal;
+this verifies the observed cut, not live process liveness. All 3,416 workspace
+tests passed with 17 skipped; one unrelated standalone-wiring test reported a
+nextest leak and passed an isolated rerun without that report. The two real
+Codex capture tests, pinned-adapter binary fixture, workspace and Windows
+Clippy, doctests, rustdoc, distribution, formatting and diff checks passed.
+
 Every observation still carries `native_attempt_execution_coverage_incomplete`.
-Open child work, non-self-root resumed inputs, Claude descendant membership,
+Complete child settlement, non-self-root resumed inputs, Claude descendant membership,
 auxiliary requests, exact request costs, native settlement and final artifacts
 are not certified by this stage. It neither produces a complete evaluation
 manifest nor advances an attempt to `Ready`.

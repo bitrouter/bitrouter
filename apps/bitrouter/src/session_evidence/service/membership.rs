@@ -2,7 +2,7 @@
 //! attempt membership. Inherited context never supplies descendant executions.
 
 use super::*;
-use crate::session_evidence::execution::rollout_runs::RolloutExecutions;
+use crate::session_evidence::execution::rollout_runs::{ExecutionState, RolloutExecutions};
 use crate::session_evidence::membership::{AttemptExecutions, DescendantExecution};
 use crate::session_evidence::native_inputs::NativeInputEvidence;
 use crate::session_evidence::types::{Attempt, MAX_OBJECT_BYTES};
@@ -225,7 +225,7 @@ impl ControllerEvidence {
                 blocked.insert(history.node.clone());
             }
             for run in &executions.runs {
-                if !run.gaps.is_empty() {
+                if run.execution_state().is_none() {
                     invalid_runs.insert((history.node.clone(), run.turn_id.clone()));
                 }
             }
@@ -282,7 +282,7 @@ impl ControllerEvidence {
                 let Some(root_turn) = &run.root_turn_id else {
                     continue;
                 };
-                if !run.gaps.is_empty() {
+                if run.execution_state().is_none() {
                     continue;
                 }
                 let roots: Vec<_> = evidence
@@ -361,6 +361,11 @@ impl ControllerEvidence {
                 source.executions.inspected.is_some(),
                 "descendant source prefix missing"
             );
+            if child.execution.execution_state() == Some(ExecutionState::AwaitingTerminal) {
+                evidence
+                    .gaps
+                    .insert("native_attempt_descendant_unfinished".into());
+            }
             evidence.descendants.push(child);
         }
         let mut lineage_nodes = BTreeSet::new();

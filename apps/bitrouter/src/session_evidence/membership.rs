@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::execution::rollout_runs::RolloutRun;
+use super::execution::rollout_runs::{ExecutionState, RolloutRun};
 use super::native_inputs::{NativeInputBinding, NativeInputEvidence};
 use super::types::{
     AcpSessionKey, MAX_GRAPH_ITEMS, MAX_OBJECT_BYTES, MAX_RECORDS, NodeKey, PARSER_VERSION,
@@ -157,7 +157,7 @@ impl AttemptExecutions {
                 !child.ancestry.is_empty()
                     && child.ancestry.len() <= 64
                     && child.execution.root_turn_id.as_ref() == Some(&root.native_id)
-                    && child.execution.gaps.is_empty(),
+                    && child.execution.execution_state().is_some(),
                 "descendant execution attribution incomplete"
             );
             ensure!(
@@ -165,6 +165,13 @@ impl AttemptExecutions {
                 "duplicate descendant execution"
             );
         }
+        ensure!(
+            self.gaps.contains("native_attempt_descendant_unfinished")
+                == self.descendants.iter().any(|child| {
+                    child.execution.execution_state() == Some(ExecutionState::AwaitingTerminal)
+                }),
+            "unfinished descendant status mismatch"
+        );
         self.references()?;
         Ok(())
     }

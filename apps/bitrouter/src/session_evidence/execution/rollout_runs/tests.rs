@@ -216,6 +216,44 @@ fn gaps_and_conflicts_withhold_completed_execution_spans() -> Result<()> {
 }
 
 #[test]
+fn an_unfinished_execution_needs_one_ordered_start_without_conflicting_evidence() -> Result<()> {
+    let open = vec![
+        row("session_meta", json!({"id":"child"})),
+        event("task_started", "turn"),
+        context("turn", "root"),
+    ];
+    let observed = scan(open.clone(), 0, MAX_OBJECT_BYTES)?;
+    assert_eq!(
+        observed.runs[0].execution_state(),
+        Some(ExecutionState::AwaitingTerminal)
+    );
+    for mutation in 0..6 {
+        let mut rows = open.clone();
+        match mutation {
+            0 => {
+                rows.remove(1);
+            }
+            1 => rows.insert(2, event("task_started", "turn")),
+            2 => rows.swap(1, 2),
+            3 => rows.push(event("task_started", "overlapping")),
+            4 => rows[2]["ordinal"] = json!(9),
+            _ => rows.push(context("turn", "conflicting-root")),
+        }
+        let evidence = scan(rows, 0, MAX_OBJECT_BYTES)?;
+        let run = evidence
+            .runs
+            .iter()
+            .find(|run| run.turn_id == "turn")
+            .context("own run")?;
+        assert!(
+            run.execution_state().is_none(),
+            "mutation {mutation}: {run:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn anonymous_aborts_and_unaddressed_messages_cannot_close_or_populate_a_turn() -> Result<()> {
     let evidence = scan(
         vec![

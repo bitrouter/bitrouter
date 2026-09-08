@@ -39,6 +39,41 @@ pub struct RolloutRun {
     pub gaps: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExecutionState {
+    AwaitingTerminal,
+    Terminal,
+}
+
+impl RolloutRun {
+    /// Interpret original bookends independently of task settlement. An open
+    /// observation does not establish whether the native process is still live.
+    pub(crate) fn execution_state(&self) -> Option<ExecutionState> {
+        if self.gaps.is_empty()
+            && self.starts.len() == 1
+            && self.terminations.len() == 1
+            && self.observed_span.is_some()
+            && self.outcome.is_some()
+        {
+            return Some(ExecutionState::Terminal);
+        }
+        if self.starts.len() == 1
+            && self.terminations.is_empty()
+            && self.observed_span.is_none()
+            && self.outcome.is_none()
+            && self.gaps.len() == 1
+            && self.gaps.contains("native_rollout_bookends_incomplete")
+            && self
+                .records
+                .iter()
+                .all(|record| record.range.start >= self.starts[0].range.start)
+        {
+            return Some(ExecutionState::AwaitingTerminal);
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RolloutExecutions {
     pub metadata: Option<RecordRef>,

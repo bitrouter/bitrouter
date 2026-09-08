@@ -208,8 +208,12 @@ by one process/input across reset. Reads revalidate the original inspected cuts,
 including competing producer claims and Codex connection acceptances. A new
 observation does not mutate an older snapshot or the original task revision.
 Current attempts are prioritized and archive targets rotate through bounded
-pages; unfinished inventory remains explicit. These observations always retain
-an execution-coverage gap: open or otherwise unassigned child work, auxiliary
+pages; unfinished inventory remains explicit. An attributable Codex child with
+an intact start but no observed terminal remains a member with an unfinished
+gap. This records an observation boundary, not proof of a live process. Later
+completion creates a new snapshot without changing the earlier one. These
+observations always retain an execution-coverage gap: complete child settlement,
+otherwise unassigned child work, auxiliary
 requests, final artifacts and native settlement still need complete attribution.
 They are not a frozen evaluation manifest and do not make an attempt `Ready`.
 An observation sequence without gaps does not cover all native work: auxiliary

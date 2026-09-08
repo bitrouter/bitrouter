@@ -207,6 +207,43 @@ async fn captured_codex_subagent_followups_keep_distinct_own_turns() -> Result<(
                 *reference
             );
         }
+        // Replay the original source cut immediately before this turn's end.
+        // This proves the retained open prefix, not live-process liveness.
+        let terminal = run.terminations.first().context("native terminal")?;
+        let inspected = executions.inspected.as_ref().context("native prefix")?;
+        let mut scanner =
+            crate::session_evidence::execution::rollout_runs::Scanner::new(node(&child));
+        let mut budget = MAX_OBJECT_BYTES;
+        let mut start = 0;
+        while start < terminal.record.range.start {
+            let end = (start + RECORD_PAGE_SIZE).min(terminal.record.range.start);
+            for record in resolver
+                .store
+                .records(&SourceRange {
+                    start,
+                    end,
+                    ..inspected.clone()
+                })
+                .await?
+            {
+                scanner.push(&record, &mut budget);
+            }
+            start = end;
+        }
+        let prefix = scanner.finish();
+        let open = prefix
+            .runs
+            .iter()
+            .find(|candidate| candidate.turn_id == run.turn_id)
+            .context("native unfinished turn")?;
+        assert_eq!(
+            open.execution_state(),
+            Some(
+                crate::session_evidence::execution::rollout_runs::ExecutionState::AwaitingTerminal
+            )
+        );
+        assert_eq!(open.root_turn_id, run.root_turn_id);
+        assert!(open.outcome.is_none() && open.observed_span.is_none());
     }
     Ok(())
 }

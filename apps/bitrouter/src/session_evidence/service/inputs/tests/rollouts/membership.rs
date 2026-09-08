@@ -17,6 +17,16 @@ async fn native_history(
     child: bool,
     turns: &[(&str, &str)],
 ) -> Result<PathBuf> {
+    native_history_with_pending(service, node, child, turns, false).await
+}
+
+async fn native_history_with_pending(
+    service: &ControllerEvidence,
+    node: &str,
+    child: bool,
+    turns: &[(&str, &str)],
+    pending: bool,
+) -> Result<PathBuf> {
     let path = service
         .collector
         .root()
@@ -34,6 +44,9 @@ async fn native_history(
     }
     for (turn, root) in turns {
         rows.extend(execution(turn, root));
+    }
+    if pending {
+        rows.pop();
     }
     for (ordinal, row) in rows.iter_mut().enumerate() {
         row["ordinal"] = json!(ordinal);
@@ -53,6 +66,130 @@ async fn native_history(
         )
         .await?;
     Ok(path)
+}
+
+#[tokio::test]
+async fn unfinished_child_membership_survives_completion_and_reopen_as_an_immutable_cut()
+-> Result<()> {
+    use crate::session_evidence::execution::rollout_runs::ExecutionState;
+    use tokio::io::AsyncWriteExt;
+    let directory = tempfile::tempdir()?;
+    let handle = fixture(directory.path(), Harness::Codex).await?;
+    let service = &handle.service;
+    create(service, directory.path()).await?;
+    producer(service, "turn").await?;
+    let root = native_history(service, "native", false, &[("turn", "turn")]).await?;
+    let child =
+        native_history_with_pending(service, "worker", true, &[("child", "turn")], true).await?;
+    let mut rows = lifecycle("thread/start", "create", &root);
+    rows.extend(turn("turn"));
+    spool(service, rows).await?;
+    let before = service.reconcile().await?;
+    let attempt = &before.attempts[0];
+    assert_eq!(attempt.phase, AttemptPhase::Settling);
+    assert!(attempt.effective_manifest.is_none());
+    let original_id = attempt
+        .execution_snapshot
+        .as_ref()
+        .context("unfinished snapshot")?
+        .clone();
+    let membership = service.store.attempt_executions(&original_id).await?;
+    assert_eq!(membership.descendants.len(), 1, "{:?}", before.gaps);
+    assert_eq!(
+        membership.descendants[0].execution.execution_state(),
+        Some(ExecutionState::AwaitingTerminal)
+    );
+    assert!(
+        membership
+            .gaps
+            .contains("native_attempt_descendant_unfinished")
+    );
+    assert!(membership.descendants[0].execution.observed_span.is_none());
+    let frozen = serde_json::to_value(&membership)?;
+
+    let mut forged = membership.clone();
+    forged.prefixes.clear();
+    forged.gaps.remove("native_attempt_descendant_unfinished");
+    let stamp = service.store.execution_pointer_stamp(&attempt.id).await?;
+    let error = service
+        .store
+        .record_attempt_executions(attempt, stamp.as_ref(), forged)
+        .await
+        .err()
+        .context("unfinished child cannot be hidden")?;
+    assert!(
+        error
+            .to_string()
+            .contains("unfinished descendant status mismatch"),
+        "{error:#}"
+    );
+
+    let ordinal = tokio::fs::read_to_string(&child).await?.lines().count();
+    let mut file = tokio::fs::OpenOptions::new()
+        .append(true)
+        .open(&child)
+        .await?;
+    let mut bytes = serde_json::to_vec(
+        &json!({"ordinal":ordinal,"type":"event_msg","payload":{"type":"task_complete","turn_id":"child"}}),
+    )?;
+    bytes.push(b'\n');
+    file.write_all(&bytes).await?;
+    file.flush().await?;
+    drop(file);
+    let after = service.reconcile().await?;
+    let completed = &after.attempt_executions[&attempt.id];
+    assert_eq!(completed.descendants.len(), 1);
+    assert_eq!(
+        completed.descendants[0].execution.execution_state(),
+        Some(ExecutionState::Terminal)
+    );
+    assert!(
+        !completed
+            .gaps
+            .contains("native_attempt_descendant_unfinished")
+    );
+    assert!(
+        completed
+            .gaps
+            .contains("native_attempt_execution_coverage_incomplete")
+    );
+    assert_eq!(after.attempts[0].phase, AttemptPhase::Settling);
+    assert!(after.attempts[0].effective_manifest.is_none());
+    let mut forged = completed.clone();
+    forged.prefixes.clear();
+    forged
+        .gaps
+        .insert("native_attempt_descendant_unfinished".into());
+    let stamp = service.store.execution_pointer_stamp(&attempt.id).await?;
+    let error = service
+        .store
+        .record_attempt_executions(&after.attempts[0], stamp.as_ref(), forged)
+        .await
+        .err()
+        .context("finished child cannot acquire an unfinished gap")?;
+    assert!(
+        error
+            .to_string()
+            .contains("unfinished descendant status mismatch"),
+        "{error:#}"
+    );
+    assert_eq!(
+        serde_json::to_value(service.store.attempt_executions(&original_id).await?)?,
+        frozen
+    );
+    drop(handle);
+    let reopened = fixture(directory.path(), Harness::Codex).await?;
+    assert_eq!(
+        serde_json::to_value(
+            reopened
+                .service
+                .store
+                .attempt_executions(&original_id)
+                .await?
+        )?,
+        frozen
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -262,58 +399,67 @@ async fn an_older_scan_cannot_overwrite_late_child_membership_at_the_same_task_r
 
 #[tokio::test]
 async fn malformed_sibling_spawn_metadata_blocks_descendant_membership() -> Result<()> {
-    for invalid in [json!(false), json!("other-parent"), Value::Null] {
-        let directory = tempfile::tempdir()?;
-        let handle = fixture(directory.path(), Harness::Codex).await?;
-        let service = &handle.service;
-        create(service, directory.path()).await?;
-        producer(service, "first").await?;
-        let root = native_history(service, "native", false, &[("first", "first")]).await?;
-        let child = native_history(service, "worker", true, &[("child", "first")]).await?;
-        let other = child
-            .parent()
-            .context("child directory")?
-            .join("other")
-            .join("rollout-worker.jsonl");
-        let mut records: Vec<Value> = tokio::fs::read_to_string(&child)
-            .await?
-            .lines()
-            .map(serde_json::from_str)
-            .collect::<std::result::Result<_, _>>()?;
-        let bad_ordinal = invalid.is_null();
-        if bad_ordinal {
-            records[2]["ordinal"] = json!(999);
-        } else {
-            records[0]["payload"]["source"]["subagent"]["thread_spawn"]["parent_thread_id"] =
-                invalid;
-        }
-        write_rows(&other, records).await?;
-        service
-            .collector
-            .reconcile(
-                NodeKey {
-                    native_id: "worker".into(),
-                    namespace: service.collector.root().namespace.clone(),
-                    harness: Harness::Codex,
-                    agent_id: None,
-                },
-                &other,
-                None,
+    for pending in [false, true] {
+        for invalid in [json!(false), json!("other-parent"), Value::Null] {
+            let directory = tempfile::tempdir()?;
+            let handle = fixture(directory.path(), Harness::Codex).await?;
+            let service = &handle.service;
+            create(service, directory.path()).await?;
+            producer(service, "first").await?;
+            let root = native_history(service, "native", false, &[("first", "first")]).await?;
+            let child = native_history_with_pending(
+                service,
+                "worker",
+                true,
+                &[("child", "first")],
+                pending,
             )
             .await?;
-        let mut rows = lifecycle("thread/start", "create", &root);
-        rows.extend(turn("first"));
-        spool(service, rows).await?;
-        let result = service.reconcile().await?;
-        let attempt = &result.attempts[0];
-        assert_eq!(attempt.members.len(), 1, "{:?}", result.gaps);
-        assert!(
-            result.attempt_executions[&attempt.id]
-                .descendants
-                .is_empty()
-        );
-        if !bad_ordinal {
-            assert!(result.gaps.contains("native_attempt_spawn_ambiguous"));
+            let other = child
+                .parent()
+                .context("child directory")?
+                .join("other")
+                .join("rollout-worker.jsonl");
+            let mut records: Vec<Value> = tokio::fs::read_to_string(&child)
+                .await?
+                .lines()
+                .map(serde_json::from_str)
+                .collect::<std::result::Result<_, _>>()?;
+            let bad_ordinal = invalid.is_null();
+            if bad_ordinal {
+                records[2]["ordinal"] = json!(999);
+            } else {
+                records[0]["payload"]["source"]["subagent"]["thread_spawn"]["parent_thread_id"] =
+                    invalid;
+            }
+            write_rows(&other, records).await?;
+            service
+                .collector
+                .reconcile(
+                    NodeKey {
+                        native_id: "worker".into(),
+                        namespace: service.collector.root().namespace.clone(),
+                        harness: Harness::Codex,
+                        agent_id: None,
+                    },
+                    &other,
+                    None,
+                )
+                .await?;
+            let mut rows = lifecycle("thread/start", "create", &root);
+            rows.extend(turn("first"));
+            spool(service, rows).await?;
+            let result = service.reconcile().await?;
+            let attempt = &result.attempts[0];
+            assert_eq!(attempt.members.len(), 1, "{:?}", result.gaps);
+            assert!(
+                result.attempt_executions[&attempt.id]
+                    .descendants
+                    .is_empty()
+            );
+            if !bad_ordinal {
+                assert!(result.gaps.contains("native_attempt_spawn_ambiguous"));
+            }
         }
     }
     Ok(())
