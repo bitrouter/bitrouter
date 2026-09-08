@@ -1,0 +1,16 @@
+{
+  "codex": {
+    "package": "@agentclientprotocol/codex-acp",
+    "version": "1.10.0",
+    "bin": "codex-acp",
+    "module": "dist/index.js",
+    "moduleDigest": "4602784c5896fbf05a7d89b09655bacc768d0bf281e0d03a10333ff81da45268"
+  },
+  "claude": {
+    "package": "@agentclientprotocol/claude-agent-acp",
+    "version": "0.75.1",
+    "bin": "claude-agent-acp",
+    "module": "dist/acp-agent.js",
+    "moduleDigest": "c22424c297429378166524b59ee6bed239c999a420ad0dd06571b768efa7525b"
+  }
+}

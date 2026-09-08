@@ -639,9 +639,22 @@ bitrouter acp serve <agent> [-c <path>]
 ```
 
 Exposes an ACP-compatible adapter over protocol-pure stdio until the ACP client
-disconnects; one controller connection can carry multiple
-harness-native sessions. Hidden `acp prompt` and `spawn` spellings remain only
-for migration. BitRouter keeps no session records.
+disconnects; one controller connection can carry multiple harness-native sessions.
+Hidden `acp prompt` and `spawn` spellings remain only for migration. Native session
+identity and lifecycle remain harness-owned. Maintained Codex and Claude
+controllers additionally retain application-owned native evidence and task/attempt
+records. Capability-advertised `_bitrouter/task/status` and `_bitrouter/task/select`
+let clients reserve a new task or retry for the next prompt; see
+[task selection](../skills/bitrouter/references/sessions.md#application-task-selection)
+for cursor, idempotency and scope semantics.
+
+Canonical pinned Codex and Claude adapter commands also use an invocation-local
+Node entry to associate prompt records with producer-reported native identifiers.
+This requires Node 22.15 or newer and a matching loaded module digest. The
+controller supplies private provenance automatically; no extra user command is
+needed. Unsupported producer coverage stays a gap. These observations are not
+complete native task membership or a settled evaluation; see the
+[adapter evidence contract](../skills/bitrouter/references/sessions.md#pinned-claude-and-codex-adapters).
 
 ### `bitrouter code` — operations dashboard and ACP sessions
 
@@ -671,8 +684,9 @@ initially focused on Conversation with a harness-native ACP session. `Tab`
 moves between Conversation and the Home, Agents, Sessions, Models, Requests,
 and Route operations views without ending the session or losing the draft.
 `--load` replays a native session's history and `--resume` continues without
-replay when the harness advertises the selected operation. BitRouter does not
-create a second session database.
+replay when the harness advertises the selected operation. Native session storage
+and lifecycle stay with the harness; maintained Codex and Claude controllers keep
+a separate local evidence index for task/attempt evaluation.
 
 **Keys**
 
@@ -681,6 +695,9 @@ create a second session database.
 | `Enter` | Send the composer text, or open the selected agent from Agents |
 | `Tab` | Move to the next view while preserving the active conversation |
 | `PageUp` / `PageDown` | Scroll the conversation transcript |
+| `F2` | Reserve a new application task for the next message |
+| `F3` | Reserve another attempt of the current task for the next message |
+| `F4` | Refresh application task state |
 | `1`–`9` | Choose an open permission option |
 | `Esc` | Deny the open permission request |
 | `Ctrl-C` | Cancel the running turn; outside a running turn, exit |
@@ -688,8 +705,20 @@ create a second session database.
 
 Cancelling a turn with a permission prompt open **denies it**. A cancel is never read as consent.
 
+Task controls appear when the controller advertises them. The first message
+automatically starts a task; F2/F3 subsequently change its next-message identity
+without clearing native context or automatically sending another prompt. The
+conversation shows the confirmed task, attempt, evidence state and any pending
+selection. Selection confirmation temporarily holds message submission while
+preserving the draft. If the outcome is unknown, the displayed F2/F3 retry keeps
+the original request and does not silently select a different task. A confirmed
+conflict requires fresh state and another explicit choice. A pending reservation
+currently cannot be cancelled or replaced. Evidence reconciliation is not a
+coding score; evaluator feedback remains unfinished.
+
 Routing flags are shared with `run` and `acp serve`. The Sessions view shows
-the native identity and the lifecycle features advertised by the harness;
+the harness-returned ACP identity, any separately reported agent identity,
+application task/attempt ids, and the advertised lifecycle features;
 unsupported lifecycle operations are not offered. `tui` and `chat` remain
 hidden compatibility aliases for the unified shell.
 

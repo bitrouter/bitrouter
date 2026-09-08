@@ -862,6 +862,8 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
         native_agent_thread_id: None,
         native_parent_agent_thread_id: None,
         native_turn_id: None,
+        native_parent_turn_id: None,
+        native_root_turn_id: None,
         legacy_workflow_session_id: None,
         api_continuation_id: None,
         evidence: Vec::new(),

@@ -662,6 +662,7 @@ dependencies = [
  "clap",
  "crossterm",
  "erased-serde",
+ "fs-id",
  "futures",
  "hex",
  "hmac 0.13.0",
@@ -673,6 +674,7 @@ dependencies = [
  "reqwest",
  "ring",
  "rmcp",
+ "rustix 1.1.4",
  "schemars 1.2.1",
  "sea-orm",
  "sea-orm-migration",
@@ -1944,6 +1946,17 @@ checksum = "e076045bb43dac435333ed5f04caf35c7463631d0dae2deb2638d94dd0a5b872"
 dependencies = [
  "lazy_static",
  "num",
+]
+
+[[package]]
+name = "fs-id"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1648c1b89e98d042d61b5c1ed0fbcd9dbd7815163864d20f8e7976a9b3af938"
+dependencies = [
+ "libc",
+ "wasi",
+ "winapi",
 ]
 
 [[package]]

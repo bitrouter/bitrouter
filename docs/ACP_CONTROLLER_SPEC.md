@@ -254,12 +254,21 @@ These are review gates, not preferences.
 
 ### 5.1 Harness session ownership
 
-- No BitRouter database table or file stores ACP session records or transcript
-  content.
+- Native session lifecycle remains harness-owned. The application may retain
+  an owner-scoped, append-only evidence index for evaluation, as specified in
+  `NATIVE_SESSION_EVIDENCE_PLAN.md`; it is not an alternate session catalog.
 - `session/list`, `load`, `resume`, `fork`, `close`, and `delete` are delegated
   to the harness.
-- BitRouter does not inspect or mutate Claude's JSONL files, Codex's session
-  files, or equivalent harness storage.
+- The application may read explicitly related Claude JSONL and Codex rollout
+  files under configured native roots. It never mutates native session storage.
+- An application observer may select additional native lifecycle notification
+  fields for durable evidence. Default observation remains ACP session updates;
+  selecting evidence fields must not change the notification forwarded to the
+  manager. Persistence completes before forwarding the original notification.
+- Historical evidence recovery uses owned controller/root registrations and
+  immutable records. It must not restore old Query liveness or configuration
+  into the current controller. Recovery failures remain evidence gaps while
+  healthy live collection continues.
 - The controller does not set `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or an
   equivalent home override unless the user explicitly requests an isolated
   harness environment. Test probes may use temporary homes.
@@ -1531,7 +1540,8 @@ ordinary local process.
 - implement permission, filesystem, terminal, elicitation, terminal-auth,
   modes/configuration, commands, plan/tool updates, usage, cost scope, and
   diagnostics through ACP; and
-- preserve the hard no-transcript, no-shadow-catalog boundary.
+- preserve harness lifecycle and identity ownership; evaluation evidence
+  remains a separate application-owned index, not a shadow session catalog.
 
 TUI multi-open and product-level reuse of one connection for several user
 sessions are not goals in this or a later scheduled phase.

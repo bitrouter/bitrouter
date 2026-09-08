@@ -68,8 +68,13 @@ jsonschema = { version = "0.47.0", default-features = false }
 rmcp = { workspace = true, features = ["server", "macros", "transport-io"] }
 schemars.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }
+
 [target.'cfg(windows)'.dependencies]
 atomicwrites.workspace = true
+# Safe handle-based file identity without reopening a path during collection.
+fs-id = "0.2.0"
 
 [build-dependencies]
 # Reads the committed registry artifacts to generate the ACP harness catalog.

@@ -24,6 +24,8 @@ use crate::paths::ConfigSource;
 const DASHBOARD_REQUEST_ROWS: u64 = 100;
 const REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
+pub(crate) mod tasks;
+
 /// Optional initial ACP session selected by `bitrouter code <agent>`.
 pub struct SessionRequest {
     pub agent: String,
@@ -40,6 +42,7 @@ struct SessionDriver {
     >,
     pending_permission: Option<bitrouter_sdk::acp::client::PendingPermission>,
     turn: Option<tokio::task::JoinHandle<Result<PromptResponse>>>,
+    tasks: tasks::TaskDriver,
 }
 
 impl Default for SessionDriver {
@@ -50,6 +53,26 @@ impl Default for SessionDriver {
             permissions: Box::pin(futures::stream::empty()),
             pending_permission: None,
             turn: None,
+            tasks: tasks::TaskDriver::default(),
+        }
+    }
+}
+
+impl SessionDriver {
+    async fn shutdown(&mut self) {
+        self.tasks = tasks::TaskDriver::default();
+        if let Some(turn) = self.turn.take() {
+            turn.abort();
+        }
+        if let Some(permission) = self.pending_permission.take() {
+            permission.deny();
+        }
+        self.updates = Box::pin(futures::stream::empty());
+        self.permissions = Box::pin(futures::stream::empty());
+        // Retire the handle before awaiting teardown. A failed replacement
+        // must not leave a closed client or an already-polled join handle.
+        if let Some(mut handle) = self.handle.take() {
+            handle.shutdown().await;
         }
     }
 }
@@ -156,21 +179,18 @@ pub async fn run(
         open_session(&target, &mut dashboard, &mut session, request).await?;
     }
 
-    let mut view =
-        bitrouter_tui::dashboard::DashboardView::open().context("opening operations dashboard")?;
+    let mut view = match bitrouter_tui::dashboard::DashboardView::open() {
+        Ok(view) => view,
+        Err(error) => {
+            session.shutdown().await;
+            return Err(error).context("opening operations dashboard");
+        }
+    };
     if session.handle.is_some() {
         view.set_page(bitrouter_tui::dashboard::Page::Conversation);
     }
     let outcome = drive(&target, &mut dashboard, &mut session, &mut view).await;
-    if let Some(turn) = session.turn.take() {
-        turn.abort();
-    }
-    if let Some(permission) = session.pending_permission.take() {
-        permission.deny();
-    }
-    if let Some(handle) = session.handle.as_mut() {
-        handle.shutdown().await;
-    }
+    session.shutdown().await;
     view.finish();
     outcome
 }
@@ -203,14 +223,16 @@ async fn drive(
                 }
                 view.draw(dashboard).context("drawing operations dashboard")?;
             }
-            update = session.updates.next() => {
+            update = session.updates.next(), if session.handle.is_some() => {
                 if let Some(update) = update {
                     dashboard.conversation.journal.apply(update);
                     dashboard.conversation.scroll = 0;
                     view.draw(dashboard).context("drawing ACP update")?;
+                } else {
+                    session.updates = Box::pin(futures::stream::pending());
                 }
             }
-            permission = session.permissions.next() => {
+            permission = session.permissions.next(), if session.handle.is_some() => {
                 if let Some(permission) = permission {
                     let prompt = bitrouter_tui::permission::Prompt::new(
                         permission.request_id.clone(),
@@ -223,6 +245,8 @@ async fn drive(
                     dashboard.conversation.permission = Some(prompt);
                     view.set_page(bitrouter_tui::dashboard::Page::Conversation);
                     view.draw(dashboard).context("drawing permission prompt")?;
+                } else {
+                    session.permissions = Box::pin(futures::stream::pending());
                 }
             }
             result = pending_turn(&mut session.turn) => {
@@ -234,10 +258,18 @@ async fn drive(
                         "turn failed".to_string()
                     }
                 };
+                session.tasks.invalidate();
+                refresh_task(dashboard, session);
                 view.draw(dashboard).context("drawing completed turn")?;
+            }
+            result = session.tasks.result() => {
+                session.tasks.complete(result);
+                publish_task(dashboard, session);
+                view.draw(dashboard).context("drawing task state")?;
             }
             _ = refresh_tick.tick() => {
                 refresh(target, dashboard).await;
+                refresh_task(dashboard, session);
                 view.draw(dashboard).context("drawing operations dashboard")?;
             }
             _ = shutdown.recv() => return Ok(()),
@@ -363,15 +395,10 @@ async fn open_session(
         )
         .into());
     };
-    if let Some(turn) = driver.turn.take() {
-        turn.abort();
-    }
-    if let Some(permission) = driver.pending_permission.take() {
-        permission.deny();
-    }
-    if let Some(handle) = driver.handle.as_mut() {
-        handle.shutdown().await;
-    }
+    driver.shutdown().await;
+    dashboard.conversation.status = "disconnected".to_string();
+    dashboard.conversation.permission = None;
+    dashboard.conversation.task = None;
     let config = crate::paths::load_config(source).await?;
     let context = crate::acp_cli::SpawnContext {
         source,
@@ -404,8 +431,23 @@ async fn open_session(
         ..Default::default()
     };
     driver.handle = Some(handle);
+    refresh_task(dashboard, driver);
     dashboard.error = None;
     Ok(())
+}
+
+fn publish_task(dashboard: &mut bitrouter_tui::dashboard::Dashboard, driver: &SessionDriver) {
+    dashboard.conversation.task = driver
+        .handle
+        .as_ref()
+        .and_then(|handle| driver.tasks.view(&handle.client));
+}
+
+fn refresh_task(dashboard: &mut bitrouter_tui::dashboard::Dashboard, driver: &mut SessionDriver) {
+    if let Some(handle) = &driver.handle {
+        driver.tasks.refresh(&handle.client, &handle.session_id);
+    }
+    publish_task(dashboard, driver);
 }
 
 fn handle_permission_key(
@@ -496,6 +538,25 @@ async fn handle_conversation_key(
     key: KeyEvent,
 ) -> Result<()> {
     match key.code {
+        KeyCode::F(number @ (2 | 3)) if key.kind == KeyEventKind::Press => {
+            if let Some(handle) = &driver.handle {
+                let mode = if number == 2 {
+                    bitrouter_sdk::acp::controller::tasks::TaskSelectionMode::NewTask
+                } else {
+                    bitrouter_sdk::acp::controller::tasks::TaskSelectionMode::Retry
+                };
+                dashboard.error = driver
+                    .tasks
+                    .select(
+                        &handle.client,
+                        &handle.session_id,
+                        mode,
+                        driver.turn.is_some(),
+                    )
+                    .err();
+            }
+        }
+        KeyCode::F(4) if key.kind == KeyEventKind::Press => refresh_task(dashboard, driver),
         KeyCode::PageUp => {
             let _ = bitrouter_tui::dashboard::step(
                 dashboard,
@@ -515,16 +576,23 @@ async fn handle_conversation_key(
             );
         }
         KeyCode::Enter if driver.turn.is_none() => {
+            let Some(handle) = driver.handle.as_ref() else {
+                dashboard.error = Some("Select an ACP agent before sending a prompt.".to_string());
+                return Ok(());
+            };
+            if !driver.tasks.can_prompt(&handle.client) {
+                dashboard.error = Some(
+                    "Confirm the task selection or refresh task state before sending this message."
+                        .into(),
+                );
+                return Ok(());
+            }
             let Some(bitrouter_tui::dashboard::Effect::Prompt(prompt)) =
                 bitrouter_tui::dashboard::step(
                     dashboard,
                     bitrouter_tui::dashboard::Action::SubmitPrompt,
                 )
             else {
-                return Ok(());
-            };
-            let Some(handle) = driver.handle.as_ref() else {
-                dashboard.error = Some("Select an ACP agent before sending a prompt.".to_string());
                 return Ok(());
             };
             dashboard
@@ -535,6 +603,8 @@ async fn handle_conversation_key(
                 )));
             dashboard.conversation.scroll = 0;
             dashboard.conversation.status = "working".to_string();
+            dashboard.error = None;
+            driver.tasks.invalidate();
             let client = handle.client.clone();
             let session_id = handle.session_id.clone();
             driver.turn = Some(tokio::spawn(async move {
@@ -547,6 +617,8 @@ async fn handle_conversation_key(
                 handle.client.deny_session_permissions(&handle.session_id);
                 handle.client.cancel(&handle.session_id).await?;
                 dashboard.conversation.status = "cancelled".to_string();
+                driver.tasks.invalidate();
+                refresh_task(dashboard, driver);
             }
         }
         KeyCode::Esc => {}
@@ -561,6 +633,7 @@ async fn handle_conversation_key(
         }
         _ => {}
     }
+    publish_task(dashboard, driver);
     Ok(())
 }
 
@@ -737,8 +810,149 @@ fn route_line(report: RouteReport) -> bitrouter_tui::dashboard::RouteLine {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Exercise the actual key handler using a live SessionHost fixture. The
+    /// caller verifies database persistence and native lifecycle forwarding.
+    #[cfg(unix)]
+    pub(crate) async fn exercise_task_keys(
+        handle: crate::acp_cli::SessionHandle,
+    ) -> Result<crate::acp_cli::SessionHandle> {
+        let mut dashboard = bitrouter_tui::dashboard::Dashboard::default();
+        dashboard.conversation.native_session_id = Some(handle.session_id.clone());
+        let mut driver = SessionDriver {
+            handle: Some(handle),
+            ..Default::default()
+        };
+        refresh_task(&mut dashboard, &mut driver);
+        dashboard.conversation.input = "keep this draft".into();
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        handle_conversation_key(&mut dashboard, &mut driver, enter).await?;
+        assert_eq!(dashboard.conversation.input, "keep this draft");
+        assert!(driver.turn.is_none());
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(10), driver.tasks.result()).await?;
+        driver.tasks.complete(result);
+        publish_task(&mut dashboard, &driver);
+        for key in [3, 2] {
+            let before = dashboard
+                .conversation
+                .task
+                .as_ref()
+                .context("task before selection")?
+                .clone();
+            handle_conversation_key(
+                &mut dashboard,
+                &mut driver,
+                KeyEvent::new(KeyCode::F(key), KeyModifiers::NONE),
+            )
+            .await?;
+            handle_conversation_key(&mut dashboard, &mut driver, enter).await?;
+            assert_eq!(dashboard.conversation.input, "keep this draft");
+            assert!(driver.turn.is_none());
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(10), driver.tasks.result())
+                    .await?;
+            driver.tasks.complete(result);
+            publish_task(&mut dashboard, &driver);
+            let selected = dashboard
+                .conversation
+                .task
+                .as_ref()
+                .context("selected task")?;
+            assert_eq!(selected.attempt_id, before.attempt_id);
+            assert!(selected.next_prompt.is_some());
+            handle_conversation_key(&mut dashboard, &mut driver, enter).await?;
+            let turn = driver.turn.take().context("key handler started prompt")?;
+            tokio::time::timeout(std::time::Duration::from_secs(10), turn).await???;
+            driver.tasks.invalidate();
+            refresh_task(&mut dashboard, &mut driver);
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(10), driver.tasks.result())
+                    .await?;
+            driver.tasks.complete(result);
+            publish_task(&mut dashboard, &driver);
+            let after = dashboard
+                .conversation
+                .task
+                .as_ref()
+                .context("next attempt")?;
+            assert_ne!(after.attempt_id, before.attempt_id);
+            assert_eq!(after.task_id == before.task_id, key == 3);
+            assert!(after.next_prompt.is_none());
+            dashboard.conversation.input = "keep this draft".into();
+        }
+        driver.handle.take().context("live session")
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_replacement_retires_the_old_session_before_retry_or_exit() -> Result<()> {
+        use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
+        let directory = tempfile::tempdir()?;
+        let source = ConfigSource::File(directory.path().join("bitrouter.yaml"));
+        let mut config = bitrouter_sdk::config::Config::default();
+        config.agents.insert("fixture".into(), AcpAgentConfig {
+            name: "fixture".into(), transport: AcpTransport::Stdio {
+                command: "bash".into(), args: vec!["-c".into(), r#"
+while read line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *initialize*) printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{}}}\n' "$id";;
+    *session/new*) printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"fixture-session"}}\n' "$id";;
+    *session/prompt*) printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+  esac
+done
+"#.into()], env: Default::default(),
+            },
+        });
+        tokio::fs::write(
+            directory.path().join("bitrouter.yaml"),
+            serde_json::to_vec(&serde_json::json!({"agents":config.agents}))?,
+        )
+        .await?;
+        let target = Target::Local {
+            source,
+            socket: directory.path().join("unused.sock"),
+        };
+        let request = |agent: &str| SessionRequest {
+            agent: agent.into(),
+            selection: crate::acp_cli::SessionSelection::New,
+            turn_timeout: Some(5),
+            routing: crate::acp_cli::RoutingOptions {
+                direct: true,
+                ..Default::default()
+            },
+        };
+        let mut dashboard = bitrouter_tui::dashboard::Dashboard::default();
+        let mut driver = SessionDriver::default();
+        open_session(&target, &mut dashboard, &mut driver, request("fixture")).await?;
+        assert!(driver.handle.is_some());
+        for _ in 0..2 {
+            assert!(
+                open_session(
+                    &target,
+                    &mut dashboard,
+                    &mut driver,
+                    request("missing-fixture-agent")
+                )
+                .await
+                .is_err()
+            );
+            assert!(driver.handle.is_none());
+            assert!(driver.updates.next().await.is_none());
+            assert!(driver.permissions.next().await.is_none());
+            assert_eq!(dashboard.conversation.status, "disconnected");
+        }
+        open_session(&target, &mut dashboard, &mut driver, request("fixture")).await?;
+        let handle = driver.handle.as_ref().context("replacement handle")?;
+        handle.client.prompt(&handle.session_id, "fixture").await?;
+        driver.shutdown().await;
+        driver.shutdown().await;
+        assert!(driver.handle.is_none());
+        Ok(())
+    }
 
     #[test]
     fn snapshot_refresh_preserves_interactive_diagnostics() {

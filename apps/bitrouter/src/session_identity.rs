@@ -61,6 +61,10 @@ pub struct NativeSessionIdentity {
     pub parent_agent_thread_id: Option<String>,
     /// Native turn identity.
     pub turn_id: Option<String>,
+    /// Immediate initiating turn claimed by the native runtime.
+    pub parent_turn_id: Option<String>,
+    /// Root turn attribution frozen by the native runtime at turn start.
+    pub root_turn_id: Option<String>,
 }
 
 /// One privacy-reviewed identity signal.
@@ -156,6 +160,10 @@ pub struct SessionIdentityObserved {
     pub native_parent_agent_thread_id: Option<String>,
     /// Native turn.
     pub native_turn_id: Option<String>,
+    /// Native initiating turn; separate from parent thread identity.
+    pub native_parent_turn_id: Option<String>,
+    /// Native root turn attribution, not task membership proof.
+    pub native_root_turn_id: Option<String>,
     /// Legacy workflow projection.
     pub legacy_workflow_session_id: Option<String>,
     /// Responses continuation.
@@ -333,6 +341,8 @@ fn event_from_context(
         native_agent_thread_id: context.native.agent_thread_id.clone(),
         native_parent_agent_thread_id: context.native.parent_agent_thread_id.clone(),
         native_turn_id: context.native.turn_id.clone(),
+        native_parent_turn_id: context.native.parent_turn_id.clone(),
+        native_root_turn_id: context.native.root_turn_id.clone(),
         legacy_workflow_session_id: context.legacy_workflow_session_id.clone(),
         api_continuation_id: context.api_continuation_id.clone(),
         evidence: context.evidence.clone(),
@@ -490,6 +500,8 @@ fn extract_native(
                 agent_thread_id: claude_agent,
                 parent_agent_thread_id: claude_parent,
                 turn_id: None,
+                parent_turn_id: None,
+                root_turn_id: None,
             }
         }
         Some("codex") => {
@@ -498,6 +510,24 @@ fn extract_native(
                 object_string(client_metadata.as_ref(), &["session_id", "sessionId"]);
             let header_turn = object_string(codex_turn_metadata.as_ref(), &["turn_id", "turnId"]);
             let body_turn = object_string(client_metadata.as_ref(), &["turn_id", "turnId"]);
+            // Codex freezes causal turn metadata at turn start, independently
+            // of the mutable session tree and the receiving agent's thread.
+            // These remain request claims until matched to native evidence.
+            // https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/turn_metadata.rs
+            let header_parent_turn = object_string(
+                codex_turn_metadata.as_ref(),
+                &["parent_turn_id", "parentTurnId"],
+            );
+            let body_parent_turn = object_string(
+                client_metadata.as_ref(),
+                &["parent_turn_id", "parentTurnId"],
+            );
+            let header_root_turn = object_string(
+                codex_turn_metadata.as_ref(),
+                &["root_turn_id", "rootTurnId"],
+            );
+            let body_root_turn =
+                object_string(client_metadata.as_ref(), &["root_turn_id", "rootTurnId"]);
             let header_parent = object_string(
                 codex_turn_metadata.as_ref(),
                 &[
@@ -518,15 +548,29 @@ fn extract_native(
                 ("client_metadata.session_id", body_session.as_ref()),
                 ("client_metadata.thread_id", body_thread.as_ref()),
                 ("client_metadata.turn_id", body_turn.as_ref()),
+                ("client_metadata.parent_turn_id", body_parent_turn.as_ref()),
+                ("client_metadata.root_turn_id", body_root_turn.as_ref()),
                 ("client_metadata.parent_thread_id", body_parent.as_ref()),
                 ("x-codex-turn-metadata.turn_id", header_turn.as_ref()),
+                (
+                    "x-codex-turn-metadata.parent_turn_id",
+                    header_parent_turn.as_ref(),
+                ),
+                (
+                    "x-codex-turn-metadata.root_turn_id",
+                    header_root_turn.as_ref(),
+                ),
                 (
                     "x-codex-turn-metadata.parent_thread_id",
                     header_parent.as_ref(),
                 ),
             ] {
                 if let Some(value) = value {
-                    evidence.push(body_evidence(field, "codex", value.clone(), false));
+                    let mut item = body_evidence(field, "codex", value.clone(), false);
+                    if field.starts_with("x-codex-turn-metadata.") {
+                        item.transport = "header".into();
+                    }
+                    evidence.push(item);
                 }
             }
             compare_sources(
@@ -557,12 +601,28 @@ fn extract_native(
                 body_parent.as_deref(),
                 "turn_metadata_header_wins",
             );
+            for (field, header, body) in [
+                (
+                    "body.client_metadata.parent_turn_id",
+                    header_parent_turn.as_deref(),
+                    body_parent_turn.as_deref(),
+                ),
+                (
+                    "body.client_metadata.root_turn_id",
+                    header_root_turn.as_deref(),
+                    body_root_turn.as_deref(),
+                ),
+            ] {
+                compare_sources(conflicts, field, header, body, "turn_metadata_header_wins");
+            }
             NativeSessionIdentity {
                 harness: Some("codex".to_string()),
                 root_session_id: codex_session.or(body_session),
                 agent_thread_id: codex_thread.or(body_thread),
                 parent_agent_thread_id: header_parent.or(body_parent),
                 turn_id: header_turn.or(body_turn),
+                parent_turn_id: header_parent_turn.or(body_parent_turn),
+                root_turn_id: header_root_turn.or(body_root_turn),
             }
         }
         _ => NativeSessionIdentity::default(),
@@ -881,6 +941,136 @@ mod tests {
         assert_eq!(outcome.route, "anthropic:claude-opus");
         assert!(outcome.applied);
         assert_eq!(outcome.reason, "applied");
+    }
+
+    #[tokio::test]
+    async fn codex_turn_ancestry_retains_conflicts_and_transport_provenance() -> anyhow::Result<()>
+    {
+        let mut extra = serde_json::Map::new();
+        extra.insert(
+            "client_metadata".into(),
+            serde_json::json!({
+                "session_id":"root-session", "thread_id":"child-thread", "turn_id":"child-turn",
+                "parent_turn_id":"body-parent", "root_turn_id":"body-root"
+            }),
+        );
+        let mut context = context(
+            "gpt-5",
+            ApiProtocol::Responses,
+            &[(
+                "x-codex-turn-metadata",
+                r#"{"turn_id":"child-turn","parent_turn_id":"parent-turn","root_turn_id":"root-turn","unreviewed":"not-evidence"}"#,
+            )],
+            extra,
+            None,
+        );
+        let normalized = observe(Arc::new(AcpRuntime::new()), &mut context).await;
+        assert_eq!(normalized.native.turn_id.as_deref(), Some("child-turn"));
+        assert_eq!(
+            normalized.native.parent_turn_id.as_deref(),
+            Some("parent-turn")
+        );
+        assert_eq!(normalized.native.root_turn_id.as_deref(), Some("root-turn"));
+        for (field, selected, other) in [
+            ("parent_turn_id", "parent-turn", "body-parent"),
+            ("root_turn_id", "root-turn", "body-root"),
+        ] {
+            assert!(normalized.conflicts.iter().any(|conflict| {
+                conflict.field == format!("body.client_metadata.{field}")
+                    && conflict.expected.as_deref() == Some(selected)
+                    && conflict.observed.as_deref() == Some(other)
+            }));
+            assert!(normalized.evidence.iter().any(|item| {
+                item.field == format!("x-codex-turn-metadata.{field}")
+                    && item.transport == "header"
+                    && item.value.as_deref() == Some(selected)
+                    && !item.used_for_route_match
+            }));
+            assert!(normalized.evidence.iter().any(|item| {
+                item.field == format!("client_metadata.{field}")
+                    && item.transport == "body"
+                    && item.value.as_deref() == Some(other)
+                    && !item.used_for_route_match
+            }));
+        }
+        let encoded = serde_json::to_string(&normalized)?;
+        assert!(!encoded.contains("not-evidence"));
+        let event = context
+            .get_event::<SessionIdentityObserved>()
+            .ok_or_else(|| anyhow::anyhow!("identity event missing"))?;
+        assert_eq!(event.native_parent_turn_id.as_deref(), Some("parent-turn"));
+        assert_eq!(event.native_root_turn_id.as_deref(), Some("root-turn"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn codex_resumed_child_keeps_request_scoped_ancestry() -> anyhow::Result<()> {
+        let runtime = Arc::new(AcpRuntime::new());
+        runtime
+            .set_route("principal", "controller", "root-first", "unused:route")
+            .map_err(anyhow::Error::msg)?;
+        for (turn, root, parent, camel) in [
+            ("child-first", "root-first", "parent-first", false),
+            ("child-second", "root-second", "parent-second", true),
+        ] {
+            let mut extra = serde_json::Map::new();
+            extra.insert(
+                "client_metadata".into(),
+                if camel {
+                    serde_json::json!({"turnId":turn,"rootTurnId":root,"parentTurnId":parent})
+                } else {
+                    serde_json::json!({"turn_id":turn,"root_turn_id":root,"parent_turn_id":parent})
+                },
+            );
+            let mut context = context(
+                "gpt-5",
+                ApiProtocol::Responses,
+                &[
+                    ("x-bitrouter-controller-id", "controller"),
+                    ("session-id", "same-session"),
+                    ("thread-id", "same-child"),
+                ],
+                extra,
+                Some("principal"),
+            );
+            let normalized = observe(runtime.clone(), &mut context).await;
+            assert_eq!(
+                normalized.native.agent_thread_id.as_deref(),
+                Some("same-child")
+            );
+            assert_eq!(normalized.native.turn_id.as_deref(), Some(turn));
+            assert_eq!(normalized.native.parent_turn_id.as_deref(), Some(parent));
+            assert_eq!(normalized.native.root_turn_id.as_deref(), Some(root));
+            assert!(normalized.conflicts.is_empty());
+            assert!(normalized.route_lease.is_none());
+            assert_eq!(context.model(), "gpt-5");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_turn_ancestry_is_not_inferred_from_turn_or_session() {
+        for metadata in [
+            serde_json::json!({"turn_id":"turn"}),
+            serde_json::json!({"turn_id":"turn","parent_turn_id":null,"root_turn_id":42}),
+        ] {
+            let mut extra = serde_json::Map::new();
+            extra.insert("client_metadata".into(), metadata);
+            let mut context = context(
+                "gpt-5",
+                ApiProtocol::Responses,
+                &[
+                    ("session-id", "same-as-turn"),
+                    ("thread-id", "same-as-turn"),
+                ],
+                extra,
+                None,
+            );
+            let normalized = observe(Arc::new(AcpRuntime::new()), &mut context).await;
+            assert_eq!(normalized.native.turn_id.as_deref(), Some("turn"));
+            assert_eq!(normalized.native.parent_turn_id, None);
+            assert_eq!(normalized.native.root_turn_id, None);
+        }
     }
 
     #[tokio::test]

@@ -81,6 +81,68 @@ async fn recorder_writes_estimated_charge_from_pricing() -> Result<()> {
 }
 
 #[tokio::test]
+async fn native_turn_ancestry_survives_upsert_without_merging_resumed_requests()
+-> anyhow::Result<()> {
+    use super::entities::requests;
+    use sea_orm::{EntityTrait, QueryOrder};
+
+    let db = pool().await;
+    let recorder = MeteringRecorder::new(MeteringStore::new(db.clone()), pricing());
+    for (id, turn, parent, root) in [
+        ("first", None, None, None),
+        (
+            "first",
+            Some("child-first"),
+            Some("parent-first"),
+            Some("root-first"),
+        ),
+        (
+            "resumed",
+            Some("child-second"),
+            Some("parent-second"),
+            Some("root-second"),
+        ),
+    ] {
+        let mut request = ctx("turn-attribution", 1, 1);
+        request.request_id = id.into();
+        let mut event = acp_identity(
+            id,
+            Some("controller"),
+            "codex",
+            Some("session"),
+            Some("child"),
+        );
+        event.native_turn_id = turn.map(str::to_owned);
+        event.native_parent_turn_id = parent.map(str::to_owned);
+        event.native_root_turn_id = root.map(str::to_owned);
+        request.emit(event);
+        recorder.record(&mut request).await?;
+    }
+    let rows = requests::Entity::find()
+        .order_by_asc(requests::Column::RequestId)
+        .all(&db)
+        .await?;
+    assert_eq!(rows.len(), 2);
+    for (row, turn, parent, root) in [
+        (&rows[0], "child-first", "parent-first", "root-first"),
+        (&rows[1], "child-second", "parent-second", "root-second"),
+    ] {
+        assert_eq!(row.native_agent_thread_id.as_deref(), Some("child"));
+        assert_eq!(row.native_turn_id.as_deref(), Some(turn));
+        assert_eq!(row.native_parent_turn_id.as_deref(), Some(parent));
+        assert_eq!(row.native_root_turn_id.as_deref(), Some(root));
+        let event: serde_json::Value = serde_json::from_str(
+            row.session_identity_json
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("request identity missing"))?,
+        )?;
+        assert_eq!(event["native_parent_turn_id"], parent);
+        assert_eq!(event["native_root_turn_id"], root);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn recorder_correlates_normalized_acp_identity_without_prompt_content() -> anyhow::Result<()>
 {
     let pool = pool().await;
@@ -99,6 +161,8 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
         native_agent_thread_id: Some("codex-thread".to_string()),
         native_parent_agent_thread_id: Some("codex-parent".to_string()),
         native_turn_id: Some("codex-turn".to_string()),
+        native_parent_turn_id: Some("codex-parent-turn".to_string()),
+        native_root_turn_id: Some("codex-root-turn".to_string()),
         legacy_workflow_session_id: None,
         api_continuation_id: None,
         evidence: vec![IdentityEvidence {
@@ -130,7 +194,7 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
     let row = pool
         .query_one(Statement::from_string(
             DatabaseBackend::Sqlite,
-            "SELECT agent_harness, controller_instance_id, acp_session_id, native_root_session_id, native_agent_thread_id, native_parent_agent_thread_id, native_turn_id, route_lease_id, session_identity_json FROM requests WHERE request_id = 'router-acp-request'".to_owned(),
+            "SELECT agent_harness, controller_instance_id, acp_session_id, native_root_session_id, native_agent_thread_id, native_parent_agent_thread_id, native_turn_id, native_parent_turn_id, native_root_turn_id, route_lease_id, session_identity_json FROM requests WHERE request_id = 'router-acp-request'".to_owned(),
         ))
         .await?
         .expect("attributed request row");
@@ -145,6 +209,14 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
         "codex-thread"
     );
     assert_eq!(row.try_get::<String>("", "native_turn_id")?, "codex-turn");
+    assert_eq!(
+        row.try_get::<String>("", "native_parent_turn_id")?,
+        "codex-parent-turn"
+    );
+    assert_eq!(
+        row.try_get::<String>("", "native_root_turn_id")?,
+        "codex-root-turn"
+    );
     assert_eq!(
         row.try_get::<String>("", "route_lease_id")?,
         "brlease_metering"
@@ -1594,6 +1666,8 @@ fn acp_identity(
         native_agent_thread_id: thread.map(str::to_string),
         native_parent_agent_thread_id: None,
         native_turn_id: None,
+        native_parent_turn_id: None,
+        native_root_turn_id: None,
         legacy_workflow_session_id: None,
         api_continuation_id: None,
         evidence: Vec::new(),

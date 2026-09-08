@@ -1,6 +1,7 @@
 # Spec: unified agent interfaces — native shortcuts, Code TUI, headless run, and one ACP bridge
 
-Status: **proposed for review** · Date: 2026-09-07  
+Status: **proposed for review** · Date: 2026-09-07
+
 Baseline: `45ac00bd` (`codex/remote-control-tui`)
 
 This document defines the next public interface for launching native coding

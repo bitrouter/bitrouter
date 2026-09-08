@@ -50,6 +50,7 @@ mod prompt;
 pub mod reload;
 pub mod remote_control;
 pub mod result_contract;
+pub mod session_evidence;
 pub mod session_identity;
 pub mod skills;
 pub mod skills_catalog;

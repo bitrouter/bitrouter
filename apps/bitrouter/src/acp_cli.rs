@@ -75,6 +75,7 @@ use bitrouter_tui::permission::{Decision, Mode, Policy, Prompt as PermissionProm
 
 use crate::chat::effects::Wire;
 use crate::paths::ConfigSource;
+use crate::session_evidence::service::{EvidenceHandle, EvidenceLaunch};
 
 // ── routing (spawn --via-daemon by default) ─────────────────────────────────────
 
@@ -168,11 +169,13 @@ mod session_host_tests {
     use bitrouter_sdk::config::Config;
 
     const STUB: &str = r#"
-while read line; do
+while IFS= read -r line; do
+  if [ -n "$BITROUTER_TEST_REQUESTS" ]; then printf '%s\n' "$line" >> "$BITROUTER_TEST_REQUESTS"; fi
   id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
     *initialize*) printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"list":{},"resume":{},"close":{}}}}}\n' "$id";;
     *session/new*) printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"native-1"}}\n' "$id";;
+    *session/load*|*session/resume*) printf '{"jsonrpc":"2.0","id":"%s","result":{}}\n' "$id";;
     *session/prompt*) printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"native-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}\n';
                       printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
   esac
@@ -275,6 +278,152 @@ done
             agent_client_protocol::schema::v1::SessionUpdate::AgentMessageChunk(_)
         ));
         assert!(handle.shutdown().await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_host_preserves_evidence_home_and_native_selection() -> anyhow::Result<()> {
+        use crate::session_evidence::store::EvidenceStore;
+        use anyhow::Context;
+        for harness in ["codex-acp", "claude-acp"] {
+            for selection in [
+                SessionSelection::New,
+                SessionSelection::Load("native-1".into()),
+                SessionSelection::Resume("native-1".into()),
+            ] {
+                let directory = tempfile::tempdir()?;
+                let home = directory.path().join("selected-home");
+                let native = directory.path().join("native");
+                tokio::fs::create_dir_all(&native).await?;
+                let source = crate::paths::ConfigSource::File(home.join("bitrouter.yaml"));
+                let requests = directory.path().join("requests.jsonl");
+                let mut config = Config::default();
+                config.database.url = "sqlite:host-evidence.db".into();
+                config.agents.insert(
+                    "stub".into(),
+                    AcpAgentConfig {
+                        name: "stub".into(),
+                        transport: AcpTransport::Stdio {
+                            command: "bash".into(),
+                            args: vec!["-c".into(), STUB.into()],
+                            env: HashMap::from([
+                                ("CODEX_HOME".into(), native.to_string_lossy().into_owned()),
+                                (
+                                    "CLAUDE_CONFIG_DIR".into(),
+                                    native.to_string_lossy().into_owned(),
+                                ),
+                                (
+                                    "BITROUTER_TEST_REQUESTS".into(),
+                                    requests.to_string_lossy().into_owned(),
+                                ),
+                            ]),
+                        },
+                    },
+                );
+                let mut host = SessionHost::prepare(
+                    SpawnContext {
+                        source: &source,
+                        config,
+                        agent_id: "stub",
+                        options: launch_options(None),
+                        routing: RoutingOptions {
+                            direct: true,
+                            ..RoutingOptions::default()
+                        },
+                    },
+                    false,
+                )
+                .await?;
+                // Keep the native process deterministic while selecting the
+                // real maintained-harness evidence wiring. This is a launch
+                // integration fixture, not native runtime conformance.
+                host.routed.endpoint_plan = Some(
+                    crate::harness::by_id(harness)
+                        .context("harness")?
+                        .endpoint_plan("http://127.0.0.1:1", "fixture", None, "fixture")
+                        .context("endpoint")?,
+                );
+                let mut handle = host
+                    .open(&selection, directory.path().to_path_buf())
+                    .await?;
+                handle.client.prompt(&handle.session_id, "fixture").await?;
+                let snapshot = handle
+                    .session
+                    .evidence
+                    .as_ref()
+                    .context("evidence installed")?
+                    .service
+                    .reconcile()
+                    .await?;
+                assert_eq!(snapshot.attempts.len(), 1);
+                assert_eq!(snapshot.attempts[0].session.session_id, "native-1");
+                assert_eq!(snapshot.native_checkpoints.len(), 1);
+                handle = crate::dashboard::tests::exercise_task_keys(handle).await?;
+                assert!(handle.shutdown().await);
+                let database = home.join("host-evidence.db");
+                assert!(database.is_file());
+                let store = EvidenceStore::new(
+                    crate::db::connect(&format!("sqlite:{}", database.display())).await?,
+                    "local",
+                )?;
+                assert_eq!(store.attempts(None, 8).await?.len(), 3);
+                let mut recorded_openings = Vec::new();
+                for source in store.sources(None, 16).await? {
+                    if source.descriptor.format != crate::session_evidence::types::SourceFormat::Acp
+                        || source.cursor.next_sequence == 0
+                    {
+                        continue;
+                    }
+                    let mut start = 0;
+                    while start < source.cursor.next_sequence {
+                        let end = start
+                            .saturating_add(crate::session_evidence::types::RECORD_PAGE_SIZE)
+                            .min(source.cursor.next_sequence);
+                        for record in store
+                            .records(&crate::session_evidence::types::SourceRange {
+                                source_id: source.id.clone(),
+                                generation: source.cursor.generation.clone(),
+                                start,
+                                end,
+                            })
+                            .await?
+                        {
+                            if record.input.raw["phase"] == "request"
+                                && let Some(method) = record.input.raw["method"].as_str()
+                                && matches!(
+                                    method,
+                                    "session/new" | "session/load" | "session/resume"
+                                )
+                            {
+                                recorded_openings.push(method.to_string());
+                            }
+                        }
+                        start = end;
+                    }
+                }
+                let messages = tokio::fs::read_to_string(requests)
+                    .await?
+                    .lines()
+                    .map(serde_json::from_str::<serde_json::Value>)
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let openings = messages
+                    .iter()
+                    .filter_map(|message| message["method"].as_str())
+                    .filter(|method| {
+                        matches!(*method, "session/new" | "session/load" | "session/resume")
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(recorded_openings, openings);
+                assert_eq!(
+                    openings,
+                    [match selection {
+                        SessionSelection::New => "session/new",
+                        SessionSelection::Load(_) => "session/load",
+                        SessionSelection::Resume(_) => "session/resume",
+                    }]
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -1474,6 +1623,7 @@ pub(crate) struct LocalControllerBinding {
 /// controller binding once, and only then lets a presentation driver open a
 /// harness-native session. Nothing in this type depends on clap or a terminal.
 pub(crate) struct SessionHost {
+    source: ConfigSource,
     config: Config,
     agent_id: String,
     options: LaunchOptions,
@@ -1564,6 +1714,7 @@ impl SessionHost {
         );
         options.terminal_auth = terminal_auth;
         Ok(Self {
+            source: source.clone(),
             config,
             agent_id,
             options,
@@ -1581,6 +1732,7 @@ impl SessionHost {
         let mcp_servers = self.options.mcp_servers.clone();
         let terminal_auth = self.options.terminal_auth;
         let mut session = launch_controlled(
+            &self.source,
             &self.config,
             &self.agent_id,
             &self.routed,
@@ -1726,6 +1878,15 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?;
     let AcpTransport::Stdio { command, args, env } = &agent.transport;
     let identity = controller_identity(agent_id, command, args, host.routed.endpoint_plan.as_ref());
+    let mut env = env.clone();
+    let mut evidence = EvidenceHandle::open(EvidenceLaunch {
+        home: host.source.home(),
+        database_url: &host.config.database.url,
+        identity: &identity,
+        env: &mut env,
+        strip_inherited_env: &host.options.strip_inherited_env,
+    })
+    .await?;
     let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
     if let Some(endpoint) = host.routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
@@ -1736,20 +1897,30 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
              the ACP client controls prompt deadlines"
         );
     }
-    let process =
-        bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
-            .strip_inherited_env(host.options.strip_inherited_env);
+    let args = match &evidence {
+        Some(evidence) => evidence.service.adapter_arguments(command, args).await?,
+        None => args.clone(),
+    };
+    let process = bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args, env.clone())
+        .strip_inherited_env(host.options.strip_inherited_env);
     let mut controller =
         bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
+    if let Some(evidence) = &evidence {
+        controller = controller.session_observer(evidence.service.clone());
+    }
     if let Some(binding) = &host.binding {
         controller = controller
             .route_control(binding.route_control())
             .session_cost(binding.session_cost());
     }
-    controller
+    let result = controller
         .run(agent_client_protocol::Stdio::new())
         .await
-        .map_err(|error| anyhow::anyhow!("acp serve: {error}"))
+        .map_err(|error| anyhow::anyhow!("acp serve: {error}"));
+    if let Some(evidence) = &mut evidence {
+        evidence.shutdown().await?;
+    }
+    result
 }
 
 // ── chat ──────────────────────────────────────────────────────────────────────
@@ -1827,10 +1998,14 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     // use.
     if !std::io::stdout().is_terminal() {
         return chat_piped(
-            &config,
-            agent_id,
+            SpawnContext {
+                source,
+                config,
+                agent_id,
+                options,
+                routing,
+            },
             &routed,
-            options,
             &cloud_credentials,
             binding,
             crate::actions::session::SessionSurface {
@@ -1852,11 +2027,17 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         terminal_auth: true,
         ..options
     };
-    let mut session =
-        launch_controlled(&config, agent_id, &routed, options.clone(), binding.clone())
-            .await
-            .with_context(|| format!("launching acp session for agent '{agent_id}'"))
-            .map_err(show_session_log)?;
+    let mut session = launch_controlled(
+        source,
+        &config,
+        agent_id,
+        &routed,
+        options.clone(),
+        binding.clone(),
+    )
+    .await
+    .with_context(|| format!("launching acp session for agent '{agent_id}'"))
+    .map_err(show_session_log)?;
 
     // At most one authentication round. A second `auth_required` after a login
     // the agent reported as successful is the agent disagreeing with itself,
@@ -1914,6 +2095,7 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
                         // on screen as it happened; no tail to add.
                         run_terminal_login(&config, agent_id, &method).await?;
                         session = launch_controlled(
+                            source,
                             &config,
                             agent_id,
                             &routed,
@@ -2133,17 +2315,22 @@ fn unauthenticated_message(
 }
 
 async fn chat_piped(
-    config: &Config,
-    agent_id: &str,
+    ctx: SpawnContext<'_>,
     routed: &Routed,
-    options: LaunchOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
     binding: Option<LocalControllerBinding>,
     mut surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<()> {
+    let SpawnContext {
+        source,
+        config,
+        agent_id,
+        options,
+        routing: _,
+    } = ctx;
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
-    let mut session = launch_controlled(config, agent_id, routed, options, binding)
+    let mut session = launch_controlled(source, &config, agent_id, routed, options, binding)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))
         .map_err(show_session_log)?;
@@ -2173,7 +2360,7 @@ async fn chat_piped(
         }
     };
     let observability =
-        build_observability(config, agent_id, &ids.acp_session_id, cloud_credentials).await;
+        build_observability(&config, agent_id, &ids.acp_session_id, cloud_credentials).await;
     if let Some(recorder) = observability.recorder.clone() {
         spawn_tool_spans(recorder, session.client.subscribe_updates());
     }
@@ -2414,6 +2601,7 @@ fn teardown_result(clean: bool) -> Result<()> {
 /// harness child's I/O, and the client all run on this runtime.
 pub(crate) struct ControlledSession {
     pub(crate) client: AcpClient,
+    pub(crate) evidence: Option<EvidenceHandle>,
     /// The route namespace this session's leases live in, when it has one.
     /// Cleaned up by [`ControlledSession::shutdown`] on every exit.
     binding: Option<LocalControllerBinding>,
@@ -2441,6 +2629,16 @@ impl ControlledSession {
     /// the reason is.
     pub(crate) async fn shutdown(&mut self) -> bool {
         let mut clean = true;
+        if let Some(evidence) = &self.evidence {
+            match tokio::time::timeout(Duration::from_secs(30), evidence.service.reconcile()).await
+            {
+                Ok(Ok(_)) => {}
+                _ => {
+                    tracing::warn!("native evidence did not reconcile before harness shutdown");
+                    clean = false;
+                }
+            }
+        }
         if let Err(error) = self.client.shutdown().await {
             tracing::warn!(%error, "acp teardown unconfirmed; the harness may not have terminated");
             clean = false;
@@ -2473,6 +2671,12 @@ impl ControlledSession {
         if let Some(binding) = &self.binding {
             binding.revoke().await;
         }
+        if let Some(mut evidence) = self.evidence.take()
+            && let Err(error) = evidence.shutdown().await
+        {
+            tracing::warn!(%error, "native evidence did not reconcile after harness shutdown");
+            clean = false;
+        }
         clean
     }
 }
@@ -2483,6 +2687,7 @@ impl ControlledSession {
 /// provider through `providers/set` exactly as a served one does — and, with
 /// a `binding`, the same route and cost bridges.
 async fn launch_controlled(
+    source: &ConfigSource,
     config: &Config,
     agent_id: &str,
     routed: &Routed,
@@ -2499,16 +2704,31 @@ async fn launch_controlled(
     let AcpTransport::Stdio { command, args, env } = &agent.transport;
 
     let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
+    let mut env = env.clone();
+    let evidence = EvidenceHandle::open(EvidenceLaunch {
+        home: source.home(),
+        database_url: &config.database.url,
+        identity: &identity,
+        env: &mut env,
+        strip_inherited_env: &options.strip_inherited_env,
+    })
+    .await?;
     let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
     if let Some(endpoint) = routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
     }
-    let mut process =
-        bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
-            .strip_inherited_env(options.strip_inherited_env);
+    let args = match &evidence {
+        Some(evidence) => evidence.service.adapter_arguments(command, args).await?,
+        None => args.clone(),
+    };
+    let mut process = bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args, env.clone())
+        .strip_inherited_env(options.strip_inherited_env);
     let reaped = process.reaped();
     let mut controller =
         bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
+    if let Some(evidence) = &evidence {
+        controller = controller.session_observer(evidence.service.clone());
+    }
     if let Some(binding) = &binding {
         controller = controller
             .route_control(binding.route_control())
@@ -2551,6 +2771,7 @@ async fn launch_controlled(
     };
     Ok(ControlledSession {
         client,
+        evidence,
         binding,
         reaped,
         controller,
@@ -3074,7 +3295,7 @@ pub async fn commands(
 
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
-    let mut session = launch_controlled(&config, agent_id, &routed, options, binding)
+    let mut session = launch_controlled(source, &config, agent_id, &routed, options, binding)
         .await
         .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
     // Subscribed before the session opens, so an agent that advertises its

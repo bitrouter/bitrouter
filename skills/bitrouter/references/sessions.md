@@ -17,8 +17,11 @@ One controller process owns one live harness connection, not one conversation.
 The manager may call `session/new` repeatedly and may list, load, resume, fork,
 close, or delete sessions when the harness advertises those capabilities.
 Every manager-visible `sessionId` is the opaque ID returned by the harness.
-BitRouter does not generate an alias, store a session catalog or transcript,
-or read Claude/Codex session files.
+BitRouter does not generate an alias or replace the harness's session catalog.
+Maintained Codex and Claude adapters also collect local evaluation evidence:
+original ACP session envelopes, native lifecycle observations, and explicitly
+related native transcript files. This evidence index never writes to the
+harness's native session files or implements its lifecycle methods.
 
 `bitrouter run` runs the **same controller**, in-process: it launches the
 harness behind a connection-level controller and drives it over an in-process
@@ -91,6 +94,61 @@ harness's figure and `_meta` exactly as sent, with no marker. Probe the
 capability; an absent or null `usage` means `cost` is whatever the harness
 reports.
 
+## Application task selection
+
+Maintained Codex and Claude controllers with evidence collection advertise
+`_meta["bitrouter.dev/controller"].taskControl` with `version: "1"`,
+`scope: "session"`, and these methods:
+
+```text
+_bitrouter/task/status { sessionId }
+_bitrouter/task/select { sessionId, requestId, expected: { taskId, attemptId, revision }, mode }
+```
+
+An absent or null capability means these controls are unavailable. Send
+`initialize` first and await success before using them. They operate in the
+controller's application evidence store and are never sent to the harness.
+`status` returns `current`, `phase`, and `pending`; `current` is null before
+the first confirmed prompt. An unknown or ambiguous session is an error.
+
+`select` reserves the next prompt as `new_task` (new task and attempt ids) or
+`retry` (same task id, new attempt id). Copy `expected` from `status.current`;
+its revision tracks prompt membership and selections, not evaluator revisions.
+The current attempt must have no outstanding prompt RPCs. No empty attempt
+is created: `pending` persists until the next new prompt consumes it atomically
+with that prompt's original observation. Native context and workspace are
+unchanged, and a retry does not automatically resend a prompt. The archived
+attempt keeps its evidence and evaluation state; switching is not proof that
+native or background work has finished.
+
+Keep the same `requestId` and payload when retrying an uncertain reply, including
+after reconnecting. An identical request is idempotent even after consumption;
+reusing the key with different data, a stale cursor, or another pending selection
+is a conflict. Refresh status after a conflict. There is currently no replacement
+or cancellation method for a pending selection. All controllers sharing this
+owner and native-root profile serialize selection and prompt transitions on the
+same task. History verification covers up to 1,024 attempts per ACP conversation
+and 1,024 prompt operations per attempt; exceeding either bound rejects the
+write without advancing its journal.
+
+`code <agent>` negotiates these methods through the shared ACP client. Its
+Conversation view shows confirmed task/attempt state, with F2 for a new task,
+F3 for another attempt and F4 to refresh. F2/F3 reserve the next message; they
+do not clear native context or automatically replay a prompt. Submission keeps
+the draft while a selection is unconfirmed. A definitive conflict refreshes
+state but never reapplies the old intent to a new cursor automatically.
+
+Only an error with JSON-RPC `invalid_request`,
+`data.code = "task_control_conflict"` and `data.outcome = "not_applied"`
+certifies a rejected selection. The application emits it for checked admission
+conflicts before writing a new selection. A commit error, a status-read error
+after commit, or an older unqualified conflict leaves the result unknown.
+Keep the exact original request when retrying. The Code process retains that
+uncertain intent while connected and offers the same F2/F3 retry; an ordinary
+status refresh cannot prove it was never applied. Confirmed reservations are
+durable in the controller store. Client intent recovery after a Code process
+restart remains unfinished, as do feedback and automatic coding evaluation.
+
 ## Pinned Claude and Codex adapters
 
 The maintained catalog commands are exact pins:
@@ -99,6 +157,80 @@ The maintained catalog commands are exact pins:
 npx -y @agentclientprotocol/claude-agent-acp@0.75.1
 npx -y @agentclientprotocol/codex-acp@1.10.0
 ```
+
+Evidence-enabled controllers launch these canonical commands through a private
+Node entry under their invocation spool. On Node 22.15 or newer, the entry checks
+the actual loaded adapter module against its pinned digest and adds producer
+observations in memory. Package files, native prompt content and global Node
+options are unchanged. An initialization capability confirms the supported
+module loaded before the controller supplies a prompt's original record reference.
+Other adapter commands, unsupported Node versions and changed module bytes do
+not acquire this binding capability; missing producer evidence remains a gap.
+
+These observations link an original ACP operation to Codex's accepted thread/turn
+or Claude's enqueued command UUID. Cancellation can be followed by a late
+acceptance, and a prompt can produce several native inputs. Command callbacks
+without direct acceptance proof remain unverified. The application collection
+snapshot also exposes native input receipts: Codex pairs connection-local RPC
+requests and acceptances, while Claude retains original process inputs and
+command acknowledgements with their native conversation identity. Conflicting
+claims and known missing evidence remain explicit gaps, including after restart.
+The inspected ranges are bounded and do not establish complete task execution
+membership or settlement. An enqueue, accepted turn, input receipt or prompt
+result alone is not a completed evaluation.
+Each verified input receipt also exposes explicitly addressed execution events
+from its original native connection. Codex turn bookends and Claude command/result
+observations can identify an input's terminal outcome. Another thread, process or
+conversation cannot supply it; duplicate or inconsistent bookends remain gaps.
+Claude completion follows its result, while cancellation can precede a late result.
+API errors, deferred/background work and interruption remain distinct from an
+ordinary native completion. These observations do not establish all-task execution
+coverage or coding success. Execution-detail copies share a bounded inspection
+budget; they do not provide unlimited task history.
+Codex input receipts also expose `codex_history`. An original native lifecycle
+observation selects a rollout for that input, corroborated by owned file metadata
+and source-local turn-context records. A later revert cannot rewrite that input's
+selection. Delayed lifecycle notifications, overlapping requests, missing or
+ambiguous sources and unsupported history remain explicit gaps. This association
+does not establish complete execution ranges, settlement or coding quality.
+Resolved Codex histories and selected inputs also expose source-local execution
+observations: own turn bookends, explicitly addressed records and root-turn
+claims. Copied ancestor records are excluded using original native boundaries;
+unaddressed records remain unassigned. These source-local observations alone do
+not establish task membership, full context semantics or descendant completion.
+The application snapshot also exposes immutable `attempt_executions` observations
+and decorates observed attempts with `members` and an `execution_snapshot` digest.
+These join verified direct inputs and selected Codex descendant turns through
+original root-input and spawn evidence. Reusing a child assigns its matching
+turns; switching tasks still allows late work to update the archived attempt's
+latest observation. Claude retains distinct native conversations acknowledged
+by one process/input across reset. Reads revalidate the original inspected cuts,
+including competing producer claims and Codex connection acceptances. A new
+observation does not mutate an older snapshot or the original task revision.
+Current attempts are prioritized and archive targets rotate through bounded
+pages; unfinished inventory remains explicit. An attributable Codex child with
+an intact start but no observed terminal remains a member with an unfinished
+gap. This records an observation boundary, not proof of a live process. Later
+completion creates a new snapshot without changing the earlier one. These
+observations always retain an execution-coverage gap: complete child settlement,
+otherwise unassigned child work, auxiliary
+requests, final artifacts and native settlement still need complete attribution.
+They are not a frozen evaluation manifest and do not make an attempt `Ready`.
+An observation sequence without gaps does not cover all native work: auxiliary
+Codex title generation and file audits, among other paths, still need their own
+causal attribution and cost coverage.
+
+Claude history projection retains original compacted records and recognizes
+native rewrites of observation metadata without treating them as new messages.
+Imported histories remain inspectable after their files disappear, with explicit
+missing-file and conflicting-source gaps. This covers stored evidence, not an
+unseen native tail. Claude Code 2.1.220 has separate native capture coverage for
+CLI fork, two compactions and resume. Source-local standalone SDK 0.3.257 fork
+projection also retains remapped message origins and records inherited compact
+references skipped by the native loader. Full, nested and message-cut forks
+have text-only native capture coverage, including another local compaction.
+These copy claims do not establish a verified parent cut or task membership;
+complete Claude child membership and evaluation readiness remain unfinished.
 
 When routing is active, one endpoint plan drives both provider setup and its
 launch fallback:
@@ -131,7 +263,178 @@ harness child is terminated and live controller state is discarded; the
 controller does not close or delete harness sessions. Whether a session is
 durable is entirely the harness's native behavior.
 
+The controller reserves `_meta["bitrouter/native-evidence"]` for its private
+prompt provenance. It removes client-supplied values and supplies a fresh
+reference only for a durably observed prompt with a confirmed bridge capability.
+The adapter consumes this field before its original prompt handler runs. Clients
+must not set or replay it. `_bitrouter/nativeBinding` notifications carry selected
+producer observations and are retained before forwarding to the manager.
+
 ## Routing and observability boundary
+
+Native evidence collection runs on `code <agent>`, `run`, and `acp serve`,
+including the compatibility `chat`, `acp prompt` and `spawn` forms. It uses the configured BitRouter database and
+private invocation spools under `<bitrouter-home>/native-evidence/controllers`.
+Codex transcript discovery follows `CODEX_HOME` (default `~/.codex`); Claude
+follows `CLAUDE_CONFIG_DIR` (default `~/.claude`). Agent environment overrides
+take precedence over inherited values. The collector reads only named sessions
+and their explicit dependencies under those roots.
+
+New controllers also recover evidence registered by earlier controllers in the
+same BitRouter database and home. Recovery verifies stored profile/spool
+registrations, continuously pages through durable records and remaining files,
+and can recover hook identities after the originating controller removed the
+temporary hook file. Historical Query state is not restored as a live session.
+Recovery failures and resource limits remain visible gaps; they do not disable
+current collection. No additional user command is needed for this recovery.
+
+A prompt in a confirmed ACP session scope automatically starts its first local
+task/attempt. Its adapter conversation key is distinct from native execution
+nodes: Claude can reset or fork a native conversation while retaining a different
+public ACP id. Neither a Claude lifecycle response nor the first prompt assigns
+native task membership. Native process, SDK or hook records discover transcript
+identities independently, and unbound membership remains an explicit gap.
+Further prompts keep the task identity across reconnects. The prompt
+record and its task transition commit together; an RPC result starts settlement
+but does not certify coding success or completed background work. Outstanding
+RPCs owned by another controller remain explicit uncertainty. Task state is
+available in the application evidence snapshot and Code task controls; TUI feedback and
+automatic evaluation submission are not yet wired.
+
+Confirmed prompt requests and their original responses also pin immutable native
+source positions after a bounded reconciliation pass (up to 30 seconds). The
+first prompt selects the task baseline; later responses select candidate result
+boundaries without changing previous checkpoints. Each checkpoint preserves
+source generations, positions, terminal record references and collection gaps
+within its owner, harness and native-root namespace. Source inventory is bounded
+to 1,024 inspected registrations; overflow remains an explicit gap. Historical
+checkpoint gaps do not hold the live collector in a stale inventory cycle.
+These positions do not establish which native executions belong to the task,
+whether late or background work has finished, or whether every earlier record
+is intact. Native command attribution, final settlement and complete evaluation
+manifests still require those separate proofs.
+
+Confirmed prompt boundaries also save local workspace checkpoints. The first
+prompt preserves the actual dirty baseline; response checkpoints preserve later
+file contents even after further edits or workspace removal. Capture covers Git
+tracked files and unignored new files in the repository containing the session
+cwd, including shell-produced edits. Runtime directories and the evidence
+database are excluded. Additional workspace roots, sparse checkout, non-Git
+directories, unsupported file modes and failed or oversized reads remain explicit
+coverage gaps. Limits are 8 MiB per file, 16 MiB total raw content, 32 MiB per
+serialized artifact and 30 seconds per capture. A prompt response checkpoint is
+not the final result of background work or proof that the task passed; final
+settlement, evaluation submission and TUI feedback are still pending.
+
+Claude session creation also follows `_meta.claudeCode.options.env`; relative
+native roots resolve against that session's `cwd`. Each profile has a separate
+evidence namespace and hook spool. Claude may reuse its loaded Query when
+load/resume supplies the same cwd and MCP configuration, ignoring new env or
+settings. A cached fingerprint cannot prove it survived an idle process exit;
+if reuse and recreation would select different profiles, scope stays unknown.
+Hooks preserve
+the adapter's `CLAUDE_MODEL_CONFIG` fallback when no session settings are given.
+Overlapping lifecycle transitions of one session are rejected; close/delete
+can still cancel an active prompt. Unknown scope remains an evidence gap until
+a successful close or a new controller connection resets it. A failed close
+does not prove reset; the adapter may already have removed the Query.
+
+The Codex controller temporarily sets `CODEX_PATH` to BitRouter's private
+`app-server` proxy. An existing `CODEX_PATH` is preserved in the child-only
+`BITROUTER_CODEX_EVIDENCE_UPSTREAM`; otherwise Node resolves Codex relative to
+the maintained adapter package, including nested dependencies. A custom adapter
+launcher can supply `BITROUTER_CODEX_ADAPTER_ENTRY` when its package entry is
+not discoverable from PATH. `BITROUTER_CODEX_EVIDENCE_SPOOL` is private launch
+wiring, not a user-facing model or provider setting.
+
+On Unix, Claude native executables also run through a private stdio proxy.
+The controller saves `CLAUDE_CODE_EXECUTABLE` in child-only
+`BITROUTER_CLAUDE_EVIDENCE_UPSTREAM` and temporarily points the adapter at
+a private `bitrouter-claude-proxy` executable alias. The alias distinguishes
+native CLI calls from ordinary BitRouter commands launched by MCP tools with
+inherited environment variables. Auth probes and other non-stream commands
+execute the original CLI directly; their output is not journaled. Without an
+explicit override, resolution follows the adapter's own
+SDK dependency and platform-specific native package. Custom adapter launchers
+can set `BITROUTER_CLAUDE_ADAPTER_ENTRY` when their entry cannot be located on
+PATH. `BITROUTER_CLAUDE_EVIDENCE_SPOOL` and
+`BITROUTER_CLAUDE_EVIDENCE_NAMESPACE` and `BITROUTER_CLAUDE_EVIDENCE_ORIGIN`
+are private subprocess wiring. The origin is a bounded reference to a committed
+configuration record and its original ACP request. It is removed before the
+native CLI starts. Each
+actual process gets its own `cli-<uuid>.jsonl` spool; these UUIDs are distinct
+from native conversation ids. Parameters, protocol bytes and native exit codes
+are preserved. Script executable overrides and platforms without signal
+supervision retain their SDK launch path and an explicit coverage gap.
+
+The Claude proxy captures lifecycle metadata, checks the native profile and
+retains process-local order across conversation resets. Registered histories
+can recover these records even when the process emitted them before an ACP
+session response. That recovery does not restore a live Query or declare that
+a task finished. A missing process-stop record remains uncertainty.
+
+Application snapshots also expose verified process configuration origins. The
+reader rechecks owned raw records, controller/profile registrations and recorded
+lifecycle fields. A saved configuration may start several native processes;
+its originating operation is not proof of what triggered a later restart. These
+bindings survive deletion of imported spool files. Older or invalid references
+remain visible as gaps and do not establish task membership or completion.
+
+Lifecycle requests and responses have separate immutable evidence boundaries
+for both maintained controllers. They can be recovered from different profile
+journals without inventing missing responses. Claude process snapshots also
+show the verified response to their configuration's original lifecycle request,
+including its ACP id or rejection. That historical ACP attachment is distinct
+from the current native conversation id after a reset and from Query liveness.
+Damaged derived boundaries remain gaps while intact raw history and later
+operations in the same journal continue to recover.
+
+Claude collection adds invocation-local lifecycle hooks through the adapter's
+session settings, preserving existing hooks. `native-session-hook` and
+`app-server` are internal entry points; users do not run them to collect or
+rate a session. Neither entry point changes the user's global native config.
+
+Claude prompt hooks retain native prompt IDs when present. Stop observations
+retain available background-work metadata; they do not certify that a task has
+finished. Child transcript collection follows nested subagent directories and
+reads adjacent `agent-*.meta.json` files for explicit parent-agent relations.
+Missing parent metadata remains an evidence gap. The derived execution graph retains raw record references and
+does not by itself assign task membership or settle an evaluation.
+
+Codex execution snapshots separate turn bookends by native node and turn id,
+including interrupted turns and later executions by a resumed child. Each
+boundary retains its original source reference and origin. Fork history can
+contain copied parent turns or synthetic aborts; those records remain unverified
+unless execution provenance is established and cannot finish a child run.
+Missing turn ids, conflicting outcomes and reversed source order remain gaps.
+The tap retains requested and accepted turn ids for native steering, but those
+native RPC ids are not the controller's ACP prompt operation ids. This status
+does not establish task membership, native liveness or evaluation readiness.
+
+The maintained Claude adapter also requests selected `emitRawSDKMessages`
+lifecycle filters while preserving existing filters. The evidence journal keeps
+native command states, session idle/running states, task transitions, background
+task sets and runtime capabilities as separate observations. Task IDs are not
+assumed to be agent transcript IDs. Original notifications still reach the
+manager; configuration fields, result text and cumulative cost counters are
+excluded from this lifecycle view. The message's native `session_id` is separate
+from its ACP attachment after a conversation reset. Early notifications retain
+their original unbound scope; application snapshots can attach individual
+observations to a verified process/profile using an identical native event UUID
+and lifecycle metadata from the CLI transport. Conflicting processes, missing
+UUIDs, invalid fields and incomplete inventory remain gaps. The snapshot rotates
+through bounded raw-record windows and reports its next cursor and inspected
+observation/process ranges. Each scan fixes its SDK observation boundary before
+reading native spools; later notifications wait for another scan so newly started
+processes are not omitted from their candidate set. If a partly imported spool
+disappears, collection continues but its known missing tail remains incomplete,
+including after a restart. It does not recover a live Query cache or settle a task.
+
+Original records survive compaction and context rewind. Fork dependencies use
+native ordinal and byte cuts, and later parent work cannot enter the inherited
+prefix. Missing history, interrupted lines, unsupported dependencies and
+collection failures remain evidence gaps. A live collection snapshot is not a
+completed task evaluation or proof that the agent's code passed its tests.
 
 Routing is attempted by default for supported catalog adapters. Use `--direct`
 to opt out, `--model` to pin the logical model, `--base-url` to select a daemon,

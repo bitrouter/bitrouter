@@ -101,6 +101,18 @@ pub struct Conversation {
     pub scroll: usize,
     pub journal: crate::journal::Journal,
     pub permission: Option<crate::permission::Prompt>,
+    /// Confirmed application evidence state; distinct from native lifecycle.
+    pub task: Option<TaskView>,
+}
+
+/// Plain task display data supplied by the application's ACP consumer.
+#[derive(Debug, Clone)]
+pub struct TaskView {
+    pub task_id: Option<String>,
+    pub attempt_id: Option<String>,
+    pub status: String,
+    pub next_prompt: Option<String>,
+    pub hint: String,
 }
 
 /// Pure Code-shell state transition. Async launch/prompt effects stay in the
@@ -500,7 +512,11 @@ fn draw_conversation(
 ) {
     let [transcript, status, input] = Layout::vertical([
         Constraint::Min(4),
-        Constraint::Length(2),
+        Constraint::Length(if dashboard.conversation.task.is_some() {
+            5
+        } else {
+            2
+        }),
         Constraint::Length(3),
     ])
     .areas(area);
@@ -513,9 +529,29 @@ fn draw_conversation(
             .wrap(Wrap { trim: false }),
         transcript,
     );
-    let status_line = conversation_status(&dashboard.conversation);
+    let mut status_lines = vec![Line::from(conversation_status(&dashboard.conversation))];
+    if let Some(task) = &dashboard.conversation.task {
+        let short = |value: &Option<String>| {
+            value
+                .as_deref()
+                .unwrap_or("pending")
+                .chars()
+                .take(8)
+                .collect::<String>()
+        };
+        status_lines.push(Line::from(format!(
+            "Task {} · attempt {}",
+            short(&task.task_id),
+            short(&task.attempt_id)
+        )));
+        status_lines.push(Line::from(task.status.clone()));
+        if let Some(next) = &task.next_prompt {
+            status_lines.push(Line::from(next.clone()));
+        }
+        status_lines.push(Line::from(task.hint.clone()));
+    }
     frame.render_widget(
-        Paragraph::new(status_line).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(status_lines).style(Style::default().fg(Color::DarkGray)),
         status,
     );
     let title =
@@ -557,9 +593,9 @@ fn draw_sessions(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: 
                 "agent",
                 dashboard.conversation.agent.as_deref().unwrap_or("unknown"),
             ));
-            lines.push(field("native id", session_id));
+            lines.push(field("ACP session", session_id));
             if let Some(provider_id) = dashboard.conversation.provider_session_id.as_deref() {
-                lines.push(field("provider id", provider_id));
+                lines.push(field("reported agent id", provider_id));
             }
             lines.push(field(
                 "lifecycle",
@@ -569,6 +605,27 @@ fn draw_sessions(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: 
             lines.push(Line::from(
                 "Load replays history; resume does not. Close releases resources; delete is separate.",
             ));
+            if let Some(task) = &dashboard.conversation.task {
+                lines.push(Line::from(""));
+                lines.push(field(
+                    "task",
+                    task.task_id
+                        .as_deref()
+                        .unwrap_or("starts with the first message"),
+                ));
+                lines.push(field(
+                    "attempt",
+                    task.attempt_id.as_deref().unwrap_or("pending"),
+                ));
+                lines.push(Line::from(task.status.clone()));
+                if let Some(next) = &task.next_prompt {
+                    lines.push(Line::from(next.clone()));
+                }
+                lines.push(Line::from(
+                    "New task and retry apply to your next message and keep the native context.",
+                ));
+                lines.push(Line::from("Task controls are available in Conversation."));
+            }
         }
         None => lines.push(Line::from(
             "No active native session. Select an ACP-capable agent in Agents.",
@@ -579,7 +636,7 @@ fn draw_sessions(frame: &mut Frame<'_>, area: ratatui::layout::Rect, dashboard: 
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Native sessions "),
+                    .title(" Session and task "),
             )
             .wrap(Wrap { trim: false }),
         area,
@@ -810,6 +867,34 @@ mod tests {
             ..Conversation::default()
         });
         assert_eq!(status, "idle · session session-1 · route direct");
+    }
+
+    #[test]
+    fn conversation_renders_task_selection_without_claiming_evaluation_complete() -> io::Result<()>
+    {
+        let mut dashboard = Dashboard::default();
+        dashboard.conversation.native_session_id = Some("native-1".into());
+        dashboard.conversation.input = "my next instruction".into();
+        dashboard.conversation.task = Some(TaskView {
+            task_id: Some("task-first".into()),
+            attempt_id: Some("attempt-first".into()),
+            status: "Reconciling task evidence; evaluation pending".into(),
+            next_prompt: Some("Next message starts another attempt of this task.".into()),
+            hint: "F2 New task · F3 Retry task · F4 Refresh task".into(),
+        });
+        let mut terminal = Terminal::new(TestBackend::new(100, 24))?;
+        terminal.draw(|frame| draw(frame, Page::Conversation, &dashboard, None))?;
+        let text = rendered_text(&terminal);
+        assert!(text.contains("evaluation pending"));
+        assert!(text.contains("Next message starts another attempt"));
+        assert!(text.contains("F2 New task"));
+        assert!(text.contains("my next instruction"));
+        terminal.draw(|frame| draw(frame, Page::Sessions, &dashboard, None))?;
+        let text = rendered_text(&terminal);
+        assert!(text.contains("task-first"));
+        assert!(text.contains("attempt-first"));
+        assert!(text.contains("native-1"));
+        Ok(())
     }
 
     #[test]

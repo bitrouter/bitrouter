@@ -408,8 +408,10 @@ fallback uses `CODEX_CONFIG` plus `MODEL_PROVIDER`; ACP mode does not append
 Codex `-c` arguments.
 
 Every session ID and lifecycle operation remains harness-native. The controller
-stores neither transcripts nor a second session catalog, and it exits when the
-ACP client disconnects. For a one-shot turn on the same controller,
+does not replace the native session catalog, and it exits when the manager
+disconnects. Maintained Codex/Claude controllers retain a separate local
+evaluation evidence index, including raw native records and source checkpoints.
+For a one-shot turn on the same controller,
 `bitrouter run claude <text>` streams versioned NDJSON to stdout. See
 `references/sessions.md` for the complete ownership boundary.
 

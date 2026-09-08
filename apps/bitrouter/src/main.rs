@@ -201,6 +201,15 @@ struct CodeArgs {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Internal Codex adapter evidence proxy.
+    #[command(name = "app-server", hide = true)]
+    NativeAppServer,
+    /// Internal native lifecycle evidence hook.
+    #[command(name = "native-session-hook", hide = true)]
+    NativeSessionHook {
+        #[arg(long)]
+        spool: PathBuf,
+    },
     /// Load a config, run migrations, and serve HTTP + control socket
     /// **in the foreground**.
     Serve {
@@ -1622,12 +1631,25 @@ fn main() {
 
 #[tokio::main]
 async fn async_main() {
+    if bitrouter::session_evidence::claude_proxy::selected() {
+        match bitrouter::session_evidence::claude_proxy::run().await {
+            Ok(code) => std::process::exit(code),
+            Err(error) => {
+                eprintln!("error: {error:#}");
+                std::process::exit(1);
+            }
+        }
+    }
     // Parse once here so the global `--json` / `--human` flags are available to
     // render the *result* — a success report or the error envelope — through the
     // single `Output` driver. Diagnostics during execution go to stderr; the
     // result (this match) goes to stdout in the selected format, so
     // `bitrouter <cmd> 2>/dev/null | jq` always sees one clean JSON value.
     let cli = Cli::parse();
+    let raw_native_proxy = matches!(
+        &cli.command,
+        Some(Command::NativeAppServer | Command::NativeSessionHook { .. })
+    );
     let raw_cloud_api = matches!(
         &cli.command,
         Some(Command::Cloud {
@@ -1670,7 +1692,7 @@ async fn async_main() {
             // `error` line on that stream itself. Keyed off the error's type
             // rather than the command shape, so it cannot misclassify a
             // sibling mode (`spawn --check` still gets its JSON report).
-            if raw_cloud_api || raw_agent_stream {
+            if raw_cloud_api || raw_native_proxy || raw_agent_stream {
                 eprintln!("error: {e:#}");
             } else if let Some(routing) = e.downcast_ref::<bitrouter::acp_cli::RoutingError>() {
                 eprintln!("error: {routing}");
@@ -1683,6 +1705,12 @@ async fn async_main() {
 }
 
 async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
+    if let Some(Command::NativeSessionHook { spool }) = &cli.command {
+        return bitrouter::session_evidence::claude_hooks::run(spool).await;
+    }
+    if matches!(&cli.command, Some(Command::NativeAppServer)) {
+        return bitrouter::session_evidence::codex_proxy::run().await;
+    }
     // Subscriber init splits by command: the long-running `serve` defers
     // its init until after the OTel exporter has installed a real tracer
     // provider globally (see `serve` below). Every other command — and
@@ -1795,6 +1823,10 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     }
 
     match command {
+        Command::NativeSessionHook { spool } => {
+            bitrouter::session_evidence::claude_hooks::run(&spool).await
+        }
+        Command::NativeAppServer => bitrouter::session_evidence::codex_proxy::run().await,
         Command::Serve { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             serve(&source).await

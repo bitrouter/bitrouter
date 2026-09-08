@@ -95,6 +95,8 @@ use crate::acp::translate::{
     PermissionOutcome, SessionUpdateKind, sanitize_selection, select_option, translate,
 };
 
+pub mod tasks;
+
 /// Capacity of the broadcast channel that fans `session/update`-derived
 /// [`SessionUpdateKind`]s out to subscribers. Sized to absorb a streaming burst
 /// without dropping; a subscriber that lags past this sees the broadcast's
@@ -531,7 +533,7 @@ type ExtensionCall =
 
 /// One command driven inside the connection's command loop.
 enum Command {
-    /// Send one extension request (`_bitrouter/route/*`) on the connection.
+    /// Send one controller extension request on the connection.
     Extension(ExtensionCall),
     /// Create the session (`session/new`) with the given working directory and
     /// MCP servers; reply with the minted wire identity.
@@ -584,6 +586,8 @@ pub struct AcpClient {
     /// client acts on is read out of it here, at handshake, and keeping the
     /// rest would be state with no reader.
     route_control: RouteControlCapability,
+    /// Task methods explicitly advertised by the application controller.
+    task_control: tasks::TaskControlCapability,
     /// The authentication methods the agent advertised, in its own order.
     ///
     /// Read at handshake for the same reason `route_control` is: it is the only
@@ -667,6 +671,7 @@ impl AcpClient {
             .await
             .map_err(|_| anyhow::anyhow!("the ACP connection ended before the handshake"))??;
         let route_control = RouteControlCapability::from_init(&init);
+        let task_control = tasks::TaskControlCapability::from_init(&init);
         let agent_capabilities = init.agent_capabilities.clone();
         let auth_methods = init.auth_methods.clone();
         let protocol_version = init.protocol_version;
@@ -674,6 +679,7 @@ impl AcpClient {
         Ok(Self {
             agent_capabilities,
             route_control,
+            task_control,
             auth_methods,
             protocol_version,
             agent_info,

@@ -55,6 +55,16 @@ Each new metering row retains:
 Historical rows created before this evidence schema are marked
 `legacy_unknown`. They do not become zero-cost requests during export.
 
+Recognized Codex requests also retain explicit native `turn_id`,
+`parent_turn_id` and `root_turn_id` correlation in their metering rows. Parent
+turns are distinct from parent threads, and a resumed child can report a new
+root turn while keeping its thread ID. Missing fields and pre-migration rows
+remain null; no turn ancestry is inferred from a session ID. Reviewed
+header/body observations and disagreements remain in `session_identity_json`.
+These are correlation claims, not authorization or complete task membership;
+they require matching native execution evidence before evaluation. Turn
+ancestry does not select a route lease.
+
 Provider transport reliability observations are stored separately from task
 reward and metering rows. Export their deterministically replayed circuit state
 with the same frozen config used by the daemon:
