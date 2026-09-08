@@ -18,6 +18,16 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 These are feature-branch capabilities. A live collection snapshot is not a
 complete evaluation sample, and an ACP response is not task-completion proof.
 
+Native file identities come from the handle used to read the transcript or
+metadata sidecar. Windows uses the volume ID, full 128-bit file ID and creation
+time, including on ReFS, rather than a pathname or the legacy 64-bit file index.
+Metadata queries run outside the async worker. Moving a file or opening a hard
+link retains its source; replacing it with an identical file does not. Existing
+Windows evidence collected with path-based identities remains immutable and is
+not rebound: the new identity imports a separate source instead of adopting an
+old cursor. Unix source identities are unchanged. Filesystems that cannot supply
+the required identity produce a collection error rather than a guessed source.
+
 ## Implementation checkpoint
 
 Storage, source-local projection, recursive Codex history dependencies, native

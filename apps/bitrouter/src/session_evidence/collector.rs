@@ -114,7 +114,7 @@ impl NativeCollector {
                 && owned.descriptor.locator
                     == format!(
                         "file:{}",
-                        file_identity(&transcript_metadata, &transcript_path)?
+                        file_identity(&transcript_file, &transcript_metadata).await?
                     )
                 && owned.cursor.offset > 0
                 && owned.cursor.offset <= transcript_metadata.len()
@@ -171,16 +171,19 @@ impl NativeCollector {
         );
         let path = tokio::fs::canonicalize(path).await?;
         ensure!(path.starts_with(&root), "agent metadata root escape");
-        let identity = file_identity(&metadata, &path)?;
-        let file = File::open(&path).await?;
+        let mut file = File::open(&path).await?;
+        let metadata = file.metadata().await?;
+        let identity = file_identity(&file, &metadata).await?;
         let mut bytes = vec![];
-        file.take(MAX_RECORD_BYTES as u64 + 1)
+        (&mut file)
+            .take(MAX_RECORD_BYTES as u64 + 1)
             .read_to_end(&mut bytes)
             .await?;
         ensure!(bytes.len() <= MAX_RECORD_BYTES, "agent metadata size limit");
-        let after = tokio::fs::metadata(&path).await?;
+        let after_file = File::open(&path).await?;
+        let after = after_file.metadata().await?;
         ensure!(
-            identity == file_identity(&after, &path)?
+            identity == file_identity(&after_file, &after).await?
                 && metadata.len() == after.len()
                 && metadata.modified().ok() == after.modified().ok(),
             "agent metadata changed while reading"
@@ -378,7 +381,7 @@ impl NativeCollector {
             metadata.is_file(),
             "native transcript must be a regular file"
         );
-        let identity = file_identity(&metadata, &path)?;
+        let identity = file_identity(&file, &metadata).await?;
         let format = match node.harness {
             Harness::Codex => SourceFormat::CodexRollout,
             Harness::ClaudeCode => SourceFormat::ClaudeTranscript,
@@ -519,8 +522,9 @@ impl NativeCollector {
                 )
                 .await?;
         }
-        let after = reader.into_inner().into_inner().metadata().await?;
-        if file_identity(&after, &path)? != identity || after.len() < offset {
+        let file = reader.into_inner().into_inner();
+        let after = file.metadata().await?;
+        if file_identity(&file, &after).await? != identity || after.len() < offset {
             gaps.insert("source_changed_during_read".into());
         }
         self.finish_source(source, path, gaps, bound).await
@@ -828,16 +832,40 @@ fn hash_digest(hasher: &Sha256) -> String {
     format!("sha256:{}", hex::encode(hasher.clone().finalize()))
 }
 
-fn file_identity(metadata: &std::fs::Metadata, path: &Path) -> Result<String> {
+async fn file_identity(file: &File, metadata: &std::fs::Metadata) -> Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let _ = path;
+        let _ = file;
         canonical_digest(&(metadata.dev(), metadata.ino(), metadata.created().ok()))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        canonical_digest(&(path, metadata.created().ok()))
+        use std::os::windows::fs::MetadataExt;
+        // Clone the open handle, not the pathname: the source can move or be
+        // replaced while its original bytes are still being read. FileIdInfo
+        // supplies the full 128-bit ID required by ReFS; legacy 64-bit file
+        // indexes are not unique there. Creation time distinguishes ID reuse.
+        // https://docs.rs/fs-id/0.2.0/fs_id/struct.FileID.html
+        // https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_info
+        let file = file.try_clone().await?.into_std().await;
+        let created = metadata.creation_time();
+        tokio::task::spawn_blocking(move || {
+            let info = fs_id::FileID::new(&file)?;
+            ensure!(info.internal_file_id() != 0, "native file ID unavailable");
+            canonical_digest(&(
+                "windows-file/1",
+                info.storage_id(),
+                format!("{:032x}", info.internal_file_id()),
+                created,
+            ))
+        })
+        .await?
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (file, metadata);
+        anyhow::bail!("native file identity unavailable on this platform")
     }
 }
 

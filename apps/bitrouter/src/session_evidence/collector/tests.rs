@@ -66,6 +66,46 @@ async fn partial_line_is_retried_and_move_preserves_source_identity() -> Result<
 }
 
 #[tokio::test]
+async fn file_links_share_evidence_but_identical_replacements_do_not() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let collector = collector(Harness::ClaudeCode, directory.path()).await?;
+    let path = directory.path().join("session-1.jsonl");
+    let alias = directory.path().join("alias.jsonl");
+    let bytes = jsonl(json!({"type":"user","sessionId":"session-1","uuid":"u1"}))?;
+    tokio::fs::write(&path, &bytes).await?;
+    let opened = File::open(&path).await?;
+    let original_identity = file_identity(&opened, &opened.metadata().await?).await?;
+    let original = collector
+        .reconcile(node(Harness::ClaudeCode), &path, None)
+        .await?;
+    tokio::fs::hard_link(&path, &alias).await?;
+    let linked = collector
+        .reconcile(node(Harness::ClaudeCode), &alias, None)
+        .await?;
+    assert_eq!(original.source.id, linked.source.id);
+    assert_eq!(original.source.cursor, linked.source.cursor);
+
+    tokio::fs::remove_file(&path).await?;
+    tokio::fs::write(&path, &bytes).await?;
+    let replacement = collector
+        .reconcile(node(Harness::ClaudeCode), &path, None)
+        .await?;
+    assert_ne!(original.source.id, replacement.source.id);
+    // An in-flight reader still owns the old file, even after its pathname
+    // names a different file containing exactly the same transcript bytes.
+    assert_eq!(
+        file_identity(&opened, &opened.metadata().await?).await?,
+        original_identity
+    );
+    let retained = collector
+        .reconcile(node(Harness::ClaudeCode), &alias, None)
+        .await?;
+    assert_eq!(original.source.id, retained.source.id);
+    assert_eq!(original.source.cursor, retained.source.cursor);
+    Ok(())
+}
+
+#[tokio::test]
 async fn overwritten_prefix_starts_a_new_generation_without_erasing_old_records() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let collector = collector(Harness::ClaudeCode, directory.path()).await?;
