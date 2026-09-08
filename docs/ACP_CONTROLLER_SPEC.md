@@ -2,6 +2,13 @@
 
 Status: **Phase 3 stable-v1 controller implemented; next iterations specified** · Date: 2026-09-02
 
+Content-recording amendment: [Observable ACP content recording](ACP_CANONICAL_CAPTURE_SPEC.md)
+adds an opt-in, app-owned capture port and local evidence store. References
+below to no transcript storage describe the original controller phase; the
+continuing invariant is that BitRouter does not replace native session IDs,
+lifecycle authority, or harness-owned history. Recording is an observable
+mirror and never a private-log reader or a second resume catalog.
+
 Implementation note: Phase 0 pins stable ACP v1 wire semantics and maintained
 Claude/Codex adapters behind one endpoint plan. Phase 1 ships the manager-first
 connection controller used by `acp serve`, including provider setup gating,
@@ -1531,7 +1538,8 @@ ordinary local process.
 - implement permission, filesystem, terminal, elicitation, terminal-auth,
   modes/configuration, commands, plan/tool updates, usage, cost scope, and
   diagnostics through ACP; and
-- preserve the hard no-transcript, no-shadow-catalog boundary.
+- preserve native session authority; optional app-owned evidence capture follows
+  `ACP_CANONICAL_CAPTURE_SPEC.md` and never becomes a shadow resume catalog.
 
 TUI multi-open and product-level reuse of one connection for several user
 sessions are not goals in this or a later scheduled phase.
@@ -1576,7 +1584,7 @@ virtual multi-harness ACP Agent and does not rewrite native session IDs.
 | Each observability sink reparses identity independently | Trace, route, replay, and metering disagree about one request | One `SessionIdentityObserved` contract, `router_request_id` joins, and online/replay equivalence tests |
 | Raw session IDs become metric labels | Unbounded cardinality and sensitive identifier exposure | Stable transformed IDs only in approved trace/event stores; metrics use bounded attribution enums |
 | Route state is keyed only by process/launch | One user session changes another accidentally | `(api_principal, declared controller, root session)` lease key and independent-controller isolation tests |
-| Controller becomes another session database | Native resume diverges from BitRouter state | Hard no-storage invariant and restart/load acceptance test |
+| Evidence storage becomes native session authority | Native resume diverges from BitRouter state | Native-ID invariant, explicit capture/mirror boundary, and restart/load acceptance tests |
 | TUI requirements leak into protocol core | Controller becomes hard to embed/test | SDK/TUI dependency boundary and headless acceptance gate |
 | Harness selector changes an active session's harness | Native context, tools, and identifiers become invalid | Select before connection/session creation and make the binding immutable after success |
 | Exact Claude turn correlation is unavailable | ACP prompt cannot be tied to one HTTP call with certainty | Treat session correlation as sufficient for v1; add adapter extension only if a measured use case requires turn-level precision |

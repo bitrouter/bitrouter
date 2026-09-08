@@ -674,7 +674,7 @@ fn collect_unclassified_schema_paths(
         || schema.get("unevaluatedProperties").is_some()
         || schema.get("patternProperties").is_some();
 
-    if !(all_of.is_some() && !has_direct_object_shape) {
+    if all_of.is_none() || has_direct_object_shape {
         match value {
             serde_json::Value::Object(values) => {
                 let properties = schema

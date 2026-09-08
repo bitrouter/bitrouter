@@ -93,6 +93,8 @@ pub struct Config {
     pub eval: EvalConfig,
     /// Durable trajectory progress-control and local operations settings.
     pub trajectory: TrajectoryConfig,
+    /// Opt-in local storage of observable ACP conversation content.
+    pub acp_recording: AcpRecordingConfig,
     /// Durable provider continuation mapping lifecycle.
     pub continuation: ContinuationConfig,
     /// Upstream providers, keyed by provider id.
@@ -149,6 +151,7 @@ impl Default for Config {
             database: DatabaseConfig::default(),
             eval: EvalConfig::default(),
             trajectory: TrajectoryConfig::default(),
+            acp_recording: AcpRecordingConfig::default(),
             continuation: ContinuationConfig::default(),
             providers: HashMap::new(),
             models: HashMap::new(),
@@ -243,6 +246,15 @@ impl Default for ContinuationConfig {
             prune_batch_size: 1_000,
         }
     }
+}
+
+/// Local ACP conversation content recording, independent of routing evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct AcpRecordingConfig {
+    /// Store observable session messages and tool results until explicitly deleted.
+    /// No content is recorded or sent to an evaluator by default.
+    pub enabled: bool,
 }
 
 /// Durable trajectory progress-control settings.

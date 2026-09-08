@@ -1440,3 +1440,23 @@ Scaffolds a starter `<NAME>/SKILL.md`; `--output` may choose another path whose
 file is still named `SKILL.md` and whose parent directory equals `<NAME>`.
 Refuses to overwrite an existing file. Names follow the Agent Skills grammar:
 1–64 lowercase ASCII letters, digits, or non-leading/trailing single hyphens.
+
+## Local ACP recordings
+
+Opt in with `acp_recording.enabled: true` in the selected config. This records
+observable ACP content from `code`, `run`, and `acp serve` in the local database,
+independently of `trajectory.enabled`. It does not invoke an evaluator.
+
+```bash
+bitrouter acp recordings [--config PATH] list --agent codex-acp
+bitrouter acp recordings [--config PATH] show --agent codex-acp NATIVE_SESSION_ID
+bitrouter acp recordings [--config PATH] delete --agent codex-acp NATIVE_SESSION_ID
+```
+
+The source is the resolved configured agent ID, and the session ID remains
+harness-native. `show` returns canonical events, separate replay audit, gaps,
+and observed metering/route links. Output follows the global JSON/`--human`
+convention. Content persists until explicit deletion; deletion fences further
+recording for that native identity and does not touch native harness history
+or metering. See [the recording contract](ACP_CANONICAL_CAPTURE_SPEC.md) for
+visibility, write-failure, and cost-accounting semantics.

@@ -1542,7 +1542,36 @@ enum ProviderAction {
 }
 
 #[derive(Subcommand)]
+enum AcpRecordingAction {
+    /// List recorded native sessions under a configured agent source.
+    List {
+        #[arg(long)]
+        agent: String,
+    },
+    /// Export canonical events, replay audit, gaps, and observed request links.
+    Show {
+        #[arg(long)]
+        agent: String,
+        session: String,
+    },
+    /// Delete this session's locally captured content.
+    Delete {
+        #[arg(long)]
+        agent: String,
+        session: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum AcpCmd {
+    /// Inspect or delete locally recorded ACP conversation content.
+    Recordings {
+        #[command(subcommand)]
+        action: AcpRecordingAction,
+        /// Config selecting the local content database.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+    },
     /// Expose an ACP-compatible agent adapter over stdio for an ACP client.
     #[command(override_usage = "bitrouter acp serve <AGENT> [OPTIONS]")]
     Serve {
@@ -6111,6 +6140,43 @@ async fn resolve_prompt_input(
 
 async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
     match cmd {
+        AcpCmd::Recordings { action, config } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            let url = bitrouter::db::anchor_url(&cfg.database.url, source.home());
+            let db = bitrouter::db::connect(&url).await?;
+            bitrouter::db::run_migrations(&db).await?;
+            let store = bitrouter::acp_trajectory::CanonicalStore::new(db);
+            match action {
+                AcpRecordingAction::List { agent } => {
+                    output.emit(&bitrouter::acp_trajectory::RecordingReport::Sessions(
+                        store.list("local", &agent).await?,
+                    ))?
+                }
+                AcpRecordingAction::Show { agent, session } => {
+                    let identity = bitrouter::acp_trajectory::SessionIdentity {
+                        owner: "local".into(),
+                        source: agent,
+                        native_session_id: session,
+                    };
+                    output.emit(&bitrouter::acp_trajectory::RecordingReport::Transcript(
+                        Box::new(store.transcript(&identity).await?),
+                    ))?;
+                }
+                AcpRecordingAction::Delete { agent, session } => {
+                    let identity = bitrouter::acp_trajectory::SessionIdentity {
+                        owner: "local".into(),
+                        source: agent,
+                        native_session_id: session,
+                    };
+                    store.delete(&identity).await?;
+                    output.emit(&bitrouter::acp_trajectory::RecordingReport::Deleted(
+                        identity,
+                    ))?;
+                }
+            }
+            Ok(())
+        }
         AcpCmd::Serve {
             agent,
             agent_compat,
