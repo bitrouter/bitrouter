@@ -9,6 +9,7 @@
 //! keeps its own report under [`crate::output::reports`].
 
 pub mod administration;
+pub(crate) mod code;
 pub mod commands;
 pub mod models;
 pub mod requests;

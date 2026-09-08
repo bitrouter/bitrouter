@@ -19,7 +19,7 @@ the ACP registry; the headless `--harness` aliases remain `codex` and `claude`.
 Global `--context NAME` selects a named remote-control target for `status`
 (including `--requests`), `requests`, `models`, `route`, `providers list`,
 `observe status`, `policy status|show`, `agents list`, and the `code`
-operations dashboard; `local` forces normal local behavior. `reload` is the
+operations-only Code surface; `local` forces normal local behavior. `reload` is the
 one remote mutation, and `operations show <request-id> --instance <boot-id>`
 looks up its retained receipt.
 Manage targets with `bitrouter context add NAME --endpoint URL --token-env
@@ -197,11 +197,11 @@ synthesized, and unmetered traffic (`--direct`, explicit `--base-url`, own-auth
 harnesses, sessions with no priced requests) is forwarded exactly as sent —
 never `$0.00`, never a daemon-wide figure.
 
-**Observability and turns**: `acp serve` forwards the harness's session/cancel and session/update wire unchanged, except that a locally bound controller decorates the harness's own `usage_update` with session-attributed `cost` (see **Session cost**); it never synthesizes per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. The normal API/virtual key is the only authentication boundary; authorization, cookies, and credentials remain excluded. `run` drives the same controller in-process, so it gets identical forwarding; its OTel turn spans are re-derived from the prompt round-trip and correlate on the **harness-native** session id. `--turn-timeout` and cooperative cancellation are the client's there, and in `code <agent>`: every command now drives the same controller through the same client, and no local `record_id` or FIFO queue survives anywhere.
+**Observability and turns**: `acp serve` forwards the harness's session/cancel and session/update wire unchanged, except that a locally bound controller decorates the harness's own `usage_update` with session-attributed `cost` (see **Session cost**); it never synthesizes per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. The normal API/virtual key is the only authentication boundary; authorization, cookies, and credentials remain excluded. `run` drives the same controller in-process, so it gets identical forwarding; its OTel turn spans are re-derived from the prompt round-trip and correlate on the **harness-native** session id. `--turn-timeout` and cooperative cancellation are the client's there, and in `code <agent>`: every command now drives the same controller through the same client, and no local `record_id` or controller-owned FIFO queue exists. Code may keep an explicit process-local next-turn queue.
 
 **NDJSON format**: every event carries `"version":1`, a monotonically increasing `"seq"`, and a `"type"`. The first success event is `session`; streamed events include `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, `usage`, and `permission`; exactly one terminal `result` or `error` follows. The old `--format json` value remains an alias for `ndjson` during migration.
 
-**Headless permissions** (`run`, plus the hidden compatibility forms): nobody is at the terminal, so the caller states the rule. `--deny-all` (the default) answers every `session/request_permission` with the agent's reject option; `--approve-reads` approves calls the harness labels `read` or `search` (the ACP tool `kind`) and denies the rest, unlabelled calls included; `--approve-all` approves everything. `--permission-policy '{"autoApprove":["read","Grep"],"autoDeny":["execute"],"defaultAction":"deny"}'` (or `@path`) overrides per tool: entries match the tool kind, the tool-call title, or the title's first word, case-insensitively; `autoDeny` beats `autoApprove`, and an unmatched request falls to `defaultAction`, else the mode flag. An approval against a request that offered no allow option still resolves to the reject option and counts as a denial. Each answer is one NDJSON line, `{"type":"permission","decision":"approved"|"denied","title":"…","kind":"edit"|null}`. **Exit status 5** when at least one request was denied and none approved; 0 otherwise (a turn or launch failure is still 1). This is the same `Policy` the piped `code <agent>` runs under (always deny-all there), through the same wire a keystroke takes in the TUI.
+**Headless permissions** (`run`, plus the hidden compatibility forms): nobody is at the terminal, so the caller states the rule. `--deny-all` (the default) answers every `session/request_permission` with the agent's reject option; `--approve-reads` approves calls the harness labels `read` or `search` (the ACP tool `kind`) and denies the rest, unlabelled calls included; `--approve-all` approves everything. `--permission-policy '{"autoApprove":["read","Grep"],"autoDeny":["execute"],"defaultAction":"deny"}'` (or `@path`) overrides per tool: entries match the tool kind, the tool-call title, or the title's first word, case-insensitively; `autoDeny` beats `autoApprove`, and an unmatched request falls to `defaultAction`, else the mode flag. An approval against a request that offered no allow option still resolves to the reject option and counts as a denial. Each answer is one NDJSON line, `{"type":"permission","decision":"approved"|"denied","title":"…","kind":"edit"|null}`. **Exit status 5** when at least one request was denied and none approved; 0 otherwise (a turn or launch failure is still 1). The retained piped `chat` compatibility path uses this same `Policy` with deny-all. Canonical `code` requires interactive stdin and stdout; use `run` for headless work.
 
 **Result contract** (`run --result-schema '<JSON Schema>'`, or `@path` to read it from a file; conflicts with `--no-wait`): the schema rides the subagent's prompt as an instruction to end the reply with a ```json fenced block. The reply's **last** ```json block (or a bare-JSON reply) is extracted and validated; on a missing/invalid result the subagent gets **one** repair re-prompt. The terminal line then carries the machine-consumable outcome — success: `{"type":"result","stop_reason":…,"result":{…},"schema_ok":true}`; failure after repair: `…,"result":null,"schema_ok":false,"raw":"<last reply text>"` (the orchestrator is never blocked). Bare `run` output is unchanged (no `result`/`schema_ok`/`raw` keys). A malformed schema fails fast before any session side effect.
 
@@ -209,52 +209,41 @@ See `references/sessions.md` for the controller/native-session boundary and what
 
 ## Interactive interface (`bitrouter code`)
 
-Bare `bitrouter code` opens the unified terminal shell on Home with Agents,
-Conversation, Sessions, Models, Requests, Route, Providers, Telemetry, Policy,
-and Reload views. Each read panel refreshes independently every two seconds and
-keeps its last successful data and its own stale/error time. `bitrouter code
-<agent>` enters Conversation in that same terminal app, backed by the
-same ACP session host as `run`. Under `--context`, the Agents view is catalog
-only and has no launch controls.
-
-| Command | What it does |
-|---|---|
-| `bitrouter code [<agent>] [--load ID\|--resume ID] [--turn-timeout SECS] [routing flags] [--config PATH]` | With no agent, open Home/operations. With an agent, open or restore one harness-native ACP session in Conversation. Friendly aliases such as `claude` and `codex` resolve to their ACP adapters unless shadowed by an exact configured id. `tui` and `chat` are hidden compatibility aliases. |
-
-**Terminal ownership**: Code uses raw mode on the main terminal screen. The
-unframed transcript has left/right padding and uses native terminal scrollback.
-Controls and operations views are docked at the bottom. Changing views keeps
-the session and multiline draft; exiting clears the controls, preserves the
-transcript, and restores terminal state. The composer grows to eight visible
-lines, preserves pasted newlines, and keeps the cursor visible. A rotating
-thinking indicator continues while the agent is waiting for a response.
-
-User messages have blank lines above and below. Agent replies render Markdown
-headings, emphasis, lists, links, tables, and code blocks. Tables too wide for
-the terminal fall back to labeled fields. Action descriptions are bright white;
-shell commands use subdued code frames. ACP terminal IDs are not displayed.
-
-**Keys**
+Bare local `bitrouter code` opens an empty conversation and **Choose agent**.
+`bitrouter code <agent>` connects directly through the shared ACP session host.
+There are no permanent tabs: Ctrl-P opens searchable commands and temporary
+pickers/inspectors. Closing them preserves the draft and reading position.
+Agent, confirmed session route, activity, and attributed session cost are the
+persistent status fields. Missing cost remains unreported, never zero.
 
 | Key | Effect |
-|---|---|
-| `Enter` | Send the composer text, or connect to the selected agent |
-| `Tab` | Move to the next view while keeping the session alive |
-| `Shift+Enter`, `Alt+Enter`, `Ctrl+J` | Insert a newline; `Ctrl+J` works without enhanced key reporting |
-| Arrow keys, `Home` / `End` | Edit within the multiline draft |
-| Terminal scroll wheel / scrollback keys | Scroll the transcript |
-| `Ctrl-L` | Repaint the view |
-| `1`–`9` | Choose an open permission option |
-| `Esc` | Deny the open permission request |
-| `Ctrl-C` | Cancel a running turn; otherwise exit |
-| `Ctrl-D` | Exit from Conversation |
-| `Enter` or `Ctrl-R` on Reload | Explicitly submit a reload; ordinary timer refreshes never reload. The view keeps the request id, server instance, status, and lookup after an interrupted response. |
+| --- | --- |
+| `Enter` | Send at idle; preserve draft and explain queueing during work |
+| `Shift-Enter` / `Alt-Enter` / `Ctrl-J` | Newline |
+| `Tab` | Complete the open popup, otherwise queue next during work |
+| `Ctrl-P` / leading `/` | Command palette / slash completion, labelled by owner |
+| Arrows, Home/End, Up/Down at draft boundaries | Cursor editing and process-local history |
+| `Ctrl-G` | External editor at idle without pending permissions |
+| `PageUp` / `PageDown` | Read history without following new output |
+| `F2` | Focus the oldest pending permission; choose a row, then Enter confirms |
+| `Esc` / `Ctrl-C` during work | Request cancellation and wait for settlement |
+| `Ctrl-C` at idle | Clear draft; exit when empty |
+| `Ctrl-D` at idle | Exit only with an empty draft |
+| `Ctrl-L` | Redraw |
 
-Cancelling a turn with a permission outstanding **denies it** — a cancel is never read as consent.
+Paste retains exact line breaks and does not submit. Follow-up queueing is an
+explicit client feature, not native steering; abnormal stops pause the queue.
+Agent settings are ACP-reported and separate from `/route` session overrides.
+Load replays native history; resume does not. No durable BitRouter session store
+is created. Pending permissions use exact offered IDs, have no default approval,
+and resolve as cancelled when the turn is cancelled.
 
-The Sessions view shows the opaque harness-native identity and the lifecycle
-operations advertised at initialize. `--load` and `--resume` are gated by that
-snapshot; BitRouter owns no transcript store or second session catalog.
+`--context NAME code` and explicit `code --socket PATH` open operations-only
+inspectors, with no ACP execution or local fallback for remote errors. Ctrl-P
+offers the typed status, models, requests, route preview, providers, telemetry,
+policy, agent catalog, reload state, and explicit reload actions. Host requests
+remain clearly host-scoped. Hidden interactive `tui` and `chat` aliases share
+the Code loop; piped compatibility output stays plain.
 
 ## Setup helpers
 

@@ -15,13 +15,13 @@ with HTTP 403 before JSON-RPC begins. This is a live deployment finding, so the
 MCP inventory and calls are not claimed as passed.
 
 For diagnostics after that known MCP failure, the following selector runs the
-independent CLI, HTTP, reload, and dashboard journeys:
+independent CLI, HTTP, reload, and Code operations journeys:
 
 ```console
 BITROUTER_REMOTE_ADMIN_SKIP_MCP=1 tests/remote-administration/run.sh
 ```
 
-It prints `selected CLI/dashboard acceptance passed (MCP skipped)` on success.
+It prints `selected CLI/Code acceptance passed (MCP skipped)` on success.
 It is not a substitute for the default acceptance gate.
 
 The script builds `bitrouter-remote-administration:local` from the current
@@ -66,11 +66,10 @@ Its `docker_partial_fixture` is a test-only HTTP server that uses the real
 control authentication, operation registry, and reload coordinator while
 simulating a partial participant result. A second client phase confirms that
 the CLI emits the `partially_applied` operation report and exits nonzero. Real
-PTY checks drive the remote dashboard through every remote read panel and its
-available controls before a successful production reload, then through the
-partial fixture. They verify semantic Home, Models, Requests, Route,
-Providers, Telemetry, Agents and policy output; route Backspace/Ctrl-U;
-active/disk policy selection, typed detail, PageDown/PageUp; explicit refresh,
+PTY checks drive the remote Code operations surface through the command palette
+and temporary inspectors before a successful production reload, then through
+the partial fixture. They verify models, requests, route, providers, telemetry,
+agents, policy status/detail, reload state, route editing, explicit reload,
 outcome rendering, generation changes, terminal restoration, and a subsequent
 shell write. The
 participant-level fault matrix remains in the Rust reload tests; the production

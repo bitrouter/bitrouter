@@ -14,6 +14,7 @@
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+static ALTERNATE_SCREEN: AtomicBool = AtomicBool::new(false);
 static ENHANCED_KEYS: AtomicBool = AtomicBool::new(false);
 
 use crossterm::execute;
@@ -22,6 +23,12 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 /// Take raw mode before the session starts its single input reader.
 pub fn enter_raw() -> io::Result<()> {
     enable_raw_mode()
+}
+
+/// Enter the alternate screen and record ownership for every cleanup path.
+pub fn enter_alternate_screen() -> io::Result<()> {
+    ALTERNATE_SCREEN.store(true, Ordering::SeqCst);
+    execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)
 }
 
 /// Request disambiguated Enter modifiers on supporting terminals. Older
@@ -55,6 +62,9 @@ pub fn restore() {
         crossterm::event::DisableBracketedPaste,
         crossterm::cursor::Show
     );
+    if ALTERNATE_SCREEN.swap(false, Ordering::SeqCst) {
+        let _ = execute!(out, crossterm::terminal::LeaveAlternateScreen);
+    }
     // XTWINOPS pop: put the user's window title back.
     let _ = write!(out, "\x1b[23;0t");
     let _ = out.flush();

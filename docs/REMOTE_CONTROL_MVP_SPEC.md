@@ -1,5 +1,11 @@
 # Spec: remote control MVP (HTTP, no remote ACP)
 
+> Code presentation update (2026-09-08):
+> [CODE_TUI_UX_SPEC.md](CODE_TUI_UX_SPEC.md) supersedes permanent dashboard
+> navigation and independent interactive drivers. It preserves public CLI names,
+> native-session ownership, typed action boundaries, and read-only remote scope.
+> [Implementation verification](CODE_TUI_UX_PROGRESS.md) is tracked separately.
+
 Status: **implemented and verified.**
 Baseline: `main` at `61dd77333a91f7aab01647b0ae7d8625d3039ffe`.
 

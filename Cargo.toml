@@ -67,7 +67,9 @@ shell-words = "1"
 # the same ones ratatui measures with, which is why this tracks the version
 # ratatui itself depends on. Adds no crate to the build graph.
 unicode-width = "0.2"
-unicode-segmentation = "1.12"
+# Cursor movement and deletion in the composer must operate on user-perceived
+# characters rather than UTF-8 bytes or scalar values.
+unicode-segmentation = "1.13"
 # `unstable_llm_providers` gives the draft `providers/*` schema types used only
 # for controller-to-harness endpoint setup. `unstable_session_fork` lets tests
 # exercise the advertised lifecycle method. We deliberately do not enable

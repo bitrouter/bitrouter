@@ -15,6 +15,12 @@ below remain evidence for the prior specification acceptance. A separately
 labeled selected run passes the independent CLI, HTTP, reload, and dashboard
 journeys with MCP intentionally skipped; it is not complete remote acceptance.
 
+2026-09-09 integration note: PR #900 replaced the permanent dashboard pages
+with Code's command palette and temporary inspectors. The typed remote target
+ports and explicit reload remain shared, and the PTY driver now follows the
+no-tabs interaction. Dashboard-specific pass counts below are historical
+evidence; the updated Docker PTY journey still requires a fresh CI run.
+
 | Requirement | State | Evidence |
 | --- | --- | --- |
 | A: canonical remote inventory and schema/profile guards | Complete | Canonical action/resource rows and schema identity tests pass; existing MCP profile guards remain intact. |
@@ -24,18 +30,18 @@ journeys with MCP intentionally skipped; it is not complete remote acceptance.
 | B: providers, telemetry, passive agent reads | Complete | Live typed ports and redaction tests pass; all advertised reads exercised over Docker HTTP and CLI. |
 | B: active/disk policy status/detail | Complete | Snapshot mode, bindings and digest tests pass; Docker observes disk/live divergence and convergence after reload. |
 | B: bounded request filters, summaries, availability | Complete | Storage and report tests plus Docker CLI/HTTP filters, truncation, validation and redaction pass. |
-| B: CLI and dashboard all read actions | Complete | Selected Docker run exercises all nine CLI leaves and semantic dashboard Home, Models, Requests, Route, Providers, Telemetry, Agents, active/disk policy overview/detail, and excluded remote ACP views. |
+| B: CLI and Code all read actions | Revalidation pending | All nine CLI leaves remain; Code exposes the corresponding typed reports through its palette and inspectors. The prior page-based Docker evidence predates PR #900 integration. |
 | C: unified reload ownership and local env serialization | Complete | HTTP/local IPC/SIGHUP admission race and reservation tests pass. |
 | C: prepared inputs and restart-required classification | Complete | All five participants prepare before mutation; immutable startup baseline, nested unknown fields and 60-second preparation deadline are tested. |
 | C: per-participant failure and mixed runtime state | Complete | Fault matrix, immutable prepared inputs, active digest, mixed-history and interruption-truth tests pass. |
 | D: explicit scoped credentials, legacy read token | Complete | Named read/reload credentials, owner isolation and legacy read-only fallback pass unit/HTTP/Docker tests. |
 | D: guarded reload admission and retained operations | Complete | Generation/boot guards, deduplication, ownership, 1024-entry capacity and 24-hour retention tests pass. |
-| D: CLI/dashboard reload and operation recovery | Complete | Selected Docker run verifies a successful production CLI reload plus `operations show` recovery, receipt-body loss recovery, boot mismatch, and successful/partial PTY outcomes. |
+| D: CLI/Code reload and operation recovery | Revalidation pending | CLI recovery evidence remains valid. Code now exposes reload state and an explicit Reload now command; its updated PTY journey awaits a fresh Docker run. |
 | D: limits, audit events, HTTP errors | Complete | 16 KiB input, 8 MiB report bound, advertised limits, structured audit and safe error tests pass. |
 | E: inventory/HTTP/auth/version/redaction tests | Complete | Final all-feature suite includes HTTP scope/shape/owner, ambiguity, redirect, legacy and inventory-route guards. |
 | E: target isolation and read divergence tests | Complete | Linux inotify, synthetic provider/config/metering inputs and two Unix-socket traps pass wrong-token and unreachable-context checks. |
 | E: reload faults/concurrency/disconnect/boot tests | Complete | Core fault/admission tests plus actual Docker lost receipt-body, same-ID lookup, deduplication and restart acceptance pass. |
-| E: dashboard and real terminal verification | Complete | Inventory-to-page guard and stale/scope tests pass; selected Docker PTY covers semantic read panels, route Backspace/Ctrl-U, policy Up/Down, typed detail, PageDown/PageUp and active/disk before reload; both outcomes restore terminal modes and subsequent shell output. |
+| E: Code and real terminal verification | Revalidation pending | The page-based evidence is historical. The updated PTY driver covers palette-driven inspectors, route/policy selectors, explicit reload, terminal restoration, and subsequent shell output. |
 | E: isolated Docker client/server TLS acceptance | Partial | Linux/ARM64 selected CLI/dashboard run passes and cleans up. Default full harness fails at external-host MCP `initialize` with HTTP 403; this is container, not physical-host, evidence. |
 | E: CLI, shipped skill, config schemas and distribution | Complete | CLI and skill references updated; schema/dist, relative links and all eight extracted package builds pass. |
 | E: all-feature tests, doc tests, clippy, fmt | Complete | Final suite: 3169 passed, 12 skipped; one existing ACP test had a non-failing leak annotation and passed cleanly on focused rerun. Doc tests, strict rustdoc, clippy and fmt pass. |

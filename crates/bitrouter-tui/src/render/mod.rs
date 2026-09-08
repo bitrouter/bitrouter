@@ -277,6 +277,20 @@ pub fn message(message: &crate::journal::Message, width: u16) -> Vec<Line<'stati
     }
 }
 
+/// Keep one row per source line for the Code journal's reading anchors.
+pub fn source_message(message: &crate::journal::Message) -> Vec<Line<'static>> {
+    let (prefix, style) = match message.voice {
+        crate::journal::Voice::User => ("> ", Style::default().fg(Color::Cyan)),
+        crate::journal::Voice::Agent => ("", Style::default()),
+        crate::journal::Voice::Thought => ("· ", thought_style()),
+    };
+    message
+        .text
+        .split('\n')
+        .map(|line| Line::from(Span::styled(format!("{prefix}{line}"), style)))
+        .collect()
+}
+
 fn thought(text: &str, width: u16) -> Vec<Line<'static>> {
     markdown::render(text, width.saturating_sub(2).max(1))
         .into_iter()

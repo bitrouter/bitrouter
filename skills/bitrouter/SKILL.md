@@ -11,19 +11,11 @@ description: >
 license: Apache-2.0
 metadata:
   author: BitRouterAI
-  tags:
-    - llm
-    - proxy
-    - routing
-    - cli
-    - ai-gateway
-    - claude-code
-    - codex
+  tags: [llm, proxy, routing, cli, ai-gateway, claude-code, codex]
 ---
 
 # BitRouter
-BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes
-OpenAI- or Anthropic-shaped requests to providers selected in §4.
+BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4.
 
 ## Activate in one pass
 Work top to bottom, probing before asking.
@@ -89,8 +81,7 @@ Auth is catalog-derived; `references/providers.md` lists each login method.
 the daemon auto-enables every provider whose key is present, and
 `export ...; bitrouter reload` rotates one without a restart.
 
-Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not
-`GOOGLE_API_KEY`), `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY` (zen *and* go).
+Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not `GOOGLE_API_KEY`), `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY` (zen *and* go).
 
 `providers login` also takes `--api-key` / `--key-stdin`, and
 `references/cloud-setup.md` covers the hosted account, credits, and `brk_*`
@@ -99,10 +90,10 @@ or BYOK supplements everything it does not cover.
 
 ### 5. Start the desired agent interface
 
-BitRouter's full-screen UI owns both operations and ACP sessions:
+BitRouter's full-screen conversation uses temporary operational inspectors:
 
 ```bash
-bitrouter code                    # home, agents, sessions, and operations
+bitrouter code                    # conversation with Choose agent picker
 bitrouter code codex              # explicit interactive ACP session
 bitrouter run claude "summarize this repo"  # headless ACP turn
 ```

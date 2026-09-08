@@ -1,4 +1,4 @@
-//! Terminal renderers for BitRouter's operations dashboard and ACP chat.
+//! Terminal renderers for BitRouter's coding conversation and operations surfaces.
 //!
 //! # The boundary, and what it is now for
 //!
@@ -49,12 +49,12 @@
 //! # What is still out of scope
 //!
 //! There is no metering store here, no daemon control socket, and no HTTP
-//! client. Session updates and dashboard snapshots are plain input supplied by
+//! client. Session updates and operation reports are plain input supplied by
 //! the application, so drawing can never become a second implementation of an
 //! action.
 
+pub mod code;
 pub mod cost;
-pub mod dashboard;
 pub mod editor;
 pub mod journal;
 pub mod lifecycle;

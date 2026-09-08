@@ -353,7 +353,7 @@ main() {
     run_pty_check partially_applied
 
     if [[ "${BITROUTER_REMOTE_ADMIN_SKIP_MCP:-0}" == "1" ]]; then
-        printf '%s\n' 'remote-administration selected CLI/dashboard acceptance passed (MCP skipped)'
+        printf '%s\n' 'remote-administration selected CLI/Code acceptance passed (MCP skipped)'
     else
         printf '%s\n' 'remote-administration Docker acceptance passed'
     fi

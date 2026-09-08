@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real PTY acceptance for the remote dashboard; standard library only.
+"""Real PTY acceptance for the remote Code operations surface; standard library only.
 
 Uses a bounded virtual terminal and observable state conditions, not timing
 sleeps. Tests refresh without mutation, explicit reload rendering, clean quit,
@@ -172,7 +172,7 @@ def main():
             if predicate(screen.text()):
                 return
             if child.poll() is not None:
-                raise AssertionError(f"dashboard exited {child.returncode} before {description}:\n{screen.text()}")
+                raise AssertionError(f"Code exited {child.returncode} before {description}:\n{screen.text()}")
             readable, _, _ = select.select([master], [], [], min(0.25, deadline - time.monotonic()))
             if readable:
                 data = os.read(master, 65536)
@@ -189,225 +189,75 @@ def main():
         screen.resize(rows, 180)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, 180, 0, 0))
 
-    def exercise_read_panels():
-        """Render each remote inspection result and its available read controls."""
+    def open_command(label, predicate, description):
+        os.write(master, b"\x10")
+        until(lambda text: "Commands" in text and "Search" in text, "command palette")
+        os.write(master, label.encode("utf-8"))
+        until(lambda text: label in text, f"{label} command")
+        os.write(master, b"\r")
+        until(predicate, description)
 
-        models = control_get("/models")
-        model_ids = [model["id"] for model in models["models"]]
-        assert model_ids, "fixture did not expose a model for dashboard verification"
-        model_count = str(len(model_ids))
+    def close_to_root():
+        os.write(master, b"\x1b")
+        until(
+            lambda text: "Remote operations" in text and "connected" in text,
+            "operations root",
+        )
+
+    def exercise_read_inspectors():
+        """Open each typed remote read through the no-tabs command palette."""
+
+        models = control_get("/models")["models"]
         providers = control_get("/providers")["providers"]
-        assert providers, "fixture did not expose a provider for dashboard verification"
-        provider_id = providers[0]["id"]
         requests = control_get("/requests", {"limit": "5"})["rows"]
-        assert requests, "fixture did not persist requests for dashboard verification"
-        request_model = requests[0]["model"]
-        route = control_post("/route/preview", {"model": "fixture-a"})
-        route_requested = route["requested_model"]
-        route_effective = route["effective_model"]
-        route_providers = [hop["provider"] for hop in route["provider_chain"]]
-        assert route_providers, "fixture route preview did not expose a provider chain"
         agents = control_get("/agents")["agents"]
-        assert agents, "fixture did not expose an agent catalog for dashboard verification"
-        agent_id = {"claude-acp": "claude", "codex-acp": "codex"}.get(
-            agents[0]["id"], agents[0]["id"]
-        )
-        policies = control_get("/policy/status", {"view": "active"})["policies"]
-        assert "fixture" in policies and "fixture-detail" in policies, (
-            "fixture did not expose the bounded policy-selection data"
-        )
+        assert models and providers and requests and agents
 
-        until(
-            lambda text: "connected" in text
-            and "models" in text
-            and re.search(r"\bmodels\s{2,}" + re.escape(model_count) + r"\b", text)
-            and provider_id in text,
-            "semantic remote home panel",
-        )
-        home_output = len(transcript)
-        os.write(master, b"r")
-        until(
-            lambda text: len(transcript) > home_output
-            and "connected" in text
-            and re.search(r"\bmodels\s{2,}" + re.escape(model_count) + r"\b", text),
-            "read-only dashboard refresh",
-        )
+        open_command("Routable models", lambda text: models[0]["id"] in text, "models inspector")
+        close_to_root()
+        open_command("Host requests", lambda text: requests[0]["model"] in text, "requests inspector")
+        close_to_root()
+        open_command("Providers", lambda text: providers[0]["id"] in text, "providers inspector")
+        close_to_root()
+        open_command("Telemetry", lambda text: "OTel" in text, "telemetry inspector")
+        close_to_root()
+        open_command("Agent catalog", lambda text: agents[0]["id"] in text, "agent catalog inspector")
+        close_to_root()
+        open_command("Policy status", lambda text: "fixture-detail" in text, "policy status inspector")
+        close_to_root()
 
-        os.write(master, b"2")
-        until(
-            lambda text: "Agent catalog" in text
-            and agent_id in text
-            and "remote catalog is read-only" in text,
-            "remote agent catalog",
-        )
-        os.write(master, b"\r")
-        until(
-            lambda text: "Remote agent catalogs are read-only" in text,
-            "remote agent launch denial",
-        )
-
-        os.write(master, b"3")
-        until(
-            lambda text: "not connected" in text and "Message" in text,
-            "remote conversation exclusion",
-        )
-        os.write(master, b"\t")
-        until(
-            lambda text: "Native sessions" in text and "No active native session" in text,
-            "remote sessions exclusion",
-        )
-
-        os.write(master, b"5")
-        until(
-            lambda text: "Models" in text and model_ids[0] in text,
-            "semantic models panel",
-        )
-        os.write(master, b"6")
-        until(
-            lambda text: "Recent requests" in text
-            and request_model in text
-            and provider_id in text,
-            "semantic requests panel",
-        )
-
-        os.write(master, b"7")
-        until(lambda text: "Type a model selector" in text, "route preview input")
+        open_command("Route preview", lambda text: "Model to preview" in text, "route selector")
         os.write(master, b"fixture-aX")
-        until(lambda text: "fixture-aX" in text, "route preview model entry")
+        until(lambda text: "fixture-aX" in text, "route model entry")
         os.write(master, b"\x7f")
-        until(
-            lambda text: "fixture-a" in text and "fixture-aX" not in text,
-            "route preview input backspace",
-        )
+        until(lambda text: "fixture-a" in text and "fixture-aX" not in text, "route model backspace")
         os.write(master, b"\r")
-        until(
-            lambda text: re.search(
-                r"\brequested\s{2,}" + re.escape(route_requested) + r"\b", text
-            )
-            and re.search(
-                r"\beffective\s{2,}" + re.escape(route_effective) + r"\b", text
-            )
-            and re.search(
-                r"\bproviders\s{2,}" + re.escape(route_providers[0]) + r"\b", text
-            ),
-            "semantic route preview",
-        )
-        os.write(master, b"\x15")
-        until(
-            lambda text: "Type a model selector" in text,
-            "route preview clear",
-        )
+        until(lambda text: "requested" in text and "effective" in text, "route inspector")
+        close_to_root()
 
-        os.write(master, b"\t")
-        until(
-            lambda text: "Providers" in text and provider_id in text and "ACTIVE" in text,
-            "semantic providers panel",
-        )
-        os.write(master, b"9")
-        until(
-            lambda text: "Telemetry" in text and "daemon" in text and "reachable" in text,
-            "semantic telemetry panel",
-        )
+        open_command("Policy detail", lambda text: "Policy name" in text, "policy selector")
+        os.write(master, b"fixture-detail\r")
+        until(lambda text: "fixture-detail" in text and "detailed" in text, "policy detail inspector")
+        close_to_root()
 
-        os.write(master, b"0")
-        until(
-            lambda text: "Policy" in text and "active" in text and "fixture-detail" in text,
-            "active policy overview",
-        )
-        os.write(master, b"\x1b[B")
-        until(
-            lambda text: "> fixture-detail" in text,
-            "policy selection",
-        )
-        selection_after_down = screen.text()
-        os.write(master, b"\x1b[A")
-        until(
-            lambda text: text != selection_after_down,
-            "policy previous selection",
-        )
-        os.write(master, b"\r")
-        until(
-            lambda text: "Detail: fixture" in text and "Detail: fixture-detail" not in text,
-            "policy previous typed detail",
-        )
-        os.write(master, b"\x1b[B")
-        until(
-            lambda text: "Detail:" not in text,
-            "policy detail reset after next selection",
-        )
-        os.write(master, b"\r")
-        until(
-            lambda text: "Detail: fixture-detail" in text
-            and "concise" in text
-            and "detailed" in text,
-            "active policy typed detail",
-        )
-
-        # A short PTY makes a real scroll observable instead of only proving
-        # that the PageDown key reaches the reducer.
-        resize(18)
-        until(
-            lambda text: "Detail: fixture-detail" in text,
-            "resized policy detail",
-        )
-        def policy_content(text):
-            # Refresh timestamps are independent of scrolling. Compare the
-            # complete policy body, after the synchronized frame commits.
-            lines = text.splitlines()
-            start = next(index for index, line in enumerate(lines) if "┌ Policy" in line)
-            end = next(index for index in range(start + 1, len(lines)) if "└" in lines[index])
-            return lines[start + 1:end]
-
-        before_scroll = policy_content(screen.text())
-        os.write(master, b"\x1b[6~")
-        until(
-            lambda text: policy_content(text) != before_scroll and "Source: active" in text,
-            "policy detail scroll",
-        )
-        os.write(master, b"\x1b[5~")
-        until(
-            lambda text: policy_content(text) == before_scroll,
-            "policy detail scroll restore",
-        )
-
-        os.write(master, b"v")
-        until(
-            lambda text: "Policy" in text and "disk" in text and "fixture-detail" in text,
-            "disk policy overview",
-        )
-        resize(60)
-        until(
-            lambda text: "Policy" in text and "disk" in text,
-            "restored dashboard size",
-        )
-        os.write(master, b"\r")
-        until(
-            lambda text: "Detail: fixture-detail" in text and "detailed" in text,
-            "disk policy typed detail",
-        )
-
-        after_reads = state()
-        assert after_reads["generation"] == initial["generation"], (
-            "dashboard read panels mutated the router"
-        )
+        open_command("Reload state", lambda text: "generation" in text and "instance" in text, "reload state inspector")
+        close_to_root()
+        assert state()["generation"] == initial["generation"], "read inspectors mutated the router"
 
     try:
-        until(lambda text: "Reload" in text and "remote:" in text, "initial dashboard")
+        until(
+            lambda text: "Remote operations" in text and "connected" in text,
+            "initial operations inspector",
+        )
         if args.read_panels:
-            exercise_read_panels()
-            os.write(master, b"\t")
-        else:
-            os.write(master, b"\t" * 10)
-        until(lambda text: "generation" in text and "instance" in text and "Enter" in text, "reload page")
+            exercise_read_inspectors()
         before = state()
-        assert before["generation"] == initial["generation"], "dashboard startup mutated the router"
-        # Explicit refresh must remain read-only. A redraw is observed before
-        # sending the reload key, and the request count is checked through state.
-        prior_output = len(transcript)
-        os.write(master, b"r")
-        until(lambda text: len(transcript) > prior_output and "generation" in text and "instance" in text, "read-only refresh")
-        assert state()["generation"] == initial["generation"], "dashboard refresh mutated the router"
-        os.write(master, b"\r")
+        assert before["generation"] == initial["generation"], "operations startup mutated the router"
+        open_command(
+            "Reload now",
+            lambda text: "request" in text and "reload" in text,
+            "explicit reload result",
+        )
         expected = args.expected.replace("_", " ")
         until(lambda text: "request" in text and (args.expected in text or expected in text), "terminal reload outcome")
         final = state()
@@ -416,9 +266,9 @@ def main():
         if args.expected == "partially_applied":
             assert final["consistency"] == "mixed"
             until(lambda text: "mixed" in text and "failed" in text, "mixed state and failed participant")
-        os.write(master, b"q")
+        os.write(master, b"\x1b\x1b")
         child.wait(timeout=10)
-        assert child.returncode == 0, f"dashboard quit failed: {child.returncode}"
+        assert child.returncode == 0, f"operations surface quit failed: {child.returncode}"
         restored = termios.tcgetattr(slave)
         mask = termios.ICANON | termios.ECHO | termios.ISIG
         assert restored[3] & mask == original[3] & mask, "terminal input modes were not restored"
