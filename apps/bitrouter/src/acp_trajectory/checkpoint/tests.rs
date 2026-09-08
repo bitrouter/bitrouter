@@ -601,3 +601,62 @@ async fn long_session_manifests_and_large_assessments_round_trip() -> Result<()>
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn interruption_after_scoring_invalidates_freshness_without_rewriting_the_prefix()
+-> Result<()> {
+    let store = store().await?;
+    let recorder = store.recorder(scope()).await?;
+    new_session(recorder.as_ref(), "s").await?;
+    let cp = freeze(&store, "s").await?;
+    let label = store
+        .submit_assessment(
+            &identity("s"),
+            input(&cp, "scored", None, AssessmentSource::Human),
+        )
+        .await?;
+    assert!(!store.effective_assessment(&identity("s")).await?.stale);
+    let original = serde_json::to_value(
+        store
+            .checkpoint_content(&identity("s"), &cp.checkpoint_id)
+            .await?,
+    )?;
+    recorder
+        .record(event(
+            CaptureKind::Disconnected,
+            None,
+            "controller/disconnected",
+            json!({"clean":false}),
+        ))
+        .await?;
+    let view = store.effective_assessment(&identity("s")).await?;
+    assert_eq!(view.current_watermark, cp.watermark);
+    assert!(view.stale);
+    assert!(
+        view.reasons
+            .iter()
+            .any(|r| r.starts_with("source_capture_interrupted:"))
+    );
+    assert_eq!(
+        view.assessment
+            .context("historical assessment")?
+            .revision_id,
+        label.revision_id
+    );
+    assert_eq!(
+        store
+            .checkpoint_family(&identity("s"))
+            .await?
+            .current_assessments,
+        0
+    );
+    assert_eq!(
+        serde_json::to_value(
+            store
+                .checkpoint_content(&identity("s"), &cp.checkpoint_id)
+                .await?
+        )?,
+        original
+    );
+    Ok(())
+}

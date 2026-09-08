@@ -160,6 +160,7 @@ pub struct EffectiveAssessment {
     pub checkpoint: Option<Checkpoint>,
     pub stale: bool,
     pub reasons: Vec<String>,
+    pub source_capture_states: BTreeMap<String, String>,
     pub resource: Option<ResourceObservation>,
 }
 
@@ -167,7 +168,7 @@ pub struct EffectiveAssessment {
 pub struct FamilyView {
     pub family_id: String,
     pub sessions: Vec<EffectiveAssessment>,
-    /// Labels without newer content, not a quality or independence guarantee.
+    /// Current labels, not a quality or independence guarantee.
     pub current_assessments: usize,
     pub requests: Vec<RequestAssociation>,
     pub conflicting_request_ids: Vec<String>,

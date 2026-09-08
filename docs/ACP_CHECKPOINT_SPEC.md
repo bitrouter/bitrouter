@@ -105,6 +105,10 @@ Selection rules are explicit:
   `new_content_unassessed`. It is excluded from the current family label count
   until a new checkpoint receives a selected assessment. A failed import does
   not clear that freshness state or silently select an older label.
+- If the session's own capture connection becomes interrupted after the
+  checkpoint, the effective label becomes stale even if no new event could be
+  persisted. Current capture states and the interruption reason are exposed;
+  the immutable checkpoint and its original assessment remain unchanged.
 
 The effective view returns one selection per native session, with its fixed
 checkpoint, current source watermark, freshness, gaps and resource observation.

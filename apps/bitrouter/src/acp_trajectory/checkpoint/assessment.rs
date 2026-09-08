@@ -227,15 +227,36 @@ impl CanonicalStore {
             self.checkpoints(identity).await?.pop()
         };
         let mut reasons = Vec::new();
-        let stale = checkpoint
+        let mut stale = checkpoint
             .as_ref()
             .is_some_and(|cp| cp.watermark != initial.head);
         if stale {
             reasons.push("new_content_unassessed".into());
         }
         let mut resource = None;
+        let mut source_states = BTreeMap::new();
         if let Some(cp) = &checkpoint {
             reasons.extend(cp.gaps.clone());
+            // A recording failure can leave the canonical head unchanged. Keep
+            // the old checkpoint intact, but do not present its prior label as
+            // current when its own capture source subsequently became incomplete.
+            // Later changes to inherited parents do not alter a child's prefix.
+            if let Some(own) = cp.segments.last() {
+                for captured in &own.connections {
+                    let connection = connections::Entity::find_by_id(&captured.connection_id)
+                        .one(&self.db)
+                        .await?
+                        .context("capture connection missing")?;
+                    if connection.state == "interrupted" {
+                        reasons.push(format!(
+                            "source_capture_interrupted:{}",
+                            connection.connection_id
+                        ));
+                        stale |= captured.state != "interrupted";
+                    }
+                    source_states.insert(connection.connection_id, connection.state);
+                }
+            }
             resource = self
                 .checkpoint_resource_history(identity, &cp.checkpoint_id)
                 .await?
@@ -257,6 +278,15 @@ impl CanonicalStore {
                 && head(&self.db, &key).await? == current_revision,
             "effective assessment changed while reading; retry"
         );
+        for (id, state) in &source_states {
+            ensure!(
+                connections::Entity::find_by_id(id)
+                    .one(&self.db)
+                    .await?
+                    .is_some_and(|row| row.state == *state),
+                "capture health changed while reading; retry"
+            );
+        }
         Ok(EffectiveAssessment {
             identity: identity.clone(),
             current_watermark: initial.head,
@@ -265,6 +295,7 @@ impl CanonicalStore {
             checkpoint,
             stale,
             reasons,
+            source_capture_states: source_states,
             resource,
         })
     }
@@ -321,6 +352,15 @@ impl CanonicalStore {
                 head(&self.db, &view.identity.key()?).await? == view.current_revision,
                 "family assessment changed while reading; retry"
             );
+            for (id, state) in &view.source_capture_states {
+                ensure!(
+                    connections::Entity::find_by_id(id)
+                        .one(&self.db)
+                        .await?
+                        .is_some_and(|row| row.state == *state),
+                    "family capture health changed while reading; retry"
+                );
+            }
         }
         let requests: Vec<_> = requests.into_values().collect();
         let (known_cost_micro_usd, unpriced_requests) = super::resource::totals(&requests)?;
