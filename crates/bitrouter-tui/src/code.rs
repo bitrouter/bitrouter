@@ -1713,7 +1713,7 @@ impl CodeState {
                 })
             )
         {
-            self.surface = return_to.map_or(Surface::Conversation, |surface| surface);
+            self.surface = return_to.unwrap_or(Surface::Conversation);
         } else if let Surface::Inspector(inspector) = &mut self.surface
             && inspector
                 .return_to
