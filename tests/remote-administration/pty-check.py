@@ -28,6 +28,8 @@ class Screen:
         self.cells = [[" "] * cols for _ in range(rows)]
         self.row = self.col = 0
         self.pending = ""
+        self.responses = bytearray()
+        self.synchronized_text = None
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
     def feed(self, data):
@@ -52,8 +54,23 @@ class Screen:
                     elif command in "ABCD":
                         self.row = max(0, min(self.rows - 1, self.row + (first if command == "B" else -first if command == "A" else 0)))
                         self.col = max(0, min(self.cols - 1, self.col + (first if command == "C" else -first if command == "D" else 0)))
-                    elif command == "J" and values[0] in (2, 3):
-                        self.cells = [[" "] * self.cols for _ in range(self.rows)]
+                    elif command == "J":
+                        if values[0] in (2, 3):
+                            self.cells = [[" "] * self.cols for _ in range(self.rows)]
+                        elif values[0] == 0:
+                            self.cells[self.row][self.col:] = [" "] * (self.cols - self.col)
+                            for row in range(self.row + 1, self.rows):
+                                self.cells[row] = [" "] * self.cols
+                        elif values[0] == 1:
+                            for row in range(self.row):
+                                self.cells[row] = [" "] * self.cols
+                            self.cells[self.row][:self.col + 1] = [" "] * (self.col + 1)
+                    elif command == "h" and raw == "?2026":
+                        self.synchronized_text = self.text()
+                    elif command == "l" and raw == "?2026":
+                        self.synchronized_text = None
+                    elif command == "n" and raw == "6":
+                        self.responses.extend(f"\x1b[{self.row + 1};{self.col + 1}R".encode())
                     elif command == "K":
                         start, end = (0, self.cols) if values[0] == 2 else (0, self.col + 1) if values[0] == 1 else (self.col, self.cols)
                         self.cells[self.row][start:end] = [" "] * (end - start)
@@ -74,7 +91,11 @@ class Screen:
             if char == "\r":
                 self.col = 0
             elif char == "\n":
-                self.row = min(self.rows - 1, self.row + 1)
+                if self.row == self.rows - 1:
+                    self.cells.pop(0)
+                    self.cells.append([" "] * self.cols)
+                else:
+                    self.row += 1
             elif char == "\b":
                 self.col = max(0, self.col - 1)
             elif char >= " ":
@@ -83,9 +104,12 @@ class Screen:
             index += 1
 
     def text(self):
+        if self.synchronized_text is not None:
+            return self.synchronized_text
         return "\n".join("".join(row) for row in self.cells)
 
     def resize(self, rows, cols):
+        self.synchronized_text = None
         self.rows, self.cols = rows, cols
         self.cells = [[" "] * cols for _ in range(rows)]
         self.row = self.col = 0
@@ -156,6 +180,9 @@ def main():
                 if len(transcript) > 8 * 1024 * 1024:
                     raise AssertionError("PTY output exceeded bound")
                 screen.feed(data)
+                if screen.responses:
+                    os.write(master, screen.responses)
+                    screen.responses.clear()
         raise AssertionError(f"timed out waiting for {description}:\n{screen.text()}")
 
     def resize(rows):
@@ -323,15 +350,23 @@ def main():
             lambda text: "Detail: fixture-detail" in text,
             "resized policy detail",
         )
-        before_scroll = screen.text()
+        def policy_content(text):
+            # Refresh timestamps are independent of scrolling. Compare the
+            # complete policy body, after the synchronized frame commits.
+            lines = text.splitlines()
+            start = next(index for index, line in enumerate(lines) if "┌ Policy" in line)
+            end = next(index for index in range(start + 1, len(lines)) if "└" in lines[index])
+            return lines[start + 1:end]
+
+        before_scroll = policy_content(screen.text())
         os.write(master, b"\x1b[6~")
         until(
-            lambda text: text != before_scroll and "Source: active" in text,
+            lambda text: policy_content(text) != before_scroll and "Source: active" in text,
             "policy detail scroll",
         )
         os.write(master, b"\x1b[5~")
         until(
-            lambda text: text == before_scroll,
+            lambda text: policy_content(text) == before_scroll,
             "policy detail scroll restore",
         )
 

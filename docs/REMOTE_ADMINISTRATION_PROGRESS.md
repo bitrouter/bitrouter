@@ -143,3 +143,34 @@ journeys with MCP intentionally skipped; it is not complete remote acceptance.
   being unavailable. The live agent-launch attempt was correctly denied.
   This follow-up changed test assets and evidence only; production fixes remain
   separate from the live-testing results.
+
+
+### Integration with main for PR review (2026-09-08)
+
+- Merged `main` at `a59bd6b3` into the remote-administration branch. Preserved
+  native transcript scrollback, the multiline composer, and docked controls.
+  All eleven pages remain available; Policy and Reload use the available
+  terminal height so typed details and retained operation receipts stay visible.
+  Rendering tests exercise the actual dock height for policy and reload.
+- Updated the PTY emulator for the main-screen writer's cursor-position query,
+  bottom-row line-feed scrolling, erase ranges, and synchronized frames.
+  PageDown/PageUp compares the complete policy body independently of automatic
+  refresh timestamps, retaining the semantic scroll-and-restore assertion.
+- Post-merge `cargo nextest run --all-features --no-fail-fast`: **3,195 passed,
+  12 skipped**. An earlier run hit the existing timeout-sensitive
+  `local_cli::tests::probes_compatible_old_failed_and_hung_workers` test; the
+  complete final rerun passed, including that test. Documentation tests passed
+  (five passed, one ignored), as did all-feature Clippy, formatting, strict
+  workspace rustdoc, and distribution/schema checks.
+- Rebuilt Linux/ARM64 selected Docker acceptance passed again: every remote
+  CLI/REST read, target isolation, retained-operation recovery, policy controls,
+  and both successful and partially applied real-PTY reload journeys. Both PTY
+  runs restored terminal state and verified a subsequent shell write. This
+  remains the explicitly MCP-skipped diagnostic selection; it does not close
+  the external-host MCP limitation recorded above.
+- Post-merge evidence: `/tmp/bitrouter-remote-merge-tests-final.log`,
+  `/tmp/bitrouter-remote-merge-doctests.log`,
+  `/tmp/bitrouter-remote-merge-clippy.log`,
+  `/tmp/bitrouter-remote-merge-rustdoc.log`,
+  `/tmp/bitrouter-remote-merge-dist.log`, and
+  `/tmp/bitrouter-remote-merge-docker-verified.log`.
