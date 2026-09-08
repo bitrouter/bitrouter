@@ -75,7 +75,8 @@ fn scan(source: &SourceDescriptor, rows: Vec<Value>) -> Result<(Vec<Receipt>, BT
     for (sequence, raw) in rows.into_iter().enumerate() {
         scanner.push(&record(source, sequence as u64, raw)?)?;
     }
-    Ok(scanner.finish())
+    let scanned = scanner.finish();
+    Ok((scanned.receipts, scanned.gaps))
 }
 
 #[test]

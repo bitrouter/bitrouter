@@ -848,7 +848,10 @@ fn decode_object<T: serde::de::DeserializeOwned + serde::Serialize>(
             | "task_archive" =>
                 fields.get("id").and_then(serde_json::Value::as_str)
                     == Some(row.object_key.as_str()),
-            "manifest" => row.object_key == row.digest,
+            "attempt_execution_pointer" =>
+                fields.get("id").and_then(serde_json::Value::as_str)
+                    == Some(row.object_key.as_str()),
+            "manifest" | "attempt_executions" => row.object_key == row.digest,
             _ => false,
         },
         "corrupt evidence object key"

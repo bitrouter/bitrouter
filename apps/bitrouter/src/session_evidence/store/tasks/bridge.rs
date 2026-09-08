@@ -36,16 +36,29 @@ impl EvidenceStore {
         targets: &BTreeSet<String>,
     ) -> Result<(Vec<ProvenObservation>, BTreeSet<String>)> {
         let transaction = self.read_snapshot().await?;
+        let result = self
+            .producer_claims_on(&transaction, range, targets)
+            .await?;
+        transaction.commit().await?;
+        Ok(result)
+    }
+
+    pub(super) async fn producer_claims_on(
+        &self,
+        db: &impl ConnectionTrait,
+        range: &SourceRange,
+        targets: &BTreeSet<String>,
+    ) -> Result<(Vec<ProvenObservation>, BTreeSet<String>)> {
         let row = source_entity::Entity::find_by_id(&range.source_id)
             .filter(source_entity::Column::Owner.eq(&self.owner_key))
-            .one(&transaction)
+            .one(db)
             .await?
             .context("producer claim source missing")?;
         ensure!(row.owner == self.owner_key, "foreign producer claim source");
         let source = decode_source(row)?;
         let mut claims = Vec::new();
         let mut gaps = BTreeSet::new();
-        let records = range_records(&transaction, &self.owner_key, range).await?;
+        let records = range_records(db, &self.owner_key, range).await?;
         ensure!(
             records.len() as u64 == range.end - range.start,
             "producer claim prefix has missing records"
@@ -72,16 +85,13 @@ impl EvidenceStore {
             let relevant = crate::session_evidence::native_inputs::target(&parsed.event)
                 .is_some_and(|id| targets.contains(id));
             if relevant {
-                let observation = self
-                    .verify_bridge_observation(&transaction, &source, &record)
-                    .await?;
+                let observation = self.verify_bridge_observation(db, &source, &record).await?;
                 claims.push(ProvenObservation {
                     record: RecordRef::from_record(&record)?,
                     observation,
                 });
             }
         }
-        transaction.commit().await?;
         Ok((claims, gaps))
     }
 
@@ -162,7 +172,7 @@ impl EvidenceStore {
         Ok(origin)
     }
 
-    async fn verify_bridge_observation(
+    pub(super) async fn verify_bridge_observation(
         &self,
         db: &impl ConnectionTrait,
         source: &RegisteredSource,
@@ -292,7 +302,10 @@ impl EvidenceStore {
     ) -> Result<PromptEvidence> {
         let transaction = self.read_snapshot().await?;
         let mut evidence = PromptEvidence::default();
-        if let Some(task) = self.active_task(&transaction, session).await? {
+        if let Some(task) = self
+            .task_for_attempt(&transaction, session, expected_attempt)
+            .await?
+        {
             ensure!(
                 task.attempt_id == expected_attempt,
                 "adapter evidence attempt changed; retry snapshot"
@@ -394,6 +407,11 @@ impl EvidenceStore {
                     evidence.gaps.insert("native_bridge_sequence_gap".into());
                 }
             }
+        } else {
+            ensure!(
+                self.active_task(&transaction, session).await?.is_none(),
+                "adapter evidence attempt unavailable"
+            );
         }
         transaction.commit().await?;
         Ok(evidence)

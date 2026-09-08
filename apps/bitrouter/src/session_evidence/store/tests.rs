@@ -203,6 +203,7 @@ fn attempt() -> Attempt {
             session_id: "adapter-session".into(),
         },
         members: BTreeSet::from([root]),
+        execution_snapshot: None,
         phase: AttemptPhase::Collecting,
         revision: 0,
         latest_manifest: None,

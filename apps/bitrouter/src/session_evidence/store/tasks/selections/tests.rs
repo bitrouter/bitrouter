@@ -492,6 +492,7 @@ async fn failed_selection_consumption_rolls_back_archive_pointer_and_prompt_toge
             task_id: "conflict".into(),
             session: session.clone(),
             members: BTreeSet::new(),
+            execution_snapshot: None,
             phase: AttemptPhase::Collecting,
             revision: 0,
             latest_manifest: None,

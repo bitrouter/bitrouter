@@ -1,7 +1,7 @@
 //! Corroborate prompt producer claims with owned native connection prefixes.
 
 use super::*;
-use crate::session_evidence::adapter_bridge::{Event, PromptEvidence, ProvenObservation};
+use crate::session_evidence::adapter_bridge::{PromptEvidence, ProvenObservation};
 use crate::session_evidence::native_inputs::{
     self, NativeInputBinding, NativeInputEvidence, Scanner,
 };
@@ -209,6 +209,7 @@ impl ControllerEvidence {
         // Check the original controller journal, including old attempts, before
         // associating any reused native identifier with the active prompt.
         let mut claims = BTreeMap::<(String, String), BTreeSet<String>>::new();
+        let mut ambiguous = BTreeSet::new();
         for source in sources {
             if !claim_source(group, source) {
                 continue;
@@ -231,7 +232,7 @@ impl ControllerEvidence {
                     // Notifications can move journals while their immutable
                     // prompt origin remains in its original native profile.
                     if proven.observation.origin.request.range.source_id == group.source.id
-                        && let Some(key) = claim_key(&proven.observation.event)
+                        && let Some(key) = native_inputs::claim_key(&proven.observation.event)
                     {
                         claims
                             .entry(key)
@@ -312,8 +313,16 @@ impl ControllerEvidence {
                 start: 0,
                 end,
             });
-            let (receipts, gaps) = scanner.finish();
-            group.gaps.extend(gaps);
+            let scanned = scanner.finish();
+            for key in scanned.ambiguous {
+                ensure!(
+                    ambiguous.contains(&key) || ambiguous.len() < MAX_GRAPH_ITEMS,
+                    "native input ambiguity limit"
+                );
+                ambiguous.insert(key);
+            }
+            group.gaps.extend(scanned.gaps);
+            let receipts = scanned.receipts;
             if receipts.is_empty() {
                 continue;
             }
@@ -361,8 +370,8 @@ impl ControllerEvidence {
                     if !native_inputs::matches(&observation.event, &receipt) {
                         continue;
                     }
-                    let key =
-                        claim_key(&observation.event).context("native claim identity missing")?;
+                    let key = native_inputs::claim_key(&observation.event)
+                        .context("native claim identity missing")?;
                     if claims.get(&key).is_none_or(|origins| {
                         origins.len() != 1
                             || !origins.contains(&observation.origin.request.record_id)
@@ -415,9 +424,10 @@ impl ControllerEvidence {
             }
         }
         group.bindings.retain(|binding| {
-            if occurrences
-                .get(&(binding.node.clone(), binding.native_id.clone()))
-                .is_some_and(|inputs| inputs.len() > 1)
+            if ambiguous.contains(&(binding.node.clone(), binding.native_id.clone()))
+                || occurrences
+                    .get(&(binding.node.clone(), binding.native_id.clone()))
+                    .is_some_and(|inputs| inputs.len() > 1)
             {
                 group.gaps.insert("native_input_turn_ambiguous".into());
                 false
@@ -469,16 +479,6 @@ fn claim_source(group: &Group, source: &RegisteredSource) -> bool {
         && source.descriptor.harness == group.source.descriptor.harness
         && source.descriptor.node.is_none()
         && source.descriptor.locator == group.source.descriptor.locator
-}
-
-fn claim_key(event: &Event) -> Option<(String, String)> {
-    match event {
-        Event::CodexAccepted {
-            thread_id, turn_id, ..
-        } => Some((thread_id.clone(), turn_id.clone())),
-        Event::ClaudeEnqueued { command_id } => Some((String::new(), command_id.clone())),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

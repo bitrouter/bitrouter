@@ -10,7 +10,7 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
 | History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex physical rollout dependencies bind immutable prefixes separately from stable threads and logical fork ancestry; observed revert variants survive file removal. Codex input receipts select a rollout through original native lifecycle and turn-context records; source-local execution views retain own turn bookends, explicit records and root-turn claims across copied subagent prefixes. | Complete execution/context coverage, unmatched/replaced rollout histories, Claude independent-fork UUID remapping and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and resumed-child task membership and execution coverage. |
-| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Pinned adapter producer observations retain original prompt provenance; native input receipts connect inspected requests, acknowledgements and explicitly addressed execution events. | Complete execution membership, exact per-attempt execution ranges and manager intent recovery after a Code process restart. |
+| Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Immutable attempt execution observations join verified direct inputs and selected Codex descendant turns, including late work on archived attempts. | Complete execution membership, pending/resumed descendant coverage, durable task-scoped paging and manager intent recovery after a Code process restart. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
 | Evaluation | Manifest persistence/validation and request-set accounting primitives exist. | Production manifest construction, coding evaluation, authoritative Eval admission and human feedback. |
 | TUI | Code displays confirmed task/attempt state and pending reservations, with F2/F3 selection and F4 refresh through negotiated ACP methods. Collection state is also available in an application snapshot. | Settled checkpoint/evaluation status, human feedback and durable recovery of uncertain client intents. |
@@ -30,7 +30,67 @@ the required identity produce a collection error rather than a guessed source.
 
 ## Implementation checkpoint
 
-The current own-execution stage adds source-local Codex execution views to
+The attempt-membership stage persists immutable `AttemptExecutions` observations
+and an independent per-attempt pointer. Each snapshot pins its parser version,
+raw task revision, original input/producer records, selected descendant runs,
+spawn metadata and inspected source prefixes. Strict reads hash those original
+prefixes and replay the relevant native scanners, original controller/process
+attachments and producer-claim uniqueness. Codex acceptance uniqueness is checked
+across inspected connections of the original controller and native profile.
+These checks concern the recorded cuts; a historical snapshot does not establish
+that no later input, competing source or execution exists.
+
+Direct inputs retain their native process and conversation identities. Claude
+can therefore retain one input acknowledged in multiple conversations across a
+native reset. Codex descendants need a unique root input, independently selected
+root rollout/turn, an unambiguous chain of original spawn metadata and a gap-free
+own child execution. A copied parent prefix or logical fork relation cannot supply
+that execution. A reused child contributes its matching turn to each attempt,
+not its whole thread. Invalid sibling metadata, execution records or unavailable
+candidate identities withhold descendant membership.
+
+Reconciliation includes unfinished archived attempts, so switching tasks does
+not strand an earlier task's late child records. It captures pointer generations
+before inspecting native sources and uses a short compare-and-swap write after
+raw-record verification. A stale scan cannot replace a newer observation at the
+same task revision. Derived writes never update or lock the original attempt
+row, and damaged derived objects do not block task status, prompt admission or
+selection. Verified reconstruction preserves corrupt content-addressed objects
+and publishes a new address when necessary.
+
+The application snapshot decorates observed attempts with `members` and an
+`execution_snapshot` reference and exposes `attempt_executions`. Original task
+rows remain independent of this replaceable index. Current attempts receive
+priority within the bounded target inventory; archive pages rotate across
+reconciliation passes, with an explicit pending gap when the page is incomplete.
+This cursor is process-local. Persistent task-scoped paging and elimination of
+the existing controller-lifetime source/record limits remain required.
+
+Every observation still carries `native_attempt_execution_coverage_incomplete`.
+Open child work, non-self-root resumed inputs, Claude descendant membership,
+auxiliary requests, exact request costs, native settlement and final artifacts
+are not certified by this stage. It neither produces a complete evaluation
+manifest nor advances an attempt to `Ready`.
+
+Independent stage review passed after correcting archived-task discovery,
+derived-index isolation, stale publication, full frozen-range input uniqueness,
+hidden sibling candidates and archive starvation. Same-connection duplicate
+acceptances retain negative identity evidence across other connections. Tests
+also cover Claude same-input reset identities, damaged derived objects, saturated
+pointer counters and two 513-attempt chains rotating through a 1,024-target page.
+All 3,414 workspace tests passed with 17 skipped. The separate pinned-adapter
+binary fixture passed and now verifies persisted membership as well as the
+unchanged original task rows. Its native transports remain deterministic fixtures.
+Both real Codex capture tests passed; the lifecycle test additionally persists
+and strictly rereads attempt membership after database reopen. Its ACP producer
+origins remain fixtures. Workspace Clippy with tests and denied warnings,
+doctests, rustdoc, distribution checks, Windows cross-target Clippy, formatting
+and diff checks passed. These results validate this stage; the full-feature
+requirements below remain open.
+
+### Preceding own-execution checkpoint
+
+The own-execution stage adds source-local Codex execution views to
 resolved histories and selected input receipts. Original metadata and contiguous
 ordinals separate copied subagent prefixes from local records; a logical fork's
 parent ordinal is not reused as an offset into a copied child file. The collector
@@ -47,7 +107,8 @@ start. Shared detail budgets apply across history dependencies and input scans.
 The candidate execution graph excludes proven copied records while exposing
 their original owner-metadata references. Stored parser facts remain immutable
 and independently readable, including older context-insensitive interpretations.
-These views do not populate attempt membership or establish final settlement.
+These source-local views alone do not establish attempt membership or final
+settlement; the subsequent membership observation joins selected executions.
 
 A real Codex CLI 0.153.4 capture through the BitRouter proxy completed a
 full-history subagent spawn and a later follow-up in the same child thread.

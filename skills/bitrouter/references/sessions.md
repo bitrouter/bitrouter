@@ -196,8 +196,22 @@ does not establish complete execution ranges, settlement or coding quality.
 Resolved Codex histories and selected inputs also expose source-local execution
 observations: own turn bookends, explicitly addressed records and root-turn
 claims. Copied ancestor records are excluded using original native boundaries;
-unaddressed records remain unassigned. These observations do not establish task
-membership, full context semantics or descendant completion.
+unaddressed records remain unassigned. These source-local observations alone do
+not establish task membership, full context semantics or descendant completion.
+The application snapshot also exposes immutable `attempt_executions` observations
+and decorates observed attempts with `members` and an `execution_snapshot` digest.
+These join verified direct inputs and selected Codex descendant turns through
+original root-input and spawn evidence. Reusing a child assigns its matching
+turns; switching tasks still allows late work to update the archived attempt's
+latest observation. Claude retains distinct native conversations acknowledged
+by one process/input across reset. Reads revalidate the original inspected cuts,
+including competing producer claims and Codex connection acceptances. A new
+observation does not mutate an older snapshot or the original task revision.
+Current attempts are prioritized and archive targets rotate through bounded
+pages; unfinished inventory remains explicit. These observations always retain
+an execution-coverage gap: open or otherwise unassigned child work, auxiliary
+requests, final artifacts and native settlement still need complete attribution.
+They are not a frozen evaluation manifest and do not make an attempt `Ready`.
 An observation sequence without gaps does not cover all native work: auxiliary
 Codex title generation and file audits, among other paths, still need their own
 causal attribution and cost coverage.

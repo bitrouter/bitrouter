@@ -1,5 +1,5 @@
 use super::*;
-use crate::session_evidence::adapter_bridge::{AdapterIdentity, Observation};
+use crate::session_evidence::adapter_bridge::{AdapterIdentity, Event, Observation};
 use crate::session_evidence::service::tests::{observation, write_rows};
 
 mod executions;
@@ -354,6 +354,75 @@ async fn claude_recreation_keeps_each_input_process_and_native_reset_identity() 
             .all(|binding| binding.origin.session.session_id == "acp"
                 && binding.configuration.is_some()
                 && binding.session_response.is_some())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn claude_membership_preserves_one_input_across_reset_and_accepts_native_absolute_cwd()
+-> Result<()> {
+    use crate::session_evidence::claude_proxy::SPOOL_ENV;
+    let directory = tempfile::tempdir()?;
+    tokio::fs::create_dir(directory.path().join("child")).await?;
+    let handle = fixture(directory.path(), Harness::ClaudeCode).await?;
+    let service = &handle.service;
+    let prepared = create(service, &directory.path().join("child/..")).await?;
+    prompt(
+        service,
+        "prompt",
+        Event::ClaudeEnqueued {
+            command_id: "command".into(),
+        },
+    )
+    .await?;
+    let process = claude_source(service, &prepared, Some("native-before")).await?;
+    let env = prepared
+        .pointer("/_meta/claudeCode/options/env")
+        .context("env")?;
+    let spool = PathBuf::from(env[SPOOL_ENV].as_str().context("spool")?);
+    let path = spool.join(format!("cli-{process}.jsonl"));
+    let mut rows: Vec<Value> = tokio::fs::read_to_string(&path)
+        .await?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<std::result::Result<_, _>>()?;
+    let mut after = rows[2].clone();
+    after["sequence"] = json!(3);
+    after["payload"]["session_id"] = json!("native-after");
+    rows.push(after);
+    write_rows(&path, rows).await?;
+    let observed = service.reconcile().await?;
+    let attempt = observed.attempts.first().context("attempt")?;
+    let membership = observed
+        .attempt_executions
+        .get(&attempt.id)
+        .context(format!("membership missing: {:?}", observed.gaps))?;
+    assert_eq!(membership.inputs.bindings.len(), 2);
+    assert_eq!(membership.members().len(), 2);
+    assert_eq!(
+        membership.inputs.bindings[0].input,
+        membership.inputs.bindings[1].input
+    );
+    let id = attempt
+        .execution_snapshot
+        .clone()
+        .context("membership pointer")?;
+    let strict = serde_json::to_value(service.store.attempt_executions(&id).await?)?;
+    drop(handle);
+    let reopened = fixture(directory.path(), Harness::ClaudeCode).await?;
+    assert_eq!(
+        serde_json::to_value(reopened.service.store.attempt_executions(&id).await?)?,
+        strict
+    );
+    let recovered = reopened.service.reconcile().await?;
+    assert_eq!(
+        recovered
+            .attempt_executions
+            .get(&attempt.id)
+            .context("recovered membership")?
+            .members()
+            .len(),
+        2
     );
     Ok(())
 }

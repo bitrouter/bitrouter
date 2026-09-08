@@ -62,6 +62,14 @@ pub(super) struct Receipt {
     pub codex_history: Option<rollouts::CodexHistoryEvidence>,
 }
 
+pub(super) struct ScannedInputs {
+    pub receipts: Vec<Receipt>,
+    pub gaps: BTreeSet<String>,
+    /// Negative evidence must survive local receipt filtering so a sibling
+    /// connection cannot make the same native execution appear unique.
+    pub ambiguous: BTreeSet<(NodeKey, String)>,
+}
+
 struct Request {
     method: String,
     thread: Option<String>,
@@ -307,7 +315,7 @@ impl<'a> Scanner<'a> {
         Ok(())
     }
 
-    pub fn finish(mut self) -> (Vec<Receipt>, BTreeSet<String>) {
+    pub fn finish(mut self) -> ScannedInputs {
         for (native_id, input) in self.claude {
             if !input.ambiguous {
                 for (node, acknowledgements) in input.nodes {
@@ -322,9 +330,6 @@ impl<'a> Scanner<'a> {
                 }
             }
         }
-        if self.gaps.contains("native_input_capture_gap") {
-            self.receipts.clear();
-        }
         // Reject same-connection ambiguity before materializing execution
         // details. Otherwise many acceptances can clone one large turn log.
         let mut occurrences = BTreeMap::<(NodeKey, String), usize>::new();
@@ -335,23 +340,29 @@ impl<'a> Scanner<'a> {
                     .or_default() += 1;
             }
         }
+        let ambiguous: BTreeSet<_> = occurrences
+            .into_iter()
+            .filter_map(|(key, count)| (count > 1).then_some(key))
+            .collect();
+        if !ambiguous.is_empty() {
+            self.gaps.insert("native_input_turn_ambiguous".into());
+        }
         self.receipts.retain(|receipt| {
-            if occurrences
-                .get(&(receipt.node.clone(), receipt.native_id.clone()))
-                .is_some_and(|count| *count > 1)
-            {
-                self.gaps.insert("native_input_turn_ambiguous".into());
-                false
-            } else {
-                true
-            }
+            !ambiguous.contains(&(receipt.node.clone(), receipt.native_id.clone()))
         });
+        if self.gaps.contains("native_input_capture_gap") {
+            self.receipts.clear();
+        }
         for receipt in &mut self.receipts {
             receipt.execution =
                 self.executions
                     .bind(&receipt.node, &receipt.native_id, &receipt.input);
         }
-        (self.receipts, self.gaps)
+        ScannedInputs {
+            receipts: self.receipts,
+            gaps: self.gaps,
+            ambiguous,
+        }
     }
 }
 
@@ -359,6 +370,16 @@ pub(super) fn target(event: &Event) -> Option<&str> {
     match event {
         Event::CodexAccepted { turn_id, .. } => Some(turn_id),
         Event::ClaudeEnqueued { command_id } => Some(command_id),
+        _ => None,
+    }
+}
+
+pub(super) fn claim_key(event: &Event) -> Option<(String, String)> {
+    match event {
+        Event::CodexAccepted {
+            thread_id, turn_id, ..
+        } => Some((thread_id.clone(), turn_id.clone())),
+        Event::ClaudeEnqueued { command_id } => Some((String::new(), command_id.clone())),
         _ => None,
     }
 }

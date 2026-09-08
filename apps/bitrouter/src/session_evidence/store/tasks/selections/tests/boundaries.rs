@@ -4,132 +4,147 @@ use super::*;
 // 1,024-attempt boundary does not repeatedly verify every growing prefix.
 // Admissions below still use Journal and the production transaction path.
 async fn seed_chain(store: &EvidenceStore, count: usize) -> Result<()> {
-    let session = root("public");
-    let mut source = store
-        .register(SourceDescriptor {
-            namespace: session.namespace.clone(),
-            harness: session.harness,
-            format: SourceFormat::Acp,
-            locator: "controller:fixture".into(),
-            node: None,
-        })
-        .await?;
-    let transaction = store.db.begin().await?;
-    let mut previous: Option<(ActiveTask, Attempt)> = None;
-    for index in 0..count {
-        let operation_id = format!("prompt-{index}");
-        let id = PromptOperation::key("fixture", &operation_id)?;
-        let attempt_id = canonical_digest(&("attempt", &id))?;
-        let mut selection_id = None;
-        if let Some((old, attempt)) = &previous {
-            let request_id = format!("select-{index}");
-            let raw = select(&request_id, cursor(old, attempt), TaskSelectionMode::Retry);
-            let request = serde_json::from_value(raw["payload"].clone())?;
-            let record = append_raw(store, &transaction, &mut source, raw).await?;
-            let selection = Selection {
-                id: canonical_digest(&(&session, request_id))?,
-                revision: 1,
-                session: session.clone(),
-                request,
-                record: RecordRef::from_record(&record)?,
-                consumed_by: Some(id.clone()),
-            };
-            let archived = ArchivedTask {
-                id: old.attempt_id.clone(),
-                revision: 0,
-                task: old.clone(),
-                selection: selection.id.clone(),
-            };
-            store
-                .insert_object(&transaction, "task_selection", &selection.id, 1, &selection)
-                .await?;
-            store
-                .insert_object(&transaction, "task_archive", &archived.id, 0, &archived)
-                .await?;
-            selection_id = Some(selection.id);
-        }
-        let request = append_raw(
-            store,
-            &transaction,
-            &mut source,
-            request(&operation_id, "public"),
-        )
-        .await?;
-        let response =
-            append_raw(store, &transaction, &mut source, response(&operation_id)).await?;
-        let task_origin = previous.as_ref().map(|(old, _)| {
-            old.task_origin
-                .clone()
-                .unwrap_or_else(|| old.origin_operation.clone())
-        });
-        let attempt = Attempt {
-            id: attempt_id.clone(),
-            task_id: canonical_digest(&("task", task_origin.as_ref().unwrap_or(&id)))?,
-            session: session.clone(),
-            members: BTreeSet::new(),
-            phase: AttemptPhase::Settling,
-            revision: 1,
-            latest_manifest: None,
-            effective_manifest: None,
-            started_at: "2026-09-07T00:00:00Z".into(),
-        };
-        let operation = PromptOperation {
-            id: id.clone(),
-            revision: 1,
-            controller_id: "fixture".into(),
-            operation_id,
-            session: session.clone(),
-            attempt_id: attempt_id.clone(),
-            request: Boundary::new(&source, &request.input)?,
-            response: Some(Boundary::new(&source, &response.input)?),
-        };
-        let task = ActiveTask {
-            id: session.id()?,
-            revision: previous.as_ref().map_or(1, |(old, _)| old.revision + 2),
-            session: session.clone(),
-            attempt_id,
-            origin_operation: id.clone(),
-            operations: BTreeSet::from([id.clone()]),
-            open_operations: BTreeSet::new(),
-            last_response: Some(id),
-            task_origin,
-            selection: selection_id,
-        };
-        task.validate()?;
-        attempt.validate()?;
-        operation.validate()?;
-        store
-            .insert_object(
-                &transaction,
-                "attempt",
-                &attempt.id,
-                i64::try_from(attempt.revision)?,
-                &attempt,
-            )
-            .await?;
-        store
-            .insert_object(
-                &transaction,
-                "prompt_operation",
-                &operation.id,
-                1,
-                &operation,
-            )
-            .await?;
-        previous = Some((task, attempt));
-    }
-    let (task, _) = previous.context("nonempty fixture")?;
     store
-        .insert_object(
-            &transaction,
-            "active_task",
-            &task.id,
-            i64::try_from(task.revision)?,
-            &task,
-        )
-        .await?;
-    transaction.commit().await?;
-    Ok(())
+        .seed_attempt_chain(root("public"), "fixture", count)
+        .await
+}
+
+impl EvidenceStore {
+    pub(crate) async fn seed_attempt_chain(
+        &self,
+        session: AcpSessionKey,
+        controller: &str,
+        count: usize,
+    ) -> Result<()> {
+        let store = self;
+        let mut source = store
+            .register(SourceDescriptor {
+                namespace: session.namespace.clone(),
+                harness: session.harness,
+                format: SourceFormat::Acp,
+                locator: format!("controller:{controller}"),
+                node: None,
+            })
+            .await?;
+        let transaction = store.db.begin().await?;
+        let mut previous: Option<(ActiveTask, Attempt)> = None;
+        for index in 0..count {
+            let operation_id = format!("prompt-{index}");
+            let id = PromptOperation::key(controller, &operation_id)?;
+            let attempt_id = canonical_digest(&("attempt", &id))?;
+            let mut selection_id = None;
+            if let Some((old, attempt)) = &previous {
+                let request_id = format!("select-{index}");
+                let mut raw = select(&request_id, cursor(old, attempt), TaskSelectionMode::Retry);
+                raw["payload"]["sessionId"] = json!(session.session_id);
+                let request = serde_json::from_value(raw["payload"].clone())?;
+                let record = append_raw(store, &transaction, &mut source, raw).await?;
+                let selection = Selection {
+                    id: canonical_digest(&(&session, request_id))?,
+                    revision: 1,
+                    session: session.clone(),
+                    request,
+                    record: RecordRef::from_record(&record)?,
+                    consumed_by: Some(id.clone()),
+                };
+                let archived = ArchivedTask {
+                    id: old.attempt_id.clone(),
+                    revision: 0,
+                    task: old.clone(),
+                    selection: selection.id.clone(),
+                };
+                store
+                    .insert_object(&transaction, "task_selection", &selection.id, 1, &selection)
+                    .await?;
+                store
+                    .insert_object(&transaction, "task_archive", &archived.id, 0, &archived)
+                    .await?;
+                selection_id = Some(selection.id);
+            }
+            let request = append_raw(
+                store,
+                &transaction,
+                &mut source,
+                request(&operation_id, &session.session_id),
+            )
+            .await?;
+            let response =
+                append_raw(store, &transaction, &mut source, response(&operation_id)).await?;
+            let task_origin = previous.as_ref().map(|(old, _)| {
+                old.task_origin
+                    .clone()
+                    .unwrap_or_else(|| old.origin_operation.clone())
+            });
+            let attempt = Attempt {
+                id: attempt_id.clone(),
+                task_id: canonical_digest(&("task", task_origin.as_ref().unwrap_or(&id)))?,
+                session: session.clone(),
+                members: BTreeSet::new(),
+                execution_snapshot: None,
+                phase: AttemptPhase::Settling,
+                revision: 1,
+                latest_manifest: None,
+                effective_manifest: None,
+                started_at: "2026-09-07T00:00:00Z".into(),
+            };
+            let operation = PromptOperation {
+                id: id.clone(),
+                revision: 1,
+                controller_id: controller.into(),
+                operation_id,
+                session: session.clone(),
+                attempt_id: attempt_id.clone(),
+                request: Boundary::new(&source, &request.input)?,
+                response: Some(Boundary::new(&source, &response.input)?),
+            };
+            let task = ActiveTask {
+                id: session.id()?,
+                revision: previous.as_ref().map_or(1, |(old, _)| old.revision + 2),
+                session: session.clone(),
+                attempt_id,
+                origin_operation: id.clone(),
+                operations: BTreeSet::from([id.clone()]),
+                open_operations: BTreeSet::new(),
+                last_response: Some(id),
+                task_origin,
+                selection: selection_id,
+            };
+            task.validate()?;
+            attempt.validate()?;
+            operation.validate()?;
+            store
+                .insert_object(
+                    &transaction,
+                    "attempt",
+                    &attempt.id,
+                    i64::try_from(attempt.revision)?,
+                    &attempt,
+                )
+                .await?;
+            store
+                .insert_object(
+                    &transaction,
+                    "prompt_operation",
+                    &operation.id,
+                    1,
+                    &operation,
+                )
+                .await?;
+            previous = Some((task, attempt));
+        }
+        let (task, _) = previous.context("nonempty fixture")?;
+        store
+            .insert_object(
+                &transaction,
+                "active_task",
+                &task.id,
+                i64::try_from(task.revision)?,
+                &task,
+            )
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
 }
 
 async fn append_raw(

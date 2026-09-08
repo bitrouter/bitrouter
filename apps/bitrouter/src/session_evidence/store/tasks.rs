@@ -9,6 +9,7 @@ use super::*;
 use crate::session_evidence::types::{AcpSessionKey, Harness, NodeKey, SourceFormat};
 
 mod bridge;
+pub(crate) mod membership;
 mod selections;
 
 /// A checked admission conflict before a new selection can be committed.
@@ -233,6 +234,48 @@ impl PromptOperation {
 }
 
 impl EvidenceStore {
+    async fn task_for_attempt(
+        &self,
+        db: &impl ConnectionTrait,
+        session: &AcpSessionKey,
+        id: &str,
+    ) -> Result<Option<ActiveTask>> {
+        let mut current = self.active_task(db, session).await?;
+        let mut seen = BTreeSet::new();
+        while let Some(task) = current {
+            ensure!(
+                seen.len() < MAX_GRAPH_ITEMS && seen.insert(task.attempt_id.clone()),
+                "execution task archive limit or cycle"
+            );
+            if task.attempt_id == id {
+                return Ok(Some(task));
+            }
+            current = self.selected_task_origin(db, &task).await?.1;
+        }
+        Ok(None)
+    }
+
+    pub(crate) async fn unsettled_attempts(&self, session: &AcpSessionKey) -> Result<Vec<Attempt>> {
+        let read = self.read_snapshot().await?;
+        let mut current = self.active_task(&read, session).await?;
+        let mut seen = BTreeSet::new();
+        let mut attempts = Vec::new();
+        while let Some(task) = current {
+            ensure!(
+                seen.len() < MAX_GRAPH_ITEMS && seen.insert(task.attempt_id.clone()),
+                "unsettled attempt archive limit or cycle"
+            );
+            let (origin, previous) = self.selected_task_origin(&read, &task).await?;
+            let attempt = self.verify_task_attempt(&read, &task, &origin).await?;
+            if attempt.phase != AttemptPhase::Ready {
+                attempts.push(attempt);
+            }
+            current = previous;
+        }
+        read.commit().await?;
+        Ok(attempts)
+    }
+
     /// Discover logical tasks from committed state, including a prompt whose
     /// observer was cancelled before updating its process-local caches. These
     /// are candidates: active_attempt verifies the original prompt boundaries.
@@ -499,6 +542,7 @@ impl EvidenceStore {
                     task_id: canonical_digest(&("task", &operation.id))?,
                     session: operation.session.clone(),
                     members: BTreeSet::new(),
+                    execution_snapshot: None,
                     phase: AttemptPhase::Collecting,
                     revision: 0,
                     latest_manifest: None,

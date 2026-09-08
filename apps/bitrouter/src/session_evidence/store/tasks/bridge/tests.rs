@@ -336,7 +336,7 @@ async fn damaged_bridge_index_preserves_raw_notifications_and_durable_gap() -> R
 }
 
 #[tokio::test]
-async fn bridge_read_rejects_an_attempt_switched_after_status_was_read() -> Result<()> {
+async fn bridge_read_keeps_archived_attempt_evidence_separate_after_switch() -> Result<()> {
     use bitrouter_sdk::acp::controller::tasks::{TaskSelectRequest, TaskSelectionMode};
 
     let db = crate::db::connect("sqlite::memory:").await?;
@@ -349,28 +349,67 @@ async fn bridge_read_rejects_an_attempt_switched_after_status_was_read() -> Resu
     };
     let source = journal(&store, "controller", &session).await?;
     source.append(request("first", &session)).await?;
+    let first_origin = store
+        .prompt_origin("controller", "first")
+        .await?
+        .context("first origin")?;
+    let first_record = source
+        .append_record(notification(&first_origin, 0, Event::Started)?)
+        .await?;
     source.append(json!({"operation_id":"first", "method":"session/prompt", "phase":"response", "native_scope":"session", "payload":{"stopReason":"end_turn"}})).await?;
     let expected = store
         .task_status(&session)
         .await?
         .current
         .context("cursor")?;
+    let before = store
+        .prompt_bridge_evidence(&session, &expected.attempt_id)
+        .await?;
+    assert_eq!(before.observations.len(), 1);
     source.append(json!({"operation_id":"selection", "method":"_bitrouter/task/select", "phase":"request", "native_scope":"session", "payload":TaskSelectRequest {
         session_id:session.session_id.clone(), request_id:"selection".into(), expected:expected.clone(), mode:TaskSelectionMode::Retry,
     }})).await?;
     source.append(request("second", &session)).await?;
+    let second_origin = store
+        .prompt_origin("controller", "second")
+        .await?
+        .context("second origin")?;
+    source
+        .append(notification(&second_origin, 0, Event::Started)?)
+        .await?;
     let current = store
         .active_attempt(&session)
         .await?
         .context("new attempt")?;
     assert_ne!(current.id, expected.attempt_id);
+    let archived = store
+        .prompt_bridge_evidence(&session, &expected.attempt_id)
+        .await?;
+    assert_eq!(
+        serde_json::to_value(archived)?,
+        serde_json::to_value(before)?
+    );
+    let evidence = store.prompt_bridge_evidence(&session, &current.id).await?;
+    assert_eq!(evidence.observations.len(), 1);
+    assert_eq!(evidence.observations[0].observation.origin, second_origin);
+    assert!(
+        store
+            .prompt_bridge_evidence(&session, &canonical_digest(&"unknown-attempt")?)
+            .await
+            .is_err()
+    );
+    record_entity::Entity::delete_by_id(first_record.id)
+        .exec(&store.db)
+        .await?;
     assert!(
         store
             .prompt_bridge_evidence(&session, &expected.attempt_id)
             .await
             .is_err()
     );
-    let evidence = store.prompt_bridge_evidence(&session, &current.id).await?;
-    assert!(evidence.gaps.contains("native_bridge_unobserved"));
+    assert_eq!(
+        serde_json::to_value(store.prompt_bridge_evidence(&session, &current.id).await?)?,
+        serde_json::to_value(evidence)?
+    );
     Ok(())
 }

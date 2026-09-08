@@ -468,6 +468,9 @@ pub struct Attempt {
     pub task_id: String,
     pub session: AcpSessionKey,
     pub members: BTreeSet<NodeKey>,
+    /// Latest observed execution membership, not an evaluation manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_snapshot: Option<String>,
     pub phase: AttemptPhase,
     pub revision: u64,
     pub latest_manifest: Option<String>,
@@ -485,9 +488,13 @@ impl Attempt {
             "too many attempt members"
         );
         timestamp(&self.started_at)?;
-        for digest in [&self.latest_manifest, &self.effective_manifest]
-            .into_iter()
-            .flatten()
+        for digest in [
+            &self.latest_manifest,
+            &self.effective_manifest,
+            &self.execution_snapshot,
+        ]
+        .into_iter()
+        .flatten()
         {
             digest_identifier(digest)?;
         }

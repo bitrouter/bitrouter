@@ -1,5 +1,7 @@
 use super::*;
 
+mod membership;
+
 async fn rollout(
     service: &ControllerEvidence,
     directory: &str,
@@ -530,8 +532,40 @@ async fn captured_codex_proxy_records_bind_input_rollouts() -> Result<()> {
     }
     assert!(by_thread.values().any(|rollouts| rollouts.len() == 2));
     assert!(by_thread.len() >= 3);
+    let snapshot = service.reconcile().await?;
+    let attempt = snapshot.attempts.first().context("captured attempt")?;
+    let snapshot_id = attempt
+        .execution_snapshot
+        .as_ref()
+        .context("captured execution snapshot")?
+        .clone();
+    let membership = service.store.attempt_executions(&snapshot_id).await?;
+    assert_eq!(
+        membership.inputs.bindings.len(),
+        turns.len(),
+        "{:?}",
+        snapshot.gaps
+    );
+    assert_eq!(membership.members().len(), by_thread.len());
+    assert!(
+        membership
+            .gaps
+            .contains("native_attempt_execution_coverage_incomplete")
+    );
+    assert!(attempt.effective_manifest.is_none());
+    let frozen = serde_json::to_value(membership)?;
     drop(handle);
     let reopened = fixture_at(directory.path(), Harness::Codex, Some(&profile)).await?;
+    assert_eq!(
+        serde_json::to_value(
+            reopened
+                .service
+                .store
+                .attempt_executions(&snapshot_id)
+                .await?
+        )?,
+        frozen
+    );
     let restored = reopened
         .service
         .native_inputs(&selected, &BTreeSet::new())

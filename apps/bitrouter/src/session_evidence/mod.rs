@@ -11,6 +11,7 @@ pub mod collector;
 pub mod execution;
 pub mod history;
 pub mod journal;
+pub mod membership;
 pub mod native_inputs;
 mod native_runtime;
 pub mod projection;

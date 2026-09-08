@@ -25,6 +25,7 @@ use crate::eval::types::canonical_digest;
 mod bridge;
 mod checkpoints;
 mod inputs;
+pub(crate) mod membership;
 pub mod processes;
 mod recovery;
 mod roots;
@@ -109,6 +110,8 @@ pub struct CollectionSnapshot {
     #[serde(default)]
     pub native_inputs: BTreeMap<String, super::native_inputs::NativeInputEvidence>,
     #[serde(default)]
+    pub attempt_executions: BTreeMap<String, super::membership::AttemptExecutions>,
+    #[serde(default)]
     pub processes: Vec<processes::ProcessBinding>,
     #[serde(default)]
     pub sdk_bindings: sdk_bindings::SdkBindingPage,
@@ -135,6 +138,7 @@ struct LiveState {
     spool_after: BTreeMap<PathBuf, PathBuf>,
     spool_gaps: BTreeMap<PathBuf, BTreeSet<String>>,
     snapshot: CollectionSnapshot,
+    membership_after: Option<String>,
     roots: BTreeMap<String, RootContext>,
     sessions: BTreeMap<String, String>,
     loaded: BTreeMap<String, LoadedQuery>,
@@ -342,8 +346,9 @@ impl ControllerEvidence {
 
     pub async fn reconcile(&self) -> Result<CollectionSnapshot> {
         let _guard = self.reconcile_gate.lock().await;
-        let epoch = self.begin_inventory().await?;
         let mut gaps = BTreeSet::new();
+        let execution_stamps = self.membership_stamps(&mut gaps).await;
+        let epoch = self.begin_inventory().await?;
         if !self.process_capture {
             gaps.insert("native_process_capture_unavailable".into());
         }
@@ -514,9 +519,6 @@ impl ControllerEvidence {
                         }
                     };
                     prompt_bindings.insert(attempt.id.clone(), bindings);
-                    if attempt.members.is_empty() {
-                        gaps.insert("native_attempt_membership_unavailable".into());
-                    }
                     if unobserved {
                         gaps.insert("native_prompt_response_unobserved".into());
                     }
@@ -550,11 +552,67 @@ impl ControllerEvidence {
                 }
             }
         }
+        for session in &task_sessions {
+            match self.store.unsettled_attempts(session).await {
+                Ok(archived) => {
+                    for attempt in archived {
+                        if attempts.iter().any(|known| known.id == attempt.id) {
+                            continue;
+                        }
+                        if execution_stamps
+                            .as_ref()
+                            .is_ok_and(|stamps| !stamps.contains_key(&attempt.id))
+                        {
+                            continue;
+                        }
+                        if attempts.len() == MAX_GRAPH_ITEMS {
+                            gaps.insert("native_attempt_archive_limit".into());
+                            break;
+                        }
+                        match self
+                            .store
+                            .prompt_bridge_evidence(session, &attempt.id)
+                            .await
+                        {
+                            Ok(bindings) => {
+                                prompt_bindings.insert(attempt.id.clone(), bindings);
+                                attempts.push(attempt);
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "archived prompt evidence unavailable");
+                                gaps.insert("native_attempt_archive_invalid".into());
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "unsettled attempt archive unavailable");
+                    gaps.insert("native_attempt_archive_invalid".into());
+                }
+            }
+        }
         let native_inputs = match self.native_inputs(&prompt_bindings, &gaps).await {
             Ok(inputs) => inputs,
             Err(error) => {
                 tracing::warn!(%error, "native input collection failed");
                 gaps.insert("native_input_collection_failed".into());
+                BTreeMap::new()
+            }
+        };
+        let attempt_executions = match execution_stamps {
+            Ok(stamps) => {
+                self.attempt_executions(
+                    &mut attempts,
+                    &native_inputs,
+                    &histories,
+                    &stamps,
+                    &mut gaps,
+                )
+                .await
+            }
+            Err(error) => {
+                tracing::warn!(%error, "execution pointer inventory unavailable");
+                gaps.insert("native_attempt_membership_invalid".into());
                 BTreeMap::new()
             }
         };
@@ -576,6 +634,7 @@ impl ControllerEvidence {
             native_checkpoints,
             prompt_bindings,
             native_inputs,
+            attempt_executions,
             processes,
             sdk_bindings,
             gaps,

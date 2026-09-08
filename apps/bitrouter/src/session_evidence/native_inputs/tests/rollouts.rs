@@ -30,7 +30,9 @@ fn scan_rows(rows: Vec<Value>) -> Result<Vec<Receipt>> {
     for (n, raw) in rows.into_iter().enumerate() {
         scanner.push(&record(&source, n as u64, raw)?)?;
     }
-    let (receipts, gaps) = scanner.finish();
+    let scanned = scanner.finish();
+    let receipts = scanned.receipts;
+    let gaps = scanned.gaps;
     assert!(gaps.is_empty(), "{gaps:?}");
     Ok(receipts)
 }

@@ -229,7 +229,7 @@ async fn controlled_prompts_create_durable_attempts_for_both_harnesses() -> Resu
                 mode == bitrouter_sdk::acp::controller::tasks::TaskSelectionMode::Retry
             );
             let snapshot = service.reconcile().await?;
-            assert_eq!(snapshot.attempts.len(), 1);
+            assert_eq!(snapshot.attempts.len(), index + 2);
             assert!(
                 snapshot.native_checkpoints[&next.attempt_id]
                     .baseline
@@ -764,6 +764,7 @@ async fn concurrent_claude_profiles_bind_reverse_results_and_keep_hooks_scoped()
     let mut expected_gaps = BTreeSet::from([
         "workspace_capture_failed".into(),
         "native_attempt_membership_unavailable".into(),
+        "native_attempt_execution_coverage_incomplete".into(),
     ]);
     if !cfg!(unix) {
         expected_gaps.insert("native_process_capture_unavailable".into());

@@ -284,6 +284,7 @@ impl EvidenceStore {
             },
             session: old.session.clone(),
             members: BTreeSet::new(),
+            execution_snapshot: None,
             phase: AttemptPhase::Collecting,
             revision: 0,
             latest_manifest: None,

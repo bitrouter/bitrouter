@@ -182,10 +182,6 @@ async fn read_bindings(
     };
     assert_eq!(snapshot.attempts.len(), 1, "one application attempt");
     let attempt = snapshot.attempts.first().context("attempt")?;
-    assert!(
-        attempt.members.is_empty(),
-        "producer observations are not native membership"
-    );
     let evidence = snapshot
         .prompt_bindings
         .get(&attempt.id)
@@ -217,6 +213,38 @@ async fn read_bindings(
         .await?,
         "local",
     )?;
+    let execution_id = attempt
+        .execution_snapshot
+        .as_ref()
+        .context("execution snapshot")?;
+    let membership = store.attempt_executions(execution_id).await?;
+    assert_eq!(
+        serde_json::to_value(&membership.inputs)?,
+        serde_json::to_value(&inputs)?
+    );
+    assert_eq!(
+        membership.members(),
+        inputs
+            .bindings
+            .iter()
+            .map(|input| input.node.clone())
+            .collect()
+    );
+    assert_eq!(membership.members(), attempt.members);
+    assert!(membership.descendants.is_empty());
+    assert!(
+        membership
+            .gaps
+            .contains("native_attempt_execution_coverage_incomplete")
+    );
+    assert!(attempt.effective_manifest.is_none());
+    assert_ne!(
+        attempt.phase,
+        bitrouter::session_evidence::types::AttemptPhase::Ready
+    );
+    let raw_attempt = store.attempt(&attempt.id).await?.context("raw attempt")?;
+    assert!(raw_attempt.members.is_empty());
+    assert!(raw_attempt.execution_snapshot.is_none());
     for binding in &inputs.bindings {
         assert!(
             binding.execution.gaps.is_empty(),
