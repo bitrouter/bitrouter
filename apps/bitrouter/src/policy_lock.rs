@@ -2718,6 +2718,7 @@ struct PolicySnapshot {
     path: Option<PathBuf>,
     digest: Option<String>,
     routers: BTreeMap<String, Arc<PolicyTableRouter>>,
+    administration: Option<crate::actions::administration::PolicyReport>,
 }
 
 /// Fully built policy candidate that has not yet replaced the live snapshot.
@@ -2869,6 +2870,11 @@ impl PolicyRuntime {
             path: loaded.as_ref().map(|lock| lock.path.clone()),
             digest: loaded.as_ref().map(|lock| lock.digest.clone()),
             routers,
+            administration: Some(crate::actions::administration::PolicyReport::from_loaded(
+                config,
+                loaded.as_ref(),
+                crate::actions::administration::PolicyView::Active,
+            )),
         })))
     }
 
@@ -2877,6 +2883,21 @@ impl PolicyRuntime {
             .snapshot
             .write()
             .unwrap_or_else(PoisonError::into_inner) = prepared.0;
+    }
+
+    /// Inspection data captured with the same policy version used for routing.
+    pub fn administration_snapshot(&self) -> crate::actions::administration::PolicyReport {
+        let snapshot = match self.snapshot.read() {
+            Ok(snapshot) => snapshot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        snapshot.administration.clone().unwrap_or_else(|| {
+            crate::actions::administration::PolicyReport::from_loaded(
+                &Config::default(),
+                None,
+                crate::actions::administration::PolicyView::Active,
+            )
+        })
     }
 
     pub fn status(&self, mode: PolicyRuntimeMode) -> PolicyRuntimeStatus {

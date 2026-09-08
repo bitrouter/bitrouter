@@ -67,6 +67,7 @@ fn parse_bearer(value: &str) -> Option<&str> {
 /// reads it) — a capability is never a pair of parallel field declarations.
 #[derive(Clone, Default)]
 struct Caps {
+    request_authorizer: Option<Arc<dyn RequestAuthorizer>>,
     /// The `status` action's port. Which side fills it depends on the
     /// deployment: a local daemon's liveness comes off the control socket and
     /// its spend off the local metering database (both injected app-side), a
@@ -85,6 +86,12 @@ struct Caps {
     /// JSON-RPC methods and resources — so it stays a plain field rather than
     /// a [`CapSpec`] entry.
     skill_catalog: Option<Arc<dyn SkillCatalog>>,
+}
+
+/// Deployment-owned authorization of a tool request after HTTP authentication.
+/// The MCP crate does not interpret deployment credentials or permissions.
+pub trait RequestAuthorizer: Send + Sync {
+    fn authorize(&self, extensions: &rmcp::model::Extensions) -> Result<(), McpError>;
 }
 
 /// One tool-contributing capability: whether it's wired, the tool router it
@@ -387,6 +394,12 @@ pub struct Builder {
 }
 
 impl Builder {
+    /// Require deployment authorization before dispatching any tool.
+    pub fn request_authorizer(mut self, authorizer: Arc<dyn RequestAuthorizer>) -> Self {
+        self.caps.request_authorizer = Some(authorizer);
+        self
+    }
+
     /// Wire the `status` action's port (the `status` tool).
     pub fn status(mut self, status: Arc<dyn StatusQuery>) -> Self {
         self.caps.status_query = Some(status);
@@ -458,6 +471,18 @@ fn skills_error(e: ToolError) -> McpError {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for BitrouterMcp {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        if let Some(authorizer) = &self.caps.request_authorizer {
+            authorizer.authorize(&context.extensions)?;
+        }
+        let context = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(context).await
+    }
+
     fn get_info(&self) -> ServerInfo {
         // Resources and the skills extension are declared only when a catalog
         // is wired. Unlike the gateway — which cannot know its upstreams'

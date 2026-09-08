@@ -25,7 +25,11 @@ use bitrouter_sdk::language_model::RoutingPrefs;
 use chrono::{DateTime, Utc};
 
 use crate::acp_runtime::AcpRuntime;
+use crate::actions::administration::{
+    Administration, AgentsReport, ObserveReport, PolicyInput, PolicyReport, ProvidersReport,
+};
 use crate::metering::{MeteringStore, TimeWindow};
+use crate::reload::{ReloadAdmissionError, ReloadReport, ReloadReservation, ReloadState};
 
 /// Anything the daemon's `Reload` command (and SIGHUP) should re-read. The
 /// runtime reloader fans out to every reloadable subsystem — routing table,
@@ -36,6 +40,44 @@ use crate::metering::{MeteringStore, TimeWindow};
 pub trait DaemonReloader: Send + Sync {
     /// Reload every reloadable subsystem.
     async fn reload(&self) -> anyhow::Result<()>;
+
+    /// Reload with owner-trusted local environment overrides. Implementations
+    /// that own a coordinator install overrides after reserving exclusive
+    /// reload ownership; a generic reloader cannot truthfully promise that.
+    async fn reload_with_env(&self, env: Vec<(String, String)>) -> anyhow::Result<()> {
+        if env.is_empty() {
+            self.reload().await
+        } else {
+            Err(anyhow::anyhow!(
+                "this daemon reloader does not support coordinated environment overrides"
+            ))
+        }
+    }
+
+    /// Return boot-local reload state when this implementation supports guarded
+    /// reload admission. `None` deliberately means unsupported, rather than a
+    /// fabricated instance identity or generation.
+    fn reload_state(&self) -> Option<ReloadState> {
+        None
+    }
+
+    /// Atomically fence a remote operation against the current boot and
+    /// generation. The reservation must be passed to [`Self::reload_reserved`]
+    /// exactly once or dropped so its coordinator can clear the admission.
+    fn reserve_remote(
+        &self,
+        _expected_instance: &str,
+        _expected_generation: u64,
+    ) -> Result<ReloadReservation, ReloadAdmissionError> {
+        Err(ReloadAdmissionError::Unsupported)
+    }
+
+    /// Execute a previously admitted remote reload. The default is reachable
+    /// only through an invalid implementation because [`Self::reserve_remote`]
+    /// rejects every request, and still returns a truthful unsupported report.
+    async fn reload_reserved(&self, _reservation: ReloadReservation) -> ReloadReport {
+        ReloadReport::unsupported()
+    }
 }
 
 /// A reloader that does nothing — useful for tests / minimal embeddings of the
@@ -68,6 +110,8 @@ pub enum DaemonCommand {
         #[serde(default)]
         env: Vec<(String, String)>,
     },
+    /// Read the reload coordinator's boot-local state without mutating it.
+    ReloadState,
     /// Report daemon status.
     Status,
     /// List every model the live routing table can route, each with the
@@ -89,6 +133,12 @@ pub enum DaemonCommand {
     /// snapshot. The wire format is the same `ObserveStatusPayload` the
     /// CLI pretty-prints for `bitrouter observe status`.
     ObserveStatus,
+    /// Run one safe, typed administration read against the live daemon.
+    ///
+    /// This is intentionally a closed enum rather than a JSON method name or
+    /// a serialized HTTP request.  The local control socket remains a
+    /// host-local transport with its own contract.
+    Inspect { inspection: DaemonInspection },
     /// Remove every route lease in one principal/controller namespace.
     AcpControllerCleanup {
         /// Opaque principal derived from the normal API credential, or local.
@@ -134,6 +184,26 @@ pub enum DaemonCommand {
         /// Harness-native ACP session identity.
         session_id: String,
     },
+}
+
+/// Passive live inspection operations accepted over the local control socket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "inspection", rename_all = "snake_case")]
+pub enum DaemonInspection {
+    Providers,
+    Agents,
+    Observe,
+    Policy { input: PolicyInput },
+}
+
+/// Typed result of a [`DaemonInspection`] request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "report", rename_all = "snake_case")]
+pub enum DaemonInspectionReport {
+    Providers(ProvidersReport),
+    Agents(AgentsReport),
+    Observe(ObserveReport),
+    Policy(PolicyReport),
 }
 
 /// One resolved hop of a route chain.
@@ -184,6 +254,10 @@ pub enum DaemonResponse {
         /// The serialized exporter state.
         payload: ObserveStatusPayload,
     },
+    /// Reload coordinator state for the current daemon boot.
+    ReloadState { state: ReloadState },
+    /// A typed administration inspection result.
+    Inspection { report: DaemonInspectionReport },
     /// Daemon-confirmed route state for one native ACP session.
     AcpRouteState {
         /// Live model selectors accepted as logical routes.
@@ -474,8 +548,43 @@ pub async fn run_control_socket_with_acp_runtime(
     observe: Arc<dyn ObserveStatusProvider>,
     acp: AcpControlPlane,
 ) -> Result<()> {
+    run_control_socket_with_acp_runtime_and_administration(
+        socket_path,
+        app,
+        listen,
+        reloader,
+        observe,
+        acp,
+        None,
+    )
+    .await
+}
+
+/// Run the local control socket with optional live administration ports.
+///
+/// Existing embeddings retain the historical control-socket surface through
+/// [`run_control_socket_with_acp_runtime`].  The app assembly injects these
+/// ports only after it has constructed the running routing and policy state.
+pub async fn run_control_socket_with_acp_runtime_and_administration(
+    socket_path: PathBuf,
+    app: Arc<App>,
+    listen: String,
+    reloader: Arc<dyn DaemonReloader>,
+    observe: Arc<dyn ObserveStatusProvider>,
+    acp: AcpControlPlane,
+    administration: Option<Administration>,
+) -> Result<()> {
     let mut listener = transport::bind(&socket_path).await?;
-    let result = accept_loop(&mut listener, &app, &listen, &reloader, &observe, &acp).await;
+    let result = accept_loop(
+        &mut listener,
+        &app,
+        &listen,
+        &reloader,
+        &observe,
+        &acp,
+        &administration,
+    )
+    .await;
     listener.cleanup().await;
     result
 }
@@ -487,12 +596,13 @@ async fn accept_loop(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     acp: &AcpControlPlane,
+    administration: &Option<Administration>,
 ) -> Result<()> {
     loop {
         let stream = listener.accept().await?;
         // Handle one command per connection. A `Stop` ends the loop (and thus
         // the whole `serve`); any other command loops for the next client.
-        if handle_connection(stream, app, listen, reloader, observe, acp).await? {
+        if handle_connection(stream, app, listen, reloader, observe, acp, administration).await? {
             tracing::info!("stop command received — shutting down");
             return Ok(());
         }
@@ -511,6 +621,7 @@ async fn handle_connection<S>(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     acp: &AcpControlPlane,
+    administration: &Option<Administration>,
 ) -> Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -535,7 +646,7 @@ where
     };
 
     let is_stop = matches!(command, DaemonCommand::Stop);
-    let response = dispatch(command, app, listen, reloader, observe, acp).await;
+    let response = dispatch(command, app, listen, reloader, observe, acp, administration).await;
     write_response(reader.get_mut(), &response).await?;
     Ok(is_stop)
 }
@@ -547,30 +658,25 @@ async fn dispatch(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     acp: &AcpControlPlane,
+    administration: &Option<Administration>,
 ) -> DaemonResponse {
     match command {
         DaemonCommand::Stop => DaemonResponse::Ok,
-        DaemonCommand::Reload { env } => {
-            // Apply the CLI's env snapshot first so file-mode YAML
-            // `${VAR}` substitution and zero-config's "is this
-            // provider's key set" check see the freshly-exported
-            // values. Empty list = caller didn't ask us to update env;
-            // we keep whatever was already in the override map.
-            if !env.is_empty() {
-                let map: std::collections::HashMap<String, String> = env.into_iter().collect();
-                bitrouter_sdk::config::set_env_overrides(map);
-                tracing::info!("env override map updated by reload");
+        DaemonCommand::Reload { env } => match reloader.reload_with_env(env).await {
+            Ok(()) => {
+                tracing::info!("reload succeeded");
+                DaemonResponse::Ok
             }
-            match reloader.reload().await {
-                Ok(()) => {
-                    tracing::info!("reload succeeded");
-                    DaemonResponse::Ok
-                }
-                Err(e) => DaemonResponse::Error {
-                    message: format!("reload failed: {e}"),
-                },
-            }
-        }
+            Err(e) => DaemonResponse::Error {
+                message: format!("reload failed: {e}"),
+            },
+        },
+        DaemonCommand::ReloadState => match reloader.reload_state() {
+            Some(state) => DaemonResponse::ReloadState { state },
+            None => DaemonResponse::Error {
+                message: "reload state is unavailable on this daemon".to_string(),
+            },
+        },
         DaemonCommand::Status => {
             let routable = app
                 .language_model()
@@ -778,6 +884,39 @@ async fn dispatch(
         }
         DaemonCommand::ObserveStatus => DaemonResponse::ObserveStatus {
             payload: observe.status(),
+        },
+        DaemonCommand::Inspect { inspection } => {
+            inspection_response(inspection, administration).await
+        }
+    }
+}
+
+async fn inspection_response(
+    inspection: DaemonInspection,
+    administration: &Option<Administration>,
+) -> DaemonResponse {
+    let Some(administration) = administration else {
+        return DaemonResponse::Error {
+            message: "live administration reads are unavailable on this daemon".to_string(),
+        };
+    };
+    match inspection {
+        DaemonInspection::Providers => DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Providers(administration.providers()),
+        },
+        DaemonInspection::Agents => DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Agents(administration.agents()),
+        },
+        DaemonInspection::Observe => DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Observe(administration.observe()),
+        },
+        DaemonInspection::Policy { input } => match administration.policy(input).await {
+            Ok(report) => DaemonResponse::Inspection {
+                report: DaemonInspectionReport::Policy(report),
+            },
+            Err(error) => DaemonResponse::Error {
+                message: format!("policy inspection failed: {error}"),
+            },
         },
     }
 }
@@ -1282,17 +1421,42 @@ mod tests {
         for cmd in [
             DaemonCommand::Stop,
             DaemonCommand::Reload { env: Vec::new() },
+            DaemonCommand::ReloadState,
             DaemonCommand::Status,
             DaemonCommand::Route {
                 model: "gpt-5".to_string(),
             },
             DaemonCommand::ObserveStatus,
+            DaemonCommand::Inspect {
+                inspection: DaemonInspection::Policy {
+                    input: PolicyInput::default(),
+                },
+            },
         ] {
             let json = serde_json::to_string(&cmd).unwrap();
             let back: DaemonCommand = serde_json::from_str(&json).unwrap();
             // tag-based round trip
             assert_eq!(std::mem::discriminant(&cmd), std::mem::discriminant(&back));
         }
+    }
+
+    #[test]
+    fn inspection_response_round_trips_as_json() -> anyhow::Result<()> {
+        let response = DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Providers(ProvidersReport {
+                resolved_via: "live".to_string(),
+                providers: Vec::new(),
+            }),
+        };
+        let json = serde_json::to_string(&response)?;
+        let decoded: DaemonResponse = serde_json::from_str(&json)?;
+        match decoded {
+            DaemonResponse::Inspection {
+                report: DaemonInspectionReport::Providers(report),
+            } => assert_eq!(report.resolved_via, "live"),
+            other => anyhow::bail!("expected provider inspection, got {other:?}"),
+        }
+        Ok(())
     }
 
     #[test]

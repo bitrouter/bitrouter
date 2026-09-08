@@ -29,6 +29,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`REMOTE_CONTROL_MVP_SPEC.md`](REMOTE_CONTROL_MVP_SPEC.md) — **implemented.**
   Read-only remote status/models/route/requests and dashboard views over an
   authenticated, loopback-only HTTP control listener; ACP stays local.
+- [`REMOTE_ADMINISTRATION_SPEC.md`](REMOTE_ADMINISTRATION_SPEC.md) — **implemented.**
+  Expands remote inspection and adds explicitly authorized reload,
+  with shared action metadata, live/disk policy views, partial-failure reporting,
+  and recovery after a client disconnect. Remote agent execution stays deferred.
 - [`REMOTE_CLI_TUI_SUPPORT_SPEC.md`](REMOTE_CLI_TUI_SUPPORT_SPEC.md) — **Phase 2
   RFD, deferred.** Remote ACP sessions over a versioned WebSocket transport,
   constrained execution, and reconnect behavior.

@@ -338,8 +338,16 @@
       "type": "object"
     },
     "ControlConfig": {
-      "description": "Read-only operator control API settings.\n\nThe control API is deliberately separate from the inference listener and\nthe local control socket. It is disabled by default, may bind only to a\nloopback address, and always authenticates with the token held in\n`BITROUTER_CONTROL_TOKEN`; [`ServerConfig::skip_auth`] never applies to it.",
+      "additionalProperties": false,
+      "description": "Scoped operator administration API settings.\n\nThe control API is deliberately separate from the inference listener and\nthe local control socket. It is disabled by default, may bind only to a\nloopback address, and authenticates named credentials when configured.\nOtherwise `BITROUTER_CONTROL_TOKEN` grants read-only access.\n[`ServerConfig::skip_auth`] never applies to it.",
       "properties": {
+        "credentials": {
+          "description": "Explicit operator credentials. Empty keeps the legacy read-only token.",
+          "items": {
+            "$ref": "#/$defs/ControlCredentialConfig"
+          },
+          "type": "array"
+        },
         "enabled": {
           "default": false,
           "description": "Whether to start the HTTP control listener.",
@@ -352,6 +360,48 @@
         }
       },
       "type": "object"
+    },
+    "ControlCredentialConfig": {
+      "additionalProperties": false,
+      "description": "A token reference only; configuration never stores the bearer value.",
+      "properties": {
+        "id": {
+          "description": "Non-secret operator identifier used for ownership and audit events.",
+          "type": "string"
+        },
+        "scopes": {
+          "description": "Explicit management authority, unrelated to inference authentication.",
+          "items": {
+            "$ref": "#/$defs/ControlScope"
+          },
+          "type": "array"
+        },
+        "token_env": {
+          "description": "Host environment variable that contains this credential's bearer token.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "token_env",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "ControlScope": {
+      "description": "Authority granted by a host operator, independently of inference credentials.",
+      "oneOf": [
+        {
+          "const": "control:read",
+          "description": "Host-wide operational inspection, including usage and policy metadata.",
+          "type": "string"
+        },
+        {
+          "const": "control:reload",
+          "description": "Reload server-owned configuration; requires the read grant as well.",
+          "type": "string"
+        }
+      ]
     },
     "DatabaseConfig": {
       "description": "Database connection settings.",

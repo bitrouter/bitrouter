@@ -16,27 +16,33 @@ the ACP registry; the headless `--harness` aliases remain `codex` and `claude`.
 
 
 
-Global `--context NAME` selects a named remote-control target for the read-only
-`status` (including `--requests`), `models`, and `route` commands; `local`
-forces normal local behavior.
+Global `--context NAME` selects a named remote-control target for `status`
+(including `--requests`), `requests`, `models`, `route`, `providers list`,
+`observe status`, `policy status|show`, `agents list`, and the `code`
+operations dashboard; `local` forces normal local behavior. `reload` is the
+one remote mutation, and `operations show <request-id> --instance <boot-id>`
+looks up its retained receipt.
 Manage targets with `bitrouter context add NAME --endpoint URL --token-env
 ENV`, `context list`, `context show NAME`, and `context remove NAME`. The store
 contains the token environment-variable name, never its value. HTTPS is
 required except for loopback/SSH-forwarded HTTP. The client handshakes first,
 follows no redirects, never falls back to local state on a remote error, and
-rejects every lifecycle/ACP/agent command under a remote context.
+rejects local `--config`/`--socket` before reading local config, environment, or
+metering data. Remote `agents list` is catalog-only: external-registry fetches,
+checks, launches, and ACP sessions remain local. Remote policy defaults to
+`--view active`; local policy defaults to `--view disk`.
 
 ## Daemon lifecycle
 
 | Command | Effect |
 |---|---|
-| `bitrouter serve [--config PATH]` | Run the inference HTTP server + local control socket **in the foreground**. Optional `control.enabled: true` also starts the authenticated HTTP control listener at `control.listen` (default `127.0.0.1:4358`), including Streamable HTTP MCP at `/mcp-control`. It requires a dedicated `BITROUTER_CONTROL_TOKEN` of at least 32 bytes, validates browser origins, stays loopback-only for a private tunnel/TLS reverse proxy, and ignores inference `server.skip_auth`. It does not expose ACP sessions. |
+| `bitrouter serve [--config PATH]` | Run the inference HTTP server + local control socket **in the foreground**. Optional `control.enabled: true` also starts the authenticated HTTP control listener at `control.listen` (default `127.0.0.1:4358`), including Streamable HTTP MCP at `/mcp-control`. `control.credentials` may name `{id, token_env, scopes}` credentials using `control:read` and `control:reload`; absent/empty credentials preserve `BITROUTER_CONTROL_TOKEN` as read-only. Explicit credentials exclude that legacy token. Tokens are at least 32 bytes, browser origins are checked, the listener stays loopback-only for a private tunnel/TLS reverse proxy, and inference `server.skip_auth` does not affect it. It does not expose ACP sessions. |
 | `bitrouter start [--config PATH] [--log PATH]` | Spawn `serve` as a detached background process. Stdout/stderr go to `~/.bitrouter/bitrouter.log` unless `--log` overrides. Refuses to start over a live daemon. |
 | `bitrouter stop [--config PATH] [--socket PATH]` | Graceful shutdown via the control socket. |
 | `bitrouter restart [--config PATH] [--log PATH] [--socket PATH]` | Stop, wait up to 30s for in-flight requests to drain, then start. Escalates to SIGKILL on timeout. |
-| `bitrouter reload [--config PATH] [--socket PATH]` | Hot-reload the running daemon's config + routing table. **Also re-pushes provider env vars** from the current shell into the daemon, so `export OPENAI_API_KEY=new...; bitrouter reload` rotates the key without a restart. SIGHUP reloads daemon-side config but cannot forward newly exported shell variables. |
+| `bitrouter reload [--config PATH] [--socket PATH]` | Hot-reload the running daemon's config + routing table. **Also re-pushes provider env vars** from the current shell into the daemon, so `export OPENAI_API_KEY=new...; bitrouter reload` rotates the key without a restart. `bitrouter --context NAME reload` instead reloads server-owned files without client env forwarding; non-success, running, partial, or unknown results exit non-zero and include a retained operation lookup. SIGHUP reloads daemon-side config but cannot forward newly exported shell variables. |
 | `bitrouter status [--config PATH] [--socket PATH]` | `systemctl status`-style block: pid / listen / model count / the distinct providers behind them / socket, plus `spend`. Reports `stopped` (exit 0) when no daemon is reachable — and still reports spend, which is on disk and outlives the daemon. Same report type as the origin MCP server's `status` tool, so `--json` here and that tool's structured content are the same bytes. **`spend` is two independent facts**: `spend.spent` (money already gone — `estimated_micro_usd` over `window`, `requests`, `unpriced`) comes from the local metering database on *any* deployment; `spend.limit` (money left — `balance_micro_usd`, `pending_micro_usd`, `remaining_micro_usd`) appears only where a cap exists, today a metered cloud account's prepaid credit. `spent` is an **estimate and a floor**: requests with no charge evidence are excluded rather than summed as zero, and `unpriced` counts them — non-zero means the figure understates by an unknown amount, so never read it as a total. A `limit` is the opposite, an authoritative ledger. No `spend` key at all means no metering database was readable, which is *not* the same as `estimated_micro_usd: 0`. Machine-wide, not per-caller. |
-| `bitrouter requests [--limit N]` | Newest-first settled requests (time, model, provider actually used, tokens, cost, latency, status) + the window's spend and trailing-minute rate. **JSON by default**; `--human` renders the table. Reads the metering store directly and works with no daemon (`mode: history_only`). Portable to named remote contexts. `status --requests` is a hidden compatibility spelling. |
+| `bitrouter requests [--limit N] [--since RFC3339 --until RFC3339] [--model ID] [--provider ID]` | Newest-first settled requests (time, model, provider actually used, tokens, cost, latency, status) + the filtered-window spend and host-wide trailing-minute rate. **JSON by default**; `--human` renders the table. The time pair is required together and spans at most seven days; `limit` is 1–500. Reads the metering store directly and works with no daemon (`mode: history_only`). Portable to named remote contexts. `status --requests` is a hidden compatibility spelling. |
 
 ## Inspection
 
@@ -44,15 +50,15 @@ rejects every lifecycle/ACP/agent command under a remote context.
 |---|---|
 | `bitrouter route <model> [--prompt TEXT] [--config PATH]` | Resolve a model name through the routing table. Tries the running daemon first (live table; its `route` verb resolves the model as given — the daemon's policy table runs on real requests, not on this preview), falls back to standalone config resolution — **policy table included**, so the answer there is what would actually run. `--prompt` supplies the request text the policy table keys on (it routes by agent-loop step, so the selected model can differ with the prompt); config path only. JSON keys: `requested_model` (what you asked for) and `effective_model` (what would run — **read this one**; equals `requested_model` on `live`), `effective_effort`, `resolved_via` (`live` \| `config` \| `zero_config` — the same words `bitrouter models` uses), `policy_decision` (absent on `live`: the daemon's `route` verb does not replay policy), `provider_chain[]` of `{provider, service_id, api_protocol}`, and `estimated_cost` (the first hop's per-token rates plus any steeper long-context brackets — rates, not a total). Same report type as the MCP `route_preview` tool. Read-only: nothing is sent upstream, and no credential is surfaced. |
 | `bitrouter models [--config PATH] [--provider ID]` | List every routable model selector, each with **all** the providers that can serve it (the fallback chain, in order). Subscription providers are explicit-route-only and therefore appear as pinned `provider:canonical-model` selectors; every displayed selector can be passed unchanged to `bitrouter route`. Tries the running daemon first, falls back to a standalone config parse — same order as `bitrouter route`. The parse is resolved the way the daemon resolves its own config at start-up (built-in defaults, then subscription providers such as `claude-code` / `google-ai` re-activated from the OAuth credential store), so a subscription-backed provider is listed with no daemon running; the live table additionally reflects `reload`s and whatever the daemon resolved at start-up. `--json` reports `resolved_via: "live" \| "config"`. Filter with `--provider`. Same report type as the MCP `list_models` tool. |
-| `bitrouter providers list [--config PATH]` | Tab-aligned: `ID  MODELS  ACTIVE  API_BASE`. |
+| `bitrouter providers list [--config PATH] [--socket PATH]` | Local compatibility output retains `ID  MODELS  ACTIVE  API_BASE`; a named remote context and the dashboard use the redacted accepted catalog without API bases or credentials. Active means configured for routing rather than connectivity-probed. |
 | `bitrouter mcp serve` | Run BitRouter's local origin MCP server over protocol-pure stdio for a host or plugin. Network-capable hosts connect directly to the daemon's authenticated `/mcp-control` Streamable HTTP endpoint. The old standalone HTTP/cloud flags are hidden compatibility inputs and no longer start a second listener. |
 | `bitrouter mcp check [server] [--config PATH]` | Connect to one configured upstream MCP server, or all of them, and report transport, reachability, latency, negotiated tools capability, and advertised tool names. |
-| `bitrouter agents list [--remote] [--config PATH]` | Show bundled ACP catalog + which are configured. `--remote` also fetches the official ACP agent registry (cdn.agentclientprotocol.com) and lists its agents with version + install support (`npx`/`uvx` stub-able; `manual` for binary-only). |
+| `bitrouter agents list [--remote] [--config PATH] [--socket PATH]` | Show the accepted ACP catalog + which are configured. A named BitRouter context exposes this catalog only. Local `--remote` also fetches the official ACP agent registry (cdn.agentclientprotocol.com) and lists its agents with version + install support (`npx`/`uvx` stub-able; `manual` for binary-only). |
 | `bitrouter agents inspect <agent> [--config PATH]` | Open a fresh ACP session, wait briefly for advertised slash commands, and report which source answers each command. |
 | `bitrouter agents check [agent] [--config PATH]` | Preflight one friendly/catalog agent or spawn each configured ACP agent and verify `initialize`. |
 | `bitrouter agents conformance <id>` | Run the `acp_compat_1` ACP-compatibility suite against a catalog agent and print the `conformance:` block to record in `registry/runtimes/<runtime>.yaml`. `<id>` is `<runtime>/<harness>` or a bare harness id (`local/` is the default runtime and may be elided). Two tiers: **handshake** (the agent answers `initialize` and settles on the ACP version its registry entry declares) and **routability** (the agent's LLM traffic reaches BitRouter when its routing block is applied). Needs **no provider credentials** — the agent is launched with its own routing pointed at an ephemeral loopback gateway that records what arrived; it does spawn the agent, so the package or binary must be installed. Exits non-zero when a tier fails, and prints no record in that case. |
 | `bitrouter agents scaffold <id>` | Print a paste-ready YAML stub for `<id>` — resolved from the bundled catalog first, then the ACP registry (`npx`/`uvx` distributions, version-pinned, `env` included). `agents install` is a hidden compatibility spelling. |
-| `bitrouter observe status [--json] [--config PATH] [--socket PATH]` | OTel exporter snapshot: wired / endpoint / sampler / cardinality usage / in-flight spans. JSON output for tooling. |
+| `bitrouter observe status [--json] [--config PATH] [--socket PATH]` | OTel exporter snapshot: compiled/wired state, sampler, metric/cardinality counters, and in-flight spans. Local compatibility output retains socket, endpoint, and service fields; named remote contexts and the dashboard use the redacted report, which omits those host details and header values. |
 
 ## Durable trajectory operations
 
@@ -204,9 +210,12 @@ See `references/sessions.md` for the controller/native-session boundary and what
 ## Interactive interface (`bitrouter code`)
 
 Bare `bitrouter code` opens the unified terminal shell on Home with Agents,
-Conversation, Sessions, Models, Requests, and Route views. It refreshes read
-views every two seconds. `bitrouter code <agent>` enters Conversation in that
-same terminal app, backed by the same ACP session host as `run`.
+Conversation, Sessions, Models, Requests, Route, Providers, Telemetry, Policy,
+and Reload views. Each read panel refreshes independently every two seconds and
+keeps its last successful data and its own stale/error time. `bitrouter code
+<agent>` enters Conversation in that same terminal app, backed by the
+same ACP session host as `run`. Under `--context`, the Agents view is catalog
+only and has no launch controls.
 
 | Command | What it does |
 |---|---|
@@ -239,6 +248,7 @@ shell commands use subdued code frames. ACP terminal IDs are not displayed.
 | `Esc` | Deny the open permission request |
 | `Ctrl-C` | Cancel a running turn; otherwise exit |
 | `Ctrl-D` | Exit from Conversation |
+| `Enter` or `Ctrl-R` on Reload | Explicitly submit a reload; ordinary timer refreshes never reload. The view keeps the request id, server instance, status, and lookup after an interrupted response. |
 
 Cancelling a turn with a permission outstanding **denies it** — a cancel is never read as consent.
 
@@ -256,8 +266,9 @@ snapshot; BitRouter owns no transcript store or second session catalog.
 | `bitrouter skills init <NAME> [--output PATH] [--json\|--human]` | Scaffold a spec-valid skill directory — writes `<NAME>/SKILL.md` unless `--output` names a path. `<NAME>` is written into the generated frontmatter. |
 | `bitrouter policy create <id> [--dir DIR]` | Write a starter access-control policy file under `--dir` (default `./policies`). Bind to a key with `bitrouter key sign --user <id> --policy <id>`. |
 | `bitrouter policy init <name> --preset <preset> --economy <model> [--economy-effort <level>] [--strong <model>] [--strong-effort <level>] [--config PATH]` | Create or extend deterministic `policy-lock.yaml`, bind the named policy to a preset, and set the process configuration to `policy.mode: adaptive`. Model-only targets retain scalar compatibility; an explicit supported effort makes `(model, effort)` the target identity, so the same model can occupy strong and economy at different levels. The strong model is inferred from an existing preset when omitted; `--strong-effort` therefore requires explicit `--strong`. Presets use `@preset[:variant]`; `templates/auto-router` binds the `auto` preset, published as `bitrouter/auto` and `bitrouter/auto:cost`. |
-| `bitrouter policy check|status [--config PATH]` | Cross-validate the main config and lock, or report the resolved path, semantic digest, runtime mode, policies, and preset bindings. |
-| `bitrouter policy show <name> [--config PATH]` | Print one validated effective policy. |
+| `bitrouter policy check [--config PATH]` | Cross-validate the local main config and lock. |
+| `bitrouter policy status [--view active\|disk] [--config PATH] [--socket PATH]` | Report an explicit policy source, digest, mode, policies, and preset bindings. Local default is `disk`; named remote context default is `active`. |
+| `bitrouter policy show <name> [--view active\|disk] [--config PATH] [--socket PATH]` | Print one named policy from the explicit source; the same local/remote defaults apply. |
 | `bitrouter policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS] [--config PATH]` | Compile legacy migration evidence and an optional frozen generic-eval snapshot into a deterministic v3 candidate. Never changes the active lock. |
 | `bitrouter policy diff <ACTIVE> <CANDIDATE>` | Compare explicit route selections. |
 | `bitrouter policy publish <CANDIDATE> [--config PATH] [--socket PATH]` | Publish that exact compiled v3 candidate under adaptive mode using its parent digest as a compare-and-swap token. |

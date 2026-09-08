@@ -42,6 +42,7 @@
 //! surface keep the rule `tui <agent>`'s cost line keeps: a currency figure states
 //! whose spend it is.
 
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
 use crate::metering::fmt_usd;
@@ -61,7 +62,7 @@ const HEADERS: [&str; 8] = [
 /// Derived from the data rather than stored, so it can never disagree with the
 /// rows beside it: an empty list because nothing ran and an empty list because
 /// the daemon is gone are different facts and must read differently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     /// A daemon is answering, and history is readable.
@@ -73,7 +74,7 @@ pub enum Mode {
 }
 
 /// The running daemon, as its control socket describes it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DaemonView {
     /// Process id.
     pub pid: u32,
@@ -88,7 +89,7 @@ pub struct DaemonView {
 /// Not [`RequestRow`] itself: that type is the metering store's display read,
 /// and serializing it here would make its field names a public JSON contract
 /// that could not then be changed without a break.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RequestView {
     /// Request id — also the join key into the trajectory store.
     pub request_id: String,
@@ -166,12 +167,106 @@ impl RequestView {
     }
 }
 
+/// The server-resolved request selection used to produce this report.
+///
+/// The input accepts optional timestamps so an ordinary request can mean
+/// "today". A report must not leave that relative choice implicit: it returns
+/// the absolute interval the host actually read.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RequestFilterView {
+    /// Inclusive RFC3339 lower bound chosen by the server.
+    pub since: String,
+    /// Exclusive RFC3339 upper bound chosen by the server.
+    pub until: String,
+    /// Resolved-model filter, when requested.
+    pub model: Option<String>,
+    /// Serving-provider filter, when requested.
+    pub provider: Option<String>,
+}
+
+impl RequestFilterView {
+    /// Construct the public view from already validated, absolute values.
+    pub fn new(
+        since: String,
+        until: String,
+        model: Option<String>,
+        provider: Option<String>,
+    ) -> Self {
+        Self {
+            since,
+            until,
+            model,
+            provider,
+        }
+    }
+}
+
+/// Whether one independently queried metering component was observed.
+///
+/// Numeric fields stay additive-compatible with the original report. This
+/// flag tells a reader whether their zero is an observed zero or a placeholder
+/// retained while another component was unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MeteringComponentAvailability {
+    /// The store query completed successfully.
+    Available,
+    /// The store could not be opened or this component's query failed.
+    Unavailable,
+}
+
+/// Availability is per component because summary, rate, and rows are separate
+/// reads. A successful component remains useful when a sibling fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct MeteringAvailability {
+    /// Aggregate spend and request count over the selected filters.
+    pub summary: MeteringComponentAvailability,
+    /// Host-wide trailing-minute rate.
+    pub rate: MeteringComponentAvailability,
+    /// The newest-first request page and its truncation flag.
+    pub rows: MeteringComponentAvailability,
+}
+
+impl MeteringAvailability {
+    /// A fully observed snapshot.
+    pub const fn available() -> Self {
+        Self {
+            summary: MeteringComponentAvailability::Available,
+            rate: MeteringComponentAvailability::Available,
+            rows: MeteringComponentAvailability::Available,
+        }
+    }
+
+    /// No metering data was available, such as when the database cannot open.
+    pub const fn unavailable() -> Self {
+        Self {
+            summary: MeteringComponentAvailability::Unavailable,
+            rate: MeteringComponentAvailability::Unavailable,
+            rows: MeteringComponentAvailability::Unavailable,
+        }
+    }
+}
+
+/// Inputs assembled by the action after the independently queried metering
+/// components have settled. This stays separate from the serialized report so
+/// a store row does not accidentally become a public JSON contract.
+#[derive(Debug, Clone)]
+pub struct RequestReportData {
+    pub window: String,
+    pub filters: RequestFilterView,
+    pub summary: SpendSummary,
+    pub rate: RateMetrics,
+    pub rows: Vec<RequestRow>,
+    pub metering: MeteringAvailability,
+    pub truncated: bool,
+}
+
 /// Result of `bitrouter status --requests`.
 ///
 /// Deliberately not `Default`: `scope` would come back `""`, a report
 /// claiming no scope at all, which is the one thing this surface must never
-/// emit. [`RequestsReport::new`] is the only way to build one.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// emit. The constructors keep that invariant centralized.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RequestsReport {
     /// Which of the three states this report represents.
     pub mode: Mode,
@@ -201,10 +296,20 @@ pub struct RequestsReport {
     pub tokens_per_minute: f64,
     /// Newest-first settled requests.
     pub rows: Vec<RequestView>,
+    /// The absolute time bounds and optional filters the host applied.
+    pub filters: RequestFilterView,
+    /// Whether another matching row existed after the returned page.
+    pub truncated: bool,
+    /// Which independently queried metering components were observed.
+    pub metering: MeteringAvailability,
+    /// Scope of the rate fields, which are intentionally not narrowed by the
+    /// report's time/model/provider filters.
+    pub rate_scope: String,
 }
 
 /// The one scope these figures have ever had.
 const SCOPE: &str = "all callers";
+const RATE_SCOPE: &str = "all callers, trailing minute";
 
 impl RequestsReport {
     /// Assemble from one poll of the store and the control socket.
@@ -218,7 +323,34 @@ impl RequestsReport {
         rate: RateMetrics,
         rows: Vec<RequestRow>,
     ) -> Self {
-        let mode = match (daemon.is_some(), rows.is_empty()) {
+        let now = chrono::Utc::now();
+        let until = match window {
+            TimeWindow::Custom { end, .. } => end,
+            _ => now,
+        };
+        let filters = RequestFilterView::new(
+            window_start(window, now).to_rfc3339(),
+            until.to_rfc3339(),
+            None,
+            None,
+        );
+        Self::new_filtered(
+            daemon,
+            RequestReportData {
+                window: window_label(window).to_string(),
+                filters,
+                summary,
+                rate,
+                rows,
+                metering: MeteringAvailability::available(),
+                truncated: false,
+            },
+        )
+    }
+
+    /// Assemble a report for one validated, potentially filtered page.
+    pub fn new_filtered(daemon: Option<DaemonView>, data: RequestReportData) -> Self {
+        let mode = match (daemon.is_some(), data.rows.is_empty()) {
             (true, _) => Mode::Live,
             (false, false) => Mode::HistoryOnly,
             (false, true) => Mode::Empty,
@@ -226,16 +358,34 @@ impl RequestsReport {
         Self {
             mode,
             daemon,
-            window: window_label(window).to_string(),
+            window: data.window,
             scope: SCOPE.to_string(),
             // Nothing priced is not the same as nothing spent.
-            spend_micro_usd: (summary.unpriced < summary.requests || summary.requests == 0)
-                .then_some(summary.spend_micro_usd),
-            requests: summary.requests,
-            unpriced_requests: summary.unpriced,
-            requests_per_minute: rate.requests_per_minute,
-            tokens_per_minute: rate.tokens_per_minute,
-            rows: rows.into_iter().map(RequestView::from).collect(),
+            spend_micro_usd: (data.metering.summary == MeteringComponentAvailability::Available
+                && (data.summary.unpriced < data.summary.requests || data.summary.requests == 0))
+                .then_some(data.summary.spend_micro_usd),
+            requests: data.summary.requests,
+            unpriced_requests: data.summary.unpriced,
+            requests_per_minute: data.rate.requests_per_minute,
+            tokens_per_minute: data.rate.tokens_per_minute,
+            rows: data.rows.into_iter().map(RequestView::from).collect(),
+            filters: data.filters,
+            truncated: data.truncated,
+            metering: data.metering,
+            rate_scope: RATE_SCOPE.to_string(),
+        }
+    }
+
+    /// Replace raw upstream errors with bounded, categorized remote-safe text.
+    ///
+    /// Local reports retain their stored diagnostic because the host owner may
+    /// use it to investigate a failed request. Remote reports must never carry
+    /// a provider URL, bearer token, prompt fragment, or upstream response.
+    pub fn sanitize_for_remote(&mut self) {
+        for row in &mut self.rows {
+            if let Some(error) = row.error.as_deref() {
+                row.error = Some(remote_error_summary(error).to_string());
+            }
         }
     }
 
@@ -252,6 +402,9 @@ impl RequestsReport {
     fn headline(&self) -> String {
         match (&self.daemon, self.mode) {
             (Some(d), _) => format!("live · pid {} · {} · {} models", d.pid, d.listen, d.models),
+            (None, _) if self.metering.rows == MeteringComponentAvailability::Unavailable => {
+                "metering unavailable — daemon not running".to_string()
+            }
             (None, Mode::HistoryOnly) => "history only — daemon not running".to_string(),
             (None, _) => "nothing recorded yet — try bitrouter serve".to_string(),
         }
@@ -268,15 +421,24 @@ impl RequestsReport {
             Some(micro_usd) => fmt_usd(micro_usd),
             None => "unreported".to_string(),
         };
+        let summary = match self.metering.summary {
+            MeteringComponentAvailability::Available => format!("{} req", self.requests),
+            MeteringComponentAvailability::Unavailable => "summary unavailable".to_string(),
+        };
+        let rate = match self.metering.rate {
+            MeteringComponentAvailability::Available => format!(
+                "{:.1} req/min · {} tok/min ({})",
+                self.requests_per_minute,
+                tokens(self.tokens_per_minute as i64),
+                self.rate_scope,
+            ),
+            MeteringComponentAvailability::Unavailable => "rate unavailable".to_string(),
+        };
         let mut line = format!(
-            "{} {spend} · {} req · {:.1} req/min · {} tok/min · {}",
-            self.window,
-            self.requests,
-            self.requests_per_minute,
-            tokens(self.tokens_per_minute as i64),
-            self.scope,
+            "{} {spend} · {summary} · {rate} · {}",
+            self.window, self.scope,
         );
-        if self.requests == 0 {
+        if self.metering.summary == MeteringComponentAvailability::Available && self.requests == 0 {
             line.push_str("  ·  no requests in this window");
         }
         line
@@ -287,18 +449,55 @@ impl RequestsReport {
     /// A partial total is worse than a labelled one: the reader has no way to
     /// tell a cheap window from an unmeasured one unless the gap is named.
     fn caveat(&self) -> Option<String> {
-        match (self.unpriced_requests, self.spend_micro_usd) {
-            (0, _) => None,
-            (n, None) => Some(format!(
-                "no charge evidence for any of these {n} requests — the daemon \
-                 recorded them but could not price them"
-            )),
-            (n, Some(_)) => Some(format!(
-                "{n} of {} requests have no charge evidence; the total above is \
-                 a floor, not a price",
-                self.requests
-            )),
+        let mut caveats = Vec::new();
+        if self.metering.summary == MeteringComponentAvailability::Unavailable {
+            caveats.push("metering summary unavailable".to_string());
         }
+        if self.metering.rate == MeteringComponentAvailability::Unavailable {
+            caveats.push("metering rate unavailable".to_string());
+        }
+        if self.metering.rows == MeteringComponentAvailability::Unavailable {
+            caveats.push("metering request rows unavailable".to_string());
+        }
+        if self.metering.summary == MeteringComponentAvailability::Available {
+            let pricing = match (self.unpriced_requests, self.spend_micro_usd) {
+                (0, _) => None,
+                (n, None) => Some(format!(
+                    "no charge evidence for any of these {n} requests — the daemon \
+                     recorded them but could not price them"
+                )),
+                (n, Some(_)) => Some(format!(
+                    "{n} of {} requests have no charge evidence; the total above is \
+                     a floor, not a price",
+                    self.requests
+                )),
+            };
+            if let Some(pricing) = pricing {
+                caveats.push(pricing);
+            }
+        }
+        if caveats.is_empty() {
+            None
+        } else {
+            Some(caveats.join("; "))
+        }
+    }
+}
+
+fn remote_error_summary(error: &str) -> &'static str {
+    let category = error
+        .chars()
+        .take(256)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if category.contains("rate limit") || category.contains("rate_limited") {
+        "upstream rate limited"
+    } else if category.contains("timeout") || category.contains("timed out") {
+        "upstream timed out"
+    } else if category.contains("policy") || category.contains("content filter") {
+        "upstream rejected request"
+    } else {
+        "upstream request failed"
     }
 }
 
@@ -331,6 +530,32 @@ fn window_label(window: TimeWindow) -> &'static str {
         TimeWindow::ThisWeek => "this week",
         TimeWindow::ThisMonth => "this month",
         TimeWindow::Custom { .. } => "window",
+    }
+}
+
+/// The legacy constructor only receives a named window. Its report still
+/// returns absolute bounds, although filtered callers use their already
+/// resolved bounds through [`RequestsReport::new_filtered`].
+fn window_start(
+    window: TimeWindow,
+    now: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
+    let midnight = now.date_naive().and_time(chrono::NaiveTime::MIN).and_utc();
+    match window {
+        TimeWindow::LastMinute => now - chrono::Duration::minutes(1),
+        TimeWindow::LastHour => now - chrono::Duration::hours(1),
+        TimeWindow::Today => midnight,
+        TimeWindow::ThisWeek => {
+            midnight - chrono::Duration::days(now.weekday().num_days_from_monday().into())
+        }
+        TimeWindow::ThisMonth => {
+            let first = chrono::NaiveDate::from_ymd_opt(now.year(), now.month(), 1);
+            match first {
+                Some(first) => first.and_time(chrono::NaiveTime::MIN).and_utc(),
+                None => midnight,
+            }
+        }
+        TimeWindow::Custom { start, .. } => start,
     }
 }
 
@@ -583,6 +808,58 @@ mod tests {
         let cells = RequestView::from(r).cells();
         assert!(!cells[7].contains('\n'), "newlines would break the row");
         assert!(cells[7].chars().count() <= ERROR_CHARS + 1, "{}", cells[7]);
+    }
+
+    #[test]
+    fn remote_reports_replace_raw_upstream_errors_with_safe_categories() {
+        let secret = "https://provider.example/v1?token=brk_do-not-disclose";
+        let mut failed = row();
+        failed.error = Some(format!("request timed out at {secret}"));
+        let mut report = report(None, vec![failed]);
+        assert!(
+            report.rows[0]
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains(secret))
+        );
+
+        report.sanitize_for_remote();
+
+        assert_eq!(report.rows[0].error.as_deref(), Some("upstream timed out"));
+        assert!(!json(&report).to_string().contains(secret));
+    }
+
+    #[test]
+    fn unavailable_metering_is_not_rendered_as_observed_zero_usage() {
+        let report = RequestsReport::new_filtered(
+            None,
+            RequestReportData {
+                window: "today".to_string(),
+                filters: RequestFilterView::new(
+                    "2026-09-08T00:00:00+00:00".to_string(),
+                    "2026-09-08T10:30:00+00:00".to_string(),
+                    None,
+                    None,
+                ),
+                summary: SpendSummary::default(),
+                rate: RateMetrics::default(),
+                rows: Vec::new(),
+                metering: MeteringAvailability::unavailable(),
+                truncated: false,
+            },
+        );
+        let value = json(&report);
+        assert_eq!(value["spend_micro_usd"], serde_json::Value::Null);
+        assert_eq!(value["metering"]["summary"], "unavailable");
+        assert_eq!(value["metering"]["rate"], "unavailable");
+        assert!(report.rollup().contains("summary unavailable"));
+        assert!(report.rollup().contains("rate unavailable"));
+        assert!(report.headline().contains("metering unavailable"));
+        assert!(
+            report
+                .caveat()
+                .is_some_and(|note| note.contains("request rows unavailable"))
+        );
     }
 
     #[test]

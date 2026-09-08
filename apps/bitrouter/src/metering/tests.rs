@@ -1474,6 +1474,67 @@ async fn recent_requests_returns_newest_first_and_honors_the_limit() -> Result<(
 }
 
 #[tokio::test]
+async fn filtered_request_page_and_summary_apply_the_same_bounds_before_limit() -> anyhow::Result<()>
+{
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+
+    for (request_id, model, provider) in [
+        ("matched-old", "gpt-5", "openai"),
+        ("matched-new", "gpt-5", "openai"),
+        ("wrong-provider", "gpt-5", "anthropic"),
+        ("wrong-model", "gpt-4", "openai"),
+        ("at-exclusive-end", "gpt-5", "openai"),
+    ] {
+        let mut request = ctx("filtered", 10, 5);
+        request.request_id = request_id.to_string();
+        request.model_id = model.to_string();
+        request.provider_id = provider.to_string();
+        recorder.record(&mut request).await?;
+    }
+
+    pool.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "UPDATE requests SET created_at = CASE request_id
+            WHEN 'matched-old' THEN '2026-09-01T00:00:00+00:00'
+            WHEN 'matched-new' THEN '2026-09-01T00:01:00+00:00'
+            WHEN 'wrong-provider' THEN '2026-09-01T00:02:00+00:00'
+            WHEN 'wrong-model' THEN '2026-09-01T00:03:00+00:00'
+            WHEN 'at-exclusive-end' THEN '2026-09-02T00:00:00+00:00'
+            ELSE created_at
+        END"
+        .to_string(),
+    ))
+    .await?;
+
+    let start = chrono::DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z")
+        .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+        .map_err(|_| bitrouter_sdk::BitrouterError::internal("invalid test start timestamp"))?;
+    let end = chrono::DateTime::parse_from_rfc3339("2026-09-02T00:00:00Z")
+        .map(|timestamp| timestamp.with_timezone(&chrono::Utc))
+        .map_err(|_| bitrouter_sdk::BitrouterError::internal("invalid test end timestamp"))?;
+    let window = TimeWindow::Custom { start, end };
+    let page = store
+        .recent_requests_filtered(window, Some("gpt-5"), Some("openai"), 1)
+        .await?;
+    assert_eq!(page.rows.len(), 1);
+    assert_eq!(page.rows[0].request_id, "matched-new");
+    assert!(page.truncated, "the second matching row must be observable");
+
+    let summary = store
+        .spend_summary_filtered(window, Some("gpt-5"), Some("openai"))
+        .await?;
+    assert_eq!(summary.requests, 2, "filters precede the page limit");
+    assert_eq!(
+        summary.spend_micro_usd, 140,
+        "the exclusive end is excluded"
+    );
+    assert_eq!(summary.unpriced, 0);
+    Ok(())
+}
+
+#[tokio::test]
 async fn get_total_rate_counts_every_caller_not_one_key() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool.clone());
