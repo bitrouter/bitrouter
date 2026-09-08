@@ -152,7 +152,9 @@ async fn repeated_producers_share_an_aggregate_materialization_budget() -> Resul
             &BTreeSet::new(),
         )
         .await?;
-    let bytes = serde_json::to_vec(&complete["attempt"].bindings[0].execution)?.len();
+    let binding = &complete["attempt"].bindings[0];
+    let bytes = serde_json::to_vec(&binding.execution)?.len()
+        + serde_json::to_vec(&binding.codex_history)?.len();
     let proven = evidence
         .observations
         .into_iter()
@@ -178,6 +180,7 @@ async fn repeated_producers_share_an_aggregate_materialization_budget() -> Resul
     let group = Group {
         source: source.clone(),
         spool: service.spool.clone(),
+        native_root: service.collector.root().directory.clone(),
         registration: RecordRef::from_record(&registration)?,
         prompts: vec![("attempt".into(), proven); 3],
         inspected: vec![],
@@ -208,6 +211,6 @@ async fn repeated_producers_share_an_aggregate_materialization_budget() -> Resul
     assert_eq!(group.bindings.len(), 2);
     assert_eq!(execution_budget, 0);
     // Final output uses the same depleted budget, not a new allowance per task.
-    assert!(reserve_execution(&group.bindings[0].execution, &mut execution_budget).is_err());
+    assert!(reserve_details(&group.bindings[0], &mut execution_budget).is_err());
     Ok(())
 }

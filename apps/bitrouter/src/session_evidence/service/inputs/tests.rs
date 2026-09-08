@@ -3,8 +3,17 @@ use crate::session_evidence::adapter_bridge::{AdapterIdentity, Observation};
 use crate::session_evidence::service::tests::{observation, write_rows};
 
 mod executions;
+mod rollouts;
 
 async fn fixture(directory: &Path, harness: Harness) -> Result<EvidenceHandle> {
+    fixture_at(directory, harness, None).await
+}
+
+async fn fixture_at(
+    directory: &Path,
+    harness: Harness,
+    codex_home: Option<&Path>,
+) -> Result<EvidenceHandle> {
     let key = if harness == Harness::Codex {
         "codex"
     } else {
@@ -24,7 +33,11 @@ async fn fixture(directory: &Path, harness: Harness) -> Result<EvidenceHandle> {
     let mut env = HashMap::from([
         (
             "CODEX_HOME".into(),
-            directory.join("codex").to_string_lossy().into_owned(),
+            codex_home
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| directory.join("codex"))
+                .to_string_lossy()
+                .into_owned(),
         ),
         (
             "CLAUDE_CONFIG_DIR".into(),

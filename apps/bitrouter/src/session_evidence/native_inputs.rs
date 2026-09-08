@@ -16,6 +16,8 @@ use super::types::{
     StoredRecord, identifier,
 };
 
+pub mod rollouts;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NativeAcknowledgement {
     pub state: String,
@@ -39,6 +41,8 @@ pub struct NativeInputBinding {
     pub session_response: Option<ProcessSessionResponse>,
     #[serde(default)]
     pub execution: InputRun,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_history: Option<rollouts::CodexHistoryEvidence>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -55,12 +59,14 @@ pub(super) struct Receipt {
     pub input: RecordRef,
     pub acknowledgements: Vec<NativeAcknowledgement>,
     pub execution: InputRun,
+    pub codex_history: Option<rollouts::CodexHistoryEvidence>,
 }
 
 struct Request {
     method: String,
     thread: Option<String>,
     reference: RecordRef,
+    rollout: rollouts::Request,
 }
 
 struct ClaudeInput {
@@ -80,6 +86,7 @@ pub(super) struct Scanner<'a> {
     acknowledgements: usize,
     gaps: BTreeSet<String>,
     executions: InputRunScanner,
+    rollouts: rollouts::Scanner,
 }
 
 impl<'a> Scanner<'a> {
@@ -95,6 +102,7 @@ impl<'a> Scanner<'a> {
             acknowledgements: 0,
             gaps: BTreeSet::new(),
             executions: InputRunScanner::default(),
+            rollouts: rollouts::Scanner::default(),
         }
     }
 
@@ -136,6 +144,7 @@ impl<'a> Scanner<'a> {
                     "native RPC conflict limit"
                 );
                 self.poisoned.insert(id.into());
+                self.rollouts.poison();
                 self.gaps.insert("native_input_rpc_ambiguous".into());
                 // Do not reuse this id after the first response: another response
                 // may still belong to either of the conflicting old requests.
@@ -153,6 +162,9 @@ impl<'a> Scanner<'a> {
                         .pointer("/payload/threadId")
                         .and_then(Value::as_str)
                         .map(str::to_owned),
+                    rollout: self
+                        .rollouts
+                        .request(method, &raw["payload"], reference.clone())?,
                     reference,
                 },
             );
@@ -162,12 +174,25 @@ impl<'a> Scanner<'a> {
                 return Ok(());
             }
             let pending = self.pending.remove(id);
+            if let Some(request) = &pending {
+                ensure!(request.method == method, "native RPC method mismatch");
+            }
+            let (pending, codex_history) = if let Some(request) = pending {
+                let history = self.rollouts.response(
+                    method,
+                    &raw["payload"],
+                    request.rollout,
+                    reference.clone(),
+                )?;
+                (Some((request.thread, request.reference)), history)
+            } else {
+                (None, None)
+            };
             let turn = raw.pointer("/payload/turn/id").and_then(Value::as_str);
             if method != "turn/start" || !turn.is_some_and(|id| self.targets.contains(id)) {
                 return Ok(());
             }
-            let request = pending.context("native acceptance has no original request")?;
-            ensure!(request.method == method, "native RPC method mismatch");
+            let (thread, input) = pending.context("native acceptance has no original request")?;
             ensure!(
                 raw.pointer("/payload/error_code").is_none()
                     && raw.pointer("/payload/turn/status").and_then(Value::as_str)
@@ -181,20 +206,24 @@ impl<'a> Scanner<'a> {
             let node = NodeKey {
                 namespace: self.source.namespace.clone(),
                 harness: Harness::Codex,
-                native_id: request.thread.context("native request thread missing")?,
+                native_id: thread.context("native request thread missing")?,
                 agent_id: None,
             };
             node.validate()?;
             self.receipts.push(Receipt {
                 node,
                 native_id: turn.context("accepted turn missing")?.into(),
-                input: request.reference,
+                input,
                 acknowledgements: vec![NativeAcknowledgement {
                     state: "accepted".into(),
                     record: reference,
                 }],
                 execution: InputRun::default(),
+                codex_history,
             });
+        } else if direction == Some("server") && phase == Some("notification") {
+            self.rollouts
+                .notification(method, &raw["payload"], reference)?;
         }
         Ok(())
     }
@@ -288,6 +317,7 @@ impl<'a> Scanner<'a> {
                         input: input.reference.clone(),
                         acknowledgements,
                         execution: InputRun::default(),
+                        codex_history: None,
                     });
                 }
             }

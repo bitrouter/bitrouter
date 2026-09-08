@@ -7,9 +7,12 @@ use crate::session_evidence::native_inputs::{
 };
 use crate::session_evidence::types::{MAX_OBJECT_BYTES, MAX_RECORDS, RegisteredSource};
 
+mod rollouts;
+
 struct Group {
     source: RegisteredSource,
     spool: PathBuf,
+    native_root: PathBuf,
     registration: RecordRef,
     prompts: Vec<(String, ProvenObservation)>,
     inspected: Vec<SourceRange>,
@@ -71,6 +74,7 @@ impl ControllerEvidence {
                         Group {
                             source,
                             spool: root.spool,
+                            native_root: root.collector.root().directory.clone(),
                             registration: RecordRef::from_record(&registration)?,
                             prompts: Vec::new(),
                             inspected: Vec::new(),
@@ -138,7 +142,7 @@ impl ControllerEvidence {
                             selected.bindings.len() < MAX_GRAPH_ITEMS,
                             "native attempt input limit"
                         );
-                        reserve_execution(&binding.execution, &mut execution_budget)?;
+                        reserve_details(binding, &mut execution_budget)?;
                         selected.bindings.push(binding.clone());
                     }
                 }
@@ -379,8 +383,8 @@ impl ControllerEvidence {
                         group.bindings.len() < MAX_GRAPH_ITEMS,
                         "native input binding limit"
                     );
-                    reserve_execution(&receipt.execution, execution_budget)?;
-                    group.bindings.push(NativeInputBinding {
+                    reserve_parts(&receipt.execution, &receipt.codex_history, execution_budget)?;
+                    let binding = NativeInputBinding {
                         origin: observation.origin.clone(),
                         producer: proven.record.clone(),
                         node: receipt.node.clone(),
@@ -393,7 +397,9 @@ impl ControllerEvidence {
                         configuration: configuration.clone(),
                         session_response: session_response.clone(),
                         execution: receipt.execution.clone(),
-                    });
+                        codex_history: receipt.codex_history.clone(),
+                    };
+                    group.bindings.push(binding);
                 }
             }
         }
@@ -419,17 +425,24 @@ impl ControllerEvidence {
                 true
             }
         });
+        self.corroborate_rollouts(group, budget, execution_budget)
+            .await?;
         Ok(())
     }
 }
 
-fn reserve_execution(
+fn reserve_details(binding: &NativeInputBinding, budget: &mut usize) -> Result<()> {
+    reserve_parts(&binding.execution, &binding.codex_history, budget)
+}
+
+fn reserve_parts(
     execution: &crate::session_evidence::execution::input_runs::InputRun,
+    history: &Option<crate::session_evidence::native_inputs::rollouts::CodexHistoryEvidence>,
     budget: &mut usize,
 ) -> Result<()> {
     // Reserve before each clone into controller groups and the final output.
     // The aggregate bound includes repeated producers and multiple sources.
-    let bytes = serde_json::to_vec(execution)?.len();
+    let bytes = serde_json::to_vec(execution)?.len() + serde_json::to_vec(history)?.len();
     ensure!(bytes <= *budget, "native execution materialization limit");
     *budget -= bytes;
     Ok(())

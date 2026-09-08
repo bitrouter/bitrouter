@@ -292,6 +292,7 @@ impl WireTap {
                     .insert((direction.into(), id.clone()), method.into());
             }
             let params = raw.get("params").cloned().unwrap_or_else(|| json!({}));
+            let inline_history = params.get("history").is_some_and(|value| !value.is_null());
             let payload = if direction == "client" {
                 select_fields(
                     &params,
@@ -301,16 +302,25 @@ impl WireTap {
                         "expectedTurnId",
                         "itemId",
                         "lastTurnId",
+                        "beforeTurnId",
                         "numTurns",
                         "input",
                         "cwd",
                         "ephemeral",
                         "includeTurns",
+                        "path",
+                        "historyMode",
                     ],
                 )
             } else {
                 params
             };
+            let mut payload = payload;
+            if direction == "client" && inline_history {
+                // Inline resume history has different identity semantics. Retain
+                // its presence without duplicating the supplied conversation.
+                payload["bitrouter_inline_history"] = json!(true);
+            }
             return Ok(Some(
                 json!({"direction":direction,"method":method,"phase":if id.is_some() {"request"} else {"notification"},
                 "operation_id":id,"payload":payload}),
@@ -369,8 +379,16 @@ fn conversation_method(method: &str) -> bool {
             | "thread/read"
             | "thread/fork"
             | "thread/rollback"
+            | "thread/revert"
+            | "thread/reverted"
+            | "thread/compact/start"
             | "thread/archive"
+            | "thread/archived"
             | "thread/unarchive"
+            | "thread/unarchived"
+            | "thread/delete"
+            | "thread/deleted"
+            | "thread/unsubscribe"
             | "thread/started"
             | "thread/closed"
             | "thread/status/changed"

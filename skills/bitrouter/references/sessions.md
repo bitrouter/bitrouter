@@ -187,6 +187,12 @@ API errors, deferred/background work and interruption remain distinct from an
 ordinary native completion. These observations do not establish all-task execution
 coverage or coding success. Execution-detail copies share a bounded inspection
 budget; they do not provide unlimited task history.
+Codex input receipts also expose `codex_history`. An original native lifecycle
+observation selects a rollout for that input, corroborated by owned file metadata
+and source-local turn-context records. A later revert cannot rewrite that input's
+selection. Delayed lifecycle notifications, overlapping requests, missing or
+ambiguous sources and unsupported history remain explicit gaps. This association
+does not establish complete execution ranges, settlement or coding quality.
 An observation sequence without gaps does not cover all native work: auxiliary
 Codex title generation and file audits, among other paths, still need their own
 causal attribution and cost coverage.

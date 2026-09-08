@@ -8,7 +8,7 @@ Foundation commit: `0af7f96a` on `feat/native-session-evidence`.
 | Layer | Implemented boundary | Remaining boundary |
 |---|---|---|
 | Collection | Both maintained controller launch paths persist registered native sources and ACP observations; restart reconciliation preserves evidence gaps. | Real pinned-runtime conformance and complete capability/version admission. |
-| History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex physical rollout dependencies bind immutable prefixes separately from stable threads and logical fork ancestry; observed revert variants survive file removal. | Active rollout selection from native lifecycle evidence, complete Claude independent-fork UUID remapping and unsupported native history formats. |
+| History | Source-local Codex and Claude context projection retains raw execution across supported compactions. Codex physical rollout dependencies bind immutable prefixes separately from stable threads and logical fork ancestry; observed revert variants survive file removal. Codex input receipts select a rollout through original native lifecycle and turn-context records. | Complete own-execution ranges, unmatched/replaced rollout histories, Claude independent-fork UUID remapping and unsupported native history formats. |
 | Identity and relations | Native nodes, groups, processes, ACP attachments and candidate spawn/fork relations are distinct. Selected Claude SDK events can acquire verified per-observation process bindings. | Complete Query lifetime recovery, unmatched reset/rebinding cases and exact resumed-child execution ranges. |
 | Task boundaries | A confirmed first prompt creates a task/attempt keyed by its ACP conversation, separately from native nodes; original prompt and response records commit with operation membership and immutable native observation frontiers. Durable controller selections and Code actions reserve a new task or retry for the next prompt. Pinned adapter producer observations retain original prompt provenance; native input receipts connect inspected requests, acknowledgements and explicitly addressed execution events. | Complete execution membership, exact per-attempt execution ranges and manager intent recovery after a Code process restart. |
 | Settlement and artifacts | Prompt responses enter settling; immutable workspace baselines and candidate result checkpoints exist. | Native/background/child/request settlement, final artifacts and baseline-to-final attribution. |
@@ -29,6 +29,50 @@ old cursor. Unix source identities are unchanged. Filesystems that cannot supply
 the required identity produce a collection error rather than a guessed source.
 
 ## Implementation checkpoint
+
+Codex input receipts now carry `codex_history`: a connection-local lifecycle
+observation, an independently verified owned rollout identity, original
+source-local turn-context references, inspected ranges and association gaps.
+Start, fork, resume, rollback and revert responses retain their original RPC
+provenance. A read-only thread query does not select a live rollout. Concurrent
+lifecycle RPCs, changes between input and acceptance, failed mutations, inline
+resume history and missing paths cannot supply a confirmed selection.
+
+The proxy now captures revert/compact lifecycle methods and the associated
+notification boundaries. Creation and revert responses retain bounded pending
+notification state: a delayed notification cannot overwrite a newer successful
+resume or revert. An uncorrelated transition invalidates the observed selection.
+Each accepted input retains its own observation across later thread changes.
+
+The association reader validates paths against the original registered root
+without reopening message-supplied paths. It corroborates the selected rollout
+against stored file identities and exact native turn-context records; inherited
+prefixes and compaction replacement messages cannot substitute for own execution.
+Duplicate physical sources, damaged records and budget exhaustion retain gaps.
+Inventory, raw inspections and detail copies share bounded budgets; at most two
+duplicate candidates are retained for each uniqueness check. Associations can be
+reconstructed after database reopen and loss of already imported native files.
+Current-generation replacement remains explicitly unresolved, and source-local
+turn association does not certify all native history semantics or turn completion.
+
+The opt-in `captured_codex_proxy_records_bind_input_rollouts` test uses
+`BITROUTER_TEST_CODEX_LIFECYCLE_CAPTURE`, an isolated capture directory containing
+`profile/` and the actual BitRouter proxy's `proxy/` spool. Run it with
+`cargo test -p bitrouter --lib --all-features
+captured_codex_proxy_records_bind_input_rollouts -- --ignored`. Its ACP producer
+observations are fixtures; native RPC and rollout records are original. An
+isolated Codex CLI 0.153.4 run through the proxy, using deterministic local
+Responses, passed this test across fork, resume, two compactions, revert and
+fork-after-revert. This adds native producer evidence without certifying the full
+controller/subagent matrix, task membership, settlement, costs or evaluation.
+
+Independent lifecycle-stage review passed after correcting delayed creation and
+revert notifications and limiting retained duplicate candidates. All 3,393
+workspace tests passed with 16 skipped. Both the real-native capture association
+test and the pinned-adapter binary fixture passed separately. The adapter fixture
+first timed out while awaiting an RPC and passed unchanged on retry; its startup
+timeout was not relaxed. Workspace Clippy with denied warnings, doctests,
+rustdoc, distribution checks, Windows cross-target Clippy and formatting passed.
 
 Codex rollout identity is now persisted separately from its stable thread and
 the file handle's source identity. Native `history_base.thread_id` names a
@@ -53,8 +97,9 @@ The resolver shares a new-record import budget across a thread's variants and
 recursive dependencies before committing their records. Exhaustion leaves a gap
 and subsequent passes resume the same durable cursors. This does not complete
 task-scoped persistent paging or bound every controller-wide prefix scan.
-Active native lifecycle selection, own-execution boundaries, complete attempt
-membership, costs and settlement remain separate work.
+Complete own-execution boundaries, attempt membership, costs and settlement
+remain separate work. Thread-level history inventories still retain all observed
+variants; per-input selection does not establish one global active thread history.
 
 The opt-in `native_codex_capture_preserves_revert_and_compaction_history` test
 imports copies of an isolated real native capture. Set
@@ -69,7 +114,7 @@ not certify the whole live controller flow, subagent execution, or full native
 version admission. Native `world_state` and `token_usage_record` records are
 retained but still produce an explicit context-semantics gap.
 
-Independent stage review passed after correcting durable top-level recovery,
+The preceding rollout-history stage passed independent review after correcting durable top-level recovery,
 source failure isolation, shared import limits and persistent prefix ambiguity.
 All 3,380 workspace tests passed with 15 skipped. The pinned-adapter binary
 fixture, Clippy with denied warnings, doctests, rustdoc, distribution checks,

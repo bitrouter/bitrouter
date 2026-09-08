@@ -4,6 +4,7 @@ use crate::session_evidence::types::RecordInput;
 use serde_json::json;
 
 mod executions;
+mod rollouts;
 
 const PROCESS: &str = "12345678-1234-4234-8234-123456789abc";
 

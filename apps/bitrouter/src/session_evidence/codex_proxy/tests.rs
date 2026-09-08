@@ -57,6 +57,58 @@ async fn steering_preserves_both_requested_and_accepted_native_turns() -> Result
 }
 
 #[tokio::test]
+async fn lifecycle_tap_retains_revert_boundaries_and_marks_inline_resume_history() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut tap = tap(directory.path()).await?;
+    let request = tap
+        .select(
+            "client",
+            &json!({"id":1,"method":"thread/revert","params":{
+                "threadId":"root", "beforeTurnId":"excluded", "config":{"api_key":"private"}
+            }}),
+        )?
+        .context("revert")?;
+    assert_eq!(
+        request["payload"],
+        json!({"threadId":"root","beforeTurnId":"excluded"})
+    );
+    let path = directory.path().join("rollout-root_reverted.jsonl");
+    let response = tap
+        .select(
+            "server",
+            &json!({"id":1,"result":{"thread":{"id":"root","path":path}}}),
+        )?
+        .context("response")?;
+    assert_eq!(response["method"], "thread/revert");
+    assert_eq!(response["payload"]["thread"]["path"], json!(path));
+    for method in [
+        "thread/reverted",
+        "thread/archived",
+        "thread/unarchived",
+        "thread/deleted",
+    ] {
+        assert!(
+            tap.select(
+                "server",
+                &json!({"method":method,"params":{"threadId":"root"}})
+            )?
+            .is_some()
+        );
+    }
+    let resume = tap
+        .select(
+            "client",
+            &json!({"id":2,"method":"thread/resume","params":{
+                "threadId":"ignored", "path":path,"history":[{"type":"message","content":"opaque"}]
+            }}),
+        )?
+        .context("resume")?;
+    assert_eq!(resume["payload"]["bitrouter_inline_history"], true);
+    assert!(resume["payload"].get("history").is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn forwarding_preserves_bytes_and_commits_the_full_event_first() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let tap = Arc::new(Mutex::new(tap(directory.path()).await?));
