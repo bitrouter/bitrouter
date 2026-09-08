@@ -8,28 +8,33 @@
 //! The third is the caller's: registering for signals means naming them, and
 //! which signals exist is a property of the host process, not of the terminal.
 //!
-//! # Why this lives here
-//!
-//! [`Writer::new`](crate::writer::Writer::new) asks the terminal where the
-//! cursor is before it draws a single row, so entering raw mode and opening
-//! the view are two halves of one ordering contract. Splitting them across a
-//! crate boundary left that contract documented in two places and enforced in
-//! neither. Terminal custody is one responsibility; it belongs in one module,
-//! and this crate is already the one holding `crossterm`.
+//! Keyboard protocols are restored only when this session enabled them, so
+//! repeated cleanup cannot pop another application's keyboard state.
 
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static ENHANCED_KEYS: AtomicBool = AtomicBool::new(false);
 
 use crossterm::execute;
-use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
-/// Take raw mode, and nothing else.
-///
-/// The inline chat renderer wants the keys but not the screen switch — its
-/// whole design is that finished rows stay in ordinary scrollback. Splitting
-/// this out is also what keeps `enable_raw_mode` to a single call site, so
-/// there is exactly one thing for [`restore`] to undo.
+/// Take raw mode before the session starts its single input reader.
 pub fn enter_raw() -> io::Result<()> {
     enable_raw_mode()
+}
+
+/// Request disambiguated Enter modifiers on supporting terminals. Older
+/// terminals ignore the sequence; Alt+Enter and Ctrl+J remain available.
+pub fn enable_session_keys() -> io::Result<()> {
+    ENHANCED_KEYS.store(true, Ordering::SeqCst);
+    execute!(
+        io::stdout(),
+        crossterm::event::EnableBracketedPaste,
+        crossterm::event::PushKeyboardEnhancementFlags(
+            crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        )
+    )
 }
 
 /// Best-effort return to the terminal the user had. Needs no handle so the
@@ -39,13 +44,15 @@ pub fn enter_raw() -> io::Result<()> {
 pub fn restore() {
     let _ = disable_raw_mode();
     let mut out = io::stdout();
-    // Bracketed paste is the chat session's, not the full-screen view's, and
+    if ENHANCED_KEYS.swap(false, Ordering::SeqCst) {
+        let _ = execute!(out, crossterm::event::PopKeyboardEnhancementFlags);
+    }
+    // Bracketed paste belongs to the chat session, and
     // disabling a mode that was never enabled costs nothing — which is why it
     // belongs here, in the one function every exit already reaches.
     let _ = execute!(
         out,
         crossterm::event::DisableBracketedPaste,
-        LeaveAlternateScreen,
         crossterm::cursor::Show
     );
     // XTWINOPS pop: put the user's window title back.

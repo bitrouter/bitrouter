@@ -54,16 +54,20 @@ ratatui = { version = "0.29", features = [
     "unstable-rendered-line-info",
 ] }
 crossterm = { version = "0.28", features = ["event-stream"] }
+# Transcript Markdown only; do not bring a second scroll/viewer implementation.
+ratatui-markdown = { version = "0.3.6", default-features = false, features = ["markdown"] }
 # The line diff behind `bitrouter-tui`'s hunked diff rendering. A dependency
 # rather than a hand-rolled diff because subtly wrong diff output is worse than
 # a dependency, and hunk grouping with context is exactly where the subtle
 # wrongness would live — see TUI_RENDERER_PLAN §C.1 (§19.2).
 similar = "3.1"
+shell-words = "1"
 # The display width of a grapheme cluster, for `bitrouter-tui`'s own wrap.
 # Ratatui's `reflow` is private, so the wrap is ours — but the widths must be
 # the same ones ratatui measures with, which is why this tracks the version
 # ratatui itself depends on. Adds no crate to the build graph.
 unicode-width = "0.2"
+unicode-segmentation = "1.12"
 # `unstable_llm_providers` gives the draft `providers/*` schema types used only
 # for controller-to-harness endpoint setup. `unstable_session_fork` lets tests
 # exercise the advertised lifecycle method. We deliberately do not enable

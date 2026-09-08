@@ -20,22 +20,21 @@
 //!
 //! # What a renderer is given
 //!
-//! [`ToolContext`] carries the id, kind, status, title, content, and height —
-//! and nothing else. No `expanded` (expand/collapse is deferred), no
-//! `raw_input`, no `locations`: no renderer here reads them, and a field
-//! added before its reader exists is dead code. Width is absent for that
-//! reason: the writer wraps the finished document itself, so no renderer ever
-//! needed it. Height stays because a diff is capped by it.
+//! [`ToolContext`] includes command input and viewport size so commands can be
+//! framed at the available width and diffs bounded by the terminal height.
 
 pub mod content;
 pub mod diff;
+pub mod markdown;
 pub mod session;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use agent_client_protocol_schema::v1::{
     ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolKind,
 };
+use ratatui::layout::Size;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -54,6 +53,10 @@ pub struct ToolContext<'a> {
     /// The terminal height, which is what bounds a single diff: one edit must
     /// never occupy more than the screen the rest of the session lives in.
     pub height: u16,
+    /// Available transcript width, excluding the outer padding.
+    pub width: u16,
+    /// Structured tool arguments, including the command for execution calls.
+    pub raw_input: Option<&'a serde_json::Value>,
 }
 
 impl<'a> ToolContext<'a> {
@@ -61,14 +64,16 @@ impl<'a> ToolContext<'a> {
     ///
     /// One place knows which fields a renderer may see, so adding a field to
     /// the protocol does not quietly widen what renderers can reach.
-    pub fn new(call: &'a ToolCall, height: u16) -> Self {
+    pub fn new(call: &'a ToolCall, size: Size) -> Self {
         Self {
             id: &call.tool_call_id,
             kind: call.kind,
             status: call.status,
             title: &call.title,
             content: &call.content,
-            height,
+            height: size.height,
+            width: size.width,
+            raw_input: call.raw_input.as_ref(),
         }
     }
 }
@@ -135,21 +140,13 @@ pub struct Registry {
 }
 
 impl Default for Registry {
-    /// The v1 set: [`Reasoning`] for thinking, and [`Generic`] for everything
-    /// else.
-    ///
-    /// `Edit` and `Execute` are deliberately *not* registered. Both had a
-    /// renderer of their own whose body was identical to `Generic`'s — a
-    /// header and the call's content — because what makes an edit look like a
-    /// diff is [`diff`] rendering its content, not the renderer that dispatched
-    /// to it. Two names for one behaviour is the dead code this rule forbids;
-    /// they fall through to the fallback and draw exactly what they drew.
     fn default() -> Self {
         let mut registry = Self {
             renderers: HashMap::new(),
             fallback: Box::new(Generic),
         };
         registry.register(ToolKey::Think, Box::new(Reasoning));
+        registry.register(ToolKey::Execute, Box::new(Execute));
         registry
     }
 }
@@ -174,29 +171,84 @@ pub struct Generic;
 
 impl ToolRenderer for Generic {
     fn render(&self, ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
+        if command_input(ctx).is_some() {
+            return Execute.render(ctx);
+        }
         let mut lines = vec![header(ctx)];
         lines.extend(content_lines(ctx));
         lines
     }
 }
 
-/// `Think` calls — the agent reasoning through a tool rather than in a thought
-/// chunk. Drawn in the same dimmed voice, because it is the same voice.
+/// Execution calls show their literal shell command in a subdued code frame.
+pub struct Execute;
+
+impl ToolRenderer for Execute {
+    fn render(&self, ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
+        let command = command_input(ctx).unwrap_or(Cow::Borrowed(ctx.title));
+        let title_is_command = ctx.title == command
+            || shell_words::split(ctx.title)
+                .ok()
+                .is_some_and(|words| words.len() == 1 && words[0] == command);
+        let title = if title_is_command || ctx.title.is_empty() {
+            "Command"
+        } else {
+            ctx.title
+        };
+        let mut lines = vec![titled_header(ctx.status, title)];
+        if !command.is_empty() {
+            lines.extend(markdown::code_block(&command, ctx.width));
+        }
+        lines.extend(content_lines(ctx));
+        lines
+    }
+}
+
+// ACP adapters may publish a shell script or argv, and may classify shell
+// reads/searches by intent. Recognize structured command input for both.
+fn command_input<'a>(ctx: &ToolContext<'a>) -> Option<Cow<'a, str>> {
+    let input = ctx.raw_input?;
+    let value = input.get("command").or_else(|| input.get("cmd"))?;
+    if let Some(command) = value.as_str() {
+        return Some(Cow::Borrowed(command));
+    }
+    let argv: Vec<&str> = value
+        .as_array()?
+        .iter()
+        .map(|value| value.as_str())
+        .collect::<Option<_>>()?;
+    if let [shell, flag, script] = argv.as_slice()
+        && matches!(
+            shell.rsplit('/').next(),
+            Some("sh" | "bash" | "zsh" | "fish" | "dash")
+        )
+        && matches!(*flag, "-c" | "-lc" | "-ic")
+    {
+        return Some(Cow::Borrowed(script));
+    }
+    (!argv.is_empty()).then(|| Cow::Owned(shell_words::join(argv)))
+}
+
+/// Reasoning tools use the same bright action style as thought messages.
 pub struct Reasoning;
 
 impl ToolRenderer for Reasoning {
     fn render(&self, ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
         let mut lines = vec![header(ctx)];
-        for line in content_lines(ctx) {
-            lines.push(Line::from(
-                line.spans
-                    .into_iter()
-                    .map(|span| {
-                        let content = span.content.into_owned();
-                        Span::styled(content, thought_style())
-                    })
-                    .collect::<Vec<_>>(),
-            ));
+        for item in ctx.content {
+            match item {
+                ToolCallContent::Content(block) => {
+                    if let agent_client_protocol_schema::v1::ContentBlock::Text(text) =
+                        &block.content
+                    {
+                        lines.extend(thought(&text.text, ctx.width));
+                    } else {
+                        lines.extend(content::render(&block.content));
+                    }
+                }
+                ToolCallContent::Diff(file) => lines.extend(diff::render(file, ctx.height)),
+                _ => {}
+            }
         }
         lines
     }
@@ -207,35 +259,43 @@ impl ToolRenderer for Reasoning {
 /// Not a registry entry: the registry keys on `ToolKind`, and a message has no
 /// kind. There are exactly three voices and they are fixed by the protocol, so
 /// a lookup table would be indirection with nothing to look up.
-pub fn message(message: &crate::journal::Message) -> Vec<Line<'static>> {
-    let (prefix, style) = match message.voice {
-        // The user's own words, marked the way they were entered.
-        crate::journal::Voice::User => ("> ", Style::default().fg(Color::Cyan)),
-        crate::journal::Voice::Agent => ("", Style::default()),
-        crate::journal::Voice::Thought => (THOUGHT_PREFIX, thought_style()),
-    };
-    // An empty run still occupies a row: it is a message that has arrived and
-    // has no text yet, and collapsing it would make the document jump when the
-    // first chunk lands.
-    if message.text.is_empty() {
-        return vec![Line::from(Span::styled(prefix.to_string(), style))];
+pub fn message(message: &crate::journal::Message, width: u16) -> Vec<Line<'static>> {
+    match message.voice {
+        crate::journal::Voice::User => {
+            let mut lines = vec![Line::default()];
+            lines.extend(message.text.split('\n').map(|line| {
+                Line::from(Span::styled(
+                    format!("> {line}"),
+                    Style::default().fg(Color::Cyan),
+                ))
+            }));
+            lines.push(Line::default());
+            lines
+        }
+        crate::journal::Voice::Agent => markdown::render(&message.text, width),
+        crate::journal::Voice::Thought => thought(&message.text, width),
     }
-    message
-        .text
-        .lines()
-        .map(|line| Line::from(Span::styled(format!("{prefix}{line}"), style)))
+}
+
+fn thought(text: &str, width: u16) -> Vec<Line<'static>> {
+    markdown::render(text, width.saturating_sub(2).max(1))
+        .into_iter()
+        .map(|line| {
+            let mut spans = vec![Span::styled("· ", thought_style())];
+            spans.extend(
+                line.spans
+                    .into_iter()
+                    .map(|span| Span::styled(span.content, span.style.patch(thought_style()))),
+            );
+            Line::from(spans)
+        })
         .collect()
 }
 
-/// Marks the agent's reasoning as reasoning, in the transcript as well as on
-/// a `Think` call.
-const THOUGHT_PREFIX: &str = "· ";
-
-/// The dimmed italic the agent's reasoning is drawn in, wherever it appears.
 fn thought_style() -> Style {
     Style::default()
-        .fg(Color::DarkGray)
-        .add_modifier(Modifier::ITALIC)
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD)
 }
 
 /// What a tool call is doing, as one glyph.
@@ -259,15 +319,19 @@ fn status_glyph(status: ToolCallStatus) -> (&'static str, Color) {
 /// A call with no title is named by its id rather than left blank — an
 /// unlabelled row is still traceable, an empty one is not.
 fn header(ctx: &ToolContext<'_>) -> Line<'static> {
-    let (glyph, color) = status_glyph(ctx.status);
     let title = if ctx.title.is_empty() {
         ctx.id.0.to_string()
     } else {
         ctx.title.to_string()
     };
+    titled_header(ctx.status, &title)
+}
+
+fn titled_header(status: ToolCallStatus, title: &str) -> Line<'static> {
+    let (glyph, color) = status_glyph(status);
     Line::from(vec![
         Span::styled(format!("{glyph} "), Style::default().fg(color)),
-        Span::raw(title),
+        Span::styled(title.to_string(), thought_style()),
     ])
 }
 
@@ -279,15 +343,8 @@ fn content_lines(ctx: &ToolContext<'_>) -> Vec<Line<'static>> {
         match item {
             ToolCallContent::Content(block) => lines.extend(content::render(&block.content)),
             ToolCallContent::Diff(file) => lines.extend(diff::render(file, ctx.height)),
-            // A terminal is a live thing owned by the agent, addressed by id.
-            // Naming it is all a static renderer can honestly do; embedding it
-            // would mean rendering a stream this crate does not hold.
-            ToolCallContent::Terminal(terminal) => {
-                lines.push(Line::from(Span::styled(
-                    format!("  [terminal {}]", terminal.terminal_id),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
+            // Terminal handles are protocol metadata, not transcript content.
+            ToolCallContent::Terminal(_) => {}
             // `ToolCallContent` is `#[non_exhaustive]`.
             _ => {}
         }
@@ -340,7 +397,7 @@ mod tests {
 
         let searched = call(ToolKind::Search, "grep for it");
         assert_eq!(
-            text(&registry.render(&ToolContext::new(&searched, 24))),
+            text(&registry.render(&ToolContext::new(&searched, Size::new(80, 24)))),
             "searched",
             "a registered key reaches its renderer"
         );
@@ -348,7 +405,7 @@ mod tests {
         // `Fetch` has no renderer registered, so this must reach `Generic` —
         // and `Generic` draws the title, which no spy does.
         let fetched = call(ToolKind::Fetch, "GET https://example.test");
-        let rendered = text(&registry.render(&ToolContext::new(&fetched, 24)));
+        let rendered = text(&registry.render(&ToolContext::new(&fetched, Size::new(80, 24))));
         assert!(
             rendered.contains("GET https://example.test"),
             "an unregistered key falls through to the default: {rendered:?}"
@@ -368,7 +425,7 @@ mod tests {
         registry.register(ToolKey::Edit, Box::new(Spy("second")));
         let edit = call(ToolKind::Edit, "Edit src/lib.rs");
         assert_eq!(
-            text(&registry.render(&ToolContext::new(&edit, 24))),
+            text(&registry.render(&ToolContext::new(&edit, Size::new(80, 24)))),
             "second"
         );
     }
@@ -422,7 +479,7 @@ mod tests {
             ToolKind::SwitchMode,
         ] {
             let drawn = call(kind, "a title");
-            let rendered = text(&registry.render(&ToolContext::new(&drawn, 24)));
+            let rendered = text(&registry.render(&ToolContext::new(&drawn, Size::new(80, 24))));
             assert!(
                 rendered.contains("a title"),
                 "{kind:?} rendered nothing: {rendered:?}"
@@ -440,7 +497,8 @@ mod tests {
                     TextContent::new("running 3 tests\ntest result: ok."),
                 )),
             )]);
-        let rendered = text(&Registry::default().render(&ToolContext::new(&executed, 24)));
+        let rendered =
+            text(&Registry::default().render(&ToolContext::new(&executed, Size::new(80, 24))));
         assert!(rendered.contains("cargo test"), "{rendered:?}");
         assert!(rendered.contains("running 3 tests"), "{rendered:?}");
         assert!(rendered.contains("test result: ok."), "{rendered:?}");
@@ -452,7 +510,8 @@ mod tests {
         let edited = call(ToolKind::Edit, "Edit src/lib.rs").content(vec![ToolCallContent::Diff(
             Diff::new("src/lib.rs", "let b = 2;").old_text("let a = 1;".to_string()),
         )]);
-        let rendered = text(&Registry::default().render(&ToolContext::new(&edited, 24)));
+        let rendered =
+            text(&Registry::default().render(&ToolContext::new(&edited, Size::new(80, 24))));
         // The name, not the shape: the diff renderer absolutizes, and an
         // absolute path is `D:\...\src\lib.rs` on Windows.
         assert!(rendered.contains("lib.rs"), "{rendered:?}");
@@ -460,8 +519,7 @@ mod tests {
         assert!(rendered.contains("+let b = 2;"), "{rendered:?}");
     }
 
-    /// Reasoning is drawn as reasoning: the same dimmed italic a thought
-    /// chunk gets, so the two cannot be confused with the agent's answer.
+    /// Reasoning tool content shares the bright style of action messages.
     #[test]
     fn a_think_call_is_drawn_in_the_reasoning_voice() {
         let thinking = call(ToolKind::Think, "considering the options").content(vec![
@@ -469,7 +527,7 @@ mod tests {
                 ContentBlock::Text(TextContent::new("weighing two designs")),
             )),
         ]);
-        let lines = Registry::default().render(&ToolContext::new(&thinking, 24));
+        let lines = Registry::default().render(&ToolContext::new(&thinking, Size::new(80, 24)));
         let styles: Vec<Style> = lines
             .iter()
             .skip(1)
@@ -503,7 +561,79 @@ mod tests {
     #[test]
     fn an_untitled_call_is_named_by_its_id() {
         let untitled = ToolCall::new(ToolCallId::new("t-42"), String::new());
-        let rendered = text(&Registry::default().render(&ToolContext::new(&untitled, 24)));
+        let rendered =
+            text(&Registry::default().render(&ToolContext::new(&untitled, Size::new(80, 24))));
         assert!(rendered.contains("t-42"), "{rendered:?}");
+    }
+    #[test]
+    fn user_messages_keep_literal_text_and_surrounding_space() {
+        let input = crate::journal::Message {
+            voice: crate::journal::Voice::User,
+            text: "Explain **this**\nand `that`".into(),
+            complete: true,
+        };
+        assert_eq!(
+            text(&message(&input, 80)),
+            "\n> Explain **this**\n> and `that`\n"
+        );
+    }
+
+    #[test]
+    fn thought_captions_render_without_markdown_delimiters_in_bright_white() {
+        let input = crate::journal::Message {
+            voice: crate::journal::Voice::Thought,
+            text: "**Inspecting root files**".into(),
+            complete: false,
+        };
+        let lines = message(&input, 80);
+        assert_eq!(text(&lines), "· Inspecting root files");
+        assert!(lines.iter().flat_map(|line| &line.spans).all(|span| {
+            span.style.fg == Some(Color::White)
+                && span.style.add_modifier.contains(Modifier::BOLD)
+                && !span.style.add_modifier.contains(Modifier::DIM)
+        }));
+    }
+
+    #[test]
+    fn shell_reads_render_commands_without_terminal_handles_or_losing_output() {
+        let read = call(ToolKind::Read, "Read README.md")
+            .raw_input(serde_json::json!({"command": ["/bin/zsh", "-lc", "cat README.md"]}))
+            .content(vec![
+                ToolCallContent::Terminal(agent_client_protocol_schema::v1::Terminal::new(
+                    "exec-secret-id",
+                )),
+                ToolCallContent::Content(agent_client_protocol_schema::v1::Content::new(
+                    ContentBlock::Text(TextContent::new("# raw output")),
+                )),
+            ]);
+        let lines = Registry::default().render(&ToolContext::new(&read, Size::new(40, 24)));
+        let output = text(&lines);
+        assert!(output.contains("● Read README.md"), "{output}");
+        assert!(output.contains("│ cat README.md"), "{output}");
+        assert!(output.contains("# raw output"), "{output}");
+        assert!(!output.contains("exec-secret-id"), "{output}");
+        assert!(!output.contains("/bin/zsh"), "{output}");
+        let command_spans = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .filter(|span| span.content.contains("cat README.md"));
+        for span in command_spans {
+            assert_eq!(span.style.fg, Some(Color::DarkGray));
+            assert!(!span.style.add_modifier.contains(Modifier::BOLD));
+        }
+    }
+
+    #[test]
+    fn argv_quoting_and_literal_execute_titles_survive() {
+        let executed = call(ToolKind::Execute, "Run checks")
+            .raw_input(serde_json::json!({"command": ["printf", "%s", "two words"]}));
+        let output =
+            text(&Registry::default().render(&ToolContext::new(&executed, Size::new(80, 24))));
+        assert!(output.contains("printf '%s' 'two words'"), "{output}");
+        let fallback = call(ToolKind::Execute, "echo '**literal**'");
+        let output =
+            text(&Registry::default().render(&ToolContext::new(&fallback, Size::new(80, 24))));
+        assert!(output.starts_with("● Command\n┌"), "{output}");
+        assert!(output.contains("│ echo '**literal**'"), "{output}");
     }
 }

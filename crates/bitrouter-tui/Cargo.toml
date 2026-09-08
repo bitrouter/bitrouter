@@ -17,7 +17,10 @@ rust-version.workspace = true
 [dependencies]
 agent-client-protocol-schema.workspace = true
 ratatui.workspace = true
+ratatui-markdown.workspace = true
 serde_json.workspace = true
 crossterm.workspace = true
 similar.workspace = true
+shell-words.workspace = true
 unicode-width.workspace = true
+unicode-segmentation.workspace = true
