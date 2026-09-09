@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter"
-version = "1.0.0-alpha.30"
+version = "1.0.0-alpha.31"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -711,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-guardrails"
-version = "1.0.0-alpha.30"
+version = "1.0.0-alpha.31"
 dependencies = [
  "async-trait",
  "bitrouter-sdk",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-mcp"
-version = "1.0.0-alpha.30"
+version = "1.0.0-alpha.31"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-providers"
-version = "1.0.0-alpha.30"
+version = "1.0.0-alpha.31"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-sdk"
-version = "1.0.0-alpha.30"
+version = "1.0.0-alpha.31"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-conductor",
@@ -806,7 +806,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-telemetry"
-version = "1.0.0-alpha.30"
+version = "1.0.0-alpha.31"
 dependencies = [
  "async-trait",
  "axum",
@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "bitrouter-tui"
-version = "1.0.0-alpha.30"
+version = "1.0.0-alpha.31"
 dependencies = [
  "agent-client-protocol-schema",
  "crossterm",
@@ -1657,7 +1657,7 @@ dependencies = [
 
 [[package]]
 name = "dist-helper"
-version = "1.0.0-alpha.30"
+version = "1.0.0-alpha.31"
 dependencies = [
  "anyhow",
  "bitrouter-sdk",

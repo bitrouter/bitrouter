@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.31](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.30...v1.0.0-alpha.31)
+
+
+### ⛰️ Features
+
+- *(acp)* Add checkpoints and assessment revisions ([#903](https://github.com/bitrouter/bitrouter/pull/903)) - ([ad2bab7](https://github.com/bitrouter/bitrouter/commit/ad2bab71968e40752fe175433b23fd2098307c81))
+- *(acp)* Persist canonical session trajectories ([#902](https://github.com/bitrouter/bitrouter/pull/902)) - ([17116a2](https://github.com/bitrouter/bitrouter/commit/17116a25e58c15f5965e2072be80de9436e36748))
+- *(control)* Add remote router administration ([#901](https://github.com/bitrouter/bitrouter/pull/901)) - ([a88ce8e](https://github.com/bitrouter/bitrouter/commit/a88ce8e2d6fba3e2c4359287d22e046224eb9616))
+- *(tui)* Adopt native scrollback ([#904](https://github.com/bitrouter/bitrouter/pull/904)) - ([b8ed285](https://github.com/bitrouter/bitrouter/commit/b8ed2854197a4a3d3dfb8ea4b20ff110420828bb))
+- *(tui)* Replace dashboard with conversation - ([6589188](https://github.com/bitrouter/bitrouter/commit/65891881df6b4584a154955bb05c80cc29427351))
+- *(tui)* Improve scrollback and transcript rendering ([#899](https://github.com/bitrouter/bitrouter/pull/899)) - ([a59bd6b](https://github.com/bitrouter/bitrouter/commit/a59bd6b3fe1537138d1ae88ddda1839b3673dfa9))
+
+### 🐛 Bug Fixes
+
+- *(codex)* Preserve ACP tools through Responses ([#892](https://github.com/bitrouter/bitrouter/pull/892)) - ([6f10d52](https://github.com/bitrouter/bitrouter/commit/6f10d52808ebf95ba98969f2652a998b13841c5e))
+- *(update)* Delegate managed installs ([#898](https://github.com/bitrouter/bitrouter/pull/898)) - ([72384d2](https://github.com/bitrouter/bitrouter/commit/72384d2926b3c573eb5c4f380fa3e458430d074a))
+
+
 ## [1.0.0-alpha.30](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.29...v1.0.0-alpha.30)
 
 
