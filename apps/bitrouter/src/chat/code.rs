@@ -143,6 +143,11 @@ impl Runtime {
         let mut paint_due = None;
         loop {
             while let Some(effect) = self.effects.pop_front() {
+                if effect == CodeEffect::Redraw {
+                    view.invalidate();
+                    dirty = true;
+                    continue;
+                }
                 let selection = match &effect {
                     CodeEffect::Select { selector, .. } => Some(selector.clone()),
                     _ => None,
@@ -236,7 +241,19 @@ impl Runtime {
                     }
                     dirty = true;
                 }
-                _ = shutdown.recv() => return Ok(()),
+                signal = shutdown.recv() => match signal {
+                    super::signals::TerminalSignal::Shutdown => return Ok(()),
+                    super::signals::TerminalSignal::Suspend => {
+                        // No input reader may retain buffered keys across the
+                        // terminal ownership boundary.
+                        drop(events.take());
+                        view.suspend()?;
+                        super::signals::suspend_current_process()?;
+                        view.resume()?;
+                        events = Some(EventStream::new());
+                        dirty = true;
+                    }
+                },
                 route = next_route(&mut self.route_probe) => {
                     self.route_probe = None;
                     match route {
@@ -450,7 +467,8 @@ impl Runtime {
             | CodeEffect::Cancel
             | CodeEffect::ResolvePermission { .. }
             | CodeEffect::Submit { .. }
-            | CodeEffect::AgentPrompt { .. } => {}
+            | CodeEffect::AgentPrompt { .. }
+            | CodeEffect::Redraw => {}
         }
         Ok(())
     }

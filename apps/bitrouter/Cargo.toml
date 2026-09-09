@@ -71,6 +71,9 @@ schemars.workspace = true
 [target.'cfg(windows)'.dependencies]
 atomicwrites.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }
+
 [build-dependencies]
 # Reads the committed registry artifacts to generate the ACP harness catalog.
 serde_json.workspace = true

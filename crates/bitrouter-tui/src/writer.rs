@@ -306,6 +306,29 @@ impl<B: Backend + SyncSink> Writer<B> {
         self.prev.clear();
     }
 
+    /// Make the complete current screen available without deleting history.
+    ///
+    /// The startup anchor protects shell rows above Code's first cursor. A
+    /// below-minimum safety surface cannot be useful in a one-row remainder,
+    /// so it scrolls those protected rows into native history and then owns
+    /// the full shrunken screen. Repeated calls are harmless once the anchor
+    /// reaches zero.
+    pub fn claim_full_height(&mut self) -> io::Result<()> {
+        let size = self.backend.size()?;
+        self.width = size.width.max(1);
+        self.height = size.height.max(1);
+        self.anchor = self.anchor.min(self.height.saturating_sub(1));
+        if self.anchor == 0 {
+            return Ok(());
+        }
+        self.backend.synchronized(true)?;
+        let result = self.scroll(usize::from(self.anchor));
+        self.backend.synchronized(false)?;
+        result?;
+        self.prev.clear();
+        self.backend.flush()
+    }
+
     /// Leave the cursor below the document, and nothing else.
     ///
     /// Every committed row stays exactly where it is — teardown removes
@@ -692,6 +715,19 @@ mod tests {
         let mut writer = writer(20, 6);
         writer.frame(&document(&["one", "two", "three"]))?;
         assert_eq!(screen(&writer)[..3], ["one", "two", "three"]);
+        Ok(())
+    }
+
+    #[test]
+    fn claiming_full_height_scrolls_the_anchor_instead_of_clearing_history() -> io::Result<()> {
+        let mut writer = writer(20, 6);
+        writer.anchor = 4;
+        writer.claim_full_height()?;
+        assert_eq!(writer.anchor, 0);
+        writer.frame(&document(&["safe one", "safe two", "safe three"]))?;
+        assert_eq!(screen(&writer)[..3], ["safe one", "safe two", "safe three"]);
+        writer.claim_full_height()?;
+        assert_eq!(writer.anchor, 0);
         Ok(())
     }
 

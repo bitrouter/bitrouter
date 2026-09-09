@@ -16,6 +16,16 @@ struct ShutdownSignals {
     interrupt: tokio::signal::unix::Signal,
     terminate: tokio::signal::unix::Signal,
     hangup: tokio::signal::unix::Signal,
+    suspend: tokio::signal::unix::Signal,
+}
+
+/// A process signal that changes terminal custody.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalSignal {
+    /// End the interactive process after its ordinary cleanup path runs.
+    Shutdown,
+    /// Restore terminal modes, stop, then reacquire them after `SIGCONT`.
+    Suspend,
 }
 
 #[cfg(unix)]
@@ -33,17 +43,39 @@ impl ShutdownSignals {
             interrupt: signal(SignalKind::interrupt())?,
             terminate: signal(SignalKind::terminate())?,
             hangup: signal(SignalKind::hangup())?,
+            suspend: signal(SignalKind::from_raw(rustix::process::Signal::TSTP.as_raw()))?,
         })
     }
 
     /// Resolve when any of them fires.
-    async fn recv(&mut self) {
+    async fn recv(&mut self) -> TerminalSignal {
         tokio::select! {
-            _ = self.interrupt.recv() => {}
-            _ = self.terminate.recv() => {}
-            _ = self.hangup.recv() => {}
+            _ = self.interrupt.recv() => TerminalSignal::Shutdown,
+            _ = self.terminate.recv() => TerminalSignal::Shutdown,
+            _ = self.hangup.recv() => TerminalSignal::Shutdown,
+            _ = self.suspend.recv() => TerminalSignal::Suspend,
         }
     }
+}
+
+/// Stop this process after terminal custody has been released.
+///
+/// `SIGSTOP` cannot be intercepted, so execution resumes immediately after
+/// this call only when the shell or supervisor delivers `SIGCONT`.
+#[cfg(unix)]
+pub fn suspend_current_process() -> std::io::Result<()> {
+    Ok(rustix::process::kill_process(
+        rustix::process::getpid(),
+        rustix::process::Signal::STOP,
+    )?)
+}
+
+#[cfg(not(unix))]
+pub fn suspend_current_process() -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "process suspension is unavailable on this platform",
+    ))
 }
 
 /// The third exit, as a `select!` arm.
@@ -71,11 +103,10 @@ impl Shutdown {
     }
 
     /// Resolve when one of them fires.
-    pub async fn recv(&mut self) {
+    pub async fn recv(&mut self) -> TerminalSignal {
         #[cfg(unix)]
         if let Some(signals) = self.signals.as_mut() {
-            signals.recv().await;
-            return;
+            return signals.recv().await;
         }
         std::future::pending().await
     }

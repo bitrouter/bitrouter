@@ -32,6 +32,10 @@ const PTY_TIMEOUT: Duration = Duration::from_secs(15);
 const CODE_COLUMNS: u16 = 80;
 const CODE_ROWS: u16 = 24;
 const REMOTE_FIXTURE_TOKEN: &str = "remote-a12-fixture-token-0123456789";
+const ENTER_ALTERNATE_SCREEN: &str = "\x1b[?1049h";
+const LEAVE_ALTERNATE_SCREEN: &str = "\x1b[?1049l";
+const BEGIN_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026h";
+const END_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026l";
 
 /// A deliberately small ACP agent. Its responses are protocol-shaped JSON, not
 /// terminal snapshots, so test failures describe lifecycle behavior instead of
@@ -102,6 +106,36 @@ def settle_pending(reason, text):
         update(text)
         finish(prompt, reason)
 
+def emit_permissions():
+    global permission_ids
+    with state_lock:
+        permission_ids = {"permission-1", "permission-2"}
+    for number in (1, 2):
+        send({
+            "jsonrpc": "2.0",
+            "id": "permission-" + str(number),
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "pty-native",
+                "toolCall": {
+                    "toolCallId": "tool-" + str(number),
+                    "title": "fixture permission " + str(number),
+                },
+                "options": [
+                    {
+                        "optionId": "allow-" + str(number),
+                        "name": "Allow fixture " + str(number),
+                        "kind": "allow_once",
+                    },
+                    {
+                        "optionId": "deny-" + str(number),
+                        "name": "Deny fixture " + str(number),
+                        "kind": "reject_once",
+                    },
+                ],
+            },
+        })
+
 def control_loop(server):
     while True:
         connection, _ = server.accept()
@@ -111,6 +145,14 @@ def control_loop(server):
                 settle_pending("end_turn", "FXRL")
             elif command == "refusal":
                 settle_pending("refusal", "FXST")
+            elif command == "permission":
+                emit_permissions()
+            elif command == "backlog":
+                prompt = take_pending()
+                if prompt is not None:
+                    for number in range(90):
+                        update("BG" + str(number).zfill(3) + "\n")
+                    finish(prompt)
             connection.sendall(b"ok\n")
             if command == "disconnect":
                 os._exit(0)
@@ -201,32 +243,15 @@ with open(capture_path, "ab") as capture:
             elif scenario == "overlapping-permissions":
                 with state_lock:
                     pending_prompt = request_id
-                    permission_ids = {"permission-1", "permission-2"}
-                for number in (1, 2):
-                    send({
-                        "jsonrpc": "2.0",
-                        "id": "permission-" + str(number),
-                        "method": "session/request_permission",
-                        "params": {
-                            "sessionId": "pty-native",
-                            "toolCall": {
-                                "toolCallId": "tool-" + str(number),
-                                "title": "fixture permission " + str(number),
-                            },
-                            "options": [
-                                {
-                                    "optionId": "allow-" + str(number),
-                                    "name": "Allow fixture " + str(number),
-                                    "kind": "allow_once",
-                                },
-                                {
-                                    "optionId": "deny-" + str(number),
-                                    "name": "Deny fixture " + str(number),
-                                    "kind": "reject_once",
-                                },
-                            ],
-                        },
-                    })
+                emit_permissions()
+            elif scenario == "permission-during-inspector":
+                with state_lock:
+                    pending_prompt = request_id
+                update("FXPD")
+            elif scenario == "detached-backlog":
+                with state_lock:
+                    pending_prompt = request_id
+                update("FXBG")
             else:
                 update("FXRP" + str(prompt_count))
                 finish(request_id)
@@ -252,6 +277,8 @@ enum MockScenario {
     DelayedNormal,
     DelayedRefusal,
     OverlappingPermissions,
+    PermissionDuringInspector,
+    DetachedBacklog,
     SettingsConfirmed,
     SettingsFailure,
     SessionLifecycle,
@@ -265,6 +292,8 @@ impl MockScenario {
             Self::DelayedNormal => "delayed-normal",
             Self::DelayedRefusal => "delayed-refusal",
             Self::OverlappingPermissions => "overlapping-permissions",
+            Self::PermissionDuringInspector => "permission-during-inspector",
+            Self::DetachedBacklog => "detached-backlog",
             Self::SettingsConfirmed => "settings-confirmed",
             Self::SettingsFailure => "settings-failure",
             Self::SessionLifecycle => "session-lifecycle",
@@ -469,6 +498,14 @@ impl MockAcp {
 
     fn disconnect(&self) -> Result<()> {
         self.control("disconnect")
+    }
+
+    fn request_permissions(&self) -> Result<()> {
+        self.control("permission")
+    }
+
+    fn release_backlog(&self) -> Result<()> {
+        self.control("backlog")
     }
 
     fn control(&self, message: &str) -> Result<()> {
@@ -1098,7 +1135,7 @@ impl PtyRunner {
                     .any(|window| window == text.as_bytes())
                     || screen != checkpoint.screen
             });
-            if visible && changed_since_checkpoint {
+            if visible && changed_since_checkpoint && synchronized_update_complete(&self.output) {
                 return Ok(screen);
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -1159,6 +1196,45 @@ impl PtyRunner {
         }
     }
 
+    fn wait_for_raw_text_since(
+        &mut self,
+        checkpoint: &PtyCheckpoint,
+        text: &str,
+    ) -> Result<String> {
+        let deadline = Instant::now() + PTY_TIMEOUT;
+        loop {
+            let bytes = &self.output[checkpoint.output_len..];
+            if bytes
+                .windows(text.len())
+                .any(|window| window == text.as_bytes())
+            {
+                return Ok(String::from_utf8_lossy(bytes).to_string());
+            }
+            let transcript = String::from_utf8_lossy(bytes).to_string();
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                bail!(
+                    "timed out waiting for raw PTY text {text:?} after checkpoint; output was {transcript:?}"
+                );
+            }
+            match self.output_receiver.recv_timeout(remaining) {
+                Ok(Ok(bytes)) => {
+                    self.screen.process(&bytes);
+                    self.output.extend_from_slice(&bytes);
+                }
+                Ok(Err(error)) => {
+                    bail!("PTY reader failed while waiting for raw {text:?}: {error}")
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    bail!("timed out waiting for raw PTY text {text:?} after checkpoint")
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    bail!("PTY closed while waiting for raw {text:?} after checkpoint")
+                }
+            }
+        }
+    }
+
     fn wait_for_exit(&mut self) -> Result<portable_pty::ExitStatus> {
         match self.exit_receiver.recv_timeout(PTY_TIMEOUT) {
             Ok(Ok(status)) => Ok(status),
@@ -1167,6 +1243,16 @@ impl PtyRunner {
             Err(RecvTimeoutError::Disconnected) => bail!("PTY waiter exited without a status"),
         }
     }
+}
+
+fn synchronized_update_complete(output: &[u8]) -> bool {
+    let begin = output
+        .windows(BEGIN_SYNCHRONIZED_UPDATE.len())
+        .rposition(|window| window == BEGIN_SYNCHRONIZED_UPDATE);
+    let end = output
+        .windows(END_SYNCHRONIZED_UPDATE.len())
+        .rposition(|window| window == END_SYNCHRONIZED_UPDATE);
+    begin.is_none_or(|begin| end.is_some_and(|end| end > begin))
 }
 
 impl Drop for PtyRunner {
@@ -1301,14 +1387,14 @@ impl CodeFixture {
 
     fn close_to_composer(&mut self) -> Result<()> {
         let checkpoint = self.pty.checkpoint();
-        self.pty.send(b"\x03\x1b")?;
-        let _ = self.pty.wait_for_text_since(&checkpoint, "Composer")?;
+        self.pty.send(b"\x1b")?;
+        let _ = self.pty.wait_for_text_since(&checkpoint, "┃ Message")?;
         Ok(())
     }
 
     fn signal_child(&self, signal: &str) -> Result<()> {
         ensure!(
-            matches!(signal, "INT" | "TERM"),
+            matches!(signal, "INT" | "TERM" | "TSTP" | "CONT"),
             "unsupported fixture signal {signal:?}"
         );
         let deadline = Instant::now() + PTY_TIMEOUT;
@@ -1762,6 +1848,199 @@ fn code_minimal_agent_preserves_multiline_prompt_history_and_terminal() -> Resul
 }
 
 #[test]
+fn code_uses_normal_buffer_until_an_explicit_inspector() -> Result<()> {
+    let mut code = CodeFixture::agent(MockScenario::Minimal)?;
+    code.wait_for_agent_ready()?;
+    ensure!(
+        !code
+            .pty
+            .output
+            .windows(ENTER_ALTERNATE_SCREEN.len())
+            .any(|window| window == ENTER_ALTERNATE_SCREEN.as_bytes()),
+        "Code entered the alternate screen before an explicit inspector"
+    );
+
+    code.pty.send(b"inspect this turn\r")?;
+    let _ = code.pty.wait_for_text("Turn completed")?;
+    let open = code.pty.checkpoint();
+    code.pty.send(b"\x0f")?;
+    let _ = code
+        .pty
+        .wait_for_raw_text_since(&open, ENTER_ALTERNATE_SCREEN)?;
+    let _ = code.pty.wait_for_text_since(&open, "Full transcript")?;
+
+    let close = code.pty.checkpoint();
+    code.pty.send(b"\x1b")?;
+    let _ = code
+        .pty
+        .wait_for_raw_text_since(&close, LEAVE_ALTERNATE_SCREEN)?;
+    let normal = code.pty.wait_for_text_since(&close, "Message")?;
+    ensure!(
+        normal.contains("inspect this turn"),
+        "closing the inspector did not restore the normal-buffer transcript"
+    );
+    code.pty.send(b"\x04")?;
+    code.assert_terminal_restored()
+}
+
+#[test]
+fn code_detached_backlog_catches_up_once_after_resizes() -> Result<()> {
+    let mut code = CodeFixture::agent(MockScenario::DetachedBacklog)?;
+    code.wait_for_agent_ready()?;
+    code.pty.send(b"produce detached backlog\r")?;
+    let _ = code.pty.wait_for_text("FXBG")?;
+    code.pty.send(b"\x0f")?;
+    let _ = code.pty.wait_for_text("Full transcript")?;
+
+    let narrow = code.pty.checkpoint();
+    code.pty.resize(40, 16)?;
+    code.pty.send(b"\x0c")?;
+    let _ = code.pty.wait_for_text_since(&narrow, "Full transcript")?;
+    let wide = code.pty.checkpoint();
+    code.pty.resize(CODE_COLUMNS, CODE_ROWS)?;
+    code.pty.send(b"\x0c")?;
+    let _ = code.pty.wait_for_text_since(&wide, "Full transcript")?;
+
+    code.mock.release_backlog()?;
+    let _ = code.pty.wait_for_text("BG010")?;
+    code.pty.send(b"\x1b[F")?;
+    let _ = code.pty.wait_for_text("BG089")?;
+    let close = code.pty.checkpoint();
+    code.pty.send(b"\x1b")?;
+    let _ = code.pty.wait_for_text_since(&close, "Turn completed")?;
+    let emitted = &code.pty.output[close.output_len..];
+    for number in 0..90 {
+        let marker = format!("BG{number:03}");
+        let count = emitted
+            .windows(marker.len())
+            .filter(|window| *window == marker.as_bytes())
+            .count();
+        ensure!(
+            count == 1,
+            "detached catch-up emitted {marker} {count} times instead of once"
+        );
+    }
+    code.pty.send(b"\x04")?;
+    code.assert_terminal_restored()
+}
+
+#[test]
+fn permission_arriving_in_inspector_needs_f2_and_fresh_selection() -> Result<()> {
+    let mut code = CodeFixture::agent(MockScenario::PermissionDuringInspector)?;
+    code.wait_for_agent_ready()?;
+    code.pty.send(b"permission while detached\r")?;
+    let _ = code.pty.wait_for_text("FXPD")?;
+    code.pty.send(b"\x0f")?;
+    let _ = code.pty.wait_for_text("Full transcript")?;
+    code.mock.request_permissions()?;
+    let _ = code.pty.wait_for_text("Permission needed · F2 to review")?;
+
+    let ignored = code.pty.checkpoint();
+    code.pty.send(b"1\r\x0c")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&ignored, "Permission needed · F2 to review")?;
+    ensure!(
+        code.mock.captured_permission_outcomes()?.is_empty(),
+        "inspector keys answered a permission before explicit F2 focus"
+    );
+
+    code.pty.send(b"\x1b")?;
+    let _ = code
+        .pty
+        .wait_for_text("Permission needed · F2 focuses oldest pending request")?;
+    code.pty.send(b"\x1b[12~")?;
+    let _ = code.pty.wait_for_text("Press a number to highlight")?;
+    let no_selection = code.pty.checkpoint();
+    code.pty.send(b"\r\x0c")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&no_selection, "Press a number to highlight")?;
+    ensure!(
+        code.mock.captured_permission_outcomes()?.is_empty(),
+        "permission focus reused buffered selection input"
+    );
+
+    code.pty.send(b"1\r")?;
+    code.pty.send(b"\x1b[12~")?;
+    let _ = code.pty.wait_for_text("Allow fixture 2")?;
+    code.pty.send(b"1\r")?;
+    let _ = code.pty.wait_for_text("Turn completed")?;
+    let outcomes = code.mock.wait_for_permission_outcomes()?;
+    ensure!(
+        outcomes.len() == 2,
+        "permissions were not resolved exactly once"
+    );
+    code.pty.send(b"\x04")?;
+    code.assert_terminal_restored()
+}
+
+#[test]
+fn code_minimum_and_below_minimum_permission_paths_are_safe() -> Result<()> {
+    let mut code = CodeFixture::agent(MockScenario::OverlappingPermissions)?;
+    code.wait_for_agent_ready()?;
+    let resize_checkpoint = code.pty.checkpoint();
+    code.pty.resize(40, 16)?;
+    code.pty.send(b"\x0c")?;
+    let _ = code
+        .pty
+        .wait_for_raw_text_since(&resize_checkpoint, "\x1b[?2026l")?;
+    let resized = code.pty.checkpoint();
+    code.pty.send("中文 👩‍💻 permission\r".as_bytes())?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&resized, "F2 permission (2)")?;
+
+    let small = code.pty.checkpoint();
+    code.pty.resize(30, 10)?;
+    code.pty.send(b"\x0c")?;
+    let raw_small = code
+        .pty
+        .wait_for_raw_text_since(&small, "Approval is disabled")?;
+    ensure!(
+        code.pty
+            .screen
+            .screen()
+            .contents()
+            .contains("Approval is disabled"),
+        "below-minimum safety copy was emitted but not visible; raw={raw_small:?}; screen={:?}",
+        code.pty.screen.screen().contents()
+    );
+    code.pty.send(b"\x1b[12~1\r")?;
+    let guarded = code.pty.checkpoint();
+    code.pty.send(b"\x0c")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&guarded, "Approval is disabled")?;
+    ensure!(
+        code.mock.captured_permission_outcomes()?.is_empty(),
+        "below-minimum input approved a permission"
+    );
+    code.pty.send(b"\x1b")?;
+    let _ = code.pty.wait_for_text("fixture permission 2")?;
+    let focus_second = code.pty.checkpoint();
+    code.pty.send(b"\x1b[12~\x0c")?;
+    let _ = code
+        .pty
+        .wait_for_raw_text_since(&focus_second, "\x1b[?2026h")?;
+    code.pty.send(b"\x1b")?;
+    let outcomes = code.mock.wait_for_permission_outcomes()?;
+    ensure!(
+        outcomes.len() == 2,
+        "safe denial did not resolve both requests"
+    );
+
+    code.pty.resize(40, 16)?;
+    let _ = code.pty.wait_for_text("Turn completed")?;
+    ensure!(
+        code.mock.captured_prompts()? == vec!["中文 👩‍💻 permission".to_string()],
+        "40×16 changed the submitted CJK/emoji prompt"
+    );
+    code.pty.send(b"\x04")?;
+    code.assert_terminal_restored()
+}
+
+#[test]
 fn code_external_editor_preserves_multiline_prompt_and_terminal() -> Result<()> {
     let mock = MockAcp::new(MockScenario::Minimal)?;
     let edited = "external-replacement 中文 👩‍💻\nsecond edited line  ";
@@ -1881,14 +2160,31 @@ fn code_sigint_restores_terminal_and_shell() -> Result<()> {
 }
 
 #[test]
+fn code_sigtstp_restores_then_sigcont_reacquires_terminal() -> Result<()> {
+    let mut code = CodeFixture::agent(MockScenario::Minimal)?;
+    code.wait_for_agent_ready()?;
+    let suspended = code.pty.checkpoint();
+    code.signal_child("TSTP")?;
+    let _ = code
+        .pty
+        .wait_for_raw_text_since(&suspended, "\x1b[?2004l")?;
+
+    let resumed = code.pty.checkpoint();
+    code.signal_child("CONT")?;
+    let _ = code.pty.wait_for_raw_text_since(&resumed, "\x1b[?2004h")?;
+    let screen = code.pty.wait_for_text_since(&resumed, "Message")?;
+    ensure!(
+        screen.contains("FXRD"),
+        "SIGCONT did not redraw the authoritative conversation"
+    );
+    code.pty.send(b"\x04")?;
+    code.assert_terminal_restored()
+}
+
+#[test]
 fn code_bare_entry_offers_selection_without_permanent_navigation() -> Result<()> {
     let mut bare = CodeFixture::bare()?;
-    let _ = bare.pty.wait_for_text("Ctrl-P commands")?;
-    let selection_checkpoint = bare.pty.checkpoint();
-    bare.pty.send(b"\x10")?;
-    let selection = bare
-        .pty
-        .wait_for_text_since(&selection_checkpoint, "Choose agent")?;
+    let selection = bare.pty.wait_for_text("claude-acp")?;
     ensure!(
         !selection.contains("Home")
             && !selection.contains("Agents")
@@ -1908,7 +2204,7 @@ fn code_bare_entry_offers_selection_without_permanent_navigation() -> Result<()>
     );
     let _ = bare
         .pty
-        .wait_for_text_since(&submit_checkpoint, "Choose agent")?;
+        .wait_for_text_since(&submit_checkpoint, "claude-acp")?;
     bare.close_to_composer()?;
     let clear_checkpoint = bare.pty.checkpoint();
     bare.pty.send(b"\x03")?;
@@ -1970,12 +2266,7 @@ fn code_hidden_chat_shares_palette_permissions_and_terminal_restoration() -> Res
 #[test]
 fn code_hidden_tui_bare_alias_uses_the_shared_empty_composer() -> Result<()> {
     let mut tui = CodeFixture::tui_bare()?;
-    let _ = tui.pty.wait_for_text("Ctrl-P commands")?;
-    let selection_checkpoint = tui.pty.checkpoint();
-    tui.pty.send(b"\x10")?;
-    let selection = tui
-        .pty
-        .wait_for_text_since(&selection_checkpoint, "Choose agent")?;
+    let selection = tui.pty.wait_for_text("claude-acp")?;
     ensure!(
         !selection.contains("Home")
             && !selection.contains("Agents")
@@ -1994,7 +2285,7 @@ fn code_queues_fifo_work_and_drains_after_each_normal_settlement() -> Result<()>
     queued.pty.send(b"first\r")?;
     let _ = queued.pty.wait_for_text("FXW1")?;
     queued.pty.paste("queued follow-up")?;
-    queued.pty.send(b"\t")?;
+    queued.pty.send(b"\r")?;
     let _ = queued.pty.wait_for_text("Queued for the next turn (")?;
 
     queued.mock.release()?;
@@ -2021,7 +2312,7 @@ fn code_cancellation_pauses_queue_without_replaying_uncertain_work() -> Result<(
     queued.pty.send(b"first\r")?;
     let _ = queued.pty.wait_for_text("FXCN")?;
     queued.pty.paste("queued follow-up")?;
-    queued.pty.send(b"\t")?;
+    queued.pty.send(b"\r")?;
     let _ = queued.pty.wait_for_text("Queued for the next turn (")?;
     let cancellation_checkpoint = queued.pty.checkpoint();
     queued.pty.send(b"\x03")?;
@@ -2047,7 +2338,7 @@ fn code_abnormal_stop_pauses_queue_without_draining_it() -> Result<()> {
     queued.pty.send(b"first\r")?;
     let _ = queued.pty.wait_for_text("FXRF")?;
     queued.pty.paste("queued after refusal")?;
-    queued.pty.send(b"\t")?;
+    queued.pty.send(b"\r")?;
     let _ = queued.pty.wait_for_text("Queued for the next turn (")?;
     let refusal_checkpoint = queued.pty.checkpoint();
     queued.mock.stop_with_refusal()?;
@@ -2110,7 +2401,7 @@ fn code_remote_operations_use_authenticated_remote_read_actions() -> Result<()> 
         "remote target and read-only scope were not visible: {root:?}"
     );
     ensure!(
-        !root.contains("Composer"),
+        !root.contains("Message"),
         "remote root exposed an enabled coding composer: {root:?}"
     );
     let capabilities = code
@@ -2129,8 +2420,7 @@ fn code_remote_operations_use_authenticated_remote_read_actions() -> Result<()> 
         palette.contains("Status")
             && palette.contains("Host requests")
             && palette.contains("Route preview")
-            && palette.contains("Providers")
-            && palette.contains("Telemetry"),
+            && palette.contains("Providers"),
         "remote palette omitted a supported read action: {palette:?}"
     );
     ensure!(
@@ -2139,6 +2429,18 @@ fn code_remote_operations_use_authenticated_remote_read_actions() -> Result<()> 
             && !palette.contains("Session route"),
         "remote palette offered ACP execution or route mutation: {palette:?}"
     );
+    code.pty.send(b"Telemetry")?;
+    let _ = code.pty.wait_for_text("Telemetry")?;
+    let palette_return = code.pty.checkpoint();
+    code.pty.send(b"\x1b")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&palette_return, "Ctrl-P opens target actions")?;
+    let models_palette = code.pty.checkpoint();
+    code.pty.send(b"\x10")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&models_palette, "Routable models")?;
     code.pty.send(b"Routable models\r")?;
     let models = code.pty.wait_for_text("REMOTE_A12_MODEL")?;
     ensure!(
@@ -2255,7 +2557,7 @@ fn code_socket_operations_remain_read_only_without_starting_an_agent() -> Result
     ensure!(
         root.contains("Local operations")
             && root.contains("read-only")
-            && !root.contains("Composer"),
+            && !root.contains("Message"),
         "socket-only entry did not show its read-only scope: {root:?}"
     );
     ensure!(
@@ -2300,7 +2602,7 @@ fn code_agent_settings_apply_only_a_confirmed_configuration() -> Result<()> {
     code.pty.send(b"A12 confirmed\r")?;
     let _ = code
         .pty
-        .wait_for_text_since(&confirmation_checkpoint, "Composer")?;
+        .wait_for_text_since(&confirmation_checkpoint, "Message")?;
     let request = code.mock.wait_for_request("session/set_config_option")?;
     ensure!(
         request["params"]["sessionId"] == "pty-native"

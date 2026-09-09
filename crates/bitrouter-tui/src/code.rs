@@ -1,4 +1,4 @@
-//! Conversation-first Code state and full-screen renderer.
+//! Conversation-first Code state and scrollback-native renderer.
 //!
 //! The application owns ACP I/O, reports, clipboard access, and async work.
 //! This module retains the conversation projection and returns plain effects.
@@ -13,8 +13,9 @@ use agent_client_protocol_schema::v1::{
 use crossterm::cursor::Hide;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
-use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::backend::{CrosstermBackend, TestBackend};
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Layout, Position, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
@@ -28,6 +29,7 @@ use crate::journal::{Entry, EntryId, Journal, Voice};
 use crate::permission::Prompt;
 use crate::render::{self, Registry, ToolContext};
 use crate::wrap::wrap;
+use crate::writer::Writer;
 
 /// The four persistent conversation facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +97,8 @@ pub enum CommandTarget {
         /// Opaque report id.
         id: String,
     },
+    /// Explicitly resume a paused next-turn queue.
+    ResumeQueue,
     /// Send an agent command as prompt text without local re-resolution.
     AgentPrompt {
         /// Exact command prompt.
@@ -330,6 +334,8 @@ pub enum CodeEffect {
         /// Exact text.
         text: String,
     },
+    /// Invalidate and repaint the presentation currently owned by Code.
+    Redraw,
     /// Exit the interactive Code process.
     Exit,
 }
@@ -353,15 +359,9 @@ enum TurnState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ReadingAnchor {
-    entry: EntryId,
-    source_offset: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ReadingPosition {
-    entry: EntryId,
-    source_offset: usize,
+enum QueueRunState {
+    Running,
+    Paused(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -372,7 +372,7 @@ enum Surface {
     Inspector(OpenInspector),
     Permission,
     Queue { selected: usize },
-    TranscriptSearch { query: String },
+    Recovery { selected: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -419,6 +419,9 @@ enum Choice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OpenInspector {
     inspector: Inspector,
+    tracks_transcript: bool,
+    /// Stable retained entry selected by the full-transcript navigator.
+    transcript_entry: Option<EntryId>,
     scroll: usize,
     search: String,
     searching: bool,
@@ -431,6 +434,7 @@ struct OpenInspector {
 struct PendingPrompt {
     prompt: String,
     agent_command: bool,
+    from_queue: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -457,19 +461,18 @@ pub struct CodeState {
     permissions: VecDeque<PendingPermission>,
     permission_selected: Option<usize>,
     permission_return: Option<Surface>,
+    pending_followups: VecDeque<QueuedPrompt>,
     queue: VecDeque<QueuedPrompt>,
+    dispatching: Option<QueuedPrompt>,
+    queue_state: QueueRunState,
+    recovery: VecDeque<QueuedPrompt>,
     selected_command: Option<(String, CommandTarget, CommandOwner)>,
     surface: Surface,
-    follow_live: bool,
-    reading_anchor: Option<ReadingAnchor>,
-    reading_positions: Vec<ReadingPosition>,
-    reading_layout_revision: u64,
-    reading_page: usize,
-    new_activity: bool,
     notice: Option<String>,
     dispatch_after_permissions: bool,
     operations_only: bool,
     operations_root: Option<Inspector>,
+    viewport: Size,
 }
 
 impl Default for CodeState {
@@ -497,19 +500,18 @@ impl CodeState {
             permissions: VecDeque::new(),
             permission_selected: None,
             permission_return: None,
+            pending_followups: VecDeque::new(),
             queue: VecDeque::new(),
+            dispatching: None,
+            queue_state: QueueRunState::Running,
+            recovery: VecDeque::new(),
             selected_command: None,
             surface: Surface::Conversation,
-            follow_live: true,
-            reading_anchor: None,
-            reading_positions: Vec::new(),
-            reading_layout_revision: 0,
-            reading_page: 1,
-            new_activity: false,
             notice: None,
             dispatch_after_permissions: false,
             operations_only: false,
             operations_root: None,
+            viewport: Size::new(80, 24),
         }
     }
 
@@ -638,6 +640,11 @@ impl CodeState {
 
     /// Open a full-content temporary inspector.
     pub fn open_inspector(&mut self, inspector: Inspector) {
+        if !self.permissions.is_empty() {
+            self.notice =
+                Some("Permission needed · F2 to review before opening details".to_string());
+            return;
+        }
         let return_to = self.transient_return_target();
         self.open_inspector_returning_to(inspector, return_to);
     }
@@ -649,6 +656,8 @@ impl CodeState {
     ) {
         self.surface = Surface::Inspector(OpenInspector {
             inspector,
+            tracks_transcript: false,
+            transcript_entry: None,
             scroll: 0,
             search: String::new(),
             searching: false,
@@ -663,8 +672,8 @@ impl CodeState {
     /// composer remains disabled for the entire operations-only surface.
     pub fn operations_root(&mut self, inspector: Inspector) {
         self.operations_only = true;
-        self.operations_root = Some(inspector.clone());
-        self.open_inspector_returning_to(inspector, None);
+        self.operations_root = Some(inspector);
+        self.surface = Surface::Conversation;
     }
 
     /// Toggle operations-only mode when no ACP session exists.
@@ -681,7 +690,7 @@ impl CodeState {
     /// The queue belongs to the prior native session, so the caller must make
     /// an explicit discard decision before changing sessions.
     pub fn reset_session(&mut self) -> bool {
-        if !self.queue.is_empty() {
+        if self.has_queue_work() {
             self.notice =
                 Some("Resolve or discard queued prompts before changing sessions".to_string());
             return false;
@@ -694,47 +703,60 @@ impl CodeState {
         self.permission_return = None;
         self.turn = TurnState::Ready;
         self.pending_prompt = None;
+        self.pending_followups.clear();
+        self.dispatching = None;
+        self.queue_state = QueueRunState::Running;
+        self.recovery.clear();
         self.dispatch_after_permissions = false;
         self.session_active = false;
         self.surface = Surface::Conversation;
-        self.follow_live = true;
-        self.reading_anchor = None;
-        self.reading_positions.clear();
-        self.reading_layout_revision = 0;
-        self.reading_page = 1;
-        self.new_activity = false;
         self.selected_command = None;
         true
     }
 
     /// Explicitly discard all process-local queued prompts.
     pub fn discard_queue(&mut self) {
+        self.pending_followups.clear();
         self.queue.clear();
+        self.dispatching = None;
+        self.queue_state = QueueRunState::Running;
+        self.recovery.clear();
         self.refresh_open_palettes();
     }
 
     /// Number of prompts awaiting a normal turn completion.
     pub fn queue_len(&self) -> usize {
-        self.queue.len()
+        self.pending_followups
+            .len()
+            .saturating_add(self.queue.len())
+            .saturating_add(usize::from(self.dispatching.is_some()))
+            .saturating_add(self.recovery.len())
+    }
+
+    fn queued_preview_len(&self) -> usize {
+        self.pending_followups
+            .len()
+            .saturating_add(self.queue.len())
+    }
+
+    fn has_queue_work(&self) -> bool {
+        self.queue_len() > 0
     }
 
     /// Apply one raw ACP update to the retained journal.
     pub fn apply(&mut self, update: SessionUpdate) {
         self.journal.apply(update);
         self.journal_revision = self.journal_revision.saturating_add(1);
-        if !self.follow_live {
-            self.new_activity = true;
+        if matches!(
+            &self.surface,
+            Surface::Inspector(inspector) if inspector.tracks_transcript
+        ) {
+            let content = self.transcript_content();
+            if let Surface::Inspector(inspector) = &mut self.surface {
+                inspector.inspector.content = content;
+            }
         }
         self.refresh_open_palettes();
-    }
-
-    fn sync_reading_layout(&mut self, revision: u64, positions: &[ReadingPosition], page: usize) {
-        self.reading_page = page.max(1);
-        if self.reading_layout_revision == revision {
-            return;
-        }
-        self.reading_positions = positions.to_vec();
-        self.reading_layout_revision = revision;
     }
 
     /// Queue a permission request by identity.
@@ -788,12 +810,16 @@ impl CodeState {
             CodeAction::TurnStarted => {
                 if let Some(pending) = self.pending_prompt.take() {
                     let prompt = pending.prompt;
+                    if pending.from_queue {
+                        self.dispatching = None;
+                    }
                     self.finish_journal_stream();
                     self.apply(SessionUpdate::UserMessageChunk(ContentChunk::new(
                         ContentBlock::Text(TextContent::new(prompt.clone())),
                     )));
                     self.finish_journal_stream();
                     self.editor.push_history(prompt);
+                    self.queue.extend(self.pending_followups.drain(..));
                     self.turn = TurnState::Working;
                     self.refresh_open_palettes();
                 }
@@ -818,6 +844,10 @@ impl CodeState {
     }
 
     fn event(&mut self, event: &Event) -> Vec<CodeEffect> {
+        if let Event::Resize(width, height) = event {
+            self.viewport = Size::new(*width, *height);
+            return Vec::new();
+        }
         if let Some(key) = pressed(event)
             && key.code == KeyCode::F(2)
             && !self.permissions.is_empty()
@@ -838,13 +868,16 @@ impl CodeState {
             }
             return Vec::new();
         }
+        if crate::editor::is_redraw(event) {
+            return vec![CodeEffect::Redraw];
+        }
         match self.surface {
             Surface::Conversation => self.conversation_event(event),
             Surface::Palette(_) | Surface::Selector(_) => self.choice_event(event),
             Surface::Inspector(_) => self.inspector_event(event),
             Surface::Permission => self.permission_event(event),
             Surface::Queue { .. } => self.queue_event(event),
-            Surface::TranscriptSearch { .. } => self.transcript_search_event(event),
+            Surface::Recovery { .. } => self.recovery_event(event),
         }
     }
 
@@ -857,7 +890,16 @@ impl CodeState {
                 self.open_palette(false, String::new());
                 return Vec::new();
             }
+            if control(key, 'o') {
+                if let Some(root) = self.operations_root.clone() {
+                    self.open_inspector(root);
+                } else {
+                    self.notice = Some("Target status is still loading".to_string());
+                }
+                return Vec::new();
+            }
             if key.code == KeyCode::Esc
+                || control(key, 'c')
                 || (key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::CONTROL))
             {
                 return vec![CodeEffect::Exit];
@@ -874,8 +916,21 @@ impl CodeState {
             return Vec::new();
         };
 
-        if key.code == KeyCode::F(3) && !self.queue.is_empty() {
-            self.surface = Surface::Queue { selected: 0 };
+        if key.code == KeyCode::Enter && !supported_viewport(self.viewport) {
+            self.notice = Some("Resize to at least 40×16 before submitting".to_string());
+            return Vec::new();
+        }
+
+        if key.code == KeyCode::F(3) && self.has_queue_work() {
+            self.surface = if self.recovery.is_empty() {
+                Surface::Queue { selected: 0 }
+            } else {
+                Surface::Recovery { selected: 0 }
+            };
+            return Vec::new();
+        }
+        if control(key, 'o') {
+            self.inspect_transcript();
             return Vec::new();
         }
         if key.code == KeyCode::F(4) {
@@ -886,38 +941,13 @@ impl CodeState {
             self.open_palette(false, String::new());
             return Vec::new();
         }
-        if control(key, 'f') {
-            self.surface = Surface::TranscriptSearch {
-                query: String::new(),
-            };
-            return Vec::new();
-        }
         if control(key, 'y') {
             return self.copy_anchor();
         }
         if control(key, 'g') && self.turn == TurnState::Ready && self.permissions.is_empty() {
             return vec![CodeEffect::ExternalEditor];
         }
-        if control(key, 'l') {
-            return Vec::new();
-        }
-        if key.code == KeyCode::End && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.return_to_live();
-            return Vec::new();
-        }
         match key.code {
-            KeyCode::PageUp => {
-                self.read_previous();
-                return Vec::new();
-            }
-            KeyCode::PageDown => {
-                self.read_next();
-                return Vec::new();
-            }
-            KeyCode::Tab if matches!(self.turn, TurnState::Submitting | TurnState::Working) => {
-                self.queue_current();
-                return Vec::new();
-            }
             KeyCode::Esc if self.turn == TurnState::Working => return self.cancel(),
             KeyCode::Esc if self.turn == TurnState::Submitting => {
                 self.notice = Some("Waiting for prompt submission to start".to_string());
@@ -964,7 +994,7 @@ impl CodeState {
                     .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
                     && matches!(self.turn, TurnState::Submitting | TurnState::Working) =>
             {
-                self.notice = Some("Tab queues for the next turn; Esc interrupts".to_string());
+                self.queue_current();
                 return Vec::new();
             }
             KeyCode::Esc if self.turn == TurnState::Ready => {
@@ -987,9 +1017,16 @@ impl CodeState {
                 }
                 Vec::new()
             }
+            Edit::Submitted
+                if self.turn == TurnState::Ready
+                    && matches!(self.queue_state, QueueRunState::Paused(_)) =>
+            {
+                self.queue_current();
+                Vec::new()
+            }
             Edit::Submitted if self.turn == TurnState::Ready => self.submit_current(),
             Edit::Submitted => {
-                self.notice = Some("Tab queues for the next turn; Esc interrupts".to_string());
+                self.notice = Some("Wait for the current transition to settle".to_string());
                 Vec::new()
             }
             Edit::OpenExternalEditor => vec![CodeEffect::ExternalEditor],
@@ -1096,7 +1133,7 @@ impl CodeState {
                     self.submit_current()
                 } else {
                     self.notice =
-                        Some("Tab queues this agent command for the next turn".to_string());
+                        Some("Enter queues this agent command for the next turn".to_string());
                     Vec::new()
                 }
             }
@@ -1118,7 +1155,7 @@ impl CodeState {
             | Surface::Inspector(_)
             | Surface::Permission
             | Surface::Queue { .. }
-            | Surface::TranscriptSearch { .. } => None,
+            | Surface::Recovery { .. } => None,
         };
     }
 
@@ -1131,6 +1168,7 @@ impl CodeState {
             CommandTarget::OpenSession => vec![CodeEffect::OpenSession],
             CommandTarget::Settings => vec![CodeEffect::Settings],
             CommandTarget::Report { id } => vec![CodeEffect::Report { id }],
+            CommandTarget::ResumeQueue => self.resume_queue(),
             CommandTarget::AgentPrompt { prompt } => self.begin_prompt(prompt, true),
             CommandTarget::PromptTemplate { prompt } => {
                 self.editor.set_text(prompt);
@@ -1143,11 +1181,17 @@ impl CodeState {
         let Some(key) = pressed(event) else {
             return Vec::new();
         };
-        if control(key, 'l') {
-            return Vec::new();
-        }
         if control(key, 'c') {
             return self.cancel();
+        }
+        if !supported_viewport(self.viewport)
+            && (key.code == KeyCode::Enter || matches!(key.code, KeyCode::Char('1'..='9')))
+        {
+            self.notice = Some(
+                "Approval disabled until every offered choice fits at 40×16 or larger".to_string(),
+            );
+            self.permission_selected = None;
+            return Vec::new();
         }
         if key.code == KeyCode::F(4) {
             self.inspect_permission_context();
@@ -1243,6 +1287,9 @@ impl CodeState {
         let Some(key) = pressed(event) else {
             return Vec::new();
         };
+        if key.code == KeyCode::Char('r') {
+            return self.resume_queue();
+        }
         let Surface::Queue { selected } = &mut self.surface else {
             return Vec::new();
         };
@@ -1251,6 +1298,19 @@ impl CodeState {
             return Vec::new();
         }
         match key.code {
+            KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) && *selected > 0 => {
+                let previous = selected.saturating_sub(1);
+                self.queue.swap(*selected, previous);
+                *selected = previous;
+            }
+            KeyCode::Down
+                if key.modifiers.contains(KeyModifiers::ALT)
+                    && selected.saturating_add(1) < self.queue.len() =>
+            {
+                let next = selected.saturating_add(1);
+                self.queue.swap(*selected, next);
+                *selected = next;
+            }
             KeyCode::Up => *selected = selected.saturating_sub(1),
             KeyCode::Down => {
                 *selected = selected
@@ -1267,6 +1327,11 @@ impl CodeState {
                 }
             }
             KeyCode::Enter | KeyCode::Char('e') => {
+                if !self.editor.text().is_empty() {
+                    self.notice =
+                        Some("Clear the composer before editing a queued draft".to_string());
+                    return Vec::new();
+                }
                 let index = *selected;
                 if let Some(item) = self.queue.remove(index) {
                     self.editor.set_text(item.prompt);
@@ -1285,34 +1350,63 @@ impl CodeState {
         Vec::new()
     }
 
-    fn transcript_search_event(&mut self, event: &Event) -> Vec<CodeEffect> {
+    fn resume_queue(&mut self) -> Vec<CodeEffect> {
+        if let Some(reason) = self.resume_queue_reason() {
+            self.notice = Some(reason);
+            return Vec::new();
+        }
+        self.queue_state = QueueRunState::Running;
+        self.surface = Surface::Conversation;
+        self.notice = Some("Next-turn queue resumed".to_string());
+        self.refresh_open_palettes();
+        self.dispatch_next()
+    }
+
+    fn recovery_event(&mut self, event: &Event) -> Vec<CodeEffect> {
         let Some(key) = pressed(event) else {
             return Vec::new();
         };
-        let mut updated_query = None;
-        let mut close = false;
-        if let Surface::TranscriptSearch { query } = &mut self.surface {
-            match key.code {
-                KeyCode::Esc | KeyCode::Enter => close = true,
-                KeyCode::Backspace => {
-                    query.pop();
-                    updated_query = Some(query.clone());
-                }
-                KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    query.push(character);
-                    updated_query = Some(query.clone());
-                }
-                _ => {}
-            }
-        }
-        if control(key, 'c') {
-            close = true;
-        }
-        if let Some(query) = updated_query {
-            self.search_transcript(&query);
-        }
-        if close {
+        if key.code == KeyCode::Esc || control(key, 'c') {
             self.surface = Surface::Conversation;
+            return Vec::new();
+        }
+        let Surface::Recovery { selected } = &mut self.surface else {
+            return Vec::new();
+        };
+        match key.code {
+            KeyCode::Up => *selected = selected.saturating_sub(1),
+            KeyCode::Down => {
+                *selected = selected
+                    .saturating_add(1)
+                    .min(self.recovery.len().saturating_sub(1));
+            }
+            KeyCode::Delete | KeyCode::Backspace => {
+                let _ = self.recovery.remove(*selected);
+                if self.recovery.is_empty() {
+                    self.surface = Surface::Conversation;
+                } else {
+                    *selected = (*selected).min(self.recovery.len().saturating_sub(1));
+                }
+            }
+            KeyCode::Enter => {
+                if !self.editor.text().is_empty() {
+                    self.notice =
+                        Some("Clear the composer before restoring a rejected draft".to_string());
+                    return Vec::new();
+                }
+                if let Some(item) = self.recovery.remove(*selected) {
+                    self.editor.set_text(item.prompt);
+                    self.selected_command = item.target.map(|target| {
+                        (
+                            self.editor.text().to_string(),
+                            target,
+                            item.owner.unwrap_or(CommandOwner::Agent),
+                        )
+                    });
+                }
+                self.surface = Surface::Conversation;
+            }
+            _ => {}
         }
         Vec::new()
     }
@@ -1328,6 +1422,8 @@ impl CodeState {
         }
         let mut close = false;
         let mut copy = None;
+        let mut move_entry = None;
+        let mut inspect_entry = false;
         if let Surface::Inspector(inspector) = &mut self.surface {
             if control(key, 'c') {
                 close = true;
@@ -1341,6 +1437,12 @@ impl CodeState {
                 inspector.searching = true;
             } else if control(key, 'y') {
                 copy = Some(inspector.inspector.content.clone());
+            } else if inspector.tracks_transcript && key.code == KeyCode::Char('[') {
+                move_entry = Some(-1);
+            } else if inspector.tracks_transcript && key.code == KeyCode::Char(']') {
+                move_entry = Some(1);
+            } else if inspector.tracks_transcript && key.code == KeyCode::F(4) {
+                inspect_entry = true;
             } else if inspector.searching {
                 match key.code {
                     KeyCode::Enter => inspector.searching = false,
@@ -1369,10 +1471,23 @@ impl CodeState {
                     KeyCode::PageUp => inspector.scroll = inspector.scroll.saturating_sub(8),
                     KeyCode::PageDown => inspector.scroll = inspector.scroll.saturating_add(8),
                     KeyCode::Home => inspector.scroll = 0,
-                    KeyCode::End => inspector.scroll = inspector.inspector.content.lines().count(),
+                    KeyCode::End => {
+                        inspector.scroll = inspector
+                            .inspector
+                            .content
+                            .lines()
+                            .count()
+                            .saturating_sub(1)
+                    }
                     _ => {}
                 }
             }
+        }
+        if let Some(delta) = move_entry {
+            self.move_transcript_entry(delta);
+        }
+        if inspect_entry {
+            self.inspect_selected_transcript_entry();
         }
         if close {
             let (return_to_permission, return_to) = match &self.surface {
@@ -1381,16 +1496,7 @@ impl CodeState {
                 }
                 _ => (false, None),
             };
-            if let Some(root) = self.operations_root.clone() {
-                let closing_root = matches!(
-                    &self.surface,
-                    Surface::Inspector(current) if current.inspector == root
-                );
-                if closing_root {
-                    return vec![CodeEffect::Exit];
-                }
-                self.open_inspector_returning_to(root, None);
-            } else if return_to_permission {
+            if return_to_permission {
                 self.surface = Surface::Permission;
             } else {
                 self.surface = return_to.map_or(Surface::Conversation, |surface| *surface);
@@ -1470,9 +1576,9 @@ impl CodeState {
         self.pending_prompt = Some(PendingPrompt {
             prompt: prompt.clone(),
             agent_command,
+            from_queue: false,
         });
         self.turn = TurnState::Submitting;
-        self.return_to_live();
         self.refresh_open_palettes();
         if agent_command {
             vec![CodeEffect::AgentPrompt { prompt }]
@@ -1486,6 +1592,7 @@ impl CodeState {
         let agent_command = pending
             .as_ref()
             .is_some_and(|pending| pending.agent_command);
+        let from_queue = pending.as_ref().is_some_and(|pending| pending.from_queue);
         let restored = if prompt.is_empty() {
             pending
                 .as_ref()
@@ -1496,23 +1603,24 @@ impl CodeState {
         };
         self.turn = TurnState::Ready;
         self.dispatch_after_permissions = false;
-        if self.editor.text().is_empty() {
-            self.editor.set_text(restored.clone());
-            if agent_command {
-                self.selected_command = Some((
-                    restored.clone(),
-                    CommandTarget::AgentPrompt { prompt: restored },
-                    CommandOwner::Agent,
-                ));
-            }
-        } else if !restored.is_empty() {
-            self.queue.push_front(QueuedPrompt {
+        if from_queue {
+            self.dispatching = None;
+        }
+        if !restored.is_empty() {
+            self.recovery.push_back(QueuedPrompt {
                 prompt: restored.clone(),
                 owner: agent_command.then_some(CommandOwner::Agent),
                 target: agent_command.then_some(CommandTarget::AgentPrompt { prompt: restored }),
             });
         }
-        self.notice = Some(format!("Prompt was not started: {reason}"));
+        self.recovery.extend(self.pending_followups.drain(..));
+        self.queue_state = QueueRunState::Paused(reason.clone());
+        if !self.recovery.is_empty() {
+            self.surface = Surface::Recovery { selected: 0 };
+        }
+        self.notice = Some(format!(
+            "Prompt was not started: {reason}. Queue paused; recover drafts explicitly."
+        ));
         self.refresh_open_palettes();
         Vec::new()
     }
@@ -1538,9 +1646,13 @@ impl CodeState {
                 None => return,
             },
         };
-        self.queue.push_back(queued);
+        if self.turn == TurnState::Submitting {
+            self.pending_followups.push_back(queued);
+        } else {
+            self.queue.push_back(queued);
+        }
         self.editor.clear();
-        self.notice = Some(format!("Queued for the next turn ({})", self.queue.len()));
+        self.notice = Some(format!("Queued for the next turn ({})", self.queue_len()));
     }
 
     fn queueable_prompt(&mut self, prompt: &str) -> Option<QueuedPrompt> {
@@ -1611,27 +1723,34 @@ impl CodeState {
         match outcome {
             TurnOutcome::Completed => {
                 if was_cancelling {
+                    self.pause_queue("turn completed after cancellation request");
                     self.notice = Some(
                         "Turn completed after cancellation request. Queue is paused.".to_string(),
                     );
                     return Vec::new();
                 }
                 self.notice = Some("Turn completed".to_string());
-                if self.permissions.is_empty() {
+                if self.permissions.is_empty() && matches!(self.queue_state, QueueRunState::Running)
+                {
                     return self.dispatch_next();
                 }
-                self.dispatch_after_permissions = !self.queue.is_empty();
+                self.dispatch_after_permissions =
+                    !self.queue.is_empty() && matches!(self.queue_state, QueueRunState::Running);
             }
             TurnOutcome::Stopped(reason) => {
+                self.pause_queue(format!("turn stopped: {reason}"));
                 self.notice = Some(format!("Turn stopped: {reason}. Queue is paused."));
             }
             TurnOutcome::Failed(error) => {
+                self.pause_queue(format!("turn failed: {error}"));
                 self.notice = Some(format!("Turn failed: {error}. Queue is paused."));
             }
             TurnOutcome::Cancelled => {
+                self.pause_queue("turn cancelled");
                 self.notice = Some("Turn cancelled. Queue is paused.".to_string());
             }
             TurnOutcome::Disconnected => {
+                self.pause_queue("disconnected");
                 self.notice = Some("Disconnected. Queue is paused.".to_string());
             }
         }
@@ -1639,26 +1758,53 @@ impl CodeState {
     }
 
     fn dispatch_next(&mut self) -> Vec<CodeEffect> {
+        if !matches!(self.queue_state, QueueRunState::Running) || self.dispatching.is_some() {
+            return Vec::new();
+        }
         let Some(next) = self.queue.front().cloned() else {
             return Vec::new();
         };
         if matches!(next.owner, Some(CommandOwner::Agent))
             && !self.agent_command_available(&next.prompt)
         {
+            self.pause_queue("queued agent command is no longer advertised");
             self.notice =
                 Some("Queued agent command is no longer advertised; queue is paused".to_string());
             return Vec::new();
         }
         let _ = self.queue.pop_front();
-        match next.target {
-            Some(CommandTarget::AgentPrompt { prompt }) => self.begin_prompt(prompt, true),
-            Some(CommandTarget::PromptTemplate { prompt }) => self.begin_prompt(prompt, false),
+        let effect = match &next.target {
+            Some(CommandTarget::AgentPrompt { prompt }) => CodeEffect::AgentPrompt {
+                prompt: prompt.clone(),
+            },
+            Some(CommandTarget::PromptTemplate { prompt }) => CodeEffect::Submit {
+                prompt: prompt.clone(),
+            },
             Some(_) => {
+                self.recovery.push_back(next);
+                self.pause_queue("queued local action is not runnable as a prompt");
                 self.notice = Some("Queued local action is not runnable as a prompt".to_string());
-                Vec::new()
+                return Vec::new();
             }
-            None => self.begin_prompt(next.prompt, false),
-        }
+            None => CodeEffect::Submit {
+                prompt: next.prompt.clone(),
+            },
+        };
+        let agent_command = matches!(&effect, CodeEffect::AgentPrompt { .. });
+        self.pending_prompt = Some(PendingPrompt {
+            prompt: next.prompt.clone(),
+            agent_command,
+            from_queue: true,
+        });
+        self.dispatching = Some(next);
+        self.turn = TurnState::Submitting;
+        self.refresh_open_palettes();
+        vec![effect]
+    }
+
+    fn pause_queue(&mut self, reason: impl Into<String>) {
+        self.queue_state = QueueRunState::Paused(reason.into());
+        self.dispatch_after_permissions = false;
     }
 
     fn cancel(&mut self) -> Vec<CodeEffect> {
@@ -1736,7 +1882,7 @@ impl CodeState {
         return_to: Option<Box<Surface>>,
     ) {
         let choices = self
-            .palette_commands()
+            .palette_commands(slash)
             .into_iter()
             .map(Choice::Command)
             .collect::<Vec<_>>();
@@ -1786,20 +1932,31 @@ impl CodeState {
         }
     }
 
-    fn palette_commands(&self) -> Vec<Command> {
+    fn palette_commands(&self, slash: bool) -> Vec<Command> {
         let mut commands = self
             .commands
             .iter()
             .filter(|command| {
-                !self.operations_only
-                    || !matches!(
-                        &command.target,
-                        CommandTarget::AgentPrompt { .. } | CommandTarget::PromptTemplate { .. }
-                    )
+                (!slash || command.label.starts_with('/'))
+                    && (!self.operations_only
+                        || !matches!(
+                            &command.target,
+                            CommandTarget::AgentPrompt { .. }
+                                | CommandTarget::PromptTemplate { .. }
+                        ))
             })
             .cloned()
             .map(|command| self.command_with_local_availability(command))
             .collect::<Vec<_>>();
+        if !slash && matches!(self.queue_state, QueueRunState::Paused(_)) {
+            let resume = self.command_with_local_availability(Command::new(
+                "Resume queue",
+                "Resume FIFO dispatch after reviewing paused work",
+                CommandOwner::BitRouter,
+                CommandTarget::ResumeQueue,
+            ));
+            commands.insert(0, resume);
+        }
         if !self.operations_only && self.journal.commands_received() {
             commands.extend(self.journal.commands().iter().map(|command| {
                 let label = if command.name.starts_with('/') {
@@ -1814,7 +1971,7 @@ impl CodeState {
                     CommandTarget::AgentPrompt { prompt: label },
                 )
             }));
-        } else if !self.operations_only {
+        } else if !self.operations_only && !slash {
             commands.push(
                 Command::new(
                     "Agent commands",
@@ -1831,14 +1988,19 @@ impl CodeState {
     }
 
     fn refresh_open_palettes(&mut self) {
-        let choices = self
-            .palette_commands()
+        let full = self
+            .palette_commands(false)
             .into_iter()
             .map(Choice::Command)
             .collect::<Vec<_>>();
-        refresh_palette_surface(&mut self.surface, &choices);
+        let slash = self
+            .palette_commands(true)
+            .into_iter()
+            .map(Choice::Command)
+            .collect::<Vec<_>>();
+        refresh_palette_surface(&mut self.surface, &full, &slash);
         if let Some(surface) = &mut self.permission_return {
-            refresh_palette_surface(surface, &choices);
+            refresh_palette_surface(surface, &full, &slash);
         }
     }
 
@@ -1865,6 +2027,7 @@ impl CodeState {
                         )
                     })
             }),
+            CommandTarget::ResumeQueue => self.resume_queue_reason(),
             _ => None,
         };
         if let Some(reason) = unavailable {
@@ -1885,10 +2048,26 @@ impl CodeState {
                 "Finish or cancel the current turn before changing this session".to_string(),
             );
         }
-        if !self.queue.is_empty() {
+        if self.has_queue_work() {
             return Some(
                 "Resolve or discard queued prompts before changing this session".to_string(),
             );
+        }
+        None
+    }
+
+    fn resume_queue_reason(&self) -> Option<String> {
+        if !matches!(self.queue_state, QueueRunState::Paused(_)) {
+            return Some("The next-turn queue is already running".to_string());
+        }
+        if !self.session_active || self.turn != TurnState::Ready {
+            return Some("Reconnect and settle the active turn before resuming".to_string());
+        }
+        if !self.permissions.is_empty() || self.dispatching.is_some() {
+            return Some("Resolve the pending transition before resuming".to_string());
+        }
+        if !self.recovery.is_empty() {
+            return Some("Recover or discard rejected drafts before resuming".to_string());
         }
         None
     }
@@ -1914,77 +2093,13 @@ impl CodeState {
         }
     }
 
-    fn read_previous(&mut self) {
-        if self.reading_positions.is_empty() {
-            return;
-        }
-        let current = self
-            .reading_anchor
-            .as_ref()
-            .and_then(|anchor| self.reading_position(anchor))
-            .unwrap_or(self.reading_positions.len());
-        let target = current.saturating_sub(self.reading_page);
-        if let Some(position) = self.reading_positions.get(target).cloned() {
-            self.follow_live = false;
-            self.reading_anchor = Some(ReadingAnchor {
-                entry: position.entry,
-                source_offset: position.source_offset,
-            });
-        }
-    }
-
-    fn read_next(&mut self) {
-        let Some(anchor) = self.reading_anchor.clone() else {
-            return;
-        };
-        let Some(position) = self.reading_position(&anchor) else {
-            self.return_to_live();
-            return;
-        };
-        if let Some(next) = self
-            .reading_positions
-            .get(position.saturating_add(self.reading_page))
-            .cloned()
-        {
-            self.reading_anchor = Some(ReadingAnchor {
-                entry: next.entry,
-                source_offset: next.source_offset,
-            });
-        } else {
-            self.return_to_live();
-        }
-    }
-
-    fn reading_position(&self, anchor: &ReadingAnchor) -> Option<usize> {
-        self.reading_positions
-            .iter()
-            .position(|position| {
-                position.entry == anchor.entry && position.source_offset >= anchor.source_offset
-            })
-            .or_else(|| {
-                self.reading_positions
-                    .iter()
-                    .rposition(|position| position.entry == anchor.entry)
-            })
-    }
-
-    fn return_to_live(&mut self) {
-        self.follow_live = true;
-        self.reading_anchor = None;
-        self.new_activity = false;
-    }
-
     fn finish_journal_stream(&mut self) {
         self.journal.finish_stream();
         self.journal_revision = self.journal_revision.saturating_add(1);
     }
 
     fn inspect_anchor(&mut self) {
-        let id = self
-            .reading_anchor
-            .as_ref()
-            .map(|anchor| anchor.entry.clone())
-            .or_else(|| self.journal.entries().last().map(|item| item.id));
+        let id = self.journal.entries().last().map(|item| item.id);
         let Some(id) = id else {
             self.notice = Some("There is no transcript entry to inspect".to_string());
             return;
@@ -1994,6 +2109,124 @@ impl CodeState {
             return;
         };
         self.open_inspector(inspector);
+    }
+
+    fn inspect_transcript(&mut self) {
+        let first_entry = self.journal.entries().next().map(|item| item.id);
+        if first_entry.is_none() {
+            self.notice = Some("There is no transcript to inspect".to_string());
+            return;
+        }
+        let content = self.transcript_content();
+        let return_to = self.transient_return_target();
+        self.surface = Surface::Inspector(OpenInspector {
+            inspector: Inspector::new("Full transcript", content),
+            tracks_transcript: true,
+            transcript_entry: first_entry,
+            scroll: 0,
+            search: String::new(),
+            searching: false,
+            return_to,
+            return_to_permission: false,
+        });
+    }
+
+    fn transcript_content(&self) -> String {
+        self.transcript_sections()
+            .into_iter()
+            .map(|(_, section)| section)
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    fn transcript_sections(&self) -> Vec<(EntryId, String)> {
+        self.journal
+            .entries()
+            .map(|item| {
+                let section = match item.entry {
+                    Entry::Message(message) => {
+                        let owner = match message.voice {
+                            Voice::User => "User",
+                            Voice::Agent => "Assistant",
+                            Voice::Thought => "Reasoning",
+                        };
+                        format!("## {owner}\n\n{}", message.text)
+                    }
+                    Entry::Tool(call) => {
+                        let content = match serde_json::to_string_pretty(call) {
+                            Ok(content) => content,
+                            Err(error) => {
+                                format!("Could not serialise retained tool content: {error}")
+                            }
+                        };
+                        format!("## Tool · {}\n\n{content}", call.title)
+                    }
+                    Entry::Plan(plan) => {
+                        let content = match serde_json::to_string_pretty(plan) {
+                            Ok(content) => content,
+                            Err(error) => format!("Could not serialise retained plan: {error}"),
+                        };
+                        format!("## Plan\n\n{content}")
+                    }
+                };
+                (item.id, section)
+            })
+            .collect()
+    }
+
+    fn move_transcript_entry(&mut self, delta: isize) {
+        let current = match &self.surface {
+            Surface::Inspector(inspector) if inspector.tracks_transcript => {
+                inspector.transcript_entry.clone()
+            }
+            _ => return,
+        };
+        let sections = self.transcript_sections();
+        if sections.is_empty() {
+            return;
+        }
+        let current_index = current
+            .as_ref()
+            .and_then(|current| sections.iter().position(|(id, _)| id == current))
+            .unwrap_or_default();
+        let next_index = if delta < 0 {
+            current_index.saturating_sub(delta.unsigned_abs())
+        } else {
+            current_index
+                .saturating_add(delta.unsigned_abs())
+                .min(sections.len().saturating_sub(1))
+        };
+        let line = sections
+            .iter()
+            .take(next_index)
+            .map(|(_, section)| section.lines().count().saturating_add(2))
+            .sum();
+        if let Surface::Inspector(inspector) = &mut self.surface {
+            inspector.transcript_entry = Some(sections[next_index].0.clone());
+            inspector.scroll = line;
+        }
+    }
+
+    fn inspect_selected_transcript_entry(&mut self) {
+        if !self.permissions.is_empty() {
+            self.notice =
+                Some("Permission needed · F2 to review before opening details".to_string());
+            return;
+        }
+        let target = match &self.surface {
+            Surface::Inspector(inspector) if inspector.tracks_transcript => {
+                inspector.transcript_entry.clone()
+            }
+            _ => None,
+        };
+        let Some(target) = target else {
+            return;
+        };
+        let Some(detail) = self.inspector_for(&target) else {
+            return;
+        };
+        let return_to = Some(Box::new(self.surface.clone()));
+        self.open_inspector_returning_to(detail, return_to);
     }
 
     fn inspect_permission_context(&mut self) {
@@ -2011,6 +2244,8 @@ impl CodeState {
         };
         self.surface = Surface::Inspector(OpenInspector {
             inspector: Inspector::new("Permission context", content),
+            tracks_transcript: false,
+            transcript_entry: None,
             scroll: 0,
             search: String::new(),
             searching: false,
@@ -2020,11 +2255,7 @@ impl CodeState {
     }
 
     fn copy_anchor(&self) -> Vec<CodeEffect> {
-        let id = self
-            .reading_anchor
-            .as_ref()
-            .map(|anchor| anchor.entry.clone())
-            .or_else(|| self.journal.entries().last().map(|item| item.id));
+        let id = self.journal.entries().last().map(|item| item.id);
         let Some(id) = id else {
             return Vec::new();
         };
@@ -2060,33 +2291,6 @@ impl CodeState {
             };
             Some(inspector)
         })
-    }
-
-    fn search_transcript(&mut self, query: &str) {
-        if query.is_empty() {
-            return;
-        }
-        let needle = query.to_lowercase();
-        let ids = self
-            .journal
-            .entries()
-            .map(|item| item.id)
-            .collect::<Vec<_>>();
-        for id in ids {
-            let Some(inspector) = self.inspector_for(&id) else {
-                continue;
-            };
-            let haystack = inspector.content.to_lowercase();
-            let Some(offset) = haystack.find(&needle) else {
-                continue;
-            };
-            self.follow_live = false;
-            self.reading_anchor = Some(ReadingAnchor {
-                entry: id,
-                source_offset: inspector.content[..offset].graphemes(true).count(),
-            });
-            return;
-        }
     }
 }
 
@@ -2192,8 +2396,13 @@ impl ChoiceList {
     }
 }
 
-fn refresh_palette_surface(surface: &mut Surface, choices: &[Choice]) {
+fn refresh_palette_surface(surface: &mut Surface, full: &[Choice], slash: &[Choice]) {
     if let Surface::Palette(list) = surface {
+        let choices = match list.kind {
+            ChoiceListKind::Palette { slash: true } => slash,
+            ChoiceListKind::Palette { slash: false } => full,
+            ChoiceListKind::Selector { .. } => return,
+        };
         list.replace_choices(choices.to_vec());
     }
 }
@@ -2250,7 +2459,7 @@ fn surface_returns_to_permission(surface: &Surface) -> bool {
             .return_to
             .as_deref()
             .is_some_and(surface_returns_to_permission),
-        Surface::Conversation | Surface::Queue { .. } | Surface::TranscriptSearch { .. } => false,
+        Surface::Conversation | Surface::Queue { .. } | Surface::Recovery { .. } => false,
     }
 }
 
@@ -2324,12 +2533,15 @@ impl Choice {
     }
 }
 
-/// Full-screen terminal custody for Code state.
+/// Normal-buffer terminal custody for Code state.
 ///
-/// The app can own this type without naming a terminal frame or any renderer
-/// type from the terminal library.
+/// The persistent conversation is painted through [`Writer`], so transcript
+/// rows enter the terminal's native scrollback while the variable-height dock
+/// remains repaintable. A read-only inspector temporarily owns the alternate
+/// screen; the surrounding session keeps raw input and keyboard modes.
 pub struct CodeView {
-    terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+    writer: Writer<CrosstermBackend<std::io::Stdout>>,
+    detached: Option<Terminal<CrosstermBackend<std::io::Stdout>>>,
     registry: Registry,
     document: DocumentCache,
     finished: bool,
@@ -2337,7 +2549,7 @@ pub struct CodeView {
 }
 
 impl CodeView {
-    /// Enter full-screen raw mode.
+    /// Enter session input modes without replacing the normal terminal buffer.
     pub fn open() -> io::Result<Self> {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             return Err(io::Error::other(
@@ -2347,22 +2559,22 @@ impl CodeView {
         crate::lifecycle::install_panic_restore();
         crate::lifecycle::enter_raw()?;
         let mut stdout = std::io::stdout();
-        if let Err(error) = crate::lifecycle::enter_alternate_screen()
-            .and_then(|()| crate::lifecycle::enable_session_keys())
-            .and_then(|()| execute!(stdout, Hide))
+        if let Err(error) =
+            crate::lifecycle::enable_session_keys().and_then(|()| execute!(stdout, Hide))
         {
             crate::lifecycle::restore();
             return Err(error);
         }
-        let terminal = match Terminal::new(CrosstermBackend::new(stdout)) {
-            Ok(terminal) => terminal,
+        let writer = match Writer::new(CrosstermBackend::new(stdout)) {
+            Ok(writer) => writer,
             Err(error) => {
                 crate::lifecycle::restore();
                 return Err(error);
             }
         };
         Ok(Self {
-            terminal,
+            writer,
+            detached: None,
             registry: Registry::default(),
             document: DocumentCache::default(),
             finished: false,
@@ -2370,50 +2582,123 @@ impl CodeView {
         })
     }
 
-    /// Draw one full frame from pure Code state.
+    /// Draw either the normal-buffer conversation or an explicit inspector.
     pub fn draw(&mut self, state: &mut CodeState) -> io::Result<()> {
         if self.finished || self.suspended {
             return Ok(());
         }
-        let registry = &self.registry;
-        let document = &mut self.document;
-        self.terminal
-            .draw(|frame| render_frame(frame, state, registry, document))
-            .map(|_| ())
+        state.viewport = if let Some(detached) = self.detached.as_ref() {
+            detached.size()?
+        } else {
+            self.writer.size()
+        };
+        if matches!(state.surface, Surface::Inspector(_)) {
+            return self.draw_detached(state);
+        }
+        self.close_detached()?;
+        self.draw_normal(state)
     }
 
     /// Restore terminal settings before launching an external editor.
     pub fn suspend(&mut self) -> io::Result<()> {
         if !self.finished && !self.suspended {
+            self.close_detached()?;
+            self.writer.finish()?;
             crate::lifecycle::restore();
             self.suspended = true;
         }
         Ok(())
     }
 
-    /// Restore the full-screen surface after an external editor exits.
+    /// Reacquire session input modes after an external editor exits.
     pub fn resume(&mut self) -> io::Result<()> {
         if self.finished || !self.suspended {
             return Ok(());
         }
         crate::lifecycle::enter_raw()?;
-        if let Err(error) = crate::lifecycle::enter_alternate_screen()
-            .and_then(|()| crate::lifecycle::enable_session_keys())
-            .and_then(|()| execute!(self.terminal.backend_mut(), Hide))
+        if let Err(error) =
+            crate::lifecycle::enable_session_keys().and_then(|()| execute!(std::io::stdout(), Hide))
         {
             crate::lifecycle::restore();
             return Err(error);
         }
-        self.terminal.clear()?;
+        self.writer.invalidate();
         self.suspended = false;
         Ok(())
+    }
+
+    /// Forget the cached physical live region without touching scrollback.
+    pub fn invalidate(&mut self) {
+        if let Some(detached) = self.detached.as_mut() {
+            let _ = detached.clear();
+        } else {
+            self.writer.invalidate();
+        }
     }
 
     /// Restore the user's terminal. Calling it repeatedly is harmless.
     pub fn finish(&mut self) -> io::Result<()> {
         if !self.finished {
+            self.close_detached()?;
+            self.writer.finish()?;
             crate::lifecycle::restore();
             self.finished = true;
+        }
+        Ok(())
+    }
+
+    fn draw_normal(&mut self, state: &mut CodeState) -> io::Result<()> {
+        let size = self.writer.size();
+        if !supported_viewport(size) {
+            self.writer.claim_full_height()?;
+        }
+        let transcript = normal_document(state, &self.registry, &mut self.document, size);
+        let dock_height = dock_height(state, size);
+        let mut dock = Terminal::new(TestBackend::new(size.width.max(1), dock_height.max(1)))?;
+        let mut cursor = None;
+        let frame = dock.draw(|frame| {
+            cursor = render_dock(frame, state, size);
+        })?;
+        let footer = buffer_lines(frame.buffer);
+        self.writer.docked_frame(&transcript, &footer)?;
+        let cursor = cursor.map(|position| {
+            Position::new(
+                position.x,
+                size.height.saturating_sub(dock_height) + position.y,
+            )
+        });
+        self.writer.cursor(cursor)
+    }
+
+    fn draw_detached(&mut self, state: &CodeState) -> io::Result<()> {
+        if self.detached.is_none() {
+            self.writer.cursor(None)?;
+            crate::lifecycle::enter_alternate_screen()?;
+            let terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()));
+            match terminal {
+                Ok(terminal) => self.detached = Some(terminal),
+                Err(error) => {
+                    let _ = crate::lifecycle::leave_alternate_screen();
+                    return Err(error);
+                }
+            }
+        }
+        let Some(detached) = self.detached.as_mut() else {
+            return Ok(());
+        };
+        detached
+            .draw(|frame| render_detached_frame(frame, state))
+            .map(|_| ())
+    }
+
+    fn close_detached(&mut self) -> io::Result<()> {
+        if self.detached.take().is_some() {
+            crate::lifecycle::leave_alternate_screen()?;
+            // The alternate buffer may have changed the physical cursor, but
+            // it did not change the writer's retained normal-buffer model.
+            // Invalidating repaints only the owned live region and lets newly
+            // appended journal rows flow through the writer exactly once.
+            self.writer.invalidate();
         }
         Ok(())
     }
@@ -2425,9 +2710,245 @@ impl Drop for CodeView {
     }
 }
 
+fn normal_document(
+    state: &CodeState,
+    registry: &Registry,
+    document: &mut DocumentCache,
+    size: Size,
+) -> Vec<Line<'static>> {
+    if state.operations_only {
+        let mut lines = vec![
+            Line::styled(
+                sanitize(&state.status.title),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Line::default(),
+            Line::styled(
+                "No coding agent is attached to this context.",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Line::default(),
+        ];
+        if let Some(root) = &state.operations_root {
+            lines.extend(root.content.lines().map(|line| Line::from(sanitize(line))));
+        } else {
+            lines.push(Line::styled(
+                "Loading target status…",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        return lines;
+    }
+    document.refresh(state, size.width.max(1), size.height.max(1), registry);
+    let mut lines = vec![
+        Line::styled(
+            sanitize(&state.status.title),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Line::default(),
+    ];
+    lines.extend(document.all_lines());
+    lines
+}
+
+fn dock_height(state: &CodeState, size: Size) -> u16 {
+    if size.width < 40 || size.height < 16 {
+        return size.height.max(1);
+    }
+    let transient_budget = size.height.saturating_mul(2).saturating_div(5).clamp(5, 12);
+    if matches!(state.surface, Surface::Permission) {
+        // Permission identity, complete choices, and its confirmation hints
+        // outrank ordinary session status. The extra row is the transient
+        // boundary; the content itself keeps the documented dock budget.
+        return transient_budget.saturating_add(1).min(size.height);
+    }
+    if state.operations_only {
+        return if matches!(state.surface, Surface::Conversation) {
+            2_u16.min(size.height).max(1)
+        } else {
+            transient_budget.saturating_add(1).min(size.height)
+        };
+    }
+    let status: u16 = if size.width < 68 { 4 } else { 2 };
+    let hint: u16 = 1;
+    let content = match state.surface {
+        Surface::Conversation => {
+            let queue = if state.queued_preview_len() == 0 {
+                0
+            } else {
+                u16::try_from(state.queued_preview_len().min(2))
+                    .unwrap_or(u16::MAX)
+                    .saturating_add(2)
+            };
+            let notice = u16::from(state.notice.is_some());
+            queue
+                .saturating_add(notice)
+                .saturating_add(composer_height(state, size.width))
+        }
+        Surface::Inspector(_) => 0,
+        _ => transient_budget,
+    };
+    status
+        .saturating_add(content)
+        .saturating_add(hint)
+        .min(size.height)
+        .max(1)
+}
+
+fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) -> Option<Position> {
+    let area = frame.area();
+    if !supported_viewport(terminal_size) {
+        let message = state.permissions.front().map_or_else(
+            || {
+                "Resize terminal to at least 40×16. Conversation, draft, queue, and selections are retained. Enter is disabled."
+                    .to_string()
+            },
+            |pending| {
+                format!(
+                    "Resize terminal to at least 40×16. Permission {} · {}\nF2 Review · Esc Deny · Ctrl-C Cancel turn\nApproval is disabled until every offered choice fits.",
+                    safe_one_line(pending.prompt.id()),
+                    safe_one_line(pending.prompt.title())
+                )
+            },
+        );
+        frame.render_widget(
+            Paragraph::new(message)
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return None;
+    }
+    if matches!(state.surface, Surface::Permission) {
+        render_permission(frame, area, state);
+        return None;
+    }
+    if state.operations_only {
+        let [content, hint_area] =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
+        match &state.surface {
+            Surface::Conversation => frame.render_widget(
+                Paragraph::new("Ctrl-P opens target actions · Ctrl-O refreshes status")
+                    .style(Style::default().fg(Color::DarkGray)),
+                content,
+            ),
+            Surface::Palette(list) | Surface::Selector(list) => {
+                render_choice_list(frame, content, list)
+            }
+            Surface::Queue { selected } => render_queue_editor(frame, content, state, *selected),
+            Surface::Recovery { selected } => {
+                render_recovery_editor(frame, content, state, *selected)
+            }
+            Surface::Permission | Surface::Inspector(_) => {}
+        }
+        frame.render_widget(
+            Paragraph::new("Ctrl-P Commands · Ctrl-O Status details · Ctrl-C Exit")
+                .style(Style::default().fg(Color::DarkGray)),
+            hint_area,
+        );
+        return None;
+    }
+
+    let status_height = if area.width < 68 { 4 } else { 2 };
+    let [status, content, hint_area] = Layout::vertical([
+        Constraint::Length(status_height.min(area.height.saturating_sub(1))),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    render_status(frame, status, state);
+
+    let mut cursor = None;
+    match &state.surface {
+        Surface::Conversation => {
+            if state.operations_only {
+                frame.render_widget(
+                    Paragraph::new("Ctrl-P opens the available target actions.")
+                        .style(Style::default().fg(Color::DarkGray)),
+                    content,
+                );
+            } else {
+                let queue_height = if state.queued_preview_len() == 0 {
+                    0
+                } else {
+                    u16::try_from(state.queued_preview_len().min(2))
+                        .unwrap_or(u16::MAX)
+                        .saturating_add(2)
+                };
+                let notice_height = u16::from(state.notice.is_some());
+                let composer_height = composer_height(state, content.width);
+                let [queue, notice, composer] = Layout::vertical([
+                    Constraint::Length(queue_height),
+                    Constraint::Length(notice_height),
+                    Constraint::Length(composer_height),
+                ])
+                .areas(content);
+                if state.queued_preview_len() > 0 {
+                    render_queue_summary(frame, queue, state);
+                }
+                if let Some(notice_text) = &state.notice {
+                    render_notice(frame, notice, notice_text);
+                }
+                render_composer(frame, composer, state);
+                cursor = composer_cursor_position(composer, state);
+                if let Some(position) = cursor {
+                    frame.set_cursor_position(position);
+                }
+            }
+        }
+        Surface::Palette(list) | Surface::Selector(list) => {
+            render_choice_list(frame, content, list)
+        }
+        Surface::Permission => render_permission(frame, content, state),
+        Surface::Queue { selected } => render_queue_editor(frame, content, state, *selected),
+        Surface::Recovery { selected } => render_recovery_editor(frame, content, state, *selected),
+        Surface::Inspector(_) => {}
+    }
+    frame.render_widget(
+        Paragraph::new(hint(state)).style(Style::default().fg(Color::DarkGray)),
+        hint_area,
+    );
+    cursor
+}
+
+fn supported_viewport(size: Size) -> bool {
+    size.width >= 40 && size.height >= 16
+}
+
+fn render_detached_frame(frame: &mut Frame<'_>, state: &CodeState) {
+    if let Surface::Inspector(inspector) = &state.surface {
+        render_inspector(frame, frame.area(), inspector);
+        if !state.permissions.is_empty() {
+            let notice = Rect::new(frame.area().x, frame.area().y, frame.area().width, 1);
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "Permission needed · F2 to review ({})",
+                    state.permissions.len()
+                ))
+                .style(Style::default().fg(Color::Yellow)),
+                notice,
+            );
+        }
+    }
+}
+
+fn buffer_lines(buffer: &Buffer) -> Vec<Line<'static>> {
+    (buffer.area.top()..buffer.area.bottom())
+        .map(|y| {
+            let mut spans = Vec::new();
+            let mut x = buffer.area.left();
+            while x < buffer.area.right() {
+                let cell = &buffer[(x, y)];
+                spans.push(Span::styled(cell.symbol().to_string(), cell.style()));
+                x = x.saturating_add(u16::try_from(cell.symbol().width()).unwrap_or(1).max(1));
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 struct DocumentRow {
-    source_offset: usize,
     line: Line<'static>,
 }
 
@@ -2438,8 +2959,6 @@ struct DocumentCache {
     source_revision: u64,
     total_rows: usize,
     entries: Vec<CachedDocumentEntry>,
-    positions: Vec<ReadingPosition>,
-    layout_revision: u64,
 }
 
 struct CachedDocumentEntry {
@@ -2455,7 +2974,6 @@ impl DocumentCache {
         if !geometry_changed && self.source_revision == state.journal_revision {
             return;
         }
-        let mut changed = geometry_changed;
         let mut previous = HashMap::with_capacity(self.entries.len());
         if !geometry_changed {
             for entry in std::mem::take(&mut self.entries) {
@@ -2473,66 +2991,30 @@ impl DocumentCache {
                 .filter(|cached| cached.revision == item.revision);
             let mut entry = match cached {
                 Some(entry) => entry,
-                None => {
-                    changed = true;
-                    CachedDocumentEntry {
-                        id: item.id.clone(),
-                        revision: item.revision,
-                        start: 0,
-                        rows: document_rows_for_entry(item.entry, width, height, registry),
-                    }
-                }
+                None => CachedDocumentEntry {
+                    id: item.id.clone(),
+                    revision: item.revision,
+                    start: 0,
+                    rows: document_rows_for_entry(item.entry, width, height, registry),
+                },
             };
-            if entry.revision != item.revision {
-                changed = true;
-            }
             entry.start = start;
             start = start.saturating_add(entry.rows.len());
             entries.push(entry);
-        }
-        if !previous.is_empty() {
-            changed = true;
         }
         self.width = width;
         self.height = height;
         self.source_revision = state.journal_revision;
         self.total_rows = start;
         self.entries = entries;
-        if changed {
-            self.positions = self
-                .entries
-                .iter()
-                .flat_map(|entry| {
-                    entry.rows.iter().map(move |row| ReadingPosition {
-                        entry: entry.id.clone(),
-                        source_offset: row.source_offset,
-                    })
-                })
-                .collect();
-            self.layout_revision = self.layout_revision.saturating_add(1);
-        }
     }
 
-    fn start_for(&self, state: &CodeState, visible: usize) -> usize {
-        if state.follow_live {
-            return self.total_rows.saturating_sub(visible);
-        }
-        let Some(anchor) = &state.reading_anchor else {
-            return self.total_rows.saturating_sub(visible);
-        };
-        self.entries
-            .iter()
-            .find(|entry| entry.id == anchor.entry)
-            .and_then(|entry| {
-                entry
-                    .rows
-                    .iter()
-                    .position(|row| row.source_offset >= anchor.source_offset)
-                    .map(|offset| entry.start.saturating_add(offset))
-            })
-            .unwrap_or_else(|| self.total_rows.saturating_sub(visible))
+    #[cfg(test)]
+    fn start_for(&self, visible: usize) -> usize {
+        self.total_rows.saturating_sub(visible)
     }
 
+    #[cfg(test)]
     fn visible_lines(&self, start: usize, count: usize) -> Vec<Line<'static>> {
         let end = start.saturating_add(count);
         let mut lines = Vec::with_capacity(count);
@@ -2554,8 +3036,16 @@ impl DocumentCache {
         }
         lines
     }
+
+    fn all_lines(&self) -> Vec<Line<'static>> {
+        self.entries
+            .iter()
+            .flat_map(|entry| entry.rows.iter().map(|row| row.line.clone()))
+            .collect()
+    }
 }
 
+#[cfg(test)]
 fn render_frame(
     frame: &mut Frame<'_>,
     state: &mut CodeState,
@@ -2582,11 +3072,11 @@ fn render_frame(
     }
 
     let status_height = if area.width < 68 { 4 } else { 2 };
-    let notice_height = u16::from(state.notice.is_some()) * 2;
-    let queue_height = if state.queue.is_empty() {
+    let notice_height = u16::from(state.notice.is_some());
+    let queue_height = if state.queued_preview_len() == 0 {
         0
     } else {
-        u16::try_from(state.queue.len().min(2))
+        u16::try_from(state.queued_preview_len().min(2))
             .unwrap_or(u16::MAX)
             .saturating_add(2)
     };
@@ -2619,17 +3109,11 @@ fn render_frame(
     );
     render_status(frame, status, state);
     render_transcript(frame, transcript, state, registry, document);
-    if !state.queue.is_empty() {
+    if state.queued_preview_len() > 0 {
         render_queue_summary(frame, queue, state);
     }
     if let Some(notice) = &state.notice {
-        frame.render_widget(
-            Paragraph::new(notice.as_str())
-                .style(Style::default().fg(Color::Yellow))
-                .block(Block::default().borders(Borders::TOP).title(" Notice "))
-                .wrap(Wrap { trim: true }),
-            notice_area,
-        );
+        render_notice(frame, notice_area, notice);
     }
     render_composer(frame, composer, state);
     frame.render_widget(
@@ -2644,6 +3128,7 @@ fn render_frame(
     }
 }
 
+#[cfg(test)]
 fn render_operations_base(frame: &mut Frame<'_>, area: Rect, state: &CodeState) {
     let [header, body, hint_area] = Layout::vertical([
         Constraint::Length(1),
@@ -2669,14 +3154,29 @@ fn render_operations_base(frame: &mut Frame<'_>, area: Rect, state: &CodeState) 
     );
 }
 
+#[cfg(test)]
 fn render_surface(frame: &mut Frame<'_>, state: &CodeState) {
     match &state.surface {
         Surface::Conversation => {}
-        Surface::Palette(list) | Surface::Selector(list) => render_choice_list(frame, list),
-        Surface::Inspector(inspector) => render_inspector(frame, inspector),
-        Surface::Permission => render_permission(frame, state),
-        Surface::Queue { selected } => render_queue_editor(frame, state, *selected),
-        Surface::TranscriptSearch { query } => render_transcript_search(frame, query),
+        Surface::Palette(list) | Surface::Selector(list) => {
+            render_choice_list(frame, centered(frame.area(), 86, 70, 12, 20), list)
+        }
+        Surface::Inspector(inspector) => {
+            render_inspector(frame, centered(frame.area(), 96, 90, 14, 22), inspector)
+        }
+        Surface::Permission => render_permission(frame, frame.area(), state),
+        Surface::Queue { selected } => render_queue_editor(
+            frame,
+            centered(frame.area(), 82, 60, 8, 14),
+            state,
+            *selected,
+        ),
+        Surface::Recovery { selected } => render_recovery_editor(
+            frame,
+            centered(frame.area(), 82, 60, 8, 14),
+            state,
+            *selected,
+        ),
     }
 }
 
@@ -2733,6 +3233,17 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, state: &CodeState) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+fn render_notice(frame: &mut Frame<'_>, area: Rect, notice: &str) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("! ", Style::default().fg(Color::Yellow)),
+            Span::raw(safe_one_line(notice)),
+        ]))
+        .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
 fn compact_cost(cost: &str, cells: usize) -> String {
     if cost.width() <= cells {
         return cost.to_string();
@@ -2756,6 +3267,7 @@ fn compact_cost(cost: &str, cells: usize) -> String {
     format!("{source}{separator}{}", truncate_cells(figure, remaining))
 }
 
+#[cfg(test)]
 fn render_transcript(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -2765,18 +3277,14 @@ fn render_transcript(
 ) {
     document.refresh(state, area.width.saturating_sub(2), area.height, registry);
     let visible = usize::from(area.height.saturating_sub(2));
-    state.sync_reading_layout(document.layout_revision, &document.positions, visible);
-    let start = document.start_for(state, visible);
+    let start = document.start_for(visible);
     let lines = document.visible_lines(start, visible);
-    let title = if state.follow_live {
-        " Conversation "
-    } else if state.new_activity {
-        " Reading history · new activity "
-    } else {
-        " Reading history "
-    };
     frame.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title)),
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Conversation "),
+        ),
         area,
     );
 }
@@ -2788,37 +3296,17 @@ fn document_rows_for_entry(
     registry: &Registry,
 ) -> Vec<DocumentRow> {
     let mut rows = Vec::new();
-    let (lines, source_offsets) = match entry {
+    let lines = match entry {
         Entry::Message(message) if message.voice == Voice::Agent => {
-            let lines = render::markdown::source_lines(&message.text);
-            let offsets = source_line_offsets(&message.text, lines.len());
-            (lines, offsets)
+            render::markdown::source_lines(&message.text)
         }
-        Entry::Message(message) => {
-            let lines = render::source_message(message);
-            let offsets = source_line_offsets(&message.text, lines.len());
-            (lines, offsets)
-        }
-        Entry::Tool(call) => {
-            let lines = compact_tool_lines(call, width, height, registry);
-            let offsets = (0..lines.len()).collect();
-            (lines, offsets)
-        }
-        Entry::Plan(plan) => {
-            let lines = render::session::plan(plan);
-            let offsets = (0..lines.len()).collect();
-            (lines, offsets)
-        }
+        Entry::Message(message) => render::source_message(message),
+        Entry::Tool(call) => compact_tool_lines(call, width, height, registry),
+        Entry::Plan(plan) => render::session::plan(plan),
     };
-    for (line_index, line) in lines.into_iter().enumerate() {
-        let mut source_offset = source_offsets.get(line_index).copied().unwrap_or_default();
+    for line in lines {
         for line in wrap(&sanitize_line(&line), width.max(1)) {
-            let source_length = line_graphemes(&line);
-            rows.push(DocumentRow {
-                source_offset,
-                line,
-            });
-            source_offset = source_offset.saturating_add(source_length);
+            rows.push(DocumentRow { line });
         }
     }
     rows
@@ -2856,80 +3344,73 @@ fn compact_tool_lines(
     lines
 }
 
-fn source_line_offsets(text: &str, count: usize) -> Vec<usize> {
-    let mut offsets = Vec::new();
-    let mut offset = 0_usize;
-    for line in text.split('\n') {
-        offsets.push(offset);
-        offset = offset
-            .saturating_add(line.graphemes(true).count())
-            .saturating_add(1);
-    }
-    if offsets.is_empty() {
-        offsets.push(0);
-    }
-    let fallback = offsets.last().copied().unwrap_or_default();
-    while offsets.len() < count {
-        offsets.push(fallback);
-    }
-    offsets.truncate(count);
-    offsets
-}
-
-fn line_graphemes(line: &Line<'_>) -> usize {
-    line.spans
-        .iter()
-        .map(|span| span.content.graphemes(true).count())
-        .sum()
-}
-
 fn render_queue_summary(frame: &mut Frame<'_>, area: Rect, state: &CodeState) {
-    let lines = state
-        .queue
-        .iter()
-        .take(2)
-        .enumerate()
-        .map(|(index, prompt)| {
-            let owner = prompt.owner.map(CommandOwner::label).unwrap_or("prompt");
-            Line::from(format!(
-                "{}: {} [{}]",
-                index.saturating_add(1),
-                one_line(&prompt.prompt),
-                owner
-            ))
-        })
-        .collect::<Vec<_>>();
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::TOP)
-                    .title(" Next turn · F3 edit/remove "),
-            )
-            .wrap(Wrap { trim: true }),
-        area,
+    let total = state.queued_preview_len();
+    let rail = Style::default().fg(Color::DarkGray);
+    let mut lines = vec![Line::from(vec![
+        Span::styled("┋ ", rail),
+        Span::styled("Queued next · F3 edit", rail.add_modifier(Modifier::BOLD)),
+    ])];
+    lines.extend(
+        state
+            .pending_followups
+            .iter()
+            .chain(state.queue.iter())
+            .take(2)
+            .enumerate()
+            .map(|(index, prompt)| {
+                let owner = prompt.owner.map(CommandOwner::label).unwrap_or("prompt");
+                Line::from(vec![
+                    Span::styled("┋ ", rail),
+                    Span::raw(format!(
+                        "{} · {} [{}]",
+                        index.saturating_add(1),
+                        one_line(&prompt.prompt),
+                        owner
+                    )),
+                ])
+            }),
     );
+    if total > 2 {
+        lines.push(Line::from(vec![
+            Span::styled("┋ ", rail),
+            Span::styled(format!("… {} more", total.saturating_sub(2)), rail),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
 }
 
 fn composer_height(state: &CodeState, width: u16) -> u16 {
     let layout = composer_layout(
         state.editor.text(),
         state.editor.cursor_byte(),
-        width.saturating_sub(4).max(1),
+        width.saturating_sub(2).max(1),
+        composer_rail(state),
+        composer_rail_style(state),
     );
     let rows = layout.rows.len().clamp(1, 4);
-    u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(2)
+    u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(1)
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &CodeState) {
-    let inner = Block::default()
-        .borders(Borders::ALL)
-        .title(" Composer ")
-        .inner(area);
+    let rail = composer_rail(state);
+    let [label, inner] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!("{rail} "), composer_rail_style(state)),
+            Span::styled(
+                composer_title(state),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        label,
+    );
     let layout = composer_layout(
         state.editor.text(),
         state.editor.cursor_byte(),
         inner.width.saturating_sub(2).max(1),
+        rail,
+        composer_rail_style(state),
     );
     let start = layout
         .cursor_row
@@ -2941,24 +3422,59 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &CodeState) {
         .take(usize::from(inner.height))
         .cloned()
         .collect::<Vec<_>>();
-    frame.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Composer ")),
-        area,
-    );
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
+fn composer_title(state: &CodeState) -> &'static str {
+    match state.turn {
+        TurnState::Submitting | TurnState::Working => "Next turn",
+        TurnState::Cancelling => "Next turn — waiting for stop",
+        TurnState::Ready if matches!(state.queue_state, QueueRunState::Paused(_)) => {
+            "Next turn — queue paused"
+        }
+        TurnState::Ready => "Message",
+    }
+}
+
+fn composer_rail(state: &CodeState) -> &'static str {
+    if state.turn == TurnState::Ready && matches!(state.queue_state, QueueRunState::Running) {
+        "┃"
+    } else {
+        "┋"
+    }
+}
+
+fn composer_rail_style(state: &CodeState) -> Style {
+    if composer_rail(state) == "┃" {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    }
+}
+
+#[cfg(test)]
 fn set_composer_cursor(frame: &mut Frame<'_>, area: Rect, state: &CodeState) {
-    let inner = Block::default()
-        .borders(Borders::ALL)
-        .title(" Composer ")
-        .inner(area);
+    if let Some(position) = composer_cursor_position(area, state) {
+        frame.set_cursor_position(position);
+    }
+}
+
+fn composer_cursor_position(area: Rect, state: &CodeState) -> Option<Position> {
+    let inner = Rect::new(
+        area.x,
+        area.y.saturating_add(1),
+        area.width,
+        area.height.saturating_sub(1),
+    );
     if inner.width == 0 || inner.height == 0 {
-        return;
+        return None;
     }
     let layout = composer_layout(
         state.editor.text(),
         state.editor.cursor_byte(),
         inner.width.saturating_sub(2).max(1),
+        composer_rail(state),
+        composer_rail_style(state),
     );
     let start = layout
         .cursor_row
@@ -2972,7 +3488,7 @@ fn set_composer_cursor(frame: &mut Frame<'_>, area: Rect, state: &CodeState) {
         .y
         .saturating_add(y_offset)
         .min(inner.bottom().saturating_sub(1));
-    frame.set_cursor_position(Position::new(x, y));
+    Some(Position::new(x, y))
 }
 
 #[derive(Clone)]
@@ -2982,9 +3498,29 @@ struct ComposerLayout {
     cursor_column: u16,
 }
 
-fn composer_layout(text: &str, cursor: usize, content_width: u16) -> ComposerLayout {
+#[derive(Clone, Copy)]
+struct ComposerFormat {
+    cursor: usize,
+    content_width: u16,
+    rail: &'static str,
+    rail_style: Style,
+}
+
+fn composer_layout(
+    text: &str,
+    cursor: usize,
+    content_width: u16,
+    rail: &'static str,
+    rail_style: Style,
+) -> ComposerLayout {
     let mut rows = Vec::new();
     let mut cursor_position = None;
+    let format = ComposerFormat {
+        cursor,
+        content_width,
+        rail,
+        rail_style,
+    };
     let mut start = 0_usize;
     let bytes = text.as_bytes();
     let mut index = 0_usize;
@@ -3000,8 +3536,7 @@ fn composer_layout(text: &str, cursor: usize, content_width: u16) -> ComposerLay
             &mut cursor_position,
             &text[start..index],
             start,
-            cursor,
-            content_width,
+            &format,
         );
         let mut next = index.saturating_add(1);
         if bytes[index] == b'\r' && bytes.get(next) == Some(&b'\n') {
@@ -3023,8 +3558,7 @@ fn composer_layout(text: &str, cursor: usize, content_width: u16) -> ComposerLay
         &mut cursor_position,
         &text[start..],
         start,
-        cursor,
-        content_width,
+        &format,
     );
     let (cursor_row, cursor_column) = cursor_position.unwrap_or_else(|| {
         let row = rows.len().saturating_sub(1);
@@ -3046,18 +3580,16 @@ fn append_composer_line(
     cursor_position: &mut Option<(usize, u16)>,
     text: &str,
     start: usize,
-    cursor: usize,
-    content_width: u16,
+    format: &ComposerFormat,
 ) {
     let mut content = String::new();
     let mut cells = 0_u16;
-    let width = content_width.max(1);
-    let mut first_row = true;
+    let width = format.content_width.max(1);
     let mut row_start = start;
 
     for (offset, grapheme) in text.grapheme_indices(true) {
         let position = start.saturating_add(offset);
-        if cursor_position.is_none() && cursor == position {
+        if cursor_position.is_none() && format.cursor == position {
             *cursor_position = Some((
                 rows.len(),
                 u16::try_from(2_usize.saturating_add(usize::from(cells))).unwrap_or(u16::MAX),
@@ -3066,31 +3598,33 @@ fn append_composer_line(
         let rendered = sanitize(grapheme);
         let grapheme_cells = u16::try_from(rendered.width()).unwrap_or(u16::MAX);
         if !content.is_empty() && cells.saturating_add(grapheme_cells) > width {
-            rows.push(composer_row(std::mem::take(&mut content), first_row));
-            first_row = false;
+            rows.push(composer_row(
+                std::mem::take(&mut content),
+                format.rail,
+                format.rail_style,
+            ));
             row_start = position;
             cells = 0;
         }
-        if cursor_position.is_none() && cursor == row_start {
+        if cursor_position.is_none() && format.cursor == row_start {
             *cursor_position = Some((rows.len(), 2));
         }
         content.push_str(&rendered);
         cells = cells.saturating_add(grapheme_cells);
     }
     let end = start.saturating_add(text.len());
-    if cursor_position.is_none() && cursor == end {
+    if cursor_position.is_none() && format.cursor == end {
         *cursor_position = Some((
             rows.len(),
             u16::try_from(2_usize.saturating_add(usize::from(cells))).unwrap_or(u16::MAX),
         ));
     }
-    rows.push(composer_row(content, first_row));
+    rows.push(composer_row(content, format.rail, format.rail_style));
 }
 
-fn composer_row(content: String, first: bool) -> Line<'static> {
-    let prefix = if first { "› " } else { "  " };
+fn composer_row(content: String, rail: &'static str, rail_style: Style) -> Line<'static> {
     Line::from(vec![
-        Span::styled(prefix, Style::default().fg(Color::Cyan)),
+        Span::styled(format!("{rail} "), rail_style),
         Span::raw(content),
     ])
 }
@@ -3106,22 +3640,24 @@ fn hint(state: &CodeState) -> String {
     match state.turn {
         TurnState::Submitting | TurnState::Working => {
             if state.permissions.is_empty() {
-                "Tab queue next · Esc interrupt · Ctrl-P commands · F3 queue".to_string()
+                "Enter queue next · Esc interrupt · Ctrl-P commands · F3 queue".to_string()
             } else {
                 format!(
-                    "F2 permission ({}) · Tab queue next · Esc interrupt · Ctrl-P commands",
+                    "F2 permission ({}) · Enter queue next · Esc interrupt · Ctrl-P commands",
                     state.permissions.len()
                 )
             }
         }
         TurnState::Cancelling => "Cancelling · wait for the agent to settle".to_string(),
         TurnState::Ready => {
+            if let QueueRunState::Paused(reason) = &state.queue_state {
+                return format!("Queue paused: {} · F3 review/resume", safe_one_line(reason));
+            }
             if state.permissions.is_empty() {
-                "Ctrl-P commands · F2 permissions · F4 inspect · Ctrl-F search · Ctrl-End live"
-                    .to_string()
+                "Ctrl-P commands · Ctrl-O details · F2 permissions · F3 queue".to_string()
             } else {
                 format!(
-                    "F2 permission ({}) · Ctrl-P commands · F4 inspect · Ctrl-End live",
+                    "F2 permission ({}) · Ctrl-P commands · Ctrl-O details",
                     state.permissions.len()
                 )
             }
@@ -3129,42 +3665,33 @@ fn hint(state: &CodeState) -> String {
     }
 }
 
-fn render_choice_list(frame: &mut Frame<'_>, list: &ChoiceList) {
-    let area = centered(frame.area(), 86, 70, 12, 20);
+fn render_choice_list(frame: &mut Frame<'_>, viewport: Rect, list: &ChoiceList) {
+    let area = viewport;
     frame.render_widget(Clear, area);
     let [heading, query, choices, footer] = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(3),
-        Constraint::Min(4),
-        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
     ])
     .areas(area);
     frame.render_widget(
-        Paragraph::new(Line::styled(
-            safe_one_line(&list.detail),
-            Style::default().fg(Color::DarkGray),
-        ))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(safe_one_line(&list.title)),
-        ),
+        Block::default()
+            .borders(Borders::TOP)
+            .title(format!(" {} ", safe_one_line(&list.title))),
         heading,
     );
-    let query_title = if list.query.is_empty() {
-        " Search · type to filter "
+    let query_text = if list.query.is_empty() {
+        format!("› Type to filter · {}", safe_one_line(&list.detail))
     } else {
-        " Search "
+        format!("› {}", safe_one_line(&list.query))
     };
     frame.render_widget(
-        Paragraph::new(safe_one_line(&list.query))
-            .block(Block::default().borders(Borders::ALL).title(query_title)),
+        Paragraph::new(query_text).style(Style::default().fg(Color::DarkGray)),
         query,
     );
 
-    let results_block = Block::default().borders(Borders::ALL).title(" Results ");
-    let results = results_block.inner(choices);
-    frame.render_widget(results_block, choices);
+    let results = choices;
     let mut lines = Vec::new();
     let mut selected_start = None;
     let mut selected_end = None;
@@ -3182,16 +3709,14 @@ fn render_choice_list(frame: &mut Frame<'_>, list: &ChoiceList) {
             Style::default()
         };
         let start = lines.len();
-        let label = Line::from(vec![Span::styled(
-            format!("{marker}{}", safe_one_line(choice.label())),
-            style,
-        )]);
+        let label = Line::from(vec![
+            Span::styled(format!("{marker}{}", safe_one_line(choice.label())), style),
+            Span::styled(
+                format!(" · {}", safe_one_line(&choice.detail())),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]);
         lines.extend(wrap(&sanitize_line(&label), results.width.max(1)));
-        let detail = Line::styled(
-            format!("    {}", safe_one_line(&choice.detail())),
-            Style::default().fg(Color::DarkGray),
-        );
-        lines.extend(wrap(&detail, results.width.max(1)));
         if selected {
             selected_start = Some(start);
             selected_end = Some(lines.len());
@@ -3220,14 +3745,14 @@ fn render_choice_list(frame: &mut Frame<'_>, list: &ChoiceList) {
         results,
     );
     frame.render_widget(
-        Paragraph::new("↑/↓ move · Enter select · Esc/Ctrl-C close · digits filter")
+        Paragraph::new("↑/↓ move · Enter select · Esc/Ctrl-C close")
             .style(Style::default().fg(Color::DarkGray)),
         footer,
     );
 }
 
-fn render_inspector(frame: &mut Frame<'_>, inspector: &OpenInspector) {
-    let area = centered(frame.area(), 96, 90, 14, 22);
+fn render_inspector(frame: &mut Frame<'_>, viewport: Rect, inspector: &OpenInspector) {
+    let area = centered(viewport, 100, 100, 14, 8);
     frame.render_widget(Clear, area);
     let title = if inspector.searching {
         format!(
@@ -3264,25 +3789,23 @@ fn render_inspector(frame: &mut Frame<'_>, inspector: &OpenInspector) {
         1,
     );
     frame.render_widget(
-        Paragraph::new("Ctrl-P commands · Ctrl-F search · Ctrl-Y copy · Esc/Ctrl-C close")
-            .style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(if inspector.tracks_transcript {
+            "[/] entries · F4 inspect · Ctrl-F search · Ctrl-Y copy · Esc/Ctrl-C close"
+        } else {
+            "Ctrl-P commands · Ctrl-F search · Ctrl-Y copy · Esc/Ctrl-C close"
+        })
+        .style(Style::default().fg(Color::DarkGray)),
         footer,
     );
 }
 
-fn render_permission(frame: &mut Frame<'_>, state: &CodeState) {
-    let viewport = frame.area();
-    let area = if viewport.width <= 48 || viewport.height <= 18 {
-        viewport
-    } else {
-        centered(viewport, 86, 66, 10, 16)
-    };
-    frame.render_widget(Clear, area);
+fn render_permission(frame: &mut Frame<'_>, viewport: Rect, state: &CodeState) {
+    let area = viewport;
     let Some(pending) = state.permissions.front() else {
         return;
     };
     let prompt = &pending.prompt;
-    let block = Block::default().borders(Borders::ALL).title(" Permission ");
+    let block = Block::default().borders(Borders::TOP).title(" Permission ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -3290,17 +3813,17 @@ fn render_permission(frame: &mut Frame<'_>, state: &CodeState) {
     }
     let width = usize::from(inner.width);
     let mut header = vec![Line::styled(
-        truncate_cells(&safe_one_line(prompt.title()), width),
+        truncate_cells(
+            &format!(
+                "{} · request {} · pending {}",
+                safe_one_line(prompt.title()),
+                safe_one_line(prompt.id()),
+                state.permissions.len()
+            ),
+            width,
+        ),
         Style::default().add_modifier(Modifier::BOLD),
     )];
-    header.push(Line::from(truncate_cells(
-        &format!(
-            "request {} · pending {}",
-            safe_one_line(prompt.id()),
-            state.permissions.len()
-        ),
-        width,
-    )));
     if let Some(context) = &pending.context {
         header.push(Line::styled(
             truncate_cells(&safe_one_line(&permission_context_summary(context)), width),
@@ -3324,10 +3847,34 @@ fn render_permission(frame: &mut Frame<'_>, state: &CodeState) {
             Style::default().fg(Color::DarkGray),
         ),
     ];
-    let header_height = u16::try_from(header.len()).unwrap_or(u16::MAX);
     let footer_height = u16::try_from(footer.len()).unwrap_or(u16::MAX);
+    let option_rows = prompt
+        .options()
+        .iter()
+        .enumerate()
+        .map(|(index, option)| {
+            wrap(
+                &Line::from(format!(
+                    "  [{}] {}",
+                    index.saturating_add(1),
+                    safe_one_line(&option.name)
+                )),
+                inner.width.max(1),
+            )
+            .len()
+        })
+        .sum::<usize>();
+    let body_height = inner.height.saturating_sub(footer_height);
+    let reserved_options = u16::try_from(option_rows)
+        .unwrap_or(u16::MAX)
+        .min(body_height.saturating_sub(1));
+    let header_height = u16::try_from(header.len())
+        .unwrap_or(u16::MAX)
+        .min(body_height.saturating_sub(reserved_options))
+        .max(1_u16.min(body_height));
+    header.truncate(usize::from(header_height));
     let [header_area, options_area, footer_area] = Layout::vertical([
-        Constraint::Length(header_height.min(inner.height.saturating_sub(footer_height))),
+        Constraint::Length(header_height),
         Constraint::Min(1),
         Constraint::Length(footer_height.min(inner.height)),
     ])
@@ -3406,8 +3953,8 @@ fn permission_context_summary(context: &ToolCallUpdate) -> String {
     )
 }
 
-fn render_queue_editor(frame: &mut Frame<'_>, state: &CodeState, selected: usize) {
-    let area = centered(frame.area(), 82, 60, 8, 14);
+fn render_queue_editor(frame: &mut Frame<'_>, viewport: Rect, state: &CodeState, selected: usize) {
+    let area = centered(viewport, 100, 100, 8, 5);
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -3445,27 +3992,61 @@ fn render_queue_editor(frame: &mut Frame<'_>, state: &CodeState, selected: usize
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(lines), rows);
     frame.render_widget(
-        Paragraph::new("↑/↓ select · Enter/e edit · Delete remove · Esc close")
+        Paragraph::new("↑/↓ select · Alt-↑/↓ reorder · Enter edit · Delete remove · r resume")
             .style(Style::default().fg(Color::DarkGray))
             .wrap(Wrap { trim: true }),
         footer,
     );
 }
 
-fn render_transcript_search(frame: &mut Frame<'_>, query: &str) {
-    let area = centered(frame.area(), 75, 50, 5, 7);
+fn render_recovery_editor(
+    frame: &mut Frame<'_>,
+    viewport: Rect,
+    state: &CodeState,
+    selected: usize,
+) {
+    let area = centered(viewport, 100, 100, 8, 5);
     frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Recover drafts ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let [rows, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(2)]).areas(inner);
+    let visible = usize::from(rows.height);
+    let start = selected
+        .saturating_sub(visible / 2)
+        .min(state.recovery.len().saturating_sub(visible));
+    let lines = state
+        .recovery
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(index, item)| {
+            let marker = if index == selected { "› " } else { "  " };
+            let style = if index == selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            Line::from(Span::styled(
+                truncate_cells(
+                    &format!("{marker}{}", safe_one_line(&item.prompt)),
+                    usize::from(rows.width),
+                ),
+                style,
+            ))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(lines), rows);
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from("Search transcript"),
-            Line::from(query.to_string()),
-            Line::styled(
-                "Enter keeps match · Esc closes",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ])
-        .block(Block::default().borders(Borders::ALL)),
-        area,
+        Paragraph::new("Enter restore to empty composer · Delete discard · Esc close")
+            .style(Style::default().fg(Color::DarkGray))
+            .wrap(Wrap { trim: true }),
+        footer,
     );
 }
 
@@ -3744,11 +4325,232 @@ mod tests {
     }
 
     #[test]
+    fn submission_acceptance_and_rejection_preserve_p0_p1_and_editable_p2() {
+        let mut accepted = active_state();
+        let _ = accepted.step(paste("P0"));
+        let _ = accepted.step(press(KeyCode::Enter));
+        let _ = accepted.step(paste("P1"));
+        let _ = accepted.step(press(KeyCode::Enter));
+        let _ = accepted.step(paste("P2"));
+        assert_eq!(accepted.pending_followups.len(), 1);
+        let _ = accepted.step(CodeAction::TurnStarted);
+        assert_eq!(accepted.editor().text(), "P2");
+        assert_eq!(
+            accepted.queue.front().map(|item| item.prompt.as_str()),
+            Some("P1")
+        );
+        assert!(accepted.pending_followups.is_empty());
+        let submitted = accepted
+            .journal()
+            .entries()
+            .filter_map(|item| match item.entry {
+                Entry::Message(message) if message.voice == Voice::User => {
+                    Some(message.text.as_str())
+                }
+                Entry::Message(_) | Entry::Tool(_) | Entry::Plan(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(submitted, vec!["P0"]);
+
+        let mut rejected = active_state();
+        let _ = rejected.step(paste("P0"));
+        let _ = rejected.step(press(KeyCode::Enter));
+        let _ = rejected.step(paste("P1"));
+        let _ = rejected.step(press(KeyCode::Enter));
+        let _ = rejected.step(paste("P2"));
+        let _ = rejected.step(CodeAction::SubmissionRejected {
+            prompt: "P0".to_string(),
+            reason: "transport rejected submission".to_string(),
+        });
+        assert_eq!(rejected.editor().text(), "P2");
+        assert_eq!(
+            rejected
+                .recovery
+                .iter()
+                .map(|item| item.prompt.as_str())
+                .collect::<Vec<_>>(),
+            vec!["P0", "P1"]
+        );
+        assert!(matches!(rejected.queue_state, QueueRunState::Paused(_)));
+        assert!(matches!(
+            rejected.surface,
+            Surface::Recovery { selected: 0 }
+        ));
+    }
+
+    #[test]
+    fn automatic_dispatch_never_clears_p2_and_rejection_pauses_exact_item() {
+        let mut state = active_state();
+        start_working(&mut state, "P0");
+        let _ = state.step(paste("P1"));
+        let _ = state.step(press(KeyCode::Enter));
+        let _ = state.step(paste("P2"));
+
+        let effect = state.step(CodeAction::TurnSettled(TurnOutcome::Completed));
+        assert!(matches!(
+            &effect[..],
+            [CodeEffect::Submit { prompt }] if prompt == "P1"
+        ));
+        assert_eq!(state.editor().text(), "P2");
+        assert_eq!(
+            state.dispatching.as_ref().map(|item| item.prompt.as_str()),
+            Some("P1")
+        );
+
+        let _ = state.step(CodeAction::SubmissionRejected {
+            prompt: "P1".to_string(),
+            reason: "agent stopped accepting prompts".to_string(),
+        });
+        assert_eq!(state.editor().text(), "P2");
+        assert_eq!(
+            state.recovery.front().map(|item| item.prompt.as_str()),
+            Some("P1")
+        );
+        assert!(state.dispatching.is_none());
+        assert!(matches!(state.queue_state, QueueRunState::Paused(_)));
+    }
+
+    #[test]
+    fn paused_queue_requires_explicit_resume_and_supports_explicit_reorder() {
+        let mut state = active_state();
+        start_working(&mut state, "active");
+        for prompt in ["first", "second"] {
+            let _ = state.step(paste(prompt));
+            let _ = state.step(press(KeyCode::Enter));
+        }
+        let _ = state.step(CodeAction::TurnSettled(TurnOutcome::Failed(
+            "adapter failed".to_string(),
+        )));
+        assert!(matches!(state.queue_state, QueueRunState::Paused(_)));
+        assert!(state.step(press(KeyCode::F(3))).is_empty());
+        let _ = state.step(CodeAction::Event(Event::Key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::ALT,
+        ))));
+        assert_eq!(
+            state.queue.front().map(|item| item.prompt.as_str()),
+            Some("second")
+        );
+        let resumed = state.step(press(KeyCode::Char('r')));
+        assert!(matches!(
+            &resumed[..],
+            [CodeEffect::Submit { prompt }] if prompt == "second"
+        ));
+        assert!(matches!(state.queue_state, QueueRunState::Running));
+        assert_eq!(
+            state.queue.front().map(|item| item.prompt.as_str()),
+            Some("first")
+        );
+    }
+
+    #[test]
+    fn paused_queue_resume_is_a_full_palette_action_not_a_slash_alias() {
+        let mut state = active_state();
+        start_working(&mut state, "active");
+        let _ = state.step(paste("queued"));
+        let _ = state.step(press(KeyCode::Enter));
+        let _ = state.step(CodeAction::TurnSettled(TurnOutcome::Failed(
+            "adapter failed".to_string(),
+        )));
+
+        let _ = state.step(ctrl('p'));
+        let full = match &state.surface {
+            Surface::Palette(list) => list,
+            _ => {
+                assert!(matches!(state.surface, Surface::Palette(_)));
+                return;
+            }
+        };
+        assert!(full.choices.iter().any(|choice| {
+            matches!(choice, Choice::Command(command)
+                if command.label == "Resume queue" && command.unavailable.is_none())
+        }));
+        let resumed = state.step(press(KeyCode::Enter));
+        assert!(matches!(
+            &resumed[..],
+            [CodeEffect::Submit { prompt }] if prompt == "queued"
+        ));
+
+        let mut slash = active_state();
+        slash.open_palette(true, String::new());
+        let list = match &slash.surface {
+            Surface::Palette(list) => list,
+            _ => {
+                assert!(matches!(slash.surface, Surface::Palette(_)));
+                return;
+            }
+        };
+        assert!(
+            list.choices
+                .iter()
+                .all(|choice| choice.label().starts_with('/'))
+        );
+        assert!(
+            !list
+                .choices
+                .iter()
+                .any(|choice| choice.label() == "Resume queue")
+        );
+    }
+
+    #[test]
+    fn ctrl_l_requests_a_redraw_without_changing_draft_or_surface() {
+        let mut state = active_state();
+        let draft = "draft 界 👩‍💻";
+        let _ = state.step(paste(draft));
+        let effects = state.step(ctrl('l'));
+        assert_eq!(effects, vec![CodeEffect::Redraw]);
+        assert_eq!(state.editor().text(), draft);
+        assert!(matches!(state.surface, Surface::Conversation));
+
+        let _ = state.step(ctrl('p'));
+        let effects = state.step(ctrl('l'));
+        assert_eq!(effects, vec![CodeEffect::Redraw]);
+        assert!(matches!(state.surface, Surface::Palette(_)));
+        assert_eq!(state.editor().text(), draft);
+    }
+
+    #[test]
+    fn below_minimum_permission_cannot_approve_but_can_deny() -> io::Result<()> {
+        let mut state = active_state();
+        let _ = state.step(CodeAction::Event(Event::Resize(30, 10)));
+        assert!(
+            state
+                .receive_permission(question("small-permission"))
+                .is_empty()
+        );
+        let _ = state.step(press(KeyCode::F(2)));
+        assert!(state.step(press(KeyCode::Char('1'))).is_empty());
+        assert!(state.step(press(KeyCode::Enter)).is_empty());
+        assert!(state.permission_selected.is_none());
+
+        let size = Size::new(30, 10);
+        let mut terminal = Terminal::new(TestBackend::new(30, 10))?;
+        terminal.draw(|frame| {
+            let _ = render_dock(frame, &state, size);
+        })?;
+        let rendered = grid(terminal.backend());
+        assert!(rendered.contains("small-permission"), "{rendered}");
+        assert!(rendered.contains("F2 Review"), "{rendered}");
+        assert!(rendered.contains("Approval is disabled"), "{rendered}");
+
+        let denied = state.step(press(KeyCode::Esc));
+        assert!(matches!(
+            &denied[..],
+            [CodeEffect::ResolvePermission {
+                outcome: RequestPermissionOutcome::Selected(choice),
+                ..
+            }] if choice.option_id.0.as_ref() == "reject-once"
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn completion_waits_for_the_last_permission_before_dispatching_queue() {
         let mut state = active_state();
         start_working(&mut state, "first prompt");
         let _ = state.step(paste("follow up"));
-        let _ = state.step(press(KeyCode::Tab));
+        let _ = state.step(press(KeyCode::Enter));
         assert_eq!(state.queue_len(), 1);
         assert!(
             state
@@ -3772,6 +4574,8 @@ mod tests {
                 CodeEffect::Submit { prompt },
             ] if prompt == "follow up"
         ));
+        assert!(state.dispatching.is_some());
+        let _ = state.step(CodeAction::TurnStarted);
         assert_eq!(state.queue_len(), 0);
     }
 
@@ -3784,7 +4588,7 @@ mod tests {
         });
         start_working(&mut state, "first prompt");
         let _ = state.step(paste("follow up"));
-        let _ = state.step(press(KeyCode::Tab));
+        let _ = state.step(press(KeyCode::Enter));
         assert!(state.receive_permission(question("late-one")).is_empty());
         assert!(state.receive_permission(question("late-two")).is_empty());
         assert!(
@@ -3841,7 +4645,7 @@ mod tests {
         start_working(&mut state, "first prompt");
 
         let _ = state.step(paste("/route fast"));
-        let _ = state.step(press(KeyCode::Tab));
+        let _ = state.step(press(KeyCode::Enter));
         assert_eq!(state.queue_len(), 0);
         assert!(
             state
@@ -3853,7 +4657,7 @@ mod tests {
         let _ = state.step(CodeAction::ExternalEditorFinished(Ok(
             "/review narrow layout".to_string(),
         )));
-        let _ = state.step(press(KeyCode::Tab));
+        let _ = state.step(press(KeyCode::Enter));
         assert_eq!(state.queue_len(), 1);
         let next = state.step(CodeAction::TurnSettled(TurnOutcome::Completed));
         assert!(matches!(
@@ -3870,7 +4674,7 @@ mod tests {
             )]),
         ));
         let _ = agent_state.step(paste("/deploy preview"));
-        let _ = agent_state.step(press(KeyCode::Tab));
+        let _ = agent_state.step(press(KeyCode::Enter));
         assert_eq!(agent_state.queue_len(), 1);
         agent_state.apply(SessionUpdate::AvailableCommandsUpdate(
             AvailableCommandsUpdate::new(Vec::new()),
@@ -4032,12 +4836,15 @@ mod tests {
             prompt: "/route".to_string(),
             reason: "connection still opening".to_string(),
         });
+        assert!(state.editor().text().is_empty());
+        assert!(matches!(state.queue_state, QueueRunState::Paused(_)));
+        assert!(matches!(state.surface, Surface::Recovery { selected: 0 }));
+        assert_eq!(
+            state.recovery.front().map(|item| item.prompt.as_str()),
+            Some("/route")
+        );
+        assert!(state.step(press(KeyCode::Enter)).is_empty());
         assert_eq!(state.editor().text(), "/route");
-        let retry = state.step(press(KeyCode::Enter));
-        assert!(matches!(
-            &retry[..],
-            [CodeEffect::AgentPrompt { prompt }] if prompt == "/route"
-        ));
         Ok(())
     }
 
@@ -4068,31 +4875,14 @@ mod tests {
     }
 
     #[test]
-    fn reading_anchor_and_full_tool_inspection_survive_new_activity() {
+    fn ctrl_o_opens_a_live_full_transcript_and_f4_inspects_the_latest_entry() {
         let mut state = active_state();
-        let long = "one long retained line ".repeat(20);
         state.apply(SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(long)))
-                .message_id(MessageId::new("m1")),
+            ContentChunk::new(ContentBlock::Text(TextContent::new(
+                "first retained answer",
+            )))
+            .message_id(MessageId::new("m1")),
         ));
-        let registry = Registry::default();
-        let mut cache = DocumentCache::default();
-        cache.refresh(&state, 16, 10, &registry);
-        state.sync_reading_layout(cache.layout_revision, &cache.positions, 8);
-        let _ = state.step(press(KeyCode::PageUp));
-        let anchor = state.reading_anchor.clone();
-        assert!(anchor.is_some());
-
-        state.apply(SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new("new live activity")))
-                .message_id(MessageId::new("m2")),
-        ));
-        cache.refresh(&state, 16, 10, &registry);
-        state.sync_reading_layout(cache.layout_revision, &cache.positions, 8);
-        assert_eq!(state.reading_anchor, anchor);
-        assert!(state.new_activity);
-
-        state.return_to_live();
         state.apply(SessionUpdate::ToolCall(
             ToolCall::new(ToolCallId::new("tool-1"), "Read complete output")
                 .status(ToolCallStatus::Completed)
@@ -4100,6 +4890,48 @@ mod tests {
                     TextContent::new("full retained tool output including the final diff hunk"),
                 ))]),
         ));
+        let _ = state.step(ctrl('o'));
+        assert!(matches!(
+            &state.surface,
+            Surface::Inspector(inspector)
+                if inspector.tracks_transcript
+                    && inspector.inspector.content.contains("first retained answer")
+                    && inspector.inspector.content.contains("final diff hunk")
+        ));
+        let _ = state.step(press(KeyCode::Char(']')));
+        let selected_tool = match &state.surface {
+            Surface::Inspector(inspector) => inspector.transcript_entry.clone(),
+            _ => None,
+        };
+        assert!(matches!(selected_tool, Some(EntryId::Tool(_))));
+        let _ = state.step(press(KeyCode::F(4)));
+        assert!(matches!(
+            &state.surface,
+            Surface::Inspector(inspector)
+                if !inspector.tracks_transcript
+                    && inspector.inspector.title.starts_with("Tool ·")
+                    && inspector.inspector.content.contains("final diff hunk")
+        ));
+        let _ = state.step(press(KeyCode::Esc));
+        assert!(matches!(
+            &state.surface,
+            Surface::Inspector(inspector)
+                if inspector.tracks_transcript
+                    && matches!(inspector.transcript_entry, Some(EntryId::Tool(_)))
+        ));
+        state.apply(SessionUpdate::AgentMessageChunk(
+            ContentChunk::new(ContentBlock::Text(TextContent::new(
+                "arrived while detached",
+            )))
+            .message_id(MessageId::new("m2")),
+        ));
+        assert!(matches!(
+            &state.surface,
+            Surface::Inspector(inspector)
+                if inspector.inspector.content.contains("arrived while detached")
+        ));
+
+        let _ = state.step(press(KeyCode::Esc));
         let _ = state.step(press(KeyCode::F(4)));
         let inspector = match &state.surface {
             Surface::Inspector(inspector) => inspector,
@@ -4111,11 +4943,16 @@ mod tests {
                 return;
             }
         };
-        assert!(inspector.inspector.content.contains("final diff hunk"));
+        assert!(
+            inspector
+                .inspector
+                .content
+                .contains("arrived while detached")
+        );
         let copied = state.step(ctrl('y'));
         assert!(matches!(
             &copied[..],
-            [CodeEffect::Copy { text }] if text.contains("final diff hunk")
+            [CodeEffect::Copy { text }] if text.contains("arrived while detached")
         ));
     }
 
@@ -4178,7 +5015,7 @@ mod tests {
         let mut state = active_state();
         start_working(&mut state, "first prompt");
         let _ = state.step(paste("follow up only after normal completion"));
-        let _ = state.step(press(KeyCode::Tab));
+        let _ = state.step(press(KeyCode::Enter));
         assert_eq!(state.queue_len(), 1);
 
         let cancelled = state.step(press(KeyCode::Esc));
@@ -4266,7 +5103,15 @@ mod tests {
             reason: "connection refused".to_string(),
         });
         assert_eq!(rejected.journal().entries().count(), 0);
-        assert_eq!(rejected.editor().text(), "must not appear");
+        assert!(rejected.editor().text().is_empty());
+        assert_eq!(
+            rejected.recovery.front().map(|item| item.prompt.as_str()),
+            Some("must not appear")
+        );
+        assert!(matches!(
+            rejected.surface,
+            Surface::Recovery { selected: 0 }
+        ));
     }
 
     #[test]
@@ -4312,7 +5157,7 @@ mod tests {
     }
 
     #[test]
-    fn disconnect_reparents_an_error_inspector_that_arrived_during_permission_focus() {
+    fn ordinary_inspectors_do_not_cover_a_focused_permission() {
         let mut state = active_state();
         state.open_inspector(Inspector::new("Session details", "retained session data"));
         assert!(
@@ -4325,10 +5170,13 @@ mod tests {
             "Operation failed",
             "report failed while waiting",
         ));
-        assert!(matches!(
-            &state.surface,
-            Surface::Inspector(inspector) if inspector.inspector.title == "Operation failed"
-        ));
+        assert!(matches!(&state.surface, Surface::Permission));
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .is_some_and(|notice| notice.contains("F2 to review"))
+        );
 
         assert!(
             state
@@ -4336,7 +5184,6 @@ mod tests {
                 .is_empty()
         );
         assert!(state.permissions.is_empty());
-        assert!(state.step(press(KeyCode::Esc)).is_empty());
         assert!(matches!(
             &state.surface,
             Surface::Inspector(inspector) if inspector.inspector.title == "Session details"
@@ -4344,7 +5191,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_closes_transient_surfaces_without_losing_the_draft_or_anchor() {
+    fn ctrl_c_closes_transient_surfaces_without_losing_the_draft() {
         let mut state = active_state();
         for index in 0..8 {
             state.apply(SessionUpdate::AgentMessageChunk(
@@ -4354,14 +5201,6 @@ mod tests {
                 .message_id(MessageId::new(format!("modal-{index}"))),
             ));
         }
-        let registry = Registry::default();
-        let mut cache = DocumentCache::default();
-        cache.refresh(&state, 12, 8, &registry);
-        state.sync_reading_layout(cache.layout_revision, &cache.positions, 6);
-        let _ = state.step(press(KeyCode::PageUp));
-        let anchor = state.reading_anchor.clone();
-        assert!(anchor.is_some());
-
         let _ = state.step(paste("draft with a grapheme ���\nsecond line"));
         let _ = state.step(press(KeyCode::Left));
         let draft = state.editor().text().to_string();
@@ -4378,7 +5217,6 @@ mod tests {
         assert!(matches!(state.surface, Surface::Conversation));
         assert_eq!(state.editor().text(), draft);
         assert_eq!(state.editor().cursor_byte(), cursor);
-        assert_eq!(state.reading_anchor, anchor);
 
         let _ = state.step(ctrl('p'));
         assert!(matches!(state.surface, Surface::Palette(_)));
@@ -4399,11 +5237,6 @@ mod tests {
         assert!(state.step(ctrl('c')).is_empty());
         assert!(matches!(state.surface, Surface::Conversation));
 
-        let _ = state.step(ctrl('f'));
-        assert!(matches!(state.surface, Surface::TranscriptSearch { .. }));
-        assert!(state.step(ctrl('c')).is_empty());
-        assert!(matches!(state.surface, Surface::Conversation));
-
         let context = ToolCallUpdate::new(
             ToolCallId::new("permission-tool"),
             ToolCallUpdateFields::default(),
@@ -4420,7 +5253,6 @@ mod tests {
         assert!(matches!(state.surface, Surface::Permission));
         assert_eq!(state.editor().text(), draft);
         assert_eq!(state.editor().cursor_byte(), cursor);
-        assert_eq!(state.reading_anchor, anchor);
 
         let mut operations = CodeState::default();
         operations.set_operations_only(true);
@@ -4444,12 +5276,16 @@ mod tests {
         };
         assert_eq!(agent_rows, 0);
         assert!(operations.step(ctrl('c')).is_empty());
+        assert!(matches!(&operations.surface, Surface::Conversation));
+        let _ = operations.step(ctrl('o'));
         assert!(matches!(
             &operations.surface,
             Surface::Inspector(inspector) if inspector.inspector.title == "Target status"
         ));
+        assert!(operations.step(ctrl('c')).is_empty());
+        assert!(matches!(&operations.surface, Surface::Conversation));
         assert!(matches!(
-            &operations.step(ctrl('c'))[..],
+            &operations.step(press(KeyCode::Esc))[..],
             [CodeEffect::Exit]
         ));
     }
@@ -4503,22 +5339,6 @@ mod tests {
     #[test]
     fn failed_selector_mutation_restores_its_exact_source_and_success_clears_it() {
         let mut state = active_state();
-        for index in 0..4 {
-            state.apply(SessionUpdate::AgentMessageChunk(
-                ContentChunk::new(ContentBlock::Text(TextContent::new(format!(
-                    "retained row {index}"
-                ))))
-                .message_id(MessageId::new(format!("selector-anchor-{index}"))),
-            ));
-        }
-        let registry = Registry::default();
-        let mut cache = DocumentCache::default();
-        cache.refresh(&state, 12, 8, &registry);
-        state.sync_reading_layout(cache.layout_revision, &cache.positions, 6);
-        let _ = state.step(press(KeyCode::PageUp));
-        let anchor = state.reading_anchor.clone();
-        assert!(anchor.is_some());
-
         let _ = state.step(paste("draft survives a failed selector mutation"));
         let _ = state.step(press(KeyCode::Left));
         let draft = state.editor().text().to_string();
@@ -4571,7 +5391,6 @@ mod tests {
         ));
         assert_eq!(state.editor().text(), draft);
         assert_eq!(state.editor().cursor_byte(), cursor);
-        assert_eq!(state.reading_anchor, anchor);
 
         assert!(state.step(press(KeyCode::Esc)).is_empty());
         assert!(matches!(
@@ -4689,20 +5508,21 @@ mod tests {
         for index in 0..12 {
             let prompt = format!("queued-{index:02} 界界 with a long first line\nsecond line");
             let _ = state.step(paste(&prompt));
-            let _ = state.step(press(KeyCode::Tab));
+            let _ = state.step(press(KeyCode::Enter));
         }
         state.surface = Surface::Queue { selected: 0 };
         for _ in 0..11 {
             let _ = state.step(press(KeyCode::Down));
         }
-        let registry = Registry::default();
-        let mut cache = DocumentCache::default();
-        let mut terminal = Terminal::new(TestBackend::new(40, 16))?;
-        terminal.draw(|frame| render_frame(frame, &mut state, &registry, &mut cache))?;
+        let size = Size::new(40, 16);
+        let mut terminal = Terminal::new(TestBackend::new(40, dock_height(&state, size)))?;
+        terminal.draw(|frame| {
+            let _ = render_dock(frame, &state, size);
+        })?;
         let rendered = grid(terminal.backend());
         assert!(rendered.contains("› queued-11"), "{rendered}");
         assert!(!rendered.contains("queued-00"), "{rendered}");
-        assert!(rendered.contains("Enter/e edit"), "{rendered}");
+        assert!(rendered.contains("r resume"), "{rendered}");
         let _ = state.step(press(KeyCode::Enter));
         assert_eq!(
             state.editor.text(),
@@ -4776,7 +5596,13 @@ mod tests {
             eprintln!("80x24\n{wide}\n\n40x16\n{narrow}\n\nlarge cost\n{large_wide}");
         }
 
-        let layout = composer_layout("ab界cd", "ab界".len(), 3);
+        let layout = composer_layout(
+            "ab界cd",
+            "ab界".len(),
+            3,
+            "┃",
+            Style::default().fg(Color::Cyan),
+        );
         assert!(layout.rows.len() >= 2);
         assert!(layout.cursor_row < layout.rows.len());
         assert!(layout.cursor_column >= 2);
@@ -4947,8 +5773,7 @@ mod tests {
     }
 
     #[test]
-    fn long_streaming_history_draws_a_bounded_tail_and_keeps_the_reading_anchor() -> io::Result<()>
-    {
+    fn long_streaming_history_keeps_a_bounded_primary_tail_and_full_inspector() -> io::Result<()> {
         let mut state = active_state();
         for index in 0..40 {
             state.apply(SessionUpdate::AgentMessageChunk(
@@ -4962,39 +5787,28 @@ mod tests {
         let mut cache = DocumentCache::default();
         let mut terminal = Terminal::new(TestBackend::new(80, 24))?;
         terminal.draw(|frame| render_frame(frame, &mut state, &registry, &mut cache))?;
-        let first_revision = cache.layout_revision;
         let tail = grid(terminal.backend());
         assert!(tail.contains("stream 39 retained transcript row"));
         assert!(!tail.contains("stream 00 retained transcript row"));
 
-        terminal.draw(|frame| render_frame(frame, &mut state, &registry, &mut cache))?;
-        assert_eq!(cache.layout_revision, first_revision);
-        let _ = state.step(press(KeyCode::PageUp));
-        let anchor = state.reading_anchor.clone();
-        assert!(anchor.is_some());
-        terminal.backend_mut().resize(40, 16);
-        terminal.draw(|frame| render_frame(frame, &mut state, &registry, &mut cache))?;
-        assert_eq!(state.reading_anchor, anchor);
-        assert!(grid(terminal.backend()).contains("Reading history"));
+        let _ = state.step(ctrl('o'));
         state.apply(SessionUpdate::AgentMessageChunk(
             ContentChunk::new(ContentBlock::Text(TextContent::new(
                 "stream 40 live update",
             )))
             .message_id(MessageId::new("message-40")),
         ));
-        terminal.draw(|frame| render_frame(frame, &mut state, &registry, &mut cache))?;
-        assert_eq!(state.reading_anchor, anchor);
-        assert!(state.new_activity);
-        let reading = grid(terminal.backend());
-        assert!(reading.contains("Reading history · new activity"));
-        if std::env::var_os("BITROUTER_TUI_RENDER_GRID").is_some() {
-            eprintln!("80x24 long history\n{reading}");
-        }
+        assert!(matches!(
+            &state.surface,
+            Surface::Inspector(inspector)
+                if inspector.inspector.content.contains("stream 00 retained transcript row")
+                    && inspector.inspector.content.contains("stream 40 live update")
+        ));
         Ok(())
     }
 
     #[test]
-    fn reading_location_survives_an_expanded_tool_before_the_anchor() -> io::Result<()> {
+    fn immutable_tool_updates_remain_visible_in_full_transcript_detail() -> io::Result<()> {
         let mut state = active_state();
         state.apply(SessionUpdate::ToolCall(
             ToolCall::new(ToolCallId::new("expanding-tool"), "Initial short output")
@@ -5003,25 +5817,6 @@ mod tests {
                     TextContent::new("short output"),
                 ))]),
         ));
-        let message = (1..=36)
-            .map(|line| format!("anchored message row {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        state.apply(SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(message)))
-                .message_id(MessageId::new("anchored-message")),
-        ));
-        let registry = Registry::default();
-        let mut cache = DocumentCache::default();
-        let mut terminal = Terminal::new(TestBackend::new(80, 24))?;
-        terminal.draw(|frame| render_frame(frame, &mut state, &registry, &mut cache))?;
-        let _ = state.step(press(KeyCode::PageUp));
-        let anchor = state.reading_anchor.clone();
-        assert!(matches!(
-            &anchor,
-            Some(ReadingAnchor { entry: EntryId::Message(id), .. }) if id.0.as_ref() == "anchored-message"
-        ));
-
         let long_output = (1..=24)
             .map(|line| format!("expanded output row {line}"))
             .collect::<Vec<_>>()
@@ -5034,19 +5829,12 @@ mod tests {
             ToolCallId::new("expanding-tool"),
             fields,
         )));
-        terminal.backend_mut().resize(40, 16);
-        terminal.draw(|frame| render_frame(frame, &mut state, &registry, &mut cache))?;
-        assert_eq!(state.reading_anchor, anchor);
-        let start = cache.start_for(&state, 4);
-        let anchored_entry = cache.entries.iter().find(|entry| {
-            let end = entry.start.saturating_add(entry.rows.len());
-            entry.start <= start && start < end
-        });
+        let _ = state.step(ctrl('o'));
         assert!(matches!(
-            anchored_entry,
-            Some(entry) if matches!(&anchor, Some(anchor) if entry.id == anchor.entry)
+            &state.surface,
+            Surface::Inspector(inspector)
+                if inspector.inspector.content.contains("expanded output row 24")
         ));
-        assert!(grid(terminal.backend()).contains("Reading history"));
         Ok(())
     }
 }
