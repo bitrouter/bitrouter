@@ -753,7 +753,22 @@ impl CodeState {
         ) {
             let content = self.transcript_content();
             if let Surface::Inspector(inspector) = &mut self.surface {
+                let follow_end = inspector.scroll
+                    >= inspector
+                        .inspector
+                        .content
+                        .lines()
+                        .count()
+                        .saturating_sub(1);
                 inspector.inspector.content = content;
+                if follow_end {
+                    inspector.scroll = inspector
+                        .inspector
+                        .content
+                        .lines()
+                        .count()
+                        .saturating_sub(1);
+                }
             }
         }
         self.refresh_open_palettes();
