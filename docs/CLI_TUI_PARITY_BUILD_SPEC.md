@@ -168,7 +168,7 @@ Consecutive non-green iterations on this task: 0
 - [ ] T4 — SessionPorts, /status, G4, G5, A1
 - [ ] T5 — /models and /preview
 - [ ] T6 — CommandsReport and its builder
-- [ ] T7 — bitrouter acp commands, /commands through the shared report
+- [ ] T7 — bro acp commands, /commands through the shared report
 - [ ] T8 — the prompt-expansion registry
 - [ ] T9 — acceptance sweep
 
@@ -410,11 +410,11 @@ and the four rendering rules), [§6 G4/G5/A1](CLI_TUI_PARITY_IMPL_SPEC.md#g4--th
    place a second `impl StatusQuery` is legitimate.**
 9. Docs lockstep: a `/status` row in `docs/CLI.md` and
    `skills/bitrouter/references/cli.md`, plus a sentence that its output is
-   `bitrouter status --human`'s.
+   `bro status --human`'s.
 
 **Verify:** the three project checks; A1, G4, G5 pass. By hand: `/status` with
 the daemon up shows the running block; with the daemon down shows
-`running: false` as a notice, not an error; `echo /status | bitrouter chat <agent>`
+`running: false` as a notice, not an error; `echo /status | bro chat <agent>`
 prints the same block to stdout.
 
 **This task enacts D1(a)** — see [§4](#4-decisions--already-made-do-not-reopen).
@@ -448,8 +448,8 @@ G4 is the enforcement. Do not reopen it.
    alone.** That is a decided outcome, not a STOP — do not add a renderer.
 
 **Verify:** the three project checks; A1 covers all three reads. By hand:
-`/models anthropic` renders what `bitrouter models --provider anthropic --human`
-renders; `/preview gpt-5` renders what `bitrouter route gpt-5 --human` renders,
+`/models anthropic` renders what `bro models --provider anthropic --human`
+renders; `/preview gpt-5` renders what `bro route gpt-5 --human` renders,
 palette off.
 
 **Commit:** `feat(chat): add /models and /preview to the session`
@@ -480,7 +480,7 @@ palette off.
 4. Unit tests on `commands_report`: shadowing, source order, and the `received`
    flag. `config` is passed empty until T8.
 
-**Verify:** `cargo nextest run -p bitrouter-mcp -p bitrouter --all-features`;
+**Verify:** `cargo nextest run -p bitrouter-mcp -p bro --all-features`;
 the three project checks. The `commands` row still has `output_schema: None`
 at the end of this task — T7 sets it.
 
@@ -488,7 +488,7 @@ at the end of this task — T7 sets it.
 
 ---
 
-### T7 — `bitrouter acp commands`, `/commands` through the shared report
+### T7 — `bro acp commands`, `/commands` through the shared report
 
 **Read:** impl spec [§7 phase 3](CLI_TUI_PARITY_IMPL_SPEC.md#phase-3--bitrouter-acp-commands-and-the-shared-commands-report)'s
 file table, [§5](CLI_TUI_PARITY_IMPL_SPEC.md#5-rendering)'s closing paragraph.
@@ -519,7 +519,7 @@ file table, [§5](CLI_TUI_PARITY_IMPL_SPEC.md#5-rendering)'s closing paragraph.
 8. Docs lockstep: the `acp commands` leaf; `/commands` now documents three
    outcomes.
 
-**Verify:** the three project checks. `bitrouter acp commands --agent <id> --json`
+**Verify:** the three project checks. `bro acp commands --agent <id> --json`
 prints a `CommandsReport`; against a harness that never sends the update it
 prints `received: false` and an empty agent group after `wait_ms`; `--source agent`
 filters. `every_actions_row_matches_its_tools_output_schema` still passes — the
@@ -573,8 +573,8 @@ three-caller table, [§2.1](CLI_TUI_PARITY_IMPL_SPEC.md#21-d2-decided-two-regist
 `/review the diff` in `chat` and running `acp prompt --agent x "/review the diff"`
 both send `Review: the diff` — assert the expanded text in the `session/prompt`
 request, extending the existing NDJSON tests. `/commands` shows a "config"
-group. A config naming `status` fails both `bitrouter chat` and
-`bitrouter config validate` with a message naming both names.
+group. A config naming `status` fails both `bro chat` and
+`bro config validate` with a message naming both names.
 
 **Commit:** `feat(config): add prompt-expansion commands to chat`
 
@@ -714,9 +714,9 @@ T9 runs this in full and records each line.
   bytes equal `Output::new(Format::Human).render_to_vec(&report)` for the same
   report. By construction for the three reads; by unit test for `commands`.
 - By hand, once per task that added a command: a routed `chat`, a `--direct`
-  session, and `echo '/<cmd>' | bitrouter chat <agent>`, each at 60 columns.
+  session, and `echo '/<cmd>' | bro chat <agent>`, each at 60 columns.
   `stty -a` reports a restored terminal after each exit.
-- `bitrouter acp commands --agent <id>` against three harnesses — one that
+- `bro acp commands --agent <id>` against three harnesses — one that
   advertises commands, one that advertises an empty list, one that never sends
   the update — produces three distinguishable reports.
 - The ledger's every row is ticked and its Blocked section is empty, or its

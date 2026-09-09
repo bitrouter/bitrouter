@@ -10,6 +10,6 @@
   "keywords": ["llm", "router", "gateway", "cost", "openai", "anthropic", "mcp"],
   "skills": ["./skills/bitrouter"],
   "mcpServers": {
-    "bitrouter": { "command": "bitrouter", "args": ["mcp", "serve"] }
+    "bitrouter": { "command": "bro", "args": ["mcp", "serve"] }
   }
 }

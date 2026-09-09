@@ -19,7 +19,7 @@
     },
     "mcp_servers": {
       "bitrouter_tools": {
-        "command": "bitrouter",
+        "command": "bro",
         "args": [
           "mcp",
           "serve"

@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use bitrouter_sdk::invocation;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
@@ -35,7 +36,7 @@ use sha2::{Digest, Sha256};
 pub const REGISTRY_BASE_URL: &str = "https://registry.modelcontextprotocol.io";
 
 /// How long any single registry request may take before the CLI gives up.
-/// Discovery is a convenience; a slow registry must not hang `bitrouter mcp`.
+/// Discovery is a convenience; a slow registry must not hang `bro mcp`.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Page size for `/v0.1/servers` pagination (the registry's maximum).
@@ -537,7 +538,7 @@ pub struct AddStub {
     pub yaml: String,
 }
 
-/// `bitrouter mcp add <name>` — emit a YAML stub for a registry entry the
+/// `bro mcp add <name>` — emit a YAML stub for a registry entry the
 /// user pastes under `mcp_servers:` after review. Manual-tier entries
 /// (oci/mcpb-only) are refused with a pointer to the project, mirroring the
 /// ACP binary-only refusal. Stub-paste is SEP-1024-compliant by
@@ -777,7 +778,10 @@ impl RegistryClient {
     async fn fetch_latest(&self, name: &str) -> Result<ServerEntry> {
         let url = latest_url(&self.base_url, name)?;
         let body = self.get(&url).await.with_context(|| {
-            format!("looking up '{name}' — check the id with `bitrouter mcp search <query>`")
+            format!(
+                "looking up '{name}' — check the id with `{cli} mcp search <query>`",
+                cli = invocation::name()
+            )
         })?;
         let entry = parse_server_detail(&body)?;
         if !visible(&entry) {
@@ -1836,7 +1840,7 @@ mod tests {
             let c = client(&server, &cache);
             let err = c.latest("no/such").await.unwrap_err();
             let msg = format!("{err:#}");
-            assert!(msg.contains("bitrouter mcp search"), "{msg}");
+            assert!(msg.contains("bro mcp search"), "{msg}");
             let _ = std::fs::remove_dir_all(&cache);
         }
 
@@ -1865,7 +1869,7 @@ mod tests {
                 .await;
             let c = client(&removed, &cache);
             let err = c.latest("no/such").await.unwrap_err();
-            assert!(format!("{err:#}").contains("bitrouter mcp search"));
+            assert!(format!("{err:#}").contains("bro mcp search"));
             let _ = std::fs::remove_dir_all(&cache);
         }
 

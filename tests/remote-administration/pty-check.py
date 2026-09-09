@@ -117,7 +117,7 @@ class Screen:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--binary", default="bitrouter")
+    parser.add_argument("--binary", default="bro")
     parser.add_argument("--context", default="administrator")
     parser.add_argument("--expected", choices=("succeeded", "partially_applied"), required=True)
     parser.add_argument("--token-env", default="CLIENT_ADMIN_TOKEN")

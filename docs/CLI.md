@@ -1,6 +1,6 @@
 # BitRouter CLI Reference
 
-`bitrouter <subcommand> [flags]`
+`bro <subcommand> [flags]`
 
 ## Output format
 
@@ -10,13 +10,13 @@ Every command prints a single **formatted JSON object** to **stdout** — succes
 - `--human` — render a human-readable view to stdout instead of JSON.
 - `--context <name>` — run a supported read action against a named remote
   BitRouter target; `local` explicitly selects normal local behavior.
-- `-H` before the subcommand (for example, `bitrouter -H cloud whoami`) — compatibility spelling for `--human`. Under `bitrouter cloud api`, `-H` means `--header`, matching `gh api`.
+- `-H` before the subcommand (for example, `bro -H cloud whoami`) — compatibility spelling for `--human`. Under `bro cloud api`, `-H` means `--header`, matching `gh api`.
 - `-h`, `--help` — unchanged (`-h` is **not** human output).
 
 All diagnostics — progress, warnings, internal logs, and a human echo of errors — go to **stderr** (colored when stderr is a TTY; honors `NO_COLOR`). So:
 
 ```
-bitrouter <cmd> 2>/dev/null | jq .
+bro <cmd> 2>/dev/null | jq .
 ```
 
 always yields one clean JSON value. A failed command emits a uniform error envelope to stdout and exits non-zero:
@@ -29,7 +29,7 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 > Non-reporting commands are exempt: `serve` and `mcp serve` are long-running servers; `acp serve` is a stdio JSON-RPC bridge; `run` streams NDJSON by default; `code` and `launch` own the terminal; and `cloud api` streams the remote response body.
 
-Per-provider credential commands are under `bitrouter providers (login|logout)`; BitRouter Cloud sign-in is `bitrouter cloud (login|logout|whoami)`.
+Per-provider credential commands are under `bro providers (login|logout)`; BitRouter Cloud sign-in is `bro cloud (login|logout|whoami)`.
 
 ## Logging (`RUST_LOG`)
 
@@ -57,11 +57,11 @@ read is **silently ignored** — a typo like `plugins.bitrouter-guardrail`
 (singular) drops the operator's declared block / redact patterns and the
 process starts anyway. Two places report it:
 
-- `bitrouter config validate` lists them under `ignored_config`. It does not
+- `bro config validate` lists them under `ignored_config`. It does not
   fail validation — an ignored block is a misconfiguration, not a malformed
   config, and this command is CI-gating.
 - Every runtime surface logs one WARN per unread id on start: the daemon, and
-  `bitrouter acp serve`, `bitrouter run`, and `bitrouter code <agent>`, none of which build the
+  `bro acp serve`, `bro run`, and `bro code <agent>`, none of which build the
   daemon's `App` but all of which read the same config. This is the path that
   matters: validation is opt-in, the runtime always runs.
 
@@ -102,22 +102,22 @@ Daemon-control subcommands (`stop`, `reload`, `status`) also accept `--socket <p
 ## Remote contexts
 
 ```console
-bitrouter context add workstation \
+bro context add workstation \
   --endpoint https://router.example/control/v1 \
   --token-env WORKSTATION_BITROUTER_TOKEN
-bitrouter context list
-bitrouter context show workstation
-bitrouter --context workstation status
-bitrouter --context workstation requests
-bitrouter --context workstation models --provider openai
-bitrouter --context workstation route openai/gpt-5
-bitrouter --context workstation providers list
-bitrouter --context workstation observe status
-bitrouter --context workstation policy status       # active by default
-bitrouter --context workstation policy show default --view disk
-bitrouter --context workstation agents list
-bitrouter --context workstation reload
-bitrouter context remove workstation
+bro context list
+bro context show workstation
+bro --context workstation status
+bro --context workstation requests
+bro --context workstation models --provider openai
+bro --context workstation route openai/gpt-5
+bro --context workstation providers list
+bro --context workstation observe status
+bro --context workstation policy status       # active by default
+bro --context workstation policy show default --view disk
+bro --context workstation agents list
+bro --context workstation reload
+bro context remove workstation
 ```
 
 Contexts live in `contexts.toml` under `$BITROUTER_HOME`, or under
@@ -154,12 +154,12 @@ reports, which use the redacted typed read contracts.
 
 ## Daemon lifecycle
 
-### `bitrouter serve`
+### `bro serve`
 
 Run the HTTP server and control socket **in the foreground**.
 
 ```
-bitrouter serve [-c <path>]
+bro serve [-c <path>]
 ```
 
 Starts the proxy on the configured listen address (default `127.0.0.1:4356`) and opens a Unix domain control socket. Logs to stdout.
@@ -193,42 +193,42 @@ under `/control/v1`, and the BitRouter origin MCP service is mounted at
 sessions are not exposed. Changes under `control:` are restart-only because
 they govern listener creation and binding.
 
-### `bitrouter start`
+### `bro start`
 
 Spawn `serve` as a **detached background daemon**.
 
 ```
-bitrouter start [-c <path>] [--log <path>]
+bro start [-c <path>] [--log <path>]
 ```
 
 Logs default to `bitrouter.log` next to the config file (e.g. `~/.bitrouter/bitrouter.log` when the config resolved to `~/.bitrouter/bitrouter.yaml`). Refuses to start if a daemon is already running.
 
 Waits until the daemon answers on its control socket before reporting `✓ … started` (up to 15s), then prints the listen address and routable-model count — so a follow-up command can rely on the daemon being up. If the daemon crashes during startup, the tail of its log is printed and the command exits non-zero; if it is alive but still not ready after 15s, a note is printed and the command exits 0 (the daemon keeps coming up).
 
-### `bitrouter stop`
+### `bro stop`
 
 ```
-bitrouter stop [-c <path>] [--socket <path>]
+bro stop [-c <path>] [--socket <path>]
 ```
 
-### `bitrouter restart`
+### `bro restart`
 
 ```
-bitrouter restart [-c <path>] [--socket <path>] [--log <path>]
+bro restart [-c <path>] [--socket <path>] [--log <path>]
 ```
 
 Stops the running daemon (waiting up to 30s for in-flight requests to drain), then starts a fresh one.
 
-### `bitrouter reload`
+### `bro reload`
 
 ```
-bitrouter reload [-c <path>] [--socket <path>]
-bitrouter --context <name> reload
+bro reload [-c <path>] [--socket <path>]
+bro --context <name> reload
 ```
 
 Hot-reloads the running daemon's config and routing table without dropping connections. Also triggered by `SIGHUP`.
 
-Any provider API keys present in the current environment are forwarded to the daemon so `export OPENAI_API_KEY=…; bitrouter reload` takes effect immediately.
+Any provider API keys present in the current environment are forwarded to the daemon so `export OPENAI_API_KEY=…; bro reload` takes effect immediately.
 
 With `--context`, reload submits a guarded operation against the server's own
 current configuration. It does not forward client environment variables. The
@@ -236,17 +236,17 @@ report includes a request id, server instance, generation, and per-subsystem
 result. A running, failed, partially applied, or unknown operation exits
 non-zero; use its operation lookup details and the target's state before retrying.
 
-### `bitrouter status`
+### `bro status`
 
 ```
-bitrouter status [-c <path>] [--socket <path>]
-bitrouter requests [--limit N] [--since RFC3339 --until RFC3339] [--model ID] [--provider ID]
-bitrouter requests --human           # the same, as a table
+bro status [-c <path>] [--socket <path>]
+bro requests [--limit N] [--since RFC3339 --until RFC3339] [--model ID] [--provider ID]
+bro requests --human           # the same, as a table
 ```
 
 Prints pid, listen address, number of routable models, the distinct providers behind them, the control socket path, and the **spend position**. Exits cleanly with "stopped" when no daemon is reachable.
 
-The same report the origin MCP server's `status` tool returns — one shared type, so `bitrouter status --json` and that tool's structured content are the same bytes.
+The same report the origin MCP server's `status` tool returns — one shared type, so `bro status --json` and that tool's structured content are the same bytes.
 
 **`spend` — what has gone, and what is left.** Two independent facts, each present only where the deployment can answer it:
 
@@ -259,11 +259,11 @@ The same report the origin MCP server's `status` tool returns — one shared typ
 
 The read is best-effort and never fails the command: no config, no database file, or an unreadable one gives no `spend` key at all — which is a different answer from `estimated_micro_usd: 0` over `0` requests, meaning "nothing spent today". It also works with **no daemon running**, so a `stopped` report still carries spend: what a past daemon spent is on disk and does not stop being true when it exits.
 
-The figure is **machine-wide**, not per-caller: it rolls up every caller of this daemon, the same scope `requests` reports. Per-session spend is `bitrouter code <agent>`'s cost line.
+The figure is **machine-wide**, not per-caller: it rolls up every caller of this daemon, the same scope `requests` reports. Per-session spend is `bro code <agent>`'s cost line.
 
-`bitrouter status --json` gained `spend` additively; every pre-existing key is unchanged.
+`bro status --json` gained `spend` additively; every pre-existing key is unchanged.
 
-`bitrouter requests` reports what the router has actually done: newest-first
+`bro requests` reports what the router has actually done: newest-first
 settled requests — time, model, the provider that **actually** served, tokens
 in/out, cost, latency, status — plus daemon state and the window's spend and
 trailing-minute rate. It reads the metering store directly, so it also works
@@ -272,33 +272,33 @@ maximum seven-day interval; absent both, the server selects today from UTC
 midnight. `--model` and `--provider` filter the same report before the limit.
 `status --requests` remains a hidden compatibility spelling.
 
-Like every other report it uses JSON by default and `--human` for the table. Repeat it with `watch -n1 bitrouter requests --human` for a live view.
+Like every other report it uses JSON by default and `--human` for the table. Repeat it with `watch -n1 bro requests --human` for a live view.
 
-The spend rollup covers every caller of the daemon, not one session. `bitrouter code <agent>`'s cost line is the per-session figure.
+The spend rollup covers every caller of the daemon, not one session. `bro code <agent>`'s cost line is the per-session figure.
 
 **Spend is reported only where there is evidence.** An unpriced request shows `?`, not `$0.00`; the same honesty rule applies to `code <agent>` session cost.
 
-Each row also carries `episode_id` — the trajectory episode to hand to `bitrouter trajectory inspect`, or `null` when trajectory capture recorded nothing for it (capture is opt-in and off by default, so `null` is the common case). It is the thread from a settled request to its structural record, which is otherwise reachable only by an episode id nothing else hands out.
+Each row also carries `episode_id` — the trajectory episode to hand to `bro trajectory inspect`, or `null` when trajectory capture recorded nothing for it (capture is opt-in and off by default, so `null` is the common case). It is the thread from a settled request to its structural record, which is otherwise reachable only by an episode id nothing else hands out.
 
 Portable — there is no terminal-only path left to gate.
 
 > **`--requests` emits JSON by default as of 1.0.0-alpha.28.** It previously printed the table unconditionally, ignoring `--json` — the only `status` path that did. Scripts that parsed the table need `--human`; anything that wanted the data now gets one clean JSON object with a stable `rows[]`.
 >
-> **Replaces `--watch` (`-w`), removed in 1.0.0-alpha.28.** That flag opened a self-refreshing ratatui view with cursor keys plus `r` (reload) and `e` (`$EDITOR` on `bitrouter.yaml`). Both of those keys ran commands you can still run directly — `bitrouter reload`, and your editor — and the piped form of `--watch` printed what `--requests --human` prints now.
+> **Replaces `--watch` (`-w`), removed in 1.0.0-alpha.28.** That flag opened a self-refreshing ratatui view with cursor keys plus `r` (reload) and `e` (`$EDITOR` on `bitrouter.yaml`). Both of those keys ran commands you can still run directly — `bro reload`, and your editor — and the piped form of `--watch` printed what `--requests --human` prints now.
 
 ---
 
 ## Config
 
-### `bitrouter init` (onboarding wizard)
+### `bro init` (onboarding wizard)
 
 ```bash
-bitrouter
-bitrouter init --yes --harness codex --after exit
-bitrouter init --harness claude --model anthropic/claude-sonnet-4-6
+bro
+bro init --yes --harness codex --after exit
+bro init --harness claude --model anthropic/claude-sonnet-4-6
 ```
 
-Bare `bitrouter` opens first-run onboarding when no default ACP harness is
+Bare `bro` opens first-run onboarding when no default ACP harness is
 saved. Credentials alone do not complete setup. The wizard saves `chat.agent`
 and optional `chat.model`, then either opens BitRouter's ACP TUI, starts the
 daemon, or exits. Subsequent bare invocations immediately open the saved TUI.
@@ -369,34 +369,34 @@ route selection. An empty or omitted schedule preserves the existing behavior.
 
 ## Routing / introspection
 
-### `bitrouter route <model>`
+### `bro route <model>`
 
 ```
-bitrouter route gpt-4o [--prompt <text>] [-c <path>] [--socket <path>]
+bro route gpt-4o [--prompt <text>] [-c <path>] [--socket <path>]
 ```
 
 Resolves a model name through the routing table and prints the full fallback chain (provider → upstream service id → protocol). Queries the running daemon if reachable — its `route` verb resolves the model exactly as given, since the daemon's policy table runs on real requests rather than on this preview — and otherwise falls back to a local config parse, **policy table included**, so `effective_model` there is what would actually run.
 
 `--prompt` supplies the request text the policy table keys on: it routes by the agent-loop step a request represents, so the model it selects can differ with the prompt. Omit it for a bare model resolution. It is consulted on the config path only; a `live` answer is the same with or without it.
 
-The report is the shared `route` action's, so `bitrouter route --json` is byte-identical to the MCP `route_preview` tool's structured content:
+The report is the shared `route` action's, so `bro route --json` is byte-identical to the MCP `route_preview` tool's structured content:
 
 | Field | Meaning |
 |---|---|
 | `requested_model` | what you asked about |
 | `effective_model` | what would actually run — differs when the policy table selects another model |
 | `effective_effort` | the reasoning effort policy selected, when it selected one |
-| `resolved_via` | `live` \| `config` \| `zero_config` — the same words `bitrouter models` uses |
+| `resolved_via` | `live` \| `config` \| `zero_config` — the same words `bro models` uses |
 | `policy_decision` | the static decision behind `effective_model`. Absent on `live`: the daemon's `route` verb does not replay policy, so there is no decision to show and `effective_model` equals `requested_model` there |
 | `provider_chain[]` | `provider` / `service_id` / `api_protocol`, preferred hop first. Never the provider's credential |
 | `estimated_cost` | the first hop's per-token rate card, including any steeper long-context brackets. Rates, not a total: nothing was sent |
 
 Read-only throughout — nothing is sent upstream.
 
-### `bitrouter models`
+### `bro models`
 
 ```
-bitrouter models [-c <path>] [-p <provider-id>]
+bro models [-c <path>] [-p <provider-id>]
 ```
 
 Lists all routable models, each with **every** provider that can serve it — the
@@ -404,11 +404,11 @@ fallback chain, in order. Filter to one provider with `--provider`.
 Subscription providers are explicit-route-only, so their rows use a pinned
 `provider:canonical-model` selector (for example,
 `openai-codex:openai/gpt-5.6-sol`). Copying any displayed selector into
-`bitrouter route` therefore previews the route without implicitly opting a bare
+`bro route` therefore previews the route without implicitly opting a bare
 canonical request into a personal subscription.
 
 Queries the running daemon if reachable and falls back to a local config parse,
-the same order `bitrouter route` uses: the live routing table reflects `reload`s
+the same order `bro route` uses: the live routing table reflects `reload`s
 and what the daemon actually resolved at start-up, where a static parse is what
 the file says now. The parse is resolved the way the daemon resolves its own —
 built-in defaults, then providers whose credential lives in the OAuth store
@@ -422,12 +422,12 @@ endpoint (bounded: 2s connect, 5s per request; failures leave that provider with
 no models rather than failing the command). The daemon path does no such probing.
 
 Same report type as the origin MCP server's `list_models` tool, so
-`bitrouter models --json` and the tool's structured content are the same bytes.
+`bro models --json` and the tool's structured content are the same bytes.
 
-### `bitrouter providers list`
+### `bro providers list`
 
 ```
-bitrouter providers list [-c <path>] [--socket <path>]
+bro providers list [-c <path>] [--socket <path>]
 ```
 
 Local compatibility output prints each provider's id, model count,
@@ -440,11 +440,11 @@ that a connectivity probe succeeded.
 
 ## MCP upstream diagnostics
 
-### `bitrouter mcp check [server]`
+### `bro mcp check [server]`
 
 ```bash
-bitrouter mcp check                 # every configured upstream
-bitrouter mcp check my-server       # one configured upstream
+bro mcp check                 # every configured upstream
+bro mcp check my-server       # one configured upstream
 ```
 
 Performs one `tools/list` round trip per selected server and reports transport,
@@ -452,28 +452,28 @@ reachability, latency, negotiated tools capability, and advertised tool names.
 This is the canonical diagnostic. The `tools` commands below are hidden
 compatibility spellings.
 
-### Hidden compatibility: `bitrouter tools`
+### Hidden compatibility: `bro tools`
 
-### `bitrouter tools list`
+### `bro tools list`
 
 ```
-bitrouter tools list [-c <path>]
+bro tools list [-c <path>]
 ```
 
 Connects to every `mcp_servers` entry in the config and lists advertised tools with descriptions.
 
-### `bitrouter tools status`
+### `bro tools status`
 
 ```
-bitrouter tools status [-c <path>]
+bro tools status [-c <path>]
 ```
 
 Health-checks each configured MCP server with a `tools/list` round-trip. Prints status, latency, and transport.
 
-### `bitrouter tools discover <server>`
+### `bro tools discover <server>`
 
 ```
-bitrouter tools discover my-server [-c <path>]
+bro tools discover my-server [-c <path>]
 ```
 
 Connects to one MCP server and prints a YAML stub suitable for pasting into the `mcp_servers:` block of `bitrouter.yaml`.
@@ -482,16 +482,16 @@ Connects to one MCP server and prints a YAML stub suitable for pasting into the 
 
 ## Origin MCP server
 
-`bitrouter mcp serve` runs BitRouter itself as an **origin** MCP server, so an
+`bro mcp serve` runs BitRouter itself as an **origin** MCP server, so an
 MCP-capable client (Claude Code, Claude Desktop, Cursor, …) can call BitRouter's
-own capabilities as tools. This is the inverse of `bitrouter mcp check` and the
+own capabilities as tools. This is the inverse of `bro mcp check` and the
 `mcp_servers:` config block, where BitRouter is the MCP *client* proxying
 upstream servers.
 
-### `bitrouter mcp serve`
+### `bro mcp serve`
 
 ```
-bitrouter mcp serve
+bro mcp serve
 ```
 
 Long-running: its stdout is the JSON-RPC wire, not a result envelope. Stdio is
@@ -520,16 +520,16 @@ retired and returns an error rather than starting a second listener.
 Control and introspection only. There is **no inference tool**: to run a
 completion, call the daemon's HTTP API (`/v1/messages`,
 `/v1/chat/completions`) — the transport built for it, with streaming, the full
-parameter surface, and the metering path. `bitrouter mcp serve` tells you which
+parameter surface, and the metering path. `bro mcp serve` tells you which
 models to send there (`list_models`), where they would go (`route_preview`),
 and what it has cost (`status`).
 
 | Tool | Wired on | What it answers |
 |---|---|---|
-| `list_models` | every profile | Every routable model with **all** the providers that can serve it, not just the first. Optional `provider` argument filters, exactly as `bitrouter models --provider` does. Returns the same report type as `bitrouter models`, advertised as the tool's `output_schema`. On stdio + local it reads the daemon's live routing table over the control socket and falls back to a static config parse, so **it answers with no daemon running**; `resolved_via` says which view it is. Other profiles answer with the backend's own `GET /v1/models`, which does need the daemon (or the metered account) up |
-| `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, providers, control socket) plus the spend position — `spend.spent` on any deployment, `spend.limit` on a metered one. Returns the same report type as `bitrouter status`, advertised as the tool's `output_schema`. A stopped daemon is `running: false`, not a tool error. Not wired on HTTP + local: only a process on the daemon's own machine can read its control socket |
-| `route_preview` | stdio + local | How a model/prompt *would* route — the effective model the policy table selects, the provider chain, the decision behind it, and the first hop's rate card — without sending anything upstream. Returns the same report type as `bitrouter route`, advertised as the tool's `output_schema`. Config is read **per call**, so an edited `bitrouter.yaml` is visible to a long-running server |
-| `skills_search` | every **stdio** profile | Every skill on this machine, optionally narrowed by `query`. Returns the same report type as `bitrouter skills list`, advertised as the tool's `output_schema`. Reads the project *and* user-global roots, and marks any skill it found but cannot serve with `valid: false` plus a `problem` |
+| `list_models` | every profile | Every routable model with **all** the providers that can serve it, not just the first. Optional `provider` argument filters, exactly as `bro models --provider` does. Returns the same report type as `bro models`, advertised as the tool's `output_schema`. On stdio + local it reads the daemon's live routing table over the control socket and falls back to a static config parse, so **it answers with no daemon running**; `resolved_via` says which view it is. Other profiles answer with the backend's own `GET /v1/models`, which does need the daemon (or the metered account) up |
+| `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, providers, control socket) plus the spend position — `spend.spent` on any deployment, `spend.limit` on a metered one. Returns the same report type as `bro status`, advertised as the tool's `output_schema`. A stopped daemon is `running: false`, not a tool error. Not wired on HTTP + local: only a process on the daemon's own machine can read its control socket |
+| `route_preview` | stdio + local | How a model/prompt *would* route — the effective model the policy table selects, the provider chain, the decision behind it, and the first hop's rate card — without sending anything upstream. Returns the same report type as `bro route`, advertised as the tool's `output_schema`. Config is read **per call**, so an edited `bitrouter.yaml` is visible to a long-running server |
+| `skills_search` | every **stdio** profile | Every skill on this machine, optionally narrowed by `query`. Returns the same report type as `bro skills list`, advertised as the tool's `output_schema`. Reads the project *and* user-global roots, and marks any skill it found but cannot serve with `valid: false` plus a `problem` |
 | `skills_get` | every **stdio** profile | One skill's frontmatter metadata and `SKILL.md` body |
 
 Only wired capabilities register their tools, so the profiles stay disjoint by
@@ -539,8 +539,8 @@ no meaning on a multi-tenant transport).
 
 The skills tools ride the **transport**, not the backend: a stdio server is a
 subprocess of the caller whose machine it is, which is the same argument that
-makes `--backend skills` stdio-only. So a `bitrouter mcp install`-ed client —
-which launches `bitrouter mcp serve` — sees skills too; before, only
+makes `--backend skills` stdio-only. So a `bro mcp install`-ed client —
+which launches `bro mcp serve` — sees skills too; before, only
 `--backend skills` did, and an installed client never saw one.
 `--backend skills` survives as the narrow gateway-subprocess profile that
 carries *nothing else*.
@@ -549,22 +549,22 @@ Every stdio profile also serves SEP-2640's `skills/list` / `skills/get` JSON-RPC
 methods plus `resources/list` / `resources/read` over the skill files, for hosts
 that consume the extension rather than the tool pair. `skills/list` publishes
 only the skills that are actually loadable; `skills_search` and
-`bitrouter skills list` show the rest, marked, so an author can see why a skill
+`bro skills list` show the rest, marked, so an author can see why a skill
 on disk is unusable. Each published entry carries a complete `resources`
 manifest with a `digest` and a byte `size` per file.
 
 Spend reaches an MCP client as **typed structured content** under `status`'s
 `spend`, read from the local metering database — the same ledger
-`bitrouter status` and `bitrouter cost` report from, so the surfaces cannot
+`bro status` and `bro cost` report from, so the surfaces cannot
 disagree about what has been spent.
 
-### Hidden compatibility: `bitrouter mcp install`
+### Hidden compatibility: `bro mcp install`
 
 ```
-bitrouter mcp install --client claude|cursor [--config PATH]
+bro mcp install --client claude|cursor [--config PATH]
 ```
 
-Renders the client config block that launches `bitrouter mcp serve` over stdio.
+Renders the client config block that launches `bro mcp serve` over stdio.
 With `--config`, merges it into that file; without, prints it to stdout.
 
 ---
@@ -575,26 +575,26 @@ These commands are hidden from normal help during the compatibility window.
 `mcp_servers:` remains the declarative source of truth; this legacy browser does
 not write config.
 
-### `bitrouter mcp search <query>`
+### `bro mcp search <query>`
 
 ```
-bitrouter mcp search filesystem [--limit N]
+bro mcp search filesystem [--limit N]
 ```
 
 Searches registry names server-side and prints rows of `name / version / install / description`. The install column classifies support: `remote` (zero-install `streamable-http` entry), `npx` / `uvx` (auto-stub-able, version-pinned stdio package), `manual` (another package type or an entry that is not safe to auto-stub), `-` (no distribution).
 
-### `bitrouter mcp list`
+### `bro mcp list`
 
 ```
-bitrouter mcp list [--limit N]
+bro mcp list [--limit N]
 ```
 
 Lists registry servers with the same install-support column (default 50 rows).
 
-### `bitrouter mcp add <name>`
+### `bro mcp add <name>`
 
 ```
-bitrouter mcp add com.pulsemcp/remote-filesystem
+bro mcp add com.pulsemcp/remote-filesystem
 ```
 
 Prints a YAML stub to review and paste under `mcp_servers:`. This legacy helper is hidden during the compatibility window; `mcp_servers:` remains the declarative source of truth.
@@ -603,45 +603,45 @@ Prints a YAML stub to review and paste under `mcp_servers:`. This legacy helper 
 
 ## ACP agent management
 
-### `bitrouter agents list`
+### `bro agents list`
 
 ```
-bitrouter agents list [-c <path>]
+bro agents list [-c <path>]
 ```
 
 Shows the built-in agent catalog alongside which agents are configured in the loaded config.
 
-### `bitrouter agents inspect`
+### `bro agents inspect`
 
 ```bash
-bitrouter agents inspect claude
+bro agents inspect claude
 ```
 
 Opens a fresh harness-native session, waits briefly for its advertised slash
 commands, and reports which source answers each command.
 
-### `bitrouter agents check`
+### `bro agents check`
 
 ```
-bitrouter agents check [agent] [-c <path>]
+bro agents check [agent] [-c <path>]
 ```
 
 With an agent or friendly alias, preflights that adapter and routing target.
 With no agent, spawns each configured adapter and verifies `initialize`.
 
-### `bitrouter agents scaffold <id>`
+### `bro agents scaffold <id>`
 
 ```
-bitrouter agents scaffold claude-code
+bro agents scaffold claude-code
 ```
 
 Prints a YAML stub for the named catalog or registry agent. Paste the output
 under `agents:` in `bitrouter.yaml`. `agents install` remains a hidden alias.
 
-### `bitrouter agents conformance <id>`
+### `bro agents conformance <id>`
 
 ```
-bitrouter agents conformance local/claude-acp
+bro agents conformance local/claude-acp
 ```
 
 Runs the `acp_compat_1` ACP-compatibility suite and prints the `conformance:`
@@ -662,10 +662,10 @@ routability as `skipped` — its ACP facet launches direct, so there is no route
 ACP traffic to observe. Exits non-zero when a tier fails or when nothing was
 verified, and prints no record in either case.
 
-### `bitrouter run` — headless agent
+### `bro run` — headless agent
 
 ```
-bitrouter run <agent> [prompt|-] [--prompt-file PATH] [--load ID|--resume ID]
+bro run <agent> [prompt|-] [--prompt-file PATH] [--load ID|--resume ID]
               [--cwd PATH] [--format ndjson|text|quiet]
               [--approve-all|--approve-reads|--deny-all]
               [--permission-policy JSON|@PATH] [--result-schema JSON|@PATH]
@@ -682,10 +682,10 @@ Permissions, result validation, routing, timeouts, session identity, and exit
 codes are the same implementation used by the compatibility `acp prompt` and
 `spawn <agent> -p` forms.
 
-### `bitrouter acp`
+### `bro acp`
 
 ```
-bitrouter acp serve <agent> [-c <path>]
+bro acp serve <agent> [-c <path>]
 ```
 
 Exposes an ACP-compatible adapter over protocol-pure stdio until the ACP client
@@ -693,13 +693,13 @@ disconnects; one controller connection can carry multiple
 harness-native sessions. Hidden `acp prompt` and `spawn` spellings remain only
 for migration. BitRouter keeps no session records.
 
-### `bitrouter code` — coding conversation
+### `bro code` — coding conversation
 
 ```bash
-bitrouter code [-c <path>]
-bitrouter code <agent> [--load <id>|--resume <id>] [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
-bitrouter code --socket <path>
-bitrouter --context <name> code
+bro code [-c <path>]
+bro code <agent> [--load <id>|--resume <id>] [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
+bro code --socket <path>
+bro --context <name> code
 ```
 
 Bare local `code` opens an empty conversation and a searchable **Choose agent**
@@ -792,12 +792,12 @@ ACP adapter remains the protocol peer; the native launch commands below are a
 separate compatibility facet.
 
 ```
-bitrouter launch <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
-bitrouter claude [options] -- <claude args…>
-bitrouter codex [options] -- <codex args…>
+bro launch <agent> [--model <id>] [-c <path>] [--base-url <url>] [--no-install] [--no-start] [--check] -- <agent args…>
+bro claude [options] -- <claude args…>
+bro codex [options] -- <codex args…>
 ```
 
-Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the native-harness compatibility surface — the human drives the harness's own TUI; for a headless prompt use `bitrouter run`.
+Launches a coding-agent harness as an **interactive native-TUI** child process with its gateway base URL pointed at BitRouter, so the agent's traffic routes through the router **without touching the agent's own config files**. This is the native-harness compatibility surface — the human drives the harness's own TUI; for a headless prompt use `bro run`.
 
 Before handing over, `launch` prints one line stating what the harness actually got — whether it is routed, and whether the tools/skills gateways reached it. That ceiling is the harness's, not BitRouter's: `pi` exposes no MCP mechanism to inject into.
 
@@ -813,7 +813,7 @@ The positional agent takes any catalog harness with an interactive binary. `clau
 | `claude` | child env (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL` for `--model`) |
 | `codex` | one-shot `-c` overrides for a `bitrouter` provider (`base_url = <target>/v1`, `wire_api = "responses"`) |
 | `opencode` | synthesized `OPENCODE_CONFIG` JSON declaring a `bitrouter` openai-compatible provider |
-| `pi` | synthesized `PI_CODING_AGENT_DIR` with a `models.json`, selected by `--provider bitrouter --model …` |
+| `pi` | synthesized `PI_CODING_AGENT_DIR` with a `models.json`, selected by `--provider bro --model …` |
 | `hermes` | synthesized `HERMES_HOME` with a `config.yaml` (loopback `custom` provider + `CUSTOM_API_KEY`) |
 | `openclaw` | synthesized `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH` profile (run as `tui --local`) |
 | `grok`, `agy` | **not routed** — own-auth subscription clients (see below) |
@@ -823,17 +823,17 @@ The synthesized files are throwaway, written under the working tree's self-ignor
 
 **Gateway MCP servers.** `launch` also injects BitRouter's two MCP-shaped gateways into the harness: `bitrouter_tools` (the daemon's aggregate endpoint at `mcp.aggregate.route`, fanning out to every configured `mcp_servers` upstream — omitted when `mcp.aggregate.enabled: false`) and `bitrouter_skills` (this binary as `mcp serve --backend skills`, over the installed-skills root). Injection reaches the harnesses that have a mechanism for it — `claude` (`--mcp-config`), `codex` (`-c mcp_servers.*`), and `opencode` and `hermes` (their synthesized config files). `pi`, `openclaw`, `grok`, and `agy` expose no injectable MCP surface and launch without the gateways.
 
-`--model <id>` pins the harness's model through whatever mechanism it has. Following `cargo run`'s convention, everything after `--` is forwarded verbatim, e.g. `bitrouter launch claude -- -p "summarize" --dangerously-skip-permissions`.
+`--model <id>` pins the harness's model through whatever mechanism it has. Following `cargo run`'s convention, everything after `--` is forwarded verbatim, e.g. `bro launch claude -- -p "summarize" --dangerously-skip-permissions`.
 
 **`grok` and `agy` are own-auth harnesses.** They launch with their own subscription auth and are **never redirected** — the startup line says `own-auth · not routed · not metered`, and `--check` reports it as a `routing` warning. They also remain **providers**: subscription clients whose sessions the daemon borrows to serve *other* requests (`supergrok` / `google-ai`), which is a separate stack and unaffected.
 
-The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bitrouter init`). A missing `claude` / `codex` binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines); the other harnesses have no bundled installer and error with a pointer to their upstream project.
+The agent authenticates to BitRouter with `BITROUTER_API_KEY` when set; otherwise a local placeholder is used (fine under the `skip_auth` default written by `bro init`). A missing `claude` / `codex` binary is offered for install via its official native installer (`--no-install`, or a non-TTY stdin, declines); the other harnesses have no bundled installer and error with a pointer to their upstream project.
 
 When the target is the local daemon (a derived base URL on a loopback/wildcard bind) and none is running, `launch` **auto-starts it** — printing a hint, launching a detached `serve`, and waiting for readiness before handing off to the agent. Pass `--no-start` to skip this (a reachability warning is printed instead). An explicit `--base-url` or a non-local bind is never auto-started — BitRouter can't start someone else's daemon — and only gets a warning if it looks unreachable.
 
 After the wrapped agent exits, `launch` prints a one-line session spend summary to stderr (spend during the run + today's total, from the local metering database). Silent when nothing was recorded in the window — e.g. when the run targeted Cloud.
 
-`bitrouter spawn --agent <claude|codex>` is a **deprecated alias** for `launch` (prints a migration note); it will be removed after one or two alpha releases.
+`bro spawn --agent <claude|codex>` is a **deprecated alias** for `launch` (prints a migration note); it will be removed after one or two alpha releases.
 
 ### Hidden `spawn` compatibility
 
@@ -844,19 +844,19 @@ absent from normal help. Its modes call the canonical implementations:
 and integrations must use the canonical commands above; protocol-serving
 compatibility forms keep stdout reserved for ACP frames.
 
-### `bitrouter policy`
+### `bro policy`
 
 ```text
-bitrouter policy init NAME --preset PRESET --economy MODEL [--economy-effort LEVEL] \
+bro policy init NAME --preset PRESET --economy MODEL [--economy-effort LEVEL] \
   [--strong MODEL] [--strong-effort LEVEL]
-bitrouter policy check|status|show [--config PATH]
-bitrouter policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS]
-bitrouter policy diff ACTIVE CANDIDATE
-bitrouter policy publish CANDIDATE [--config PATH] [--socket PATH]
-bitrouter policy verify --evidence [--config PATH]
-bitrouter policy evolve [--config PATH] [--apply | --output FILE]
-bitrouter policy reload [--config PATH] [--socket PATH]
-bitrouter policy rollback DIGEST [--config PATH] [--socket PATH]
+bro policy check|status|show [--config PATH]
+bro policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS]
+bro policy diff ACTIVE CANDIDATE
+bro policy publish CANDIDATE [--config PATH] [--socket PATH]
+bro policy verify --evidence [--config PATH]
+bro policy evolve [--config PATH] [--apply | --output FILE]
+bro policy reload [--config PATH] [--socket PATH]
+bro policy rollback DIGEST [--config PATH] [--socket PATH]
 ```
 
 The BitRouter process, not the policy lock, owns adaptive behavior:
@@ -885,15 +885,15 @@ is part of the candidate lineage.
 
 The lock contains deterministic routes, tiers, and learning thresholds, but no activation or freeze switch. Older `policy.writeback: locked|evolve` input remains readable as `frozen|adaptive`; newly written configuration uses `policy.mode`. The old `policy lock`, `policy unlock`, and `policy evolve --freeze` surfaces have been removed.
 
-### `bitrouter optimize`
+### `bro optimize`
 
 ```text
-bitrouter optimize run [--policy auto] [--candidate-tier TIER] \
+bro optimize run [--policy auto] [--candidate-tier TIER] \
   [--exploration-ppm 100000] [--minimum-tasks 3] [--maximum-tasks 20] \
   [--minimum-pass-rate-ppm 900000] \
   [--evaluator-config-digest sha256:...] \
   [--config bitrouter.yaml] [--socket PATH]
-bitrouter optimize status [--policy auto] [--config bitrouter.yaml]
+bro optimize status [--policy auto] [--config bitrouter.yaml]
 ```
 
 Optimization is driven by history from normal use, not by a bundled workflow
@@ -901,11 +901,11 @@ runner. Initialize a policy, run a coding agent or Terminal Bench normally,
 submit externally evaluated results, and advance the controller one step:
 
 ```bash
-bitrouter policy init auto --preset auto --economy provider:model
+bro policy init auto --preset auto --economy provider:model
 # run the coding agent or Terminal Bench normally through bitrouter/auto
-bitrouter eval result submit result.json --config bitrouter.yaml
-bitrouter optimize run --policy auto --config bitrouter.yaml
-bitrouter optimize status --policy auto --config bitrouter.yaml
+bro eval result submit result.json --config bitrouter.yaml
+bro optimize run --policy auto --config bitrouter.yaml
+bro optimize status --policy auto --config bitrouter.yaml
 ```
 
 Repeat normal traced work, external Eval submission, and `optimize run` until
@@ -953,7 +953,7 @@ The generic Eval Exchange and low-level `policy compile`, `policy diff`,
 available for independent evaluation, migration, audit, and operator-managed
 policy workflows. They are not extra approval stages for `optimize run`.
 
-### `bitrouter trajectory`
+### `bro trajectory`
 
 Durable trajectory progress control is an explicit local opt-in:
 
@@ -992,13 +992,13 @@ are redacted digest/count evidence and an `inconclusive` verdict; they are not a
 quality score and do not infer task identity or capability from private data.
 
 ```text
-bitrouter trajectory inspect EPISODE_ID
-bitrouter trajectory replay EPISODE_ID
-bitrouter trajectory prune --before RFC3339 [--dry-run]
+bro trajectory inspect EPISODE_ID
+bro trajectory replay EPISODE_ID
+bro trajectory prune --before RFC3339 [--dry-run]
 
-bitrouter trajectory --config PATH inspect EPISODE_ID
-bitrouter trajectory --config PATH replay EPISODE_ID
-bitrouter trajectory --config PATH prune --before RFC3339 [--dry-run]
+bro trajectory --config PATH inspect EPISODE_ID
+bro trajectory --config PATH replay EPISODE_ID
+bro trajectory --config PATH prune --before RFC3339 [--dry-run]
 ```
 
 `--config PATH` is optional and may appear before or after the trajectory leaf
@@ -1045,16 +1045,16 @@ authoritative token/cost totals. Missing metering stays absent rather than
 becoming zero. `history_complete=false` means the visible prefix is not proven
 complete and guards follow their configured incomplete-history behavior.
 
-### `bitrouter eval`
+### `bro eval`
 
 ```text
-bitrouter eval subject put FILE [--config PATH]
-bitrouter eval subject get EVAL_ID [--config PATH]
-bitrouter eval subject list [--config PATH]
-bitrouter eval result submit FILE [--config PATH]
-bitrouter eval snapshot freeze [--at RFC3339] [--config PATH]
-bitrouter eval snapshot get SHA256 [--config PATH]
-bitrouter eval status [--config PATH]
+bro eval subject put FILE [--config PATH]
+bro eval subject get EVAL_ID [--config PATH]
+bro eval subject list [--config PATH]
+bro eval result submit FILE [--config PATH]
+bro eval snapshot freeze [--at RFC3339] [--config PATH]
+bro eval snapshot get SHA256 [--config PATH]
+bro eval status [--config PATH]
 ```
 
 Generic eval sits outside the inference hot path. Routed requests create
@@ -1079,10 +1079,10 @@ The daemon exposes the same library operations at
 `GET /v1/evals/snapshots/{evidence_root}`, and `GET /v1/evals/status`.
 These endpoints mutate evidence only; no evaluator can edit or publish a lock.
 
-### `bitrouter key sign`
+### `bro key sign`
 
 ```
-bitrouter key sign --user <id> [--db <url>] [--policy <policy-id>]
+bro key sign --user <id> [--db <url>] [--policy <policy-id>]
 ```
 
 Mints a scoped `brvk_` virtual key for a user. The plaintext secret is printed once — only its SHA-256 hash is stored.
@@ -1093,14 +1093,14 @@ Mints a scoped `brvk_` virtual key for a user. The plaintext secret is printed o
 | `--db` | `sqlite://./bitrouter.db` | Database URL — `sqlite://`, `postgres://`, or `mysql://` |
 | `--policy` | *(none)* | Policy id to bind to the key |
 
-### `bitrouter providers login <provider>`
+### `bro providers login <provider>`
 
 ```
-bitrouter providers login claude-code     # Claude Pro/Max subscription via Claude Code
-bitrouter providers login openai-codex    # ChatGPT subscription via Codex
-bitrouter providers login github-copilot  # GitHub device-code flow
-bitrouter providers login openai --api-key sk-…        # BYOK, non-interactive
-printf %s "$KEY" | bitrouter providers login anthropic --key-stdin
+bro providers login claude-code     # Claude Pro/Max subscription via Claude Code
+bro providers login openai-codex    # ChatGPT subscription via Codex
+bro providers login github-copilot  # GitHub device-code flow
+bro providers login openai --api-key sk-…        # BYOK, non-interactive
+printf %s "$KEY" | bro providers login anthropic --key-stdin
 ```
 
 Runs the provider's OAuth flow (PKCE in a browser or device-code, depending on provider) and stores the token in `$XDG_DATA_HOME/bitrouter/oauth-tokens.json`. The slot is keyed by `(provider_id, label)` — pass `--label <name>` (defaults to `default`) to keep multiple accounts of the same provider side by side. Other providers fall back to a pasted API key.
@@ -1109,27 +1109,27 @@ For a provider that accepts a pasted key, `--api-key <KEY>` (or `--key-stdin`, w
 
 For `claude-code`, the login menu defaults to the live Claude Code session. For `openai-codex`, the default is **"Import an existing session from the vendor CLI"** — BitRouter reads the credential Codex already stored in `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) first, then the macOS Keychain, and adopts it with no fresh browser sign-in. The imported token refreshes automatically like any other; choose the browser subscription flow when no local Codex session exists.
 
-For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami) below.
+For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bro cloud login`](#bitrouter-cloud-login--logout--whoami) below.
 
-### `bitrouter providers logout <provider>`
+### `bro providers logout <provider>`
 
 ```
-bitrouter providers logout github-copilot
+bro providers logout github-copilot
 ```
 
 Removes every stored credential for the provider (subscription OAuth tokens and pasted API keys alike).
 
-### `bitrouter cloud login` / `logout` / `whoami`
+### `bro cloud login` / `logout` / `whoami`
 
-Cloud sign-in, distinct from the per-provider `bitrouter providers login` flow above. Interactive login uses the RFC 8628 OAuth Device Authorization Grant. For CI and other non-interactive environments, pass an existing BitRouter API key with `--api-key`. Both forms persist to the same credential file and are reused by `cloud api`, management commands, the built-in `bitrouter` provider, and account-attributed telemetry.
+Cloud sign-in, distinct from the per-provider `bro providers login` flow above. Interactive login uses the RFC 8628 OAuth Device Authorization Grant. For CI and other non-interactive environments, pass an existing BitRouter API key with `--api-key`. Both forms persist to the same credential file and are reused by `cloud api`, management commands, the built-in `bitrouter` provider, and account-attributed telemetry.
 
-OAuth browser approval asks which workspace to bind; the resulting credential is **namespace-baked** (workspace-baked). To switch workspaces, re-run `bitrouter cloud login`. OAuth credentials auto-refresh on use. API-key login performs no network request and management commands use the server's `me` namespace alias.
+OAuth browser approval asks which workspace to bind; the resulting credential is **namespace-baked** (workspace-baked). To switch workspaces, re-run `bro cloud login`. OAuth credentials auto-refresh on use. API-key login performs no network request and management commands use the server's `me` namespace alias.
 
 ```
-bitrouter cloud login [--oauth-as <URL>] [--client-id <ID>] [--scope <SCOPE>]
-bitrouter cloud login --api-key <BRK_API_KEY> [--oauth-as <URL>]
-bitrouter cloud logout [--oauth-as <URL>] [--client-id <ID>]
-bitrouter cloud whoami
+bro cloud login [--oauth-as <URL>] [--client-id <ID>] [--scope <SCOPE>]
+bro cloud login --api-key <BRK_API_KEY> [--oauth-as <URL>]
+bro cloud logout [--oauth-as <URL>] [--client-id <ID>]
+bro cloud whoami
 ```
 
 | Flag | Default | Description |
@@ -1149,13 +1149,13 @@ These commands export and validate the request-scoped evidence used by policy
 benchmarks:
 
 ```text
-bitrouter workflow-state classifier-bakeoff --fixtures <DIR> [--submission <JSON>] --output <JSON>
-bitrouter workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
-bitrouter workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME>] [--credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
-bitrouter workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
-bitrouter workflow-state policy-oracle --traces <JSONL> --cloud-usage <JSONL> --policy-lock <YAML> --policy <NAME> --effective-cost-factor <0..1> --target-savings <0..1> ... --output <JSON>
-bitrouter workflow-state bundle --run-label <LABEL> --traces <JSONL> --cloud-usage <JSONL> [--outcomes <JSONL>] [--policy-decisions <JSONL>] --output-dir <DIR>
-bitrouter workflow-state apply-reward-feedback --database-url <URL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> --policy-decisions <JSONL>
+bro workflow-state classifier-bakeoff --fixtures <DIR> [--submission <JSON>] --output <JSON>
+bro workflow-state metering-usage --database-url <URL> --output <JSONL> [--since <RFC3339>] [--until <RFC3339>] [--impute-price <SPEC> ...]
+bro workflow-state reconcile-metering --database-url <URL> [--api-base <URL>] [--api-key-env <NAME>] [--credentials-file <PATH>] --request-id <ID> ... [--price <SPEC> ...] [--max-attempts <N>] [--poll-interval-ms <MS>]
+bro workflow-state reliability-report --database-url <URL> --config <PATH> --output <JSON>
+bro workflow-state policy-oracle --traces <JSONL> --cloud-usage <JSONL> --policy-lock <YAML> --policy <NAME> --effective-cost-factor <0..1> --target-savings <0..1> ... --output <JSON>
+bro workflow-state bundle --run-label <LABEL> --traces <JSONL> --cloud-usage <JSONL> [--outcomes <JSONL>] [--policy-decisions <JSONL>] --output-dir <DIR>
+bro workflow-state apply-reward-feedback --database-url <URL> --traces <JSONL> --cloud-usage <JSONL> --outcomes <JSONL> --policy-decisions <JSONL>
 ```
 
 `classifier-bakeoff` is a research-only, read-only route-context evaluation.
@@ -1232,40 +1232,40 @@ not estimate the unexecuted models' quality or authorize a policy change.
 
 ## Policy
 
-### `bitrouter policy create <id>`
+### `bro policy create <id>`
 
 ```
-bitrouter policy create strict [--dir ./policies]
+bro policy create strict [--dir ./policies]
 ```
 
 Writes a starter policy file to the policy directory. Bind it to a key with:
 
 ```
-bitrouter key sign --user <id> --policy strict
+bro key sign --user <id> --policy strict
 ```
 
 ---
 
 ## Cloud account management
 
-`bitrouter cloud …` drives the BitRouter Cloud API using the credential persisted by [`bitrouter cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command. Typed subcommands cover the common terminal workflows: namespace inspection, API keys, usage and request history, billing balance and checkout, policies, budgets, presets, and BYOK. Use `bitrouter cloud api <relative-endpoint>` for the rest of the Cloud API surface, including public provider and usage discovery, settlement receipts, routing presets, OAuth clients, billing ledgers, checkout status, and namespace/account lifecycle endpoints.
+`bro cloud …` drives the BitRouter Cloud API using the credential persisted by [`bro cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command. Typed subcommands cover the common terminal workflows: namespace inspection, API keys, usage and request history, billing balance and checkout, policies, budgets, presets, and BYOK. Use `bro cloud api <relative-endpoint>` for the rest of the Cloud API surface, including public provider and usage discovery, settlement receipts, routing presets, OAuth clients, billing ledgers, checkout status, and namespace/account lifecycle endpoints.
 
 OAuth credentials are **namespace-baked** — keys, usage, and policies are scoped to the workspace chosen at login. API-key credentials use `/v1/namespaces/me/*`. The path segment is always resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all workspaces regardless.
 
 Every leaf accepts `--json` to print the raw response body instead of the human-readable summary. On a 403 whose description is `missing required scope: <s>`, OAuth users receive a copy-pasteable re-login hint that appends the missing scope; API-key users are told to mint or select a key with that scope and log in with it.
 
-### `bitrouter cloud api`
+### `bro cloud api`
 
 Make an authenticated request to any **relative** endpoint on the origin recorded by `cloud login`, modeled after [`gh api`](https://cli.github.com/manual/gh_api):
 
 ```bash
-bitrouter cloud api /v1/models
-bitrouter cloud api /v1/chat/completions --input request.json
-bitrouter cloud api /v1/responses -f model=openai/gpt-5 -F stream=true
+bro cloud api /v1/models
+bro cloud api /v1/chat/completions --input request.json
+bro cloud api /v1/responses -f model=openai/gpt-5 -F stream=true
 ```
 
 ```text
-bitrouter cloud api <ENDPOINT> [-X <METHOD>] [-H <KEY:VALUE>] \
+bro cloud api <ENDPOINT> [-X <METHOD>] [-H <KEY:VALUE>] \
   [-f <KEY=VALUE>] [-F <KEY=VALUE>] [--input <FILE|->] \
   [-i|--include] [--silent|--verbose]
 ```
@@ -1287,115 +1287,115 @@ Absolute URLs, scheme-relative paths, fragments, and cross-origin redirects are 
 
 This first release intentionally omits `gh api`'s GraphQL, pagination/slurp, `--jq`, Go templates, cache, hostname, preview, and placeholder expansion features. See the [Cloud API guide](/docs/guides/cloud-api) for copyable requests.
 
-### `bitrouter cloud whoami`
+### `bro cloud whoami`
 
 ```
-bitrouter cloud whoami
+bro cloud whoami
 ```
 
 Prints the cloud identity and the bound namespace alongside the `/v1/*` base URL the CLI will target. Reads the local credentials file only — no network call.
 
-### `bitrouter cloud namespace`
+### `bro cloud namespace`
 
-Inspect the workspaces you own and the one this CLI session is baked to. The typed CLI only inspects workspaces; creation and deletion require the Console or `bitrouter cloud api` with the appropriate control-plane scope.
+Inspect the workspaces you own and the one this CLI session is baked to. The typed CLI only inspects workspaces; creation and deletion require the Console or `bro cloud api` with the appropriate control-plane scope.
 
 ```
-bitrouter cloud namespace list    [--json]
-bitrouter cloud namespace current [--json]
+bro cloud namespace list    [--json]
+bro cloud namespace current [--json]
 ```
 
-`list` fetches all namespaces you own and marks the active one. `current` is offline — it reads the local credential and prints the bound namespace id without a network call. If the credential predates namespace-scoping, it prints `(no namespace — run \`bitrouter cloud login\`)`.
+`list` fetches all namespaces you own and marks the active one. `current` is offline — it reads the local credential and prints the bound namespace id without a network call. If the credential predates namespace-scoping, it prints `(no namespace — run \`bro cloud login\`)`.
 
-### `bitrouter cloud keys`
+### `bro cloud keys`
 
 Manage `brk_` API keys in the active workspace. All minted keys are workspace-baked to the same namespace as the caller and cannot upscale their scopes beyond the caller's.
 
 ```
-bitrouter cloud keys list [--json]
-bitrouter cloud keys mint --name <NAME> --scope <SCOPE> [--scope <SCOPE> …] [--expires-at <RFC3339>] [--json]
-bitrouter cloud keys revoke <ID> [--json]
+bro cloud keys list [--json]
+bro cloud keys mint --name <NAME> --scope <SCOPE> [--scope <SCOPE> …] [--expires-at <RFC3339>] [--json]
+bro cloud keys revoke <ID> [--json]
 ```
 
 Requested scopes on `mint` must be a subset of your effective scopes (RFC 6749 §3.3 — no upscaling). The plaintext token is shown once in the `mint` response and is not recoverable after.
 
-### `bitrouter cloud usage` / `bitrouter cloud requests`
+### `bro cloud usage` / `bro cloud requests`
 
 Read aggregate spend / token counts and page through recent inference requests.
 
 ```
-bitrouter cloud usage    [--from <RFC3339>] [--to <RFC3339>] [--json]
-bitrouter cloud requests [--limit <N>] [--offset <N>] [--json]
+bro cloud usage    [--from <RFC3339>] [--to <RFC3339>] [--json]
+bro cloud requests [--limit <N>] [--offset <N>] [--json]
 ```
 
 `usage` defaults to a 30-day rolling window. `requests` clamps the page size to `[1, 100]` and defaults to 25.
 
-### `bitrouter cloud billing`
+### `bro cloud billing`
 
 User-level — not workspace-scoped; reflects the account-wide wallet regardless of which workspace the CLI is signed in to.
 
 ```
-bitrouter cloud billing balance [--json]
-bitrouter cloud billing checkout --amount-cents <N> [--json]
+bro cloud billing balance [--json]
+bro cloud billing checkout --amount-cents <N> [--json]
 ```
 
-`checkout` starts a Stripe credit-purchase session and prints the hosted URL. Requires the `billing:write` scope, which is opt-in — pass `--scope` to `bitrouter cloud login` to request it.
+`checkout` starts a Stripe credit-purchase session and prints the hosted URL. Requires the `billing:write` scope, which is opt-in — pass `--scope` to `bro cloud login` to request it.
 
-Use `bitrouter cloud api /v1/billing/transactions` for the billing ledger, and `/v1/billing/checkout/sessions/<session-id>/status` for checkout status.
+Use `bro cloud api /v1/billing/transactions` for the billing ledger, and `/v1/billing/checkout/sessions/<session-id>/status` for checkout status.
 
-### `bitrouter cloud policy`
+### `bro cloud policy`
 
 Generic CRUD over the typed policy registry (kinds: `budget`, `rate_limit`, `guardrail`, `preset`).
 
 ```
-bitrouter cloud policy list [--kind <KIND>] [--json]
-bitrouter cloud policy get <ID> [--json]
-bitrouter cloud policy create --name <NAME> --kind <KIND> --spec <FILE|-> [--json]
-bitrouter cloud policy update <ID> [--name <NAME>] [--spec <FILE|->] [--json]
-bitrouter cloud policy delete <ID> [--json]
-bitrouter cloud policy bind <ID> --principal-type <TYPE> --principal-id <ID> [--json]
-bitrouter cloud policy unbind <ID> <BINDING_ID> [--json]
-bitrouter cloud policy enable <ID> [--json]
-bitrouter cloud policy disable <ID> [--json]
-bitrouter cloud policy bindings <ID> [--json]
-bitrouter cloud policy effective --principal-type <TYPE> --principal-id <ID> [--json]
-bitrouter cloud policy for-principal <TYPE> <ID> [--json]
+bro cloud policy list [--kind <KIND>] [--json]
+bro cloud policy get <ID> [--json]
+bro cloud policy create --name <NAME> --kind <KIND> --spec <FILE|-> [--json]
+bro cloud policy update <ID> [--name <NAME>] [--spec <FILE|->] [--json]
+bro cloud policy delete <ID> [--json]
+bro cloud policy bind <ID> --principal-type <TYPE> --principal-id <ID> [--json]
+bro cloud policy unbind <ID> <BINDING_ID> [--json]
+bro cloud policy enable <ID> [--json]
+bro cloud policy disable <ID> [--json]
+bro cloud policy bindings <ID> [--json]
+bro cloud policy effective --principal-type <TYPE> --principal-id <ID> [--json]
+bro cloud policy for-principal <TYPE> <ID> [--json]
 ```
 
 `--spec` reads the flat inner spec body as JSON from a file path or `-` for stdin. Principal types: `namespace`, `api_key`, `oauth_token`, `oauth_client`. `disable` parks a policy without deleting it — the engine skips disabled rows at request time.
 
-### `bitrouter cloud budget` / `bitrouter cloud preset`
+### `bro cloud budget` / `bro cloud preset`
 
 Typed wrappers over the budget-kind and preset-kind policy rows — same storage, flat wire shape (no `kind`/`spec` envelope).
 
 ```
-bitrouter cloud budget list [--json]
-bitrouter cloud budget get <ID> [--json]
-bitrouter cloud budget create --name <NAME> --window <day|month|total> --limit-micro-usd <N> [--json]
-bitrouter cloud budget update <ID> [--name <NAME>] [--window <W>] [--limit-micro-usd <N>] [--json]
-bitrouter cloud budget delete <ID> [--json]
+bro cloud budget list [--json]
+bro cloud budget get <ID> [--json]
+bro cloud budget create --name <NAME> --window <day|month|total> --limit-micro-usd <N> [--json]
+bro cloud budget update <ID> [--name <NAME>] [--window <W>] [--limit-micro-usd <N>] [--json]
+bro cloud budget delete <ID> [--json]
 
-bitrouter cloud preset list [--json]
-bitrouter cloud preset get <ID> [--json]
-bitrouter cloud preset create --name <NAME> [--guardrail <FILE|->] [--budget <FILE|->] [--rate-limit <FILE|->] [--json]
-bitrouter cloud preset update <ID> [--name <NAME>] [--guardrail <FILE|->] [--budget <FILE|->] [--rate-limit <FILE|->] [--clear-guardrail] [--clear-budget] [--clear-rate-limit] [--json]
-bitrouter cloud preset delete <ID> [--json]
+bro cloud preset list [--json]
+bro cloud preset get <ID> [--json]
+bro cloud preset create --name <NAME> [--guardrail <FILE|->] [--budget <FILE|->] [--rate-limit <FILE|->] [--json]
+bro cloud preset update <ID> [--name <NAME>] [--guardrail <FILE|->] [--budget <FILE|->] [--rate-limit <FILE|->] [--clear-guardrail] [--clear-budget] [--clear-rate-limit] [--json]
+bro cloud preset delete <ID> [--json]
 ```
 
 Budget `--limit-micro-usd` must be strictly positive (the engine treats `<= 0` as "no policy" and the API refuses it up-front). Preset clauses are independently optional; use `--clear-*` flags to drop a clause from an existing preset.
 
-### `bitrouter cloud byok`
+### `bro cloud byok`
 
 User-level — not workspace-scoped; BYOK provider keys are account-wide. The cloud only stores already-sealed ciphertext — seal against the cloud's current X25519 public key (separate fetch) before calling.
 
 ```
-bitrouter cloud byok list [--json]
-bitrouter cloud byok set    --provider <ID> --ciphertext-b64 <B64> --kek-id <ID> --key-prefix <PREFIX> [--api-base <URL>] [--json]
-bitrouter cloud byok delete <PROVIDER> [--json]
+bro cloud byok list [--json]
+bro cloud byok set    --provider <ID> --ciphertext-b64 <B64> --kek-id <ID> --key-prefix <PREFIX> [--api-base <URL>] [--json]
+bro cloud byok delete <PROVIDER> [--json]
 ```
 
 ## Skills
 
-`bitrouter skills …` inspects Agent Skills — directories containing a `SKILL.md` with YAML frontmatter (`name`, `description`). The agent skills directory is `~/.claude/skills/` with `--global`, or `./.claude/skills/` (project-local) by default.
+`bro skills …` inspects Agent Skills — directories containing a `SKILL.md` with YAML frontmatter (`name`, `description`). The agent skills directory is `~/.claude/skills/` with `--global`, or `./.claude/skills/` (project-local) by default.
 
 BitRouter **reads** the installed-skills directory; it does not install into it.
 Getting a skill onto disk is the ecosystem's job — `npx skills add`, or the
@@ -1403,13 +1403,13 @@ Claude Code / Codex plugin marketplaces. BitRouter is a skills *server* and
 *gateway*, not an installer: see `docs/SKILLS_MCP_SPEC.md` §2.
 
 The `add`, `remove`, `find`, and `update` verbs were removed for that reason.
-To serve installed skills over MCP, see `bitrouter mcp serve` (every stdio
+To serve installed skills over MCP, see `bro mcp serve` (every stdio
 profile carries them) or the narrower `--backend skills`.
 
-### `bitrouter skills list`
+### `bro skills list`
 
 ```
-bitrouter skills list [-g|--global]
+bro skills list [-g|--global]
 ```
 
 Prints the skills under the project root, or under `~/.claude/` with `-g`. Each
@@ -1430,10 +1430,10 @@ listing is where you find out why a skill you wrote is not loading.
 This is the same report the `skills_search` MCP tool returns, so
 `--json` here and that tool's structured content are the same bytes.
 
-### `bitrouter skills init <name>`
+### `bro skills init <name>`
 
 ```
-bitrouter skills init <NAME> [-o|--output <PATH>]
+bro skills init <NAME> [-o|--output <PATH>]
 ```
 
 Scaffolds a starter `<NAME>/SKILL.md`; `--output` may choose another path whose
@@ -1448,9 +1448,9 @@ observable ACP content from `code`, `run`, and `acp serve` in the local database
 independently of `trajectory.enabled`. It does not invoke an evaluator.
 
 ```bash
-bitrouter acp recordings [--config PATH] list --agent codex-acp
-bitrouter acp recordings [--config PATH] show --agent codex-acp NATIVE_SESSION_ID
-bitrouter acp recordings [--config PATH] delete --agent codex-acp NATIVE_SESSION_ID
+bro acp recordings [--config PATH] list --agent codex-acp
+bro acp recordings [--config PATH] show --agent codex-acp NATIVE_SESSION_ID
+bro acp recordings [--config PATH] delete --agent codex-acp NATIVE_SESSION_ID
 ```
 
 The source is the resolved configured agent ID, and the session ID remains
@@ -1467,14 +1467,14 @@ Use the source and native ID from `acp recordings list`, and the current `head`
 from `acp recordings show`. Creation rejects a stale expected watermark.
 
 ```bash
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] create --watermark N
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] list
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] show CHECKPOINT_ID
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] resources CHECKPOINT_ID [--refresh]
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] submit assessment.json
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] history
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] effective
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] family
+bro acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] create --watermark N
+bro acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] list
+bro acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] show CHECKPOINT_ID
+bro acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] resources CHECKPOINT_ID [--refresh]
+bro acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] submit assessment.json
+bro acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] history
+bro acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] effective
+bro acp checkpoints --agent SOURCE NATIVE_ID [--config PATH] family
 ```
 
 These commands use existing local records only. `create` freezes event references

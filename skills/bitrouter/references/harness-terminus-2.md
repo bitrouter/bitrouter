@@ -92,7 +92,7 @@ Set these on the BitRouter daemon before starting it:
 export BITROUTER_WORKFLOW_TRACE_HARNESS=terminus_2
 export BITROUTER_WORKFLOW_TRACE_JSONL="$PWD/artifacts/traces.jsonl"
 export BITROUTER_POLICY_DECISION_JSONL="$PWD/artifacts/policy-decisions.jsonl"
-bitrouter start --config ./bitrouter.yaml
+bro start --config ./bitrouter.yaml
 ```
 
 The ingress capture persists a provider-neutral request ID and can promote

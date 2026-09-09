@@ -1964,7 +1964,7 @@ fn validate_runtime<'a>(
             Some(record) => validate_conformance(record, &entry.id, data.status, &file, issues),
             None => advisories.push(format!(
                 "{file}: agent '{}' has no {SUITE} record — run \
-                 `bitrouter agents conformance {}/{}`",
+                 `bro agents conformance {}/{}`",
                 entry.id, data.name, entry.id
             )),
         }
@@ -2594,7 +2594,7 @@ struct CanonicalAgent {
     /// than the YAML key.
     package_marker: String,
     /// The harness's own native-TUI binary, when it has one. Presence declares
-    /// a `bitrouter launch` facet; absence means the agent is ACP-only.
+    /// a `bro launch` facet; absence means the agent is ACP-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     interactive_binary: Option<String>,
     acp: AgentAcp,

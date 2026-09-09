@@ -32,7 +32,7 @@ controller call or modify the request.
 Start BitRouter from this directory:
 
 ```bash
-bitrouter serve --config bitrouter.yaml
+bro serve --config bitrouter.yaml
 ```
 
 The template starts in `policy.mode: frozen`: routes are deterministic, ledger
@@ -129,7 +129,7 @@ baseline traffic. The effective cost factor includes expected token, retry, and
 turn inflation, not just provider list price:
 
 ```bash
-bitrouter workflow-state policy-oracle \
+bro workflow-state policy-oracle \
   --traces traces.jsonl \
   --cloud-usage usage.jsonl \
   --policy-lock policy-lock.yaml \
@@ -146,20 +146,20 @@ on the default tier. It does not assume the remainder of a live agent trajectory
 will stay unchanged.
 
 The daemon creates redacted request subjects automatically. External evaluators
-submit results through `bitrouter eval result submit` or `POST /v1/evals/results`.
+submit results through `bro eval result submit` or `POST /v1/evals/results`.
 Freeze admitted evidence and compile without changing the active lock:
 
 ```bash
-bitrouter eval snapshot freeze --config bitrouter.yaml
-bitrouter policy compile --eval-snapshot sha256:... --output candidate.yaml --config bitrouter.yaml
-bitrouter policy diff policy-lock.yaml candidate.yaml
-bitrouter policy publish candidate.yaml --config bitrouter.yaml
+bro eval snapshot freeze --config bitrouter.yaml
+bro policy compile --eval-snapshot sha256:... --output candidate.yaml --config bitrouter.yaml
+bro policy diff policy-lock.yaml candidate.yaml
+bro policy publish candidate.yaml --config bitrouter.yaml
 ```
 
 `publish` requires `policy.mode: adaptive` and rejects stale parent digests.
 The runtime's `policy.mode`, rather than lockfile contents, owns publication
 authority: frozen mode never replaces the active lock, while adaptive mode only
 permits this explicit publish step.
-After explicit publication, `bitrouter policy verify --evidence --config
+After explicit publication, `bro policy verify --evidence --config
 bitrouter.yaml` reconstructs the active lock's evidence root from the local
 ledger.

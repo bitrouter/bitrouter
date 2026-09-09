@@ -1,6 +1,6 @@
 //! The `list_models` action: *what can BitRouter route, and who can serve it?*
 //!
-//! One report type, shared by `bitrouter models` and the MCP `list_models`
+//! One report type, shared by `bro models` and the MCP `list_models`
 //! tool, so the CLI's `--json` and the tool's structured content are the same
 //! bytes.
 //!
@@ -72,7 +72,7 @@ impl ModelsReport {
     /// Keep only the models `provider` can serve; `None` keeps everything.
     ///
     /// The filter lives on the report rather than in the port so that
-    /// `bitrouter models --provider` and the tool's `provider` argument are
+    /// `bro models --provider` and the tool's `provider` argument are
     /// the *same* filter over the *same* list. A port-side filter would let
     /// each surface interpret "declared by this provider" its own way, which is
     /// the drift this action exists to remove.
@@ -86,7 +86,7 @@ impl ModelsReport {
 }
 
 /// Arguments to the `list_models` tool — the tool half of
-/// `bitrouter models --provider`.
+/// `bro models --provider`.
 #[derive(Debug, Clone, Default, serde::Deserialize, schemars::JsonSchema)]
 pub struct ListModelsArgs {
     /// Show only models this provider declares. Omit for every routable model.

@@ -1,4 +1,4 @@
-//! `SKILL.md` format support and the `bitrouter skills …` CLI.
+//! `SKILL.md` format support and the `bro skills …` CLI.
 //!
 //! ## What this is, and what it deliberately is not
 //!

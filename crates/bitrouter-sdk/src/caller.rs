@@ -25,13 +25,13 @@ pub struct CallerContext {
     user_id: String,
     /// True when synthesised by `server.skip_auth` rather than authenticated.
     local: bool,
-    /// Which `bitrouter launch` session this request belongs to, when one
+    /// Which `bro launch` session this request belongs to, when one
     /// minted the credential it arrived with. See [`launch_tag`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     launch_id: Option<String>,
 }
 
-/// Prefix of the opaque per-launch attribution token `bitrouter launch` mints
+/// Prefix of the opaque per-launch attribution token `bro launch` mints
 /// when it — and not the user — owns the gateway credential slot.
 pub const LAUNCH_TOKEN_PREFIX: &str = "brl_";
 
@@ -82,7 +82,7 @@ impl CallerContext {
         }
     }
 
-    /// The local caller, tagged with the `bitrouter launch` session whose
+    /// The local caller, tagged with the `bro launch` session whose
     /// minted credential this request arrived with.
     ///
     /// The identity is unchanged — still `local`, still unauthenticated. Only
@@ -130,7 +130,7 @@ impl CallerContext {
         self.local
     }
 
-    /// The `bitrouter launch` session this request belongs to, if any.
+    /// The `bro launch` session this request belongs to, if any.
     pub fn launch_id(&self) -> Option<&str> {
         self.launch_id.as_deref()
     }

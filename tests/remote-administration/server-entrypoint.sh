@@ -11,7 +11,7 @@ trap 'kill "$mock_pid" 2>/dev/null || true' EXIT
 
 for _ in $(seq 1 40); do
     if curl --silent --fail http://127.0.0.1:8080/health >/dev/null; then
-        exec bitrouter serve --config /work/server/bitrouter.yaml
+        exec bro serve --config /work/server/bitrouter.yaml
     fi
     sleep 0.1
 done

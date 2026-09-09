@@ -115,15 +115,15 @@ control_status() {
 }
 
 add_reader_context() {
-    bitrouter context add reader \
+    bro context add reader \
         --endpoint "$control_endpoint" \
         --token-env CLIENT_READ_TOKEN >/tmp/context-reader.json
 }
 
 assert_cli_reaches_tls_proxy() {
     add_reader_context
-    bitrouter --context reader status >/tmp/status.json
-    bitrouter --context reader models >/tmp/models.json
+    bro --context reader status >/tmp/status.json
+    bro --context reader models >/tmp/models.json
     jq --exit-status 'has("running")' /tmp/status.json >/dev/null \
         || fail 'remote status CLI response is not a status report'
     jq --exit-status 'has("models")' /tmp/models.json >/dev/null \
@@ -136,23 +136,23 @@ assert_cli_read_actions() {
     local until
     until=$(utc_timestamp)
 
-    bitrouter --context reader status >/tmp/cli-status.json
-    bitrouter --context reader status --requests >/tmp/cli-status-requests.json
-    bitrouter --context reader models --provider fixture >/tmp/cli-models.json
-    bitrouter --context reader requests \
+    bro --context reader status >/tmp/cli-status.json
+    bro --context reader status --requests >/tmp/cli-status-requests.json
+    bro --context reader models --provider fixture >/tmp/cli-models.json
+    bro --context reader requests \
         --limit 1 \
         --model fixture-a \
         --provider fixture \
         --since "$since" \
         --until "$until" >/tmp/cli-requests.json
-    bitrouter --context reader route fixture-a \
+    bro --context reader route fixture-a \
         --prompt 'container acceptance' >/tmp/cli-route.json
-    bitrouter --context reader providers list >/tmp/cli-providers.json
-    bitrouter --context reader observe status >/tmp/cli-observe.json
-    bitrouter --context reader policy status --view active >/tmp/cli-policy-status.json
-    bitrouter --context reader policy show fixture \
+    bro --context reader providers list >/tmp/cli-providers.json
+    bro --context reader observe status >/tmp/cli-observe.json
+    bro --context reader policy status --view active >/tmp/cli-policy-status.json
+    bro --context reader policy show fixture \
         --view active >/tmp/cli-policy-show.json
-    bitrouter --context reader agents list >/tmp/cli-agents.json
+    bro --context reader agents list >/tmp/cli-agents.json
 
     jq --exit-status 'has("running")' /tmp/cli-status.json >/dev/null \
         || fail 'remote status CLI did not return a status report'
@@ -208,7 +208,7 @@ assert_mcp_control_tools() {
 assert_remote_target_isolation() {
     local report
     report=$(python3 /usr/local/libexec/target-isolation.py \
-        --binary bitrouter \
+        --binary bro \
         --endpoint "$control_endpoint" \
         --ca "$ca_file")
     assert_json "$report" '
@@ -547,10 +547,10 @@ assert_disconnected_reload_recovery() {
 }
 
 assert_successful_cli_reload_and_operation_show() {
-    bitrouter context add administrator \
+    bro context add administrator \
         --endpoint "$control_endpoint" \
         --token-env CLIENT_ADMIN_TOKEN >/tmp/context-administrator.json
-    bitrouter --context administrator reload >/tmp/cli-reload.json
+    bro --context administrator reload >/tmp/cli-reload.json
     jq --exit-status '
         .status == "succeeded"
         and .result.outcome == "succeeded"
@@ -564,7 +564,7 @@ assert_successful_cli_reload_and_operation_show() {
     request_id=$(jq -r '.request_id' /tmp/cli-reload.json)
     local instance
     instance=$(jq -r '.server_instance_id' /tmp/cli-reload.json)
-    bitrouter --context administrator operations show "$request_id" \
+    bro --context administrator operations show "$request_id" \
         --instance "$instance" >/tmp/cli-operations-show.json
     jq --exit-status --arg request_id "$request_id" --arg instance "$instance" '
         .request_id == $request_id
@@ -596,10 +596,10 @@ assert_boot_change() {
 }
 
 assert_legacy_token_read_only() {
-    bitrouter context add legacy \
+    bro context add legacy \
         --endpoint "$control_endpoint" \
         --token-env CLIENT_READ_TOKEN >/tmp/context-legacy.json
-    bitrouter --context legacy status >/tmp/legacy-status.json
+    bro --context legacy status >/tmp/legacy-status.json
     jq --exit-status 'has("running")' /tmp/legacy-status.json >/dev/null \
         || fail 'legacy control token could not read status'
 
@@ -627,16 +627,16 @@ assert_legacy_token_read_only() {
     old_admin=$(control_status "$CLIENT_ADMIN_TOKEN" GET '/status' 401)
     assert_json "$old_admin" '.error.code == "unauthorized"'
 
-    if bitrouter --context legacy reload >/tmp/legacy-reload.json 2>/tmp/legacy-reload.err; then
+    if bro --context legacy reload >/tmp/legacy-reload.json 2>/tmp/legacy-reload.err; then
         fail 'legacy read-only context unexpectedly reloaded the router'
     fi
 }
 
 assert_partial_reload_cli() {
-    bitrouter context add administrator \
+    bro context add administrator \
         --endpoint "$control_endpoint" \
         --token-env CLIENT_ADMIN_TOKEN >/tmp/context-administrator.json
-    if bitrouter --context administrator reload >/tmp/partial-reload.json 2>/tmp/partial-reload.err; then
+    if bro --context administrator reload >/tmp/partial-reload.json 2>/tmp/partial-reload.err; then
         fail 'CLI reported success for a partially-applied reload'
     fi
     if ! jq --slurp --exit-status '

@@ -1479,7 +1479,7 @@ impl CodeFixture {
     }
 }
 
-/// A remote `bitrouter --context fixture code` process and its loopback target.
+/// A remote `bro --context fixture code` process and its loopback target.
 struct RemoteCodeFixture {
     remote: RemoteFixture,
     pty: PtyRunner,
@@ -1529,7 +1529,7 @@ impl RemoteCodeFixture {
 }
 
 fn shell_command(mock: &MockAcp, visual_editor: Option<&VisualEditor>) -> Result<CommandBuilder> {
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_bitrouter"));
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_bro"));
     let mut command = CommandBuilder::new("/bin/sh");
     command.env_clear();
     command.arg("-c");
@@ -1566,7 +1566,7 @@ fn shell_command(mock: &MockAcp, visual_editor: Option<&VisualEditor>) -> Result
 }
 
 fn remote_shell_command(remote: &RemoteFixture) -> Result<CommandBuilder> {
-    let binary = PathBuf::from(env!("CARGO_BIN_EXE_bitrouter"));
+    let binary = PathBuf::from(env!("CARGO_BIN_EXE_bro"));
     let mut command = CommandBuilder::new("/bin/sh");
     command.env_clear();
     command.arg("-c");

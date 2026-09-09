@@ -3,6 +3,7 @@
 
 use bitrouter_mcp::actions::route::{ResolvedVia, RouteReport};
 use bitrouter_mcp::actions::status::StatusReport;
+use bitrouter_sdk::invocation;
 use serde::Serialize;
 
 use crate::output::CliReport;
@@ -100,12 +101,12 @@ impl CliReport for DaemonActionReport {
     }
 }
 
-/// The human view of `bitrouter status`. Exit code stays 0 whether running or
+/// The human view of `bro status`. Exit code stays 0 whether running or
 /// stopped — "stopped" is an answer, not a failure.
 ///
 /// The report type itself is
 /// [`bitrouter_mcp::actions::status::StatusReport`]: the `status`
-/// tool returns the same type, so `bitrouter status --json` and the tool's
+/// tool returns the same type, so `bro status --json` and the tool's
 /// structured content are the same bytes. Rendering stays here — a local trait
 /// on a foreign type is legal, and it keeps [`Human`] out of the crate.
 impl CliReport for StatusReport {
@@ -118,7 +119,10 @@ impl CliReport for StatusReport {
             // Spend outlives the daemon: what a past daemon spent is on disk
             // and stays true after it exits, so it is shown here too.
             render_spend(self.spend.as_ref(), h)?;
-            return h.note("Run `bitrouter start` to launch the daemon.");
+            return h.note(&format!(
+                "Run `{} start` to launch the daemon.",
+                invocation::name()
+            ));
         }
         h.status_block(Health::Up, "bitrouter is running")?;
         if let Some(pid) = self.pid {
@@ -411,7 +415,7 @@ mod tests {
     }
 
     /// The human line has to *say* when the policy table moved the request —
-    /// printing only the requested model is how `bitrouter route` used to name
+    /// printing only the requested model is how `bro route` used to name
     /// a model the daemon would never pick.
     #[test]
     fn route_human_names_the_effective_model_when_policy_moved_it() {
@@ -433,13 +437,13 @@ mod tests {
         assert!(h.contains("policy → big"), "{h}");
     }
 
-    /// The whole point of the shared type: what `bitrouter route --json` prints
+    /// The whole point of the shared type: what `bro route --json` prints
     /// is what the `route_preview` tool returns, so the tool's structured
     /// content deserializes straight back into the report the CLI emitted —
     /// including the enum wire values, which a rename would silently break.
     ///
     /// The wire values are pinned literally too: `resolved_via` is
-    /// `live` / `config` / `zero_config`, the same words `bitrouter models`
+    /// `live` / `config` / `zero_config`, the same words `bro models`
     /// uses for the same fact, so an agent never sees `live` from one report
     /// and `live daemon` from the other.
     #[test]

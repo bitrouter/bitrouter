@@ -105,7 +105,7 @@ The tree says the app owns observability and always did:
 - `metering/`, `trajectory/` and `adequacy/` — ~25 files of spend recording,
   durable request history, replay and a reliability ledger — are the app's own
   observation plane and were never candidates for either home.
-- `bitrouter observe status` is an app command that reads a compile-time flag
+- `bro observe status` is an app command that reads a compile-time flag
   *out of* the crate.
 
 Rename the concern and the sentence that started the whole chain becomes
@@ -388,7 +388,7 @@ declared block/redact patterns silently never apply. `dist/schema/bitrouter.conf
 does not catch it either — `plugins` is `additionalProperties: true`, as
 permissive as the map.
 
-So D6 ships an unknown-key warning **first**, at `bitrouter config validate`
+So D6 ships an unknown-key warning **first**, at `bro config validate`
 *and* at daemon startup — startup matters more, since `validate` is opt-in and
 the daemon always runs. That converts this class of failure from silent to
 loud for every plugin, and it is what makes the rename boring rather than
@@ -788,7 +788,7 @@ running something.
   directions; verified non-vacuous by deleting an id (fails) and by adding a
   phantom one (fails).
 
-- **The guard never fired on the ACP path.** `bitrouter acp serve|prompt` takes
+- **The guard never fired on the ACP path.** `bro acp serve|prompt` takes
   its exporter from `build_otel_exporter_standalone_with_credentials` and never
   builds an `App`, so the one scenario D6 exists for — a stale key, no
   exporter, no error — stayed completely silent on a surface the skill
@@ -797,7 +797,7 @@ running something.
 
   **The first fix missed half the surface.** `build_observability` is reached
   only by `chat`, `chat_piped` and `prompt`; `acp_cli::serve` — behind both
-  `bitrouter acp serve` and `bitrouter spawn --serve` — never calls it, so the
+  `bro acp serve` and `bro spawn --serve` — never calls it, so the
   path the doc comment named by name stayed exactly as silent as before. It now
   emits the same set itself, first thing, on the config as read. Pinned by
   `tests/acp.rs::serve_warns_about_ignored_plugin_blocks`, which spawns
@@ -899,7 +899,7 @@ measuring does not have to.
    `tracing-subscriber`, `tonic` and `dashmap`. This is now a CI step.
 7. **Met.** All seven resolve in `bitrouter-telemetry --all-features`; none is in
    its default tree; `axum` and `tonic` are absent from the `otel-http` tree.
-8. **Met.** `bitrouter observe status` is unchanged: `OTEL_ENABLED` moved crate
+8. **Met.** `bro observe status` is unchanged: `OTEL_ENABLED` moved crate
    but keeps its name, value and meaning, and `ObserveStatusReport` is untouched.
 9. **Met.** 2,866 passed / 0 failed / 11 skipped; clippy, `cargo doc` under
    `-D warnings`, and `cargo fmt --check` all clean.

@@ -360,7 +360,7 @@ fn conversation_label(workspace: &Path) -> String {
         .file_name()
         .unwrap_or(workspace.as_os_str())
         .to_string_lossy();
-    format!("bitrouter code · {short}")
+    format!("{} code · {short}", bitrouter_sdk::invocation::name())
 }
 
 /// A socket or named remote target exposes only daemon reports. The typed
@@ -400,7 +400,7 @@ mod tests {
     fn conversation_welcome_uses_only_the_short_workspace_name() {
         assert_eq!(
             conversation_label(std::path::Path::new("/workspaces/bitrouter")),
-            "bitrouter code · bitrouter"
+            "bro code · bitrouter"
         );
     }
 

@@ -7,7 +7,7 @@
 //! `--json` / `--human` flags.
 //!
 //! Default is JSON (agent-native). Diagnostics never come through here — they
-//! go to stderr — so `bitrouter <cmd> 2>/dev/null | jq` always sees one clean
+//! go to stderr — so `bro <cmd> 2>/dev/null | jq` always sees one clean
 //! JSON value.
 
 pub mod error;

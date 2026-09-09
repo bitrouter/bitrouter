@@ -1,4 +1,4 @@
-//! `bitrouter agents` — lifecycle CLI for upstream ACP agents.
+//! `bro agents` — lifecycle CLI for upstream ACP agents.
 //!
 //! Three verbs:
 //! - `list` — show the bundled catalog of well-known agents and which of
@@ -6,7 +6,7 @@
 //!   `--remote` additionally fetches the official ACP registry and lists
 //!   its agents.
 //! - `check` — spawn each configured agent and verify it answers
-//!   `initialize`. Same shape as `bitrouter tools status` for MCP.
+//!   `initialize`. Same shape as `bro tools status` for MCP.
 //! - `install <id>` — look up the agent in the compiled catalog, falling
 //!   back to the ACP registry (`npx`/`uvx` distributions only), and emit a
 //!   YAML stub the user can paste into the `agents:` block.
@@ -19,11 +19,12 @@
 use std::time::Duration;
 
 use bitrouter_sdk::config::Config;
+use bitrouter_sdk::invocation;
 
 use crate::agent_registry::{InstallSupport, Registry, RegistryAgent};
 use crate::harness::{self, Harness};
 
-/// One row in `bitrouter agents list`.
+/// One row in `bro agents list`.
 #[derive(Debug, Clone)]
 pub struct ListRow {
     /// Agent id.
@@ -37,7 +38,7 @@ pub struct ListRow {
     pub description: String,
 }
 
-/// One row in `bitrouter agents check`.
+/// One row in `bro agents check`.
 #[derive(Debug, Clone)]
 pub struct CheckRow {
     /// Agent id.
@@ -47,7 +48,7 @@ pub struct CheckRow {
     pub outcome: Result<Duration, String>,
 }
 
-/// `bitrouter agents list` — show the catalog merged with the user's
+/// `bro agents list` — show the catalog merged with the user's
 /// configured agents. Sorted by id.
 pub fn list(config: &Config) -> Vec<ListRow> {
     let mut ids: std::collections::BTreeMap<String, ListRow> = Default::default();
@@ -99,7 +100,7 @@ fn describe_invocation(cfg: &bitrouter_sdk::acp::transport::AcpAgentConfig) -> S
     one_line
 }
 
-/// `bitrouter agents check` — spawn each *configured* agent, send an
+/// `bro agents check` — spawn each *configured* agent, send an
 /// `initialize` request, and report whether the round-trip succeeded.
 pub async fn check(config: &Config) -> Vec<CheckRow> {
     use bitrouter_sdk::acp::transport::AcpTransport;
@@ -120,7 +121,7 @@ pub async fn check(config: &Config) -> Vec<CheckRow> {
     out
 }
 
-/// One row in the registry table of `bitrouter agents list --remote`.
+/// One row in the registry table of `bro agents list --remote`.
 #[derive(Debug, Clone)]
 pub struct RemoteRow {
     pub id: String,
@@ -155,17 +156,24 @@ pub fn registry_rows(registry: &Registry) -> Vec<RemoteRow> {
     rows
 }
 
-/// `bitrouter agents install <id>`, catalog tier — look up `id` in the
+/// `bro agents install <id>`, catalog tier — look up `id` in the
 /// compiled catalog and emit a YAML stub the user can paste under `agents:`
 /// in `bitrouter.yaml`. Returns an error if `id` is not a catalog entry (the
 /// CLI then falls back to the registry tier).
 pub fn install(id: &str) -> Result<String, String> {
-    let agent: &Harness = harness::by_id(id)
-        .ok_or_else(|| format!("'{id}' is not in the bundled catalog. Run `bitrouter agents list` (or `--remote` for the ACP registry) to see the available ids."))?;
+    let agent: &Harness = harness::by_id(id).ok_or_else(|| {
+        format!(
+            "'{id}' is not in the bundled catalog. Run `{cli} agents list` (or `--remote` \
+                 for the ACP registry) to see the available ids.",
+            cli = invocation::name()
+        )
+    })?;
     let command = agent.acp_command.ok_or_else(|| {
         format!(
-            "'{id}' is interactive-only (no ACP adapter to install) — drive it with `bitrouter launch --agent {}`",
-            agent.interactive_binary.unwrap_or(id)
+            "'{id}' is interactive-only (no ACP adapter to install) — drive it with \
+             `{cli} launch --agent {}`",
+            agent.interactive_binary.unwrap_or(id),
+            cli = invocation::name()
         )
     })?;
     Ok(render_stub(&StubSpec {
@@ -178,16 +186,18 @@ pub fn install(id: &str) -> Result<String, String> {
     }))
 }
 
-/// `bitrouter agents install <id>`, registry tier — emit a stub for a
+/// `bro agents install <id>`, registry tier — emit a stub for a
 /// registry entry whose distribution maps onto a package runner (`npx` /
 /// `uvx`). Binary-only entries are refused with a pointer to the project
 /// (no checksums in the registry — manual install stays user-verified).
 pub fn install_from_registry(registry: &Registry, id: &str) -> Result<String, String> {
-    let agent: &RegistryAgent = registry
-        .agents
-        .iter()
-        .find(|a| a.id == id)
-        .ok_or_else(|| format!("'{id}' is not in the ACP registry either. Run `bitrouter agents list --remote` to see the available ids."))?;
+    let agent: &RegistryAgent = registry.agents.iter().find(|a| a.id == id).ok_or_else(|| {
+        format!(
+            "'{id}' is not in the ACP registry either. Run `{cli} agents list --remote` to \
+                 see the available ids.",
+            cli = invocation::name()
+        )
+    })?;
     let Some(invocation) = agent.stdio_invocation() else {
         let hint = agent
             .repository
@@ -437,7 +447,7 @@ mod tests {
     fn install_unknown_id_errors_with_hint() {
         let err = install("nonexistent").unwrap_err();
         assert!(err.contains("not in the bundled catalog"));
-        assert!(err.contains("bitrouter agents list"));
+        assert!(err.contains("bro agents list"));
     }
 
     /// Registry fixture mirroring the real document shape: npx (stub-able),

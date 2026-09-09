@@ -201,7 +201,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         }),
     },
     ActionSpec {
-        // No CLI twin, and adding `bitrouter skills show` for the table's sake
+        // No CLI twin, and adding `bro skills show` for the table's sake
         // would be dead surface — so this row has one surface, and the schema
         // it carries pins nothing against a second one. It is here because the
         // tool returns `Json<SkillDetail>` and therefore *does* advertise a
@@ -298,7 +298,7 @@ mod tests {
             if let (Some(leaf), Some(tool)) = (action.cli_leaf, action.mcp_tool) {
                 assert!(
                     action.output_schema.is_some(),
-                    "`{}` answers on both machine surfaces (`bitrouter {leaf}` and the \
+                    "`{}` answers on both machine surfaces (`bro {leaf}` and the \
                      `{tool}` tool) but carries no `output_schema`, so nothing holds the \
                      two shapes to one another",
                     action.id

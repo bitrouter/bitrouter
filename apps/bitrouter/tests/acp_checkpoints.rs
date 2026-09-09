@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 async fn command(config: &Path, cwd: &Path, args: &[&str]) -> Result<std::process::Output> {
     Ok(tokio::time::timeout(
         Duration::from_secs(30),
-        tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+        tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
             .current_dir(cwd)
             .args([
                 "acp",
@@ -157,7 +157,7 @@ async fn cli_preserves_checkpoints_and_revisions_across_processes() -> Result<()
     let next = run(&config, &cwd, &["create", "--watermark", "2"]).await?;
     assert_eq!(next["data"]["previous_checkpoint_id"], cp);
     assert_eq!(run(&config, &cwd, &["show", cp]).await?, content);
-    let deleted = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+    let deleted = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
         .current_dir(&cwd)
         .args(["acp", "recordings", "--config"])
         .arg(&config)

@@ -66,7 +66,7 @@ pub struct RoutingPrefs {
 /// Also the element type of the shared `list_models` action report
 /// (`bitrouter_mcp::actions::models::ModelsReport`), which is why it derives
 /// `JsonSchema`: the MCP tool advertises an `output_schema` built from it, and
-/// `bitrouter models --json` emits the same shape. It lives here rather than
+/// `bro models --json` emits the same shape. It lives here rather than
 /// beside the action because it already rides a wire — `GET /v1/models` and the
 /// daemon control socket both carry it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

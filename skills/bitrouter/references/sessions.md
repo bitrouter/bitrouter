@@ -6,7 +6,7 @@ How BitRouter's ACP surfaces divide ownership. For CLI flags see
 
 ## One controller, three drivers
 
-`bitrouter acp serve` is a connection-level ACP controller:
+`bro acp serve` is a connection-level ACP controller:
 
 ```text
 manager -- ACP --> BitRouter controller -- ACP --> one harness process
@@ -21,7 +21,7 @@ BitRouter does not generate an alias or read Claude/Codex private session
 files. Optional local recording mirrors observable ACP content; it does not
 replace the harness's native session catalog or persistence.
 
-`bitrouter run` runs the **same controller**, in-process: it launches the
+`bro run` runs the **same controller**, in-process: it launches the
 harness behind a connection-level controller and drives it over an in-process
 duplex channel as that controller's own ACP client. Session identity is therefore
 harness-native there too — there is no `record_id` alias. What `prompt` adds on
@@ -29,7 +29,7 @@ top of the controller is client-side: `--turn-timeout` (cooperative
 `session/cancel` plus a three-second grace), headless permission denial, OTel
 turn spans re-derived from the prompt round-trip, and the NDJSON presentation.
 
-`bitrouter code <agent>` drives the same in-process controller through the same
+`bro code <agent>` drives the same in-process controller through the same
 client, with two additions: it declares a route namespace over the local
 daemon socket (so its traffic meters by controller instance, and the
 controller decorates `usage_update` with attributed cost), and its `/route`
@@ -43,10 +43,10 @@ stops pause queued work for explicit action.
 
 ```bash
 # ACP-client-driven, multiple native sessions on one harness connection
-bitrouter acp serve <id> [--config PATH]
+bro acp serve <id> [--config PATH]
 
 # One-shot client over the same controller
-bitrouter run <id> "prompt" [routing flags]
+bro run <id> "prompt" [routing flags]
 ```
 
 Stdout is ACP JSON-RPC and logs go to stderr. The ACP client sends `initialize`
@@ -205,9 +205,9 @@ authentication, provider configuration, and MCP launch credentials are excluded.
 Recorded user/tool content can itself contain sensitive information.
 
 ```bash
-bitrouter acp recordings list --agent codex-acp
-bitrouter acp recordings show --agent codex-acp NATIVE_SESSION_ID
-bitrouter acp recordings delete --agent codex-acp NATIVE_SESSION_ID
+bro acp recordings list --agent codex-acp
+bro acp recordings show --agent codex-acp NATIVE_SESSION_ID
+bro acp recordings delete --agent codex-acp NATIVE_SESSION_ID
 ```
 
 Use the resolved configured agent ID as the source namespace. Add `--config`
@@ -236,14 +236,14 @@ Read the native session's `head` from `acp recordings show`, then freeze that
 exact prefix. The agent source is the configured ID used when recording.
 
 ```sh
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH create --watermark N
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH list
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH show CHECKPOINT_ID
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH resources CHECKPOINT_ID --refresh
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH submit assessment.json
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH history
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH effective
-bitrouter acp checkpoints --agent SOURCE NATIVE_ID --config PATH family
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH create --watermark N
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH list
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH show CHECKPOINT_ID
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH resources CHECKPOINT_ID --refresh
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH submit assessment.json
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH history
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH effective
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH family
 ```
 
 Creation rejects an outdated watermark. Existing checkpoints keep original tool

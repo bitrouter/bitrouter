@@ -3,12 +3,12 @@
 //!
 //! A harness is drivable in either of two facets:
 //!
-//! - **interactive** (`bitrouter launch`) — the harness's own native TUI
+//! - **interactive** (`bro launch`) — the harness's own native TUI
 //!   (`claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`,
 //!   `agy`), launched as a child with its LLM traffic pointed at the daemon —
 //!   by env/args where that suffices, otherwise through a synthesized config
 //!   file ([`Harness::launch_overlay`]); the human drives it directly.
-//! - **ACP** (`bitrouter spawn`) — a headless ACP adapter
+//! - **ACP** (`bro spawn`) — a headless ACP adapter
 //!   (`@agentclientprotocol/claude-agent-acp`, …) driven as a sub-agent by a
 //!   program.
 //!
@@ -23,14 +23,14 @@
 pub const BITROUTER_API_KEY_ENV: &str = "BITROUTER_API_KEY";
 
 /// Placeholder credential injected when no real key is available. Ignored by
-/// the daemon under `skip_auth: true` (the `bitrouter init` default); the
+/// the daemon under `skip_auth: true` (the `bro init` default); the
 /// harness merely needs *some* credential to start.
 pub const PLACEHOLDER_API_KEY: &str = "bitrouter-local";
 
 use anyhow::Context;
 
 /// One catalog harness. Keyed by [`id`](Self::id), which is the ACP-facet
-/// id used under `agents:` in `bitrouter.yaml` and by `bitrouter agents`.
+/// id used under `agents:` in `bitrouter.yaml` and by `bro agents`.
 #[derive(Debug, Clone, Copy)]
 pub struct Harness {
     /// Catalog / ACP-config id (e.g. `claude-acp`). Also the `agents install`
@@ -44,7 +44,7 @@ pub struct Harness {
     /// conformance suite's handshake tier checks the negotiated version
     /// against it.
     pub acp_protocol_version: u32,
-    /// The ACP adapter invocation (`command` + `args`) for `bitrouter spawn`,
+    /// The ACP adapter invocation (`command` + `args`) for `bro spawn`,
     /// when the harness has one. `None` for interactive-only harnesses
     /// (grok, antigravity) — they have no headless ACP adapter today.
     pub acp_command: Option<&'static str>,
@@ -55,7 +55,7 @@ pub struct Harness {
     /// `agents:` entry back to its catalog routing (invocation matching, so
     /// the YAML key carries no semantics). Usually the adapter package name.
     pub package_marker: &'static str,
-    /// The interactive native-TUI binary for `bitrouter launch`, when the
+    /// The interactive native-TUI binary for `bro launch`, when the
     /// harness has one. `None` for adapter-only harnesses (gemini).
     pub interactive_binary: Option<&'static str>,
     /// How this harness's LLM traffic is pointed at the daemon.
@@ -474,7 +474,7 @@ impl Harness {
         }
     }
 
-    /// Whether `bitrouter launch` will run this harness: exactly those with an
+    /// Whether `bro launch` will run this harness: exactly those with an
     /// [`interactive_binary`](Self::interactive_binary).
     ///
     /// The cut to four ids was made when `launch` also promised a *hosted
@@ -529,7 +529,7 @@ impl Harness {
         }
     }
 
-    /// Interactive-launch overlay (`bitrouter launch`): the full routing
+    /// Interactive-launch overlay (`bro launch`): the full routing
     /// overlay for *any* interactive harness — including the ones env/args
     /// cannot route, whose config files are synthesized under `state_dir`
     /// (opencode's `OPENCODE_CONFIG`, pi's `PI_CODING_AGENT_DIR`, hermes's
@@ -704,7 +704,7 @@ pub fn resolve_gateway_auth(bitrouter_key: Option<String>, require_key: bool) ->
 }
 
 /// The Codex `-c` provider-override overlay. Mirrors the interactive
-/// `bitrouter launch` codex wiring so both facets route identically.
+/// `bro launch` codex wiring so both facets route identically.
 fn codex_overlay(base_url: &str, auth: &str, model: Option<&str>) -> RoutingOverlay {
     let mut env = Vec::new();
     let mut args = vec![
@@ -1509,7 +1509,7 @@ mod tests {
         );
     }
 
-    // ── Launch overlays (`bitrouter launch` facet with no gateways wired). ──
+    // ── Launch overlays (`bro launch` facet with no gateways wired). ──
 
     #[test]
     fn opencode_launch_overlay_routes_to_the_gateway_without_mcp() {

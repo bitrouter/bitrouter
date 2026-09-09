@@ -24,7 +24,7 @@ pub struct ServerToolsView {
     pub error: Option<String>,
 }
 
-/// Result of `bitrouter tools list`.
+/// Result of `bro tools list`.
 #[derive(Serialize)]
 pub struct ToolsListReport {
     pub servers: Vec<ServerToolsView>,
@@ -66,7 +66,7 @@ pub struct ServerStatusView {
     pub error: Option<String>,
 }
 
-/// Result of `bitrouter tools status`.
+/// Result of `bro tools status`.
 #[derive(Serialize)]
 pub struct ToolsStatusReport {
     pub servers: Vec<ServerStatusView>,
@@ -89,7 +89,7 @@ impl CliReport for ToolsStatusReport {
     }
 }
 
-/// Result of `bitrouter tools discover <server>` — the paste-able YAML stub,
+/// Result of `bro tools discover <server>` — the paste-able YAML stub,
 /// carried verbatim under `yaml`.
 #[derive(Serialize)]
 pub struct ToolsDiscoverReport {

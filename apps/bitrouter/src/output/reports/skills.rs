@@ -14,7 +14,7 @@ use crate::output::human::Theme;
 /// Human rendering for the shared `skills_search` report.
 ///
 /// The type is the MCP crate's — `impl CliReport for <foreign report>` is legal
-/// because the trait is ours — so `bitrouter skills list --json` is byte-for-byte
+/// because the trait is ours — so `bro skills list --json` is byte-for-byte
 /// the tool's structured content, and only this rendering is CLI-only.
 impl CliReport for SkillsReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
@@ -35,7 +35,7 @@ impl CliReport for SkillsReport {
     }
 }
 
-/// Result of `bitrouter skills init <name>`.
+/// Result of `bro skills init <name>`.
 #[derive(Serialize)]
 pub struct SkillInitReport {
     pub path: String,

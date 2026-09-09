@@ -34,7 +34,7 @@ const PROVIDER_ID: &str = "claude-code";
 /// Genuine Claude Code traffic carries the Claude Code agent-profile beta —
 /// `anthropic-beta: claude-code-…` — the same marker the Pro/Max subscription
 /// endpoint keys on. It's sent identically by the CLI, the Agent SDK, and
-/// `bitrouter spawn`, and is stable across releases (unlike the
+/// `bro spawn`, and is stable across releases (unlike the
 /// version-dependent system-prompt text the older detection relied on). Such a
 /// request also targets a bare Claude model id (e.g. `claude-opus-4-8`).
 ///
@@ -62,7 +62,7 @@ impl PromptTransform for ClaudeCodeRouter {
         // Genuine Claude Code carries the agent-profile beta
         // (`anthropic-beta: claude-code-…`) — the same marker the subscription
         // endpoint keys on, stable across Claude Code's CLI / Agent-SDK /
-        // `bitrouter spawn` shapes (unlike the version-dependent system prompt
+        // `bro spawn` shapes (unlike the version-dependent system prompt
         // text). When it's present and the request targets a bare `claude-*`
         // model, route to the subscription provider by prefixing the model.
         // Non-Claude-Code traffic is left untouched (it falls to the

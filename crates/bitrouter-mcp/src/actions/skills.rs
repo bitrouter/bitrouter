@@ -1,6 +1,6 @@
 //! The `skills_search` action: *what skills do I have, and can I use them?*
 //!
-//! One report type, shared by `bitrouter skills list` and the MCP
+//! One report type, shared by `bro skills list` and the MCP
 //! `skills_search` tool, so the CLI's `--json` and the tool's structured
 //! content are the same bytes.
 //!
@@ -67,7 +67,7 @@ impl SkillsReport {
     /// case-insensitively; `None` keeps everything.
     ///
     /// The filter lives on the report rather than in the port, for the same
-    /// reason `ModelsReport::filtered` does: `bitrouter skills list` and the
+    /// reason `ModelsReport::filtered` does: `bro skills list` and the
     /// tool's `query` argument are then the *same* filter over the *same* list,
     /// instead of each surface interpreting "matches" its own way.
     pub fn matching(mut self, query: Option<&str>) -> Self {
@@ -85,7 +85,7 @@ impl SkillsReport {
 /// One skill's full content — the `skills_get` tool's answer.
 ///
 /// Not a second surface's report: `skills_get` has no CLI twin, and adding
-/// `bitrouter skills show` for the table's sake would be dead surface. It is
+/// `bro skills show` for the table's sake would be dead surface. It is
 /// typed all the same so the tool advertises an `output_schema` rather than an
 /// opaque JSON blob, and so the body's frontmatter split is the one in
 /// `SKILL.md`'s own format module instead of a fourth hand-rolled reader.

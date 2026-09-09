@@ -105,7 +105,7 @@ pub struct ServeOptions {
     /// reads the serving machine's own installed-skills roots, which a
     /// multi-tenant HTTP caller has no claim on). Set on **every** stdio
     /// profile, not just `--backend skills`: an `mcp install`-ed client runs
-    /// `bitrouter mcp serve`, and until this existed such a client never saw a
+    /// `bro mcp serve`, and until this existed such a client never saw a
     /// skill.
     pub skills: Option<std::sync::Arc<dyn actions::skills::SkillsQuery>>,
     /// Optional SEP-2640 catalog (`skills/list` / `skills/get` plus

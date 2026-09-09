@@ -25,3 +25,10 @@ publish-prereleases = true
 install-updater = false
 # Whether dist should create a Github Release or use an existing draft
 create-release = false
+
+# The CLI renamed `bitrouter` → `bro`. Installers additionally create a
+# `bitrouter` symlink so an existing muscle-memory invocation keeps working;
+# the binary prints a deprecation note when reached through it. The alias is
+# installer-only (it is not in the archives) and is removed in 1.0.0.
+[dist.bin-aliases]
+bro = ["bitrouter"]

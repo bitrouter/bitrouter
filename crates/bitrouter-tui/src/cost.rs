@@ -4,7 +4,7 @@
 //!
 //! ACP's `UsageUpdate.cost` is specified as this session's cumulative cost,
 //! so a figure that arrives there is never wider than the session — the
-//! daemon's total is answered by `bitrouter status --requests`, not here. What
+//! daemon's total is answered by `bro status --requests`, not here. What
 //! the specification cannot say is *who wrote the number*: two parties can. A
 //! harness may report its own provider relationship, and BitRouter may report
 //! its meter. They are different numbers, and a subscription harness's figure

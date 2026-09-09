@@ -64,5 +64,5 @@ pub mod workflow_state;
 
 pub use assemble::{Assembled, build_app, build_app_with_path, merge_registry_into};
 
-/// Crate version string, surfaced by `bitrouter --version`.
+/// Crate version string, surfaced by `bro --version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

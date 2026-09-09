@@ -1,4 +1,4 @@
-//! Plain compatibility rendering and session-log support for `bitrouter chat`.
+//! Plain compatibility rendering and session-log support for `bro chat`.
 //!
 //! Interactive conversations use the canonical Code driver. This module keeps
 //! only the redirected-input/output renderer and the session-log helpers it

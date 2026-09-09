@@ -95,7 +95,8 @@ fn reserved_preset(slug: &str) -> Result<&'static str> {
 fn missing_reserved_binding(preset: &str) -> BitrouterError {
     BitrouterError::bad_request(format!(
         "'{RESERVED_NAMESPACE}{preset}' needs a preset named '{preset}' bound to a routing \
-         policy; run `bitrouter policy init {preset} --preset {preset} --economy provider:model`"
+         policy; run `{cli} policy init {preset} --preset {preset} --economy provider:model`",
+        cli = crate::invocation::name()
     ))
 }
 
@@ -391,7 +392,7 @@ mod tests {
         assert_eq!(err.status(), 400);
         assert!(
             err.to_string()
-                .contains("bitrouter policy init auto --preset auto --economy")
+                .contains("bro policy init auto --preset auto --economy")
         );
     }
 
@@ -416,7 +417,7 @@ mod tests {
         );
         assert!(result.as_ref().err().is_some_and(|err| {
             err.to_string()
-                .contains("bitrouter policy init auto --preset auto --economy")
+                .contains("bro policy init auto --preset auto --economy")
         }));
     }
 

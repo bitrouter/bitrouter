@@ -2,7 +2,7 @@
 //!
 //! Two-step authentication:
 //!
-//! 1. The user runs `bitrouter providers login github-copilot` once, which
+//! 1. The user runs `bro providers login github-copilot` once, which
 //!    drives the OAuth Device Authorization Grant against `github.com` and
 //!    stores a long-lived GitHub user-to-server access token (e.g. `ghu_…`) in
 //!    the [`crate::oauth::credential_store::CredentialStore`].
@@ -133,9 +133,10 @@ impl CopilotAuthApplier {
             .and_then(|c| c.as_oauth().cloned())
             .ok_or_else(|| BitrouterError::Upstream {
                 status: 401,
-                message: "no GitHub Copilot OAuth token — run \
-                          `bitrouter providers login github-copilot`"
-                    .to_string(),
+                message: format!(
+                    "no GitHub Copilot OAuth token — run `{} providers login github-copilot`",
+                    bitrouter_sdk::invocation::name()
+                ),
             })
     }
 
@@ -283,7 +284,7 @@ mod tests {
         let err = applier.apply(req, &copilot_target()).await.unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("bitrouter providers login github-copilot"),
+            msg.contains("bro providers login github-copilot"),
             "expected helpful hint, got: {msg}"
         );
     }

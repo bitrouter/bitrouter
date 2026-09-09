@@ -1,6 +1,6 @@
 //! The `skills_search` action, implemented over the shared skills roots.
 //!
-//! One implementation, two surfaces: `bitrouter skills list` calls
+//! One implementation, two surfaces: `bro skills list` calls
 //! [`InstalledSkills::report`] directly, and the origin MCP server's
 //! `skills_search` tool calls it through the [`SkillsQuery`] port. Both get the
 //! same [`SkillsReport`], so the CLI's `--json` and the tool's structured
@@ -246,7 +246,7 @@ mod tests {
     /// **The phase, asserted end to end.** One disk, three surfaces, run
     /// together:
     ///
-    /// - `bitrouter skills list` (the CLI's own path, via `report`),
+    /// - `bro skills list` (the CLI's own path, via `report`),
     /// - `skills_search` (the MCP tool's path, via the port),
     /// - `skills/list` (the SEP-2640 catalog),
     ///
@@ -292,7 +292,7 @@ mod tests {
             project_root: project.to_path_buf(),
         };
 
-        // The CLI, as `bitrouter skills list` and `bitrouter skills list -g`
+        // The CLI, as `bro skills list` and `bro skills list -g`
         // call it.
         let cli_project = InstalledSkills::new(vec![project_root.clone()]).report();
         let cli_global = InstalledSkills::new(vec![global.clone()]).report();

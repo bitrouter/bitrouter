@@ -248,7 +248,7 @@ impl OtelExporter {
         self.tracer.clone()
     }
 
-    /// Snapshot of what's wired — fed to `bitrouter observe status` via
+    /// Snapshot of what's wired — fed to `bro observe status` via
     /// the daemon control socket. Cheap to call; no allocation beyond the
     /// owned strings.
     pub fn status(&self) -> OtelStatus {
@@ -301,7 +301,7 @@ impl OtelExporter {
 
 /// Serializable snapshot of the OTel exporter's state. Returned by
 /// [`OtelExporter::status`] and surfaced through the daemon control socket
-/// for `bitrouter observe status`. Field names match the YAML / env-var
+/// for `bro observe status`. Field names match the YAML / env-var
 /// vocabulary so the output reads as "this is what the exporter sees."
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OtelStatus {

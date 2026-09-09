@@ -6,7 +6,7 @@
 //! named for what it now is (a root to read) rather than what it used to be (a
 //! target to install into).
 //!
-//! **The one root resolution.** Both the CLI (`bitrouter skills list`, with
+//! **The one root resolution.** Both the CLI (`bro skills list`, with
 //! `-g`) and both MCP surfaces resolve their roots through [`SkillsRoot`]. The
 //! MCP surfaces used to be constructed over `current_dir()` alone, which is why
 //! a user-global skill was reachable from the CLI and invisible to an agent;
@@ -18,7 +18,7 @@
 //!
 //! Each root is its own containment anchor: `format::is_safe_installed_path`
 //! is applied with the root a path was discovered under, never with another
-//! root. A project-scoped caller (`bitrouter skills list` with no `-g`) is
+//! root. A project-scoped caller (`bro skills list` with no `-g`) is
 //! handed only the project root, so the global root cannot become a traversal
 //! surface for it — a global skill is not merely filtered out of that caller's
 //! answer, it is never walked.
@@ -87,7 +87,7 @@ impl SkillsRoot {
         }
     }
 
-    /// The roots the CLI reads for `bitrouter skills list [-g]`.
+    /// The roots the CLI reads for `bro skills list [-g]`.
     ///
     /// `-g` selects the global root *instead of* the project one, which is what
     /// the flag has always meant. Asking for it on a machine with no home

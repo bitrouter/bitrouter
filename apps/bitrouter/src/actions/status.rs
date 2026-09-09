@@ -1,7 +1,7 @@
 //! The `status` action, implemented over the daemon's control socket plus the
 //! local metering database.
 //!
-//! One implementation, two surfaces: `bitrouter status` calls
+//! One implementation, two surfaces: `bro status` calls
 //! [`DaemonStatus::report`] directly, and the origin MCP server's `status` tool
 //! calls it through the [`StatusQuery`] port. Both get the same
 //! [`StatusReport`], so the CLI's `--json` and the tool's structured content
@@ -23,7 +23,7 @@ use crate::metering::store::TimeWindow;
 use crate::paths::ConfigSource;
 
 /// The window `status` reports spend over, and the label it carries in the
-/// report. `bitrouter status --requests` rolls up the same day, so the
+/// report. `bro status --requests` rolls up the same day, so the
 /// agent-facing spend surfaces agree.
 const SPEND_WINDOW: TimeWindow = TimeWindow::Today;
 
@@ -188,7 +188,7 @@ providers:
     }
 
     /// The change's whole point: on a local deployment **both** surfaces fill
-    /// `spend`. `bitrouter status` goes through `report()`; the MCP `status`
+    /// `spend`. `bro status` goes through `report()`; the MCP `status`
     /// tool goes through the `StatusQuery` port. Same struct, same numbers.
     #[tokio::test]
     async fn both_surfaces_report_spend_on_a_local_deployment() {

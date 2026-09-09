@@ -8,7 +8,7 @@ row is out of scope here.
 > **Historical note (2026-08-16):** this plan predates the removal of
 > `status --watch`. Steps that say to leave it untouched describe the state of
 > the implementation when the plan was executed; the current status surface is
-> `bitrouter status --requests`.
+> `bro status --requests`.
 
 Designed to be driven by `/goal`. See §A for the loop protocol and §B for the
 goal conditions to paste.
@@ -230,7 +230,7 @@ TUI; ACP v2.
   - Done when: a new integration test starts a daemon with
     `policy_table.tiers` routing to one provider, reloads with the tier changed
     to another, issues a request, and asserts the **newly** chosen provider.
-  - Verify: `cargo nextest run -p bitrouter reload 2>&1 | tail -20`
+  - Verify: `cargo nextest run -p bro reload 2>&1 | tail -20`
   - Commit: `fix(daemon): rebuild the policy table on reload`
 
 - [x] **2.2 Capture both stderr streams to a session log**
@@ -253,7 +253,7 @@ TUI; ACP v2.
     failure the caller can render. Preserve the existing fail-fast timing.
   - Done when: the pre-ACP failure path returns an error value rather than
     calling `std::process::exit`.
-  - Verify: `cargo nextest run -p bitrouter acp 2>&1 | tail -20`
+  - Verify: `cargo nextest run -p bro acp 2>&1 | tail -20`
   - Commit: `feat(acp): surface launch failures structurally`
 
 - [x] **2.4 Phase 2 gate** — same three commands as 1.7.
@@ -282,7 +282,7 @@ TUI; ACP v2.
     and never put on the down-facing wire.
   - Done when: a test drives a settled turn and asserts a non-null
     `UsageUpdate.cost` reaches the manager.
-  - Verify: `cargo nextest run -p bitrouter acp 2>&1 | tail -20`
+  - Verify: `cargo nextest run -p bro acp 2>&1 | tail -20`
   - Commit: `feat(acp): emit router-measured cost on the wire`
 
 - [x] **3.3 Implement `providers/list` and `providers/set`**
@@ -297,7 +297,7 @@ TUI; ACP v2.
     `ProviderCurrentConfig` is non-secret only.
   - Done when: both methods answer, and no credential value appears in any
     response.
-  - Verify: `cargo nextest run -p bitrouter acp 2>&1 | tail -20`
+  - Verify: `cargo nextest run -p bro acp 2>&1 | tail -20`
   - Commit: `feat(acp): expose routing via providers/list and providers/set`
 
 - [x] **3.4 Protocol conformance tests**
@@ -308,7 +308,7 @@ TUI; ACP v2.
     `UsageUpdate` carries non-null `cost` after a settled turn; the five
     forwarded variants survive round-trip.
   - Done when: all four assertions pass.
-  - Verify: `cargo nextest run -p bitrouter acp 2>&1 | tail -20`
+  - Verify: `cargo nextest run -p bro acp 2>&1 | tail -20`
   - Commit: `test(acp): cover providers, usage, and forwarded updates`
 
 - [x] **3.5 Phase 3 gate** — same three commands as 1.7.
@@ -339,7 +339,7 @@ depends on the TUI existing.
     asserts the session's `UsageUpdate.cost` counts only its own, and that a
     session whose traffic is unattributable reports `daemon_wide` rather than
     silently over-reporting.
-  - Verify: `cargo nextest run -p bitrouter acp 2>&1 | tail -20`
+  - Verify: `cargo nextest run -p bro acp 2>&1 | tail -20`
   - Commit: `fix(acp): scope reported cost to the session`
 
 - [x] **4.2 `providers/set` must actually reroute**
@@ -356,7 +356,7 @@ depends on the TUI existing.
   - Done when: an integration test starts a daemon, issues `providers/set`, and
     asserts a **subsequent request on that launch id** resolves to the new
     provider while a request without it does not.
-  - Verify: `cargo nextest run -p bitrouter providers 2>&1 | tail -20`
+  - Verify: `cargo nextest run -p bro providers 2>&1 | tail -20`
   - Commit: `feat(daemon): launch-scoped route override`
 
 - [x] **4.3 The `bitrouter-tui` crate**
@@ -376,13 +376,13 @@ depends on the TUI existing.
   - Depends on: 2.3, 4.3
   - Files: `apps/bitrouter/src/main.rs`, `apps/bitrouter/src/acp_cli.rs`,
     `apps/bitrouter/Cargo.toml`
-  - Do: add `bitrouter chat <agent>`, reusing `RoutingOptions` via clap
+  - Do: add `bro chat <agent>`, reusing `RoutingOptions` via clap
     `#[command(flatten)]` (§8.1). The verb owns argument parsing and session
     launch; it hands the running ACP session to `bitrouter_tui`. Do not add an
     interactive mode to `spawn`.
-  - Done when: `bitrouter chat --help` lists the shared routing flags and the
+  - Done when: `bro chat --help` lists the shared routing flags and the
     flags have exactly one definition in source.
-  - Verify: `cargo run -p bitrouter -- chat --help 2>&1 | head -25`
+  - Verify: `cargo run -p bro -- chat --help 2>&1 | head -25`
   - Commit: `feat(cli): add the chat verb for ACP sessions`
 
 - [x] **4.5 Inline viewport over the session's own updates**

@@ -264,7 +264,7 @@ impl BitrouterMcp {
         // `Json<RouteReport>` rather than a hand-built `CallToolResult`: that
         // is what makes rmcp derive the tool's `output_schema` from the shared
         // report type, which is the agreement `actions::ACTIONS` asserts
-        // against `bitrouter route --json`.
+        // against `bro route --json`.
         self.routing()?
             .route(input)
             .await
@@ -299,7 +299,7 @@ impl BitrouterMcp {
         // `Json<SkillsReport>` rather than a hand-built `CallToolResult`: that
         // is what makes rmcp derive the tool's `output_schema` from the shared
         // report type, which is the agreement `actions::ACTIONS` asserts
-        // against `bitrouter skills list --json`.
+        // against `bro skills list --json`.
         self.skills()?
             .list()
             .await
@@ -1263,7 +1263,7 @@ mod tests {
 
     /// The drift phase 2 removes, asserted at the tool boundary: a model served
     /// by two providers must reach the client with both. The tool returns the
-    /// shared `ModelsReport`, so this is the same value `bitrouter models`
+    /// shared `ModelsReport`, so this is the same value `bro models`
     /// emits.
     #[tokio::test]
     async fn list_models_carries_the_whole_fallback_chain() {
@@ -1417,7 +1417,7 @@ mod tests {
 
     #[test]
     fn router_profile_is_the_introspection_pair_plus_route_preview() {
-        // What `bitrouter mcp serve --transport stdio --backend local` wires
+        // What `bro mcp serve --transport stdio --backend local` wires
         // (before the skills ports, which every stdio profile adds on top).
         let server = BitrouterMcp::builder()
             .models(Arc::new(StubBackend))

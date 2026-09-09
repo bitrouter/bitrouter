@@ -245,7 +245,7 @@ suite observed for that (agent, runtime) pair:
         as_of: 2026-09-06
 ```
 
-Produce it with `bitrouter agents conformance <runtime>/<harness>`, which
+Produce it with `bro agents conformance <runtime>/<harness>`, which
 prints the block to paste. The suite needs **no provider credentials** — the
 agent is launched with its own routing pointed at an ephemeral loopback gateway
 that records what arrived — so it runs on a pull request. It does spawn the

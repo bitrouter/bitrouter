@@ -1,6 +1,6 @@
 //! Daemon control over a local IPC channel.
 //!
-//! A running `bitrouter serve` listens on a control endpoint alongside the
+//! A running `bro serve` listens on a control endpoint alongside the
 //! HTTP API. The CLI's `stop` / `restart` / `reload` / `status` / `route`
 //! subcommands are thin clients that connect, send one newline-delimited JSON
 //! [`DaemonCommand`], and read one [`DaemonResponse`].
@@ -99,7 +99,7 @@ pub enum DaemonCommand {
     Stop,
     /// Hot-reload the config / routing table. The CLI piggybacks a
     /// snapshot of API-key-style env vars from its own process so a
-    /// `export OPENAI_API_KEY=…; bitrouter reload` propagates the new
+    /// `export OPENAI_API_KEY=…; bro reload` propagates the new
     /// value into the running daemon without requiring a restart.
     /// `env` is `#[serde(default)]` for wire-compat with the
     /// historical unit variant — older clients sending `{"cmd":"reload"}`
@@ -119,7 +119,7 @@ pub enum DaemonCommand {
     ///
     /// Distinct from [`Self::Status`], which reports only the *count* and the
     /// distinct provider set: this is the catalog itself, and it is what lets
-    /// `bitrouter models` and the MCP `list_models` tool answer with the
+    /// `bro models` and the MCP `list_models` tool answer with the
     /// daemon's real view — subscription-backed providers and post-`reload`
     /// state included — instead of a static config projection.
     Models,
@@ -131,7 +131,7 @@ pub enum DaemonCommand {
     /// Report the OTel exporter's current state — what's wired, current
     /// cardinality usage, in-flight span count. Returned as a JSON
     /// snapshot. The wire format is the same `ObserveStatusPayload` the
-    /// CLI pretty-prints for `bitrouter observe status`.
+    /// CLI pretty-prints for `bro observe status`.
     ObserveStatus,
     /// Run one safe, typed administration read against the live daemon.
     ///
@@ -443,7 +443,7 @@ pub fn is_not_reachable(err: &anyhow::Error) -> bool {
 /// The daemon's self-reported readiness snapshot, returned by
 /// [`probe_status`]. A successful probe means the control socket is bound
 /// and the app is assembled (the model count is populated), which is exactly
-/// the signal `bitrouter status` reports.
+/// the signal `bro status` reports.
 #[derive(Debug, Clone)]
 pub struct ReadyInfo {
     /// The daemon's process id.
@@ -1045,8 +1045,9 @@ mod transport {
     pub async fn connect(path: &Path) -> Result<UnixStream> {
         UnixStream::connect(path).await.with_context(|| {
             format!(
-                "connecting to {} — is the daemon running? (`bitrouter start`)",
-                path.display()
+                "connecting to {} — is the daemon running? (`{cli} start`)",
+                path.display(),
+                cli = bitrouter_sdk::invocation::name()
             )
         })
     }
@@ -1158,7 +1159,10 @@ mod transport {
                 }
                 Err(e) => {
                     return Err(e).with_context(|| {
-                        format!("connecting to {name} — is the daemon running? (`bitrouter start`)")
+                        format!(
+                            "connecting to {name} — is the daemon running? (`{cli} start`)",
+                            cli = bitrouter_sdk::invocation::name()
+                        )
                     });
                 }
             }
@@ -1279,7 +1283,7 @@ pub enum DaemonStartOutcome {
     },
 }
 
-/// Spawn `bitrouter serve` as a detached background process writing to
+/// Spawn `bro serve` as a detached background process writing to
 /// `log_path` (append). Returns the child handle and the log's pre-spawn byte
 /// length so the caller can quote only this run's output on early death.
 ///
@@ -1329,7 +1333,12 @@ fn spawn_detached_serve(
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
-    let child = cmd.spawn().context("spawning detached `bitrouter serve`")?;
+    let child = cmd.spawn().with_context(|| {
+        format!(
+            "spawning detached `{} serve`",
+            bitrouter_sdk::invocation::name()
+        )
+    })?;
     Ok((child, log_size_before))
 }
 
@@ -1367,7 +1376,7 @@ pub fn eprint_failure_log(log_path: &Path, content: &str) {
     eprintln!();
 }
 
-/// Launch a detached `bitrouter serve` and poll the control socket until it
+/// Launch a detached `bro serve` and poll the control socket until it
 /// answers `Status`, the process dies, or `timeout` elapses. The daemon keeps
 /// running regardless of the outcome — this only reports what the launcher
 /// observed. `socket` is the control-socket path to poll; pass `None` when it

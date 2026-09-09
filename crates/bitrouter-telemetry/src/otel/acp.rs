@@ -1,4 +1,4 @@
-//! GenAI **agent** spans for the ACP substrate path (`bitrouter acp …`).
+//! GenAI **agent** spans for the ACP substrate path (`bro acp …`).
 //!
 //! Not to be confused with [`bitrouter_sdk::acp`], which is the ACP pipeline itself.
 //! This module only *observes* that path: it lives here, rather than beside

@@ -28,7 +28,7 @@
       "bitrouter_tools": {
         "type": "local",
         "command": [
-          "bitrouter",
+          "bro",
           "mcp",
           "serve"
         ],

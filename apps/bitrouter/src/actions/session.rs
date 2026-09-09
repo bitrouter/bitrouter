@@ -116,8 +116,8 @@ pub struct SessionPorts {
 }
 
 impl SessionPorts {
-    /// The same three constructors `bitrouter status`, `bitrouter models` and
-    /// `bitrouter route` call, with the same arguments.
+    /// The same three constructors `bro status`, `bro models` and
+    /// `bro route` call, with the same arguments.
     pub fn open(source: ConfigSource, socket: PathBuf) -> Self {
         Self {
             status: Arc::new(crate::actions::status::DaemonStatus::new(
@@ -318,7 +318,7 @@ providers:
 
     /// The third surface answers with the second's bytes.
     ///
-    /// `bitrouter status` constructs `DaemonStatus` and calls `report()`;
+    /// `bro status` constructs `DaemonStatus` and calls `report()`;
     /// `/status` goes through `SessionPorts`. This holds `open` to constructing
     /// the action the leaf constructs, from the same source and the same
     /// socket — a mismatch shows up as a different `socket` in the report.
@@ -375,7 +375,7 @@ providers:
         );
     }
 
-    /// `/models` answers with what `bitrouter models --provider` answers,
+    /// `/models` answers with what `bro models --provider` answers,
     /// filter included — the filter is the report's, so both surfaces read
     /// "declared by this provider" the same way.
     #[tokio::test]
@@ -403,7 +403,7 @@ providers:
         assert!(!leaf.models.is_empty(), "the fixture declares one model");
     }
 
-    /// `/preview <model>` answers with what `bitrouter route <model>` answers.
+    /// `/preview <model>` answers with what `bro route <model>` answers.
     #[tokio::test]
     async fn the_preview_surface_answers_with_the_cli_leafs_bytes() {
         let dir = tempfile::tempdir().expect("tempdir");

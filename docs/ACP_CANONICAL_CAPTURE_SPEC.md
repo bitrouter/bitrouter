@@ -88,7 +88,7 @@ cannot be labeled complete local metering.
 
 ## Local operations and deletion
 
-`bitrouter acp recordings list|show|delete` inspects or removes captured content.
+`bro acp recordings list|show|delete` inspects or removes captured content.
 `--agent` selects the configured source and `show`/`delete` take the native ID.
 The command's `--config` selects the database using the same path anchoring as
 the coding entrypoints. JSON includes original payloads and reference IDs;
