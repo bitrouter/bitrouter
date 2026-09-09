@@ -2,25 +2,25 @@
 
 Claude has two deliberate BitRouter facets:
 
-- `bitrouter code claude` drives the built-in `claude-acp` adapter inside
+- `bro code claude` drives the built-in `claude-acp` adapter inside
   BitRouter's full-screen ACP lifecycle UI.
-- `bitrouter claude` launches Claude Code's own native interface with
+- `bro claude` launches Claude Code's own native interface with
   reversible per-process routing overrides.
 
 For local ACP sessions, install Node.js 22+ and `npx`. No `agents:` YAML is
 required. A Claude Code subscription can be adopted with:
 
 ```bash
-bitrouter providers login claude-code
-bitrouter init --yes --harness claude --after exit
+bro providers login claude-code
+bro init --yes --harness claude --after exit
 ```
 
 ## ACP session
 
 ```bash
-bitrouter code claude
-bitrouter run claude "summarize this repo"
-bitrouter acp serve claude
+bro code claude
+bro run claude "summarize this repo"
+bro acp serve claude
 ```
 
 The pinned `@agentclientprotocol/claude-agent-acp@0.75.1` adapter uses a local
@@ -36,8 +36,8 @@ it for one session. No vendor CLI config file is rewritten.
 ## Native interface
 
 ```bash
-bitrouter claude
-bitrouter claude -- -p "summarize this repo"
+bro claude
+bro claude -- -p "summarize this repo"
 ```
 
 The native launcher starts Claude Code with `ANTHROPIC_BASE_URL` pointed at
@@ -51,7 +51,7 @@ authentication. Token precedence is an exported `ANTHROPIC_AUTH_TOKEN`, then
 `skip_auth: true` local default.
 
 Claude sends bare Anthropic model ids such as `claude-sonnet-4-6`; verify their
-effective route with `bitrouter route claude-sonnet-4-6`. Existing Claude Code
+effective route with `bro route claude-sonnet-4-6`. Existing Claude Code
 processes must be restarted before changed environment routing takes effect.
-Inspect routed traffic with `bitrouter requests`; ACP session diagnostics live
+Inspect routed traffic with `bro requests`; ACP session diagnostics live
 under the BitRouter home in `logs/session-*.log`.

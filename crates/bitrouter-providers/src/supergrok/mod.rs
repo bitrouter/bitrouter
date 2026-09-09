@@ -160,7 +160,8 @@ impl SuperGrokAuthApplier {
                 status: 401,
                 message: format!(
                     "no supergrok credential for label '{label}' — \
-                     run `bitrouter providers login supergrok` (imports your Grok CLI session)"
+                     run `{cli} providers login supergrok` (imports your Grok CLI session)",
+                    cli = bitrouter_sdk::invocation::name()
                 ),
             })?;
         let token = stored
@@ -225,8 +226,10 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
         AuthCodeError::OAuthError { error, description } => BitrouterError::Upstream {
             status: 401,
             message: format!(
-                "supergrok OAuth refresh failed ({error}{}). Re-run `bitrouter providers login supergrok`.",
-                description.map(|d| format!(": {d}")).unwrap_or_default()
+                "supergrok OAuth refresh failed ({error}{}). Re-run `{cli} providers login \
+                 supergrok`.",
+                description.map(|d| format!(": {d}")).unwrap_or_default(),
+                cli = bitrouter_sdk::invocation::name()
             ),
         },
         other => BitrouterError::Upstream {
@@ -363,8 +366,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            err.to_string()
-                .contains("bitrouter providers login supergrok"),
+            err.to_string().contains("bro providers login supergrok"),
             "expected helpful hint, got: {err}"
         );
     }

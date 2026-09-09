@@ -141,35 +141,35 @@ BitRouter runs as a local daemon — start it with your own keys or a Cloud sign
 
 ```bash
 export OPENAI_API_KEY=sk-...    # ANTHROPIC_API_KEY / GEMINI_API_KEY also work
-bitrouter start                 # proxy running at http://localhost:4356
+bro start                 # proxy running at http://localhost:4356
 ```
 
 **Or sign in to BitRouter Cloud** — use browser OAuth interactively or store an existing API key in CI:
 
 ```bash
-bitrouter cloud login           # RFC 8628 device flow against api.bitrouter.ai
-bitrouter cloud login --api-key "$BITROUTER_API_KEY"  # non-interactive CI login
-bitrouter start                 # `bitrouter` provider auto-enables once signed in
+bro cloud login           # RFC 8628 device flow against api.bitrouter.ai
+bro cloud login --api-key "$BITROUTER_API_KEY"  # non-interactive CI login
+bro start                 # `bitrouter` provider auto-enables once signed in
 ```
 
 The same credential also drives a [`gh api`](https://cli.github.com/manual/gh_api)-style raw client—no daemon required:
 
 ```bash
-bitrouter cloud api /v1/models
-bitrouter cloud api /v1/chat/completions --input request.json
+bro cloud api /v1/models
+bro cloud api /v1/chat/completions --input request.json
 ```
 
-Point your agent runtime at `http://localhost:4356` and any available provider is live. For advanced routing rules, guardrails, or multi-account failover, scaffold a config with `bitrouter init` (writes `./bitrouter.yaml`).
+Point your agent runtime at `http://localhost:4356` and any available provider is live. For advanced routing rules, guardrails, or multi-account failover, scaffold a config with `bro init` (writes `./bitrouter.yaml`).
 
 ```bash
-bitrouter start / stop / restart        # daemon lifecycle
-bitrouter requests                      # settled requests + spend
-bitrouter route <model>                 # trace how a model name resolves
-bitrouter key sign --user <id>          # mint a scoped brvk_ API key
-bitrouter cloud keys list               # manage API keys
-bitrouter cloud usage                   # inspect spend and tokens
-bitrouter cloud billing balance         # check credits
-bitrouter cloud api /v1/models          # call Cloud APIs directly
+bro start / stop / restart        # daemon lifecycle
+bro requests                      # settled requests + spend
+bro route <model>                 # trace how a model name resolves
+bro key sign --user <id>          # mint a scoped brvk_ API key
+bro cloud keys list               # manage API keys
+bro cloud usage                   # inspect spend and tokens
+bro cloud billing balance         # check credits
+bro cloud api /v1/models          # call Cloud APIs directly
 ```
 
 See [`docs/CLI.md`](docs/CLI.md) for the full command reference, flags, and config resolution.
@@ -194,8 +194,8 @@ from the MCP gateway that proxies configured upstream servers). Control and
 introspection only: completions go to the HTTP API below.
 
 ```bash
-bitrouter mcp serve                    # stdio → local daemon at 127.0.0.1:4356
-bitrouter mcp check                    # check configured upstream MCP servers
+bro mcp serve                    # stdio → local daemon at 127.0.0.1:4356
+bro mcp check                    # check configured upstream MCP servers
 ```
 
 Network-capable hosts connect directly to `/mcp-control` on the daemon's
@@ -237,18 +237,18 @@ actually resolves. Full catalog in [`registry/`](registry/).
 
 ## Harness integrations
 
-Run `bitrouter` to complete first-run setup and choose a default ACP harness.
-After setup, `bitrouter code` is the explicit full-screen home for operations
+Run `bro` to complete first-run setup and choose a default ACP harness.
+After setup, `bro code` is the explicit full-screen home for operations
 and ACP sessions. Codex (`codex-acp`) and Claude (`claude-acp`) are built in;
 no agent YAML is required. A compatible local CLI is discovered automatically
 and used behind its ACP adapter; otherwise the adapter uses its bundled worker.
 
 ```bash
-bitrouter                              # onboarding, then the default ACP TUI
-bitrouter code                         # operations and agent picker
-bitrouter code codex                   # one interactive ACP session
-bitrouter run claude "summarize this repo"  # headless ACP turn
-bitrouter claude                       # Claude Code's native interface
+bro                              # onboarding, then the default ACP TUI
+bro code                         # operations and agent picker
+bro code codex                   # one interactive ACP session
+bro run claude "summarize this repo"  # headless ACP turn
+bro claude                       # Claude Code's native interface
 ```
 
 The built-in adapters require Node.js 22+ and `npx`. BitRouter only launches ACP
@@ -258,8 +258,8 @@ per-process routing overrides. Other API clients can use
 `OPENAI_BASE_URL=http://localhost:4356/v1` or
 `ANTHROPIC_BASE_URL=http://localhost:4356` to send traffic to the daemon.
 
-Headless ACP sub-agents use `bitrouter run`; ACP clients launch
-`bitrouter acp serve <agent>`. The full provider and harness catalog lives in
+Headless ACP sub-agents use `bro run`; ACP clients launch
+`bro acp serve <agent>`. The full provider and harness catalog lives in
 [github.com/bitrouter/bitrouter/registry](https://github.com/bitrouter/bitrouter/tree/main/registry).
 
 ## Features

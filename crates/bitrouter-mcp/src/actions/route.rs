@@ -1,7 +1,7 @@
 //! The `route` action: *how would BitRouter route this, and what would it
 //! cost?*
 //!
-//! One report type, shared by `bitrouter route` and the MCP `route_preview`
+//! One report type, shared by `bro route` and the MCP `route_preview`
 //! tool, so the CLI's `--json` and the tool's structured content are the same
 //! bytes. Read-only by construction: it replays routing without sending
 //! anything upstream, and the resolved targets' secrets (api keys) never enter
@@ -15,7 +15,7 @@ use bitrouter_sdk::language_model::types::ReasoningEffort;
 use crate::error::ToolError;
 
 /// Arguments to the `route` action (the `route_preview` tool's parameters, and
-/// what `bitrouter route` builds from its own flags).
+/// what `bro route` builds from its own flags).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct RouteInput {
     /// The model selector to resolve (as you'd send to the daemon's

@@ -47,7 +47,7 @@ pub struct CodeStatus {
 impl Default for CodeStatus {
     fn default() -> Self {
         Self {
-            title: "bitrouter code".to_string(),
+            title: "bro code".to_string(),
             agent: "choose an agent".to_string(),
             route: "unreported".to_string(),
             activity: "choosing agent".to_string(),
@@ -2553,7 +2553,7 @@ impl CodeView {
     pub fn open() -> io::Result<Self> {
         if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
             return Err(io::Error::other(
-                "bitrouter code requires an interactive stdin and stdout",
+                "bro code requires an interactive stdin and stdout",
             ));
         }
         crate::lifecycle::install_panic_restore();

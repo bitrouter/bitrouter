@@ -5,6 +5,7 @@ use crate::actions::administration::{
 };
 use crate::output::CliReport;
 use crate::output::human::{Health, Human, Table};
+use bitrouter_sdk::invocation;
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
@@ -66,9 +67,15 @@ impl CliReport for AgentsReport {
 impl CliReport for ObserveReport {
     fn render(&self, human: &mut Human<'_>) -> std::io::Result<()> {
         if !self.daemon_reachable {
-            human.status_block(Health::Down, "bitrouter observe — daemon stopped")?;
+            human.status_block(
+                Health::Down,
+                &format!("{} observe — daemon stopped", invocation::name()),
+            )?;
             human.field("compiled", yes_no(self.compiled_in))?;
-            return human.note("Run `bitrouter start` to inspect the live telemetry exporter.");
+            return human.note(&format!(
+                "Run `{} start` to inspect the live telemetry exporter.",
+                invocation::name()
+            ));
         }
         let (health, headline) = if self.exporter_wired {
             (Health::Up, "OTel exporter is wired")
@@ -80,7 +87,10 @@ impl CliReport for ObserveReport {
         } else {
             (Health::Down, "OTel feature not compiled in")
         };
-        human.status_block(health, &format!("bitrouter observe — {headline}"))?;
+        human.status_block(
+            health,
+            &format!("{} observe — {headline}", invocation::name()),
+        )?;
         human.field("compiled", yes_no(self.compiled_in))?;
         human.field("wired", yes_no(self.exporter_wired))?;
         if let Some(sampler) = &self.sampler {

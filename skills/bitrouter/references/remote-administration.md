@@ -37,12 +37,12 @@ It is not a personal usage scope. Inference `server.skip_auth` has no effect.
 Set the selected token in the client's environment, then save its variable name:
 
 ```console
-bitrouter context add workstation \
+bro context add workstation \
   --endpoint https://router.example/control/v1 \
   --token-env WORKSTATION_CONTROL_TOKEN
-bitrouter --context workstation status
-bitrouter --context workstation models
-bitrouter --context workstation code
+bro --context workstation status
+bro --context workstation models
+bro --context workstation code
 ```
 
 Plain HTTP is accepted only for a loopback URL, such as an SSH port-forward.
@@ -59,13 +59,13 @@ start/stop/restart continue to require host-local execution.
 ## Inspect the host
 
 ```console
-bitrouter --context workstation providers list
-bitrouter --context workstation observe status
-bitrouter --context workstation agents list
-bitrouter --context workstation policy status
-bitrouter --context workstation policy show production --view active
-bitrouter --context workstation policy status --view disk
-bitrouter --context workstation requests --limit 50 --provider openai \
+bro --context workstation providers list
+bro --context workstation observe status
+bro --context workstation agents list
+bro --context workstation policy status
+bro --context workstation policy show production --view active
+bro --context workstation policy status --view disk
+bro --context workstation requests --limit 50 --provider openai \
   --since 2026-09-07T00:00:00Z --until 2026-09-08T00:00:00Z
 ```
 
@@ -86,8 +86,8 @@ Prepare configuration using the host's existing deployment workflow, inspect
 its disk policy, then use a credential with `control:reload`:
 
 ```console
-bitrouter --context workstation reload
-bitrouter --context workstation operations show REQUEST_UUID --instance BOOT_UUID
+bro --context workstation reload
+bro --context workstation operations show REQUEST_UUID --instance BOOT_UUID
 ```
 
 Reload reads only server-owned files and does not forward client environment

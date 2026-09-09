@@ -24,8 +24,8 @@ skills/bitrouter/
     └── harness-*.md
 ```
 
-A CLI-only activation runbook: probe, install, drive `bitrouter init --yes`,
-resolve credentials, wire the harness with `bitrouter launch`, verify a routed
+A CLI-only activation runbook: probe, install, drive `bro init --yes`,
+resolve credentials, wire the harness with `bro launch`, verify a routed
 request. Deeper CLI surface, cloud onboarding, provider config, migration off
 other gateways, diagnostics, and durable per-harness wiring live in `references/`.
 
@@ -66,10 +66,10 @@ CLI, a plugin marketplace, or copy the directory.
 ```bash
 # Generic skills CLI — discovers skills/ automatically. Always pass --skill:
 # without it the CLI installs all three (or prompts, on an interactive TTY).
-npx skills add bitrouter/bitrouter --skill bitrouter
-npx skills add bitrouter/bitrouter --skill run-bitrouter-benchmark
-npx skills add bitrouter/bitrouter --skill evaluating-bitrouter-routes
-npx skills add bitrouter/bitrouter --list          # see what the repo exposes
+npx skills add bitrouter/bro --skill bitrouter
+npx skills add bitrouter/bro --skill run-bitrouter-benchmark
+npx skills add bitrouter/bro --skill evaluating-bitrouter-routes
+npx skills add bitrouter/bro --list          # see what the repo exposes
 
 # Claude Code / Codex — add this repo as a plugin marketplace, which ships
 # skills/ verbatim (see .claude-plugin/ and .agents/plugins/).
@@ -80,9 +80,9 @@ cp -r skills/run-bitrouter-benchmark      ~/.claude/skills/
 cp -r skills/evaluating-bitrouter-routes  ~/.claude/skills/
 ```
 
-Once installed, `bitrouter mcp serve --backend skills` serves them to any MCP
+Once installed, `bro mcp serve --backend skills` serves them to any MCP
 client over SEP-2640 (`skills/list`, `skills/get`, `resources/read`), and
-`bitrouter skills list` shows what is installed.
+`bro skills list` shows what is installed.
 
 ## Editing conventions
 

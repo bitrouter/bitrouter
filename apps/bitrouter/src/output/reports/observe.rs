@@ -1,4 +1,4 @@
-//! Report for `bitrouter observe status`.
+//! Report for `bro observe status`.
 
 use serde::Serialize;
 
@@ -6,7 +6,7 @@ use crate::daemon::ObserveStatusPayload;
 use crate::output::CliReport;
 use crate::output::human::{Health, Human};
 
-/// Result of `bitrouter observe status` — the OTel exporter snapshot plus
+/// Result of `bro observe status` — the OTel exporter snapshot plus
 /// whether the daemon was reachable (so "feature off" is distinguishable from
 /// "daemon down"). The snapshot fields are flattened to the top level.
 #[derive(Serialize)]
@@ -21,10 +21,19 @@ impl CliReport for ObserveStatusReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         let s = &self.snapshot;
         if !self.daemon_reachable {
-            h.status_block(Health::Down, "bitrouter observe — daemon stopped")?;
+            h.status_block(
+                Health::Down,
+                &format!(
+                    "{} observe — daemon stopped",
+                    bitrouter_sdk::invocation::name()
+                ),
+            )?;
             h.field("compiled", if s.compiled_in { "yes" } else { "no" })?;
             h.field("socket", &self.socket)?;
-            return h.note("Run `bitrouter start` to launch the daemon, then re-run this command.");
+            return h.note(&format!(
+                "Run `{} start` to launch the daemon, then re-run this command.",
+                bitrouter_sdk::invocation::name()
+            ));
         }
         let (health, headline) = if s.exporter_wired {
             (Health::Up, "OTel exporter is wired")
@@ -36,7 +45,10 @@ impl CliReport for ObserveStatusReport {
         } else {
             (Health::Down, "OTel feature not compiled in")
         };
-        h.status_block(health, &format!("bitrouter observe — {headline}"))?;
+        h.status_block(
+            health,
+            &format!("{} observe — {headline}", bitrouter_sdk::invocation::name()),
+        )?;
         h.field("compiled", if s.compiled_in { "yes" } else { "no" })?;
         h.field("wired", if s.exporter_wired { "yes" } else { "no" })?;
         if let Some(endpoint) = &s.endpoint {

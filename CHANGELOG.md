@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Breaking (CLI): the invocation is now `bro`.** `bitrouter <cmd>` becomes
+  `bro <cmd>`. Only the invocation changed — the product, crate, npm package,
+  Homebrew tap, `bitrouter.yaml`, `~/.bitrouter`, `BITROUTER_*` environment
+  variables, `brk_` key prefix, and telemetry identifiers keep their names.
+  Shell, PowerShell, npm, and Homebrew installers additionally create a
+  deprecated `bitrouter` alias; invoking it prints one migration note on
+  stderr while preserving structured stdout. The alias is installer-only,
+  release archives contain `bro`, and the alias is removed in 1.0.0.
+
 ## [1.0.0-alpha.30](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.29...v1.0.0-alpha.30)
 
 

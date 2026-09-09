@@ -122,7 +122,7 @@ claims below correct the brief that commissioned this spec; those are marked
 
 | Claim | Evidence |
 |---|---|
-| The CLI has **29 top-level commands** | [`main.rs:128`](../apps/bitrouter/src/main.rs:128) `enum Command`, confirmed against `bitrouter --help` |
+| The CLI has **29 top-level commands** | [`main.rs:128`](../apps/bitrouter/src/main.rs:128) `enum Command`, confirmed against `bro --help` |
 | …and **103 invocable leaves** | walked from `Cli::command()`: `cloud` alone contributes 40, `policy` 13, `eval` 8, `workflow-state` 6 |
 | The interactive surface is **two** slash commands | [`machine.rs:375`](../crates/bitrouter-tui/src/machine.rs:375) — `/commands`, and `/route` gated on `state.routable` |
 | Both are hardcoded string compares in `submit()`, not a table | same site; there is no command registry in the TUI at all |
@@ -310,7 +310,7 @@ sets**, and the third one is where the interactive layer earns its existence:
 Set C is not a parity shortfall. `route/set` leases a route for **a live ACP
 session**, and the CLI has no live session to name — the same reason psql's `\e`
 and `\r` have no flags (they edit a query buffer that only exists in a session)
-and k9s's `:xray` has no `kubectl` twin. Inventing `bitrouter acp route set
+and k9s's `:xray` has no `kubectl` twin. Inventing `bro acp route set
 --session <id>` to close the "gap" would be new surface nothing asked for.
 
 **[Corroborated post-research.]** All four coding-agent harnesses surveyed in
@@ -346,7 +346,7 @@ same gate, and it admits set C honestly instead of by exception. See
 [D7](#d7--does-the-route-picker-need-a-cli-leaf).
 
 **Why P1 is stricter than the stated goal, not weaker.** "Every CLI command has a
-TUI command" says nothing about whether the two *agree*. `bitrouter route` and
+TUI command" says nothing about whether the two *agree*. `bro route` and
 the `/route` picker are both present today and disagree: the picker offers model
 ids the daemon's `route_chain` will refuse
 ([`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) §1, phase 5). Under P1 that is a violated
@@ -450,7 +450,7 @@ repeatedly, and the record is unusually explicit.
 | `ACP_TUI_SPEC.md` §9 | the extraction trigger | Extract the crate on the first PR that *"adds a session list, or a second pane, or **a verb with no CLI equivalent**"*, or that *"**renders daemon-wide data in the TUI**"* |
 | `ACP_TUI_PLAN.md` §C.1 → `crates/bitrouter-tui` | shipped | The extraction happened. The trigger is now a compiler check |
 | `crates/bitrouter-tui/src/lib.rs` | module doc | *"The previous terminal UI died of accretion. It lived inside the application, so it could reach any function in it, and it grew verbs with no command-line equivalent until nobody could say what it was. That is still the failure this boundary prevents: what it stops is **reachability, not vocabulary**."* |
-| `ACP_CONTROLLER_SPEC.md` §16.3 | 2026-09-01 | *"`bitrouter chat <harness>` remains on the existing single-session engine… TUI/controller convergence is separate product work."* |
+| `ACP_CONTROLLER_SPEC.md` §16.3 | 2026-09-01 | *"`bro chat <harness>` remains on the existing single-session engine… TUI/controller convergence is separate product work."* |
 
 **What full parity would and would not reverse.** Precision matters here, because
 three of these rules are compatible with the stated goal and two are not.
@@ -535,7 +535,7 @@ sets, and the third one is where the interactive layer earns its existence.**
 BitRouter already has a set-C member and this spec initially mis-modelled it:
 `route/set` and `route/reset` are session-scoped writes over a lease that *has
 no headless subject*, because the CLI has no live ACP session to name. That is
-not a parity shortfall to be fixed by inventing `bitrouter acp route set
+not a parity shortfall to be fixed by inventing `bro acp route set
 --session <id>`; it is the normal shape. §3 and [D7](#d7--does-the-route-picker-need-a-cli-leaf)
 are written against this finding.
 
@@ -1617,7 +1617,7 @@ worktree at `0a9537b5`.
 
 | Claim | Evidence |
 |---|---|
-| `bitrouter mcp serve` already has a **remote transport**, and it is not ACP | [`main.rs:818`](../apps/bitrouter/src/main.rs:818) `enum McpTransport { Stdio, Http }` — *"Streamable HTTP, mounted at `/mcp-control`"*, `--bind` default `127.0.0.1:4357` ([`main.rs:774`](../apps/bitrouter/src/main.rs:774)) |
+| `bro mcp serve` already has a **remote transport**, and it is not ACP | [`main.rs:818`](../apps/bitrouter/src/main.rs:818) `enum McpTransport { Stdio, Http }` — *"Streamable HTTP, mounted at `/mcp-control`"*, `--bind` default `127.0.0.1:4357` ([`main.rs:774`](../apps/bitrouter/src/main.rs:774)) |
 | It is genuinely multi-tenant, not loopback-only by accident | [`multitenant_http.rs:58`](../crates/bitrouter-mcp/tests/multitenant_http.rs:58) `two_callers_forward_distinct_bearers` — two clients, two bearers, each forwarded to the upstream separately |
 | An unauthenticated bind is **forced** to loopback | [`lib.rs:142`](../crates/bitrouter-mcp/src/lib.rs:142) → [`server.rs:786`](../crates/bitrouter-mcp/src/server.rs:786) `ensure_loopback_bind` |
 | The two transports serve **two profiles of one table**, not two implementations | [`lib.rs:160`](../crates/bitrouter-mcp/src/lib.rs:160) `stdio_profile` and [`server.rs:880`](../crates/bitrouter-mcp/src/server.rs:880) `http_profile`, both assembling the same `BitrouterMcp::builder()` from the same ports |
@@ -1715,7 +1715,7 @@ property that makes a mis-press recoverable, which is exactly what §14's `stop`
 guardrail was reasoning about. It also has the pleasant property of being
 *checkable from the table* rather than from judgement.
 
-**What the rule is not.** It is not "is this useful?" — `bitrouter status
+**What the rule is not.** It is not "is this useful?" — `bro status
 --requests` is extremely useful mid-session and fails R4 (it is a table of every
 caller's requests, which wants a pane). Utility is the reason to *reopen* the
 rule, not an exception to it.
@@ -1895,7 +1895,7 @@ no new machinery.
 round trip to talk to yourself, for a report the same process already computed,
 in service of a consumer that does not exist. The only thing the wire buys over
 option C is that an `acp serve` manager — a GUI — would get `status` and `models`
-for free. But a GUI is a separate process that can already run `bitrouter status
+for free. But a GUI is a separate process that can already run `bro status
 --json` or call the MCP `status` tool. **There is no consumer gap to close**, and
 building for one is CLAUDE.md rule 4.
 
@@ -2162,7 +2162,7 @@ prediction in this codebase's spec history that came true on schedule.
 brief's framing — "~5 rows against 29 CLI commands" — reads the ratio as
 evidence the table is under-built. It is not. `ACTIONS_SPEC.md` §5 already
 decided the direction: *"Not asserted: that every CLI leaf has a row.
-`bitrouter policy verify` needs no MCP tool and should not need a table entry to
+`bro policy verify` needs no MCP tool and should not need a table entry to
 exist."* The table's size is a measurement of how many questions have more than
 one asker, and that number is genuinely small.
 
@@ -2374,7 +2374,7 @@ survives translation, the journal stores it, the TUI renders it, the NDJSON stre
 already forwards it verbatim — and there is no way to *ask* for it, no obligation
 on the agent to send it, and no completion condition.
 
-- **`bitrouter acp commands --agent <id>`.** Spawn, `initialize`, `session/new`,
+- **`bro acp commands --agent <id>`.** Spawn, `initialize`, `session/new`,
   collect `available_commands_update` until quiescent or `--wait` elapses
   (default short — this is a settle, not a poll), print a `CommandsReport`, tear
   the session down. No prompt is sent, so nothing is billed and no turn runs.
@@ -2409,7 +2409,7 @@ does, for free, and a second follower would be two implementations of one thing.
 **What this does not do, and it is worth saying because the framing invites the
 opposite reading.** It does not let a headless caller *invoke* an agent command.
 Invocation needs no new surface at all — ACP's only channel is `session/prompt`,
-so `bitrouter acp prompt --agent x "/plan ship it"` already works and always did.
+so `bro acp prompt --agent x "/plan ship it"` already works and always did.
 The gap being closed is discovery, not dispatch.
 
 ### Phase 1 — `/route reset`, and the write model
@@ -2619,7 +2619,7 @@ says it is built before the router actions are.
 
 ### D3 — `reload`
 
-`bitrouter reload` fails R1 (daemon-wide) and R5 (no inverse), but it is the one
+`bro reload` fails R1 (daemon-wide) and R5 (no inverse), but it is the one
 excluded command with a genuine session story: you edited `bitrouter.yaml` and
 want the next turn to use it. It also has a known bug —
 `ACP_TUI_SPEC.md` §6 records that `reload` does not rebuild the policy table, so
@@ -2662,7 +2662,7 @@ commands are different things, and a user debugging "why can't the agent see my
 skill" is exactly the case `ACTIONS_SPEC.md` phase 4 exists to serve.
 
 **Recommendation: exclude for now, on R1** — the question is about the disk, not
-the session, and `bitrouter skills list` answers it in another terminal without
+the session, and `bro skills list` answers it in another terminal without
 disturbing anything. Weak reasoning, and the counter-argument is decent; flagged
 rather than buried.
 
@@ -2675,7 +2675,7 @@ violated in the tree, silently.
 - **(a) Weaken to P2** — "every TUI command is an inventoried action", with the
   CLI-leaf requirement dropped for actions whose subject is a live ACP session,
   which the CLI structurally cannot have.
-- **(b) Add the leaves** — `bitrouter acp route set --session <id>`.
+- **(b) Add the leaves** — `bro acp route set --session <id>`.
 - **(c) Keep §14 strict and argue the picker is not a "command"** — it is a
   key-driven modal, and modals were never covered.
 
@@ -2720,16 +2720,16 @@ reason not to.
 `acp serve` and `acp prompt`) already carries `--model`, documented as pinning
 the harness's model, and it accepts the provider-qualified `provider:model` form
 that Strategy 1 of `resolve_clean_route_chain` routes directly. With
-`bitrouter models` to list and `bitrouter route <model>` to preview, **launch-time
+`bro models` to list and `bro route <model>` to preview, **launch-time
 selection by model and provider is shipped today.** What (b) adds is *mid-session*
 change — the headless twin of `/route`.
 
-**A prerequisite this document missed.** `bitrouter acp route set --session <id>`
+**A prerequisite this document missed.** `bro acp route set --session <id>`
 needs session ids to be discoverable, and `AcpCmd` has exactly two variants,
-`Serve` and `Prompt`. There is no `bitrouter acp sessions`. So (b) is really two
+`Serve` and `Prompt`. There is no `bro acp sessions`. So (b) is really two
 pieces, and the order matters:
 
-1. **Session discovery** — either a `bitrouter acp sessions` leaf, or scoping the
+1. **Session discovery** — either a `bro acp sessions` leaf, or scoping the
    setter to the session the invoking process owns, which needs no listing and no
    new surface. The second is smaller and covers the agent case; the first is
    what a human at a second terminal needs.
@@ -2754,9 +2754,9 @@ exactly the kind of thing that produces a mis-press.
 - **(a) Overload**, as phased.
 - **(b) Split** — `/route` picks, `/preview <model>` previews.
 - **(c) Split the other way** — `/route <model>` *sets* directly (matching
-  `bitrouter route`'s argument shape being a model), `/routes` lists.
+  `bro route`'s argument shape being a model), `/routes` lists.
 
-**Recommendation: (b).** The CLI's `bitrouter route <model>` is a read, so under
+**Recommendation: (b).** The CLI's `bro route <model>` is a read, so under
 (a) or (c) the same words mean different things on the two surfaces — which is
 the drift this whole document is about. (b) costs one more command name and keeps
 every name meaning one thing.
@@ -2938,7 +2938,7 @@ Concretely, `machine.rs:375`'s `if line.trim() == "/commands"` becomes a table
 lookup, which is what guard **G1** was already asking for, and the headless
 `--command <name>` entry point that OpenCode's `run.ts` exposes becomes
 *available* rather than absent. It is not thereby *scheduled*: nothing today asks
-for `bitrouter chat --command status`, and building it before something does is
+for `bro chat --command status`, and building it before something does is
 CLAUDE.md rule 4. What the decision fixes is the direction — when a headless
 caller wants a session verb, it goes through the table, and no second dispatcher
 is written for it.
@@ -3034,7 +3034,7 @@ maintains. **ACP has no network transport**
 ([§6.11.2](#6112-acp-has-no-network-transport-and-that-is-the-fact-that-decides-d13),
 finding 18): stdio is the only transport it defines; Streamable HTTP is *"in
 discussion, draft proposal in progress"* in both v1 and v2; the HTTP/WebSocket RFD
-is targeted at v1 but has not landed even in the draft channel. `bitrouter acp
+is targeted at v1 but has not landed even in the draft channel. `bro acp
 serve` is stdio in its help text.
 
 So B-over-HTTP does not exist to be chosen. Choosing it would mean either
@@ -3051,7 +3051,7 @@ compensating standardness.** The requirement makes B worse, not better.
 Yes, and BitRouter has already done it once for the same table — but the answer
 is better than "a trait with two impls", and the difference matters.
 
-`bitrouter mcp serve --transport http` already serves `ACTIONS` rows over
+`bro mcp serve --transport http` already serves `ACTIONS` rows over
 streamable HTTP at `POST /mcp-control`, multi-tenant, with per-caller bearer
 forwarding proved by an integration test
 ([§6.11.3](#6113-bitrouter-has-already-answered-the-same-actions-but-remote-once-for-actions),
@@ -3328,9 +3328,9 @@ one meaning, on both surfaces. Reasons:
   into `/commands`, so there is no second list left for `/list` to be. Shipping
   both would be two commands over one report, which P1 forbids.
 
-**Where `list` is the right word: as a leaf under a namespace.** `bitrouter acp
-commands` reads as a noun and matches the TUI's `/commands`; `bitrouter acp
-list-commands` would be the same thing with a redundant verb, and `bitrouter acp
+**Where `list` is the right word: as a leaf under a namespace.** `bro acp
+commands` reads as a noun and matches the TUI's `/commands`; `bro acp
+list-commands` would be the same thing with a redundant verb, and `bro acp
 list` reintroduces the ambiguity one level down. Same noun on both surfaces is
 what P1 asks for.
 
@@ -3348,7 +3348,7 @@ does not exist (CLAUDE.md rule 4).
 - **Anything #786 removed.** Fleets, sub-agents, worktrees, review queues,
   multi-pane splits, session lists. Single-session remains the line
   (`ACP_TUI_SPEC.md` §2), and #749 remains the charter.
-- **`bitrouter launch`.** The harness owns that UX; parity there would mean
+- **`bro launch`.** The harness owns that UX; parity there would mean
   injecting BitRouter commands into someone else's TUI.
 - **The `chat`/controller convergence** deferred by `ACP_CONTROLLER_SPEC.md`
   §16.3. This spec assumes today's one-shot engine and stays correct under the

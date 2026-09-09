@@ -1,4 +1,4 @@
-//! `bitrouter update` — in-place self-updater built on cargo-dist's
+//! `bro update` — in-place self-updater built on cargo-dist's
 //! `axoupdater`. Decision logic (install-method detection, release channel,
 //! nudge-cache TTL) lives in small pure functions so it can be unit-tested
 //! without touching the network or replacing the running binary.
@@ -7,10 +7,11 @@ use crate::output::reports::update::UpdateReport;
 use crate::{daemon, style};
 use anyhow::Result;
 use axoupdater::{AxoUpdater, UpdateRequest};
+use bitrouter_sdk::invocation;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// How the running `bitrouter` binary was installed, used to pick the right
+/// How the running `bro` binary was installed, used to pick the right
 /// upgrade path when there is no cargo-dist receipt to self-update from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InstallMethod {
@@ -115,7 +116,7 @@ fn choose_spec(tag: Option<&str>, stable: bool) -> VersionSpec {
     }
 }
 
-/// Options parsed from the `bitrouter update` flags.
+/// Options parsed from the `bro update` flags.
 #[derive(Debug)]
 pub struct UpdateOptions {
     pub check: bool,
@@ -132,7 +133,7 @@ pub struct UpdateOptions {
 /// [`Output`]: crate::output::Output
 #[derive(Debug)]
 pub struct RunOutcome {
-    /// The single result value for `bitrouter update`, rendered to stdout.
+    /// The single result value for `bro update`, rendered to stdout.
     pub report: UpdateReport,
     /// A running daemon needs restarting to pick up the new binary. When true,
     /// `report.daemon` is already set to `restarted` on the optimistic
@@ -266,7 +267,7 @@ fn confirm(current: &str, target: &str) -> Result<bool> {
     use std::io::Write;
     let p = style::Palette::for_stderr();
     eprint!(
-        "Update bitrouter from {bold}{current}{reset} to {target}? [y/N] ",
+        "Update BitRouter from {bold}{current}{reset} to {target}? [y/N] ",
         bold = p.bold,
         reset = p.reset,
     );
@@ -322,7 +323,7 @@ const NUDGE_DISABLE_ENV: &str = "BITROUTER_NO_UPDATE_CHECK";
 /// Nudge network check cadence: once per day.
 const NUDGE_TTL_SECS: i64 = 24 * 60 * 60;
 
-/// Best-effort "update available" line for `bitrouter status`. Never returns an
+/// Best-effort "update available" line for `bro status`. Never returns an
 /// error and never blocks meaningfully: it respects the opt-out env var, checks
 /// the network at most once per `NUDGE_TTL_SECS` (cached under `home`), and
 /// swallows every failure.
@@ -364,12 +365,13 @@ pub async fn maybe_nudge(home: &Path, p: &style::Palette) {
 
     if let Some(latest) = latest.filter(|l| is_newer(l, current_version())) {
         // Diagnostic, not the command result — goes to stderr so it never
-        // pollutes a command's JSON stdout (e.g. `bitrouter status`).
+        // pollutes a command's JSON stdout (e.g. `bro status`).
         eprintln!();
         eprintln!(
-            "  {dim}↑ {latest} available — run `bitrouter update`{reset}",
+            "  {dim}↑ {latest} available — run `{cli} update`{reset}",
             dim = p.dim,
             reset = p.reset,
+            cli = invocation::name(),
         );
     }
 }
@@ -413,7 +415,7 @@ mod tests {
 
     #[test]
     fn detects_homebrew_from_cellar_path() {
-        let exe = Path::new("/opt/homebrew/Cellar/bitrouter/1.0.0/bin/bitrouter");
+        let exe = Path::new("/opt/homebrew/Cellar/bitrouter/1.0.0/bin/bro");
         assert_eq!(detect_install_method(exe, None), InstallMethod::Homebrew);
     }
 
@@ -422,13 +424,13 @@ mod tests {
         // A cargo-dist receipt is global to the user, not to an executable.
         // `run` must therefore delegate based on this path before it attempts
         // to load any receipt.
-        let exe = Path::new("/opt/homebrew/Cellar/bitrouter/1.0.0/bin/bitrouter");
+        let exe = Path::new("/opt/homebrew/Cellar/bitrouter/1.0.0/bin/bro");
         assert!(!should_load_receipt(detect_install_method(exe, None)));
     }
 
     #[test]
     fn detects_cargo_from_cargo_home_bin() {
-        let exe = Path::new("/home/me/.cargo/bin/bitrouter");
+        let exe = Path::new("/home/me/.cargo/bin/bro");
         let cargo_home = Path::new("/home/me/.cargo");
         assert_eq!(
             detect_install_method(exe, Some(cargo_home)),
@@ -438,8 +440,7 @@ mod tests {
 
     #[test]
     fn detects_npm_from_bin_real_path() {
-        let exe =
-            Path::new("/usr/local/lib/node_modules/bitrouter/node_modules/.bin_real/bitrouter");
+        let exe = Path::new("/usr/local/lib/node_modules/bitrouter/node_modules/.bin_real/bro");
         assert_eq!(detect_install_method(exe, None), InstallMethod::Npm);
     }
 
@@ -447,14 +448,13 @@ mod tests {
     fn npm_under_homebrew_node_is_npm_not_homebrew() {
         // A global npm install under a Homebrew-managed Node contains
         // `/homebrew/`; npm detection must win over the Homebrew heuristic.
-        let exe =
-            Path::new("/opt/homebrew/lib/node_modules/bitrouter/node_modules/.bin_real/bitrouter");
+        let exe = Path::new("/opt/homebrew/lib/node_modules/bitrouter/node_modules/.bin_real/bro");
         assert_eq!(detect_install_method(exe, None), InstallMethod::Npm);
     }
 
     #[test]
     fn unknown_when_no_signal_matches() {
-        let exe = Path::new("/usr/local/bin/bitrouter");
+        let exe = Path::new("/usr/local/bin/bro");
         assert_eq!(detect_install_method(exe, None), InstallMethod::Unknown);
     }
 

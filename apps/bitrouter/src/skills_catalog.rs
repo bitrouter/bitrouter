@@ -54,7 +54,7 @@ struct CatalogEntry {
 /// Serves the skills installed under a set of roots.
 ///
 /// The roots come from [`SkillsRoot`] — the same resolution the CLI uses — so
-/// an MCP client sees the user-global skills `bitrouter skills list -g` shows,
+/// an MCP client sees the user-global skills `bro skills list -g` shows,
 /// which it could not before.
 pub struct InstalledSkillCatalog {
     roots: Vec<SkillsRoot>,
@@ -77,7 +77,7 @@ impl InstalledSkillCatalog {
     /// is how a shadowed skill goes unnoticed.
     ///
     /// **Only valid skills are published**, and validity is
-    /// [`DiscoveredSkill::problem`] — the same judgement `bitrouter skills list`
+    /// [`DiscoveredSkill::problem`] — the same judgement `bro skills list`
     /// and `skills_search` render as `valid: false` plus a reason. The SEP
     /// leaves no room for an invalid entry here: it requires the final URI
     /// segment to equal `frontmatter.name` and the entry's `frontmatter` to
@@ -97,7 +97,8 @@ impl InstalledSkillCatalog {
                         path = %found.skill_md.display(),
                         %problem,
                         "skills catalog: skill cannot be published; \
-                         `bitrouter skills list` shows it marked",
+                         `{} skills list` shows it marked",
+                        bitrouter_sdk::invocation::name(),
                     );
                     continue;
                 }

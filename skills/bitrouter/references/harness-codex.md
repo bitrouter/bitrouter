@@ -2,25 +2,25 @@
 
 Codex has two deliberate BitRouter facets:
 
-- `bitrouter code codex` drives the built-in `codex-acp` adapter inside
+- `bro code codex` drives the built-in `codex-acp` adapter inside
   BitRouter's full-screen ACP lifecycle UI.
-- `bitrouter codex` launches Codex's own native interface with reversible
+- `bro codex` launches Codex's own native interface with reversible
   one-shot configuration overrides.
 
 For local ACP sessions, install Node.js 22+ and `npx`. No `agents:` YAML is
 required. A ChatGPT Codex subscription can be imported with:
 
 ```bash
-bitrouter providers login openai-codex --import-existing
-bitrouter init --yes --harness codex --after exit
+bro providers login openai-codex --import-existing
+bro init --yes --harness codex --after exit
 ```
 
 ## ACP session
 
 ```bash
-bitrouter code codex
-bitrouter run codex "summarize this repo"
-bitrouter acp serve codex
+bro code codex
+bro run codex "summarize this repo"
+bro acp serve codex
 ```
 
 The pinned `@agentclientprotocol/codex-acp@1.10.0` adapter uses a local Codex
@@ -43,8 +43,8 @@ for one session. No vendor CLI config file is rewritten.
 ## Native interface
 
 ```bash
-bitrouter codex
-bitrouter codex -- --model openai/gpt-5-codex
+bro codex
+bro codex -- --model openai/gpt-5-codex
 ```
 
 The native launcher supplies a `bitrouter` model provider for
@@ -55,5 +55,5 @@ when set, otherwise the launcher supplies the placeholder accepted by the
 and a missing local daemon is auto-started unless `--no-start` is set.
 
 Existing Codex processes must be restarted before changed provider routing
-takes effect. Inspect routed traffic with `bitrouter requests`; ACP session
+takes effect. Inspect routed traffic with `bro requests`; ACP session
 diagnostics live under the BitRouter home in `logs/session-*.log`.

@@ -1,4 +1,4 @@
-//! Reports for `config validate`. (`bitrouter init` now emits the onboarding
+//! Reports for `config validate`. (`bro init` now emits the onboarding
 //! result envelope via `crate::onboarding` rather than a dedicated report.)
 
 use serde::Serialize;
@@ -12,7 +12,7 @@ pub struct UnsetVar {
     pub unset_env: String,
 }
 
-/// Result of `bitrouter config validate`. `valid: false` carries `errors` and
+/// Result of `bro config validate`. `valid: false` carries `errors` and
 /// exits non-zero (CI-safe); `valid: true` carries the catalog counts, any
 /// unset-var `warnings`, and any `ignored_config`.
 ///

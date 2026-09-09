@@ -200,7 +200,7 @@ impl DiscoveredSkill {
     ///
     /// **The one validation policy.** Every surface asks this function and none
     /// re-derives it: the SEP-2640 catalog skips a skill with a problem (it has
-    /// no conforming entry to publish), while `bitrouter skills list` and
+    /// no conforming entry to publish), while `bro skills list` and
     /// `skills_search` show it marked with the string this returns.
     ///
     /// The rules are the Agent Skills format's, which SEP-2640 delegates to

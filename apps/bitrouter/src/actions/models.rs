@@ -1,14 +1,14 @@
 //! The `list_models` action, implemented over the daemon's live routing table
 //! with a static-config fallback.
 //!
-//! One implementation, two surfaces: `bitrouter models` calls
+//! One implementation, two surfaces: `bro models` calls
 //! [`RoutableModels::report`] directly, and the origin MCP server's
 //! `list_models` tool calls it through the [`ModelsQuery`] port. Both get the
 //! same [`ModelsReport`], so the CLI's `--json` and the tool's structured
 //! content cannot drift.
 //!
 //! **Daemon-first, config as the fallback** — the order `route_preview` and
-//! `bitrouter route` already use, and for the same reason. The live routing
+//! `bro route` already use, and for the same reason. The live routing
 //! table is what a request will actually be routed against: it reflects
 //! `reload`s, the daemon's own start-up resolution, and a config that has not
 //! been edited since — a static projection is what the file says *now*. (The

@@ -172,6 +172,6 @@ mod tests {
         let err = ModelsQuery::list_models(&backend, &CallerAuth::default())
             .await
             .expect_err("an unreachable daemon must not read as an empty catalog");
-        assert!(err.to_string().contains("bitrouter start"), "{err}");
+        assert!(err.to_string().contains("bro start"), "{err}");
     }
 }

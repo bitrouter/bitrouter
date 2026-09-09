@@ -1,7 +1,7 @@
 //! The `route` action, implemented over the live daemon with a config
 //! fallback.
 //!
-//! One implementation, two surfaces: `bitrouter route <model>` calls
+//! One implementation, two surfaces: `bro route <model>` calls
 //! [`RouteAction::report`] directly, and the origin MCP server's
 //! `route_preview` tool calls it through the [`RouteQuery`] port. Both get the
 //! same [`RouteReport`], so the CLI's `--json` and the tool's structured
@@ -127,7 +127,7 @@ impl RouteAction {
 
     /// Resolve from this machine's config, policy table included.
     ///
-    /// The policy table is the half `bitrouter route` used to skip, which is
+    /// The policy table is the half `bro route` used to skip, which is
     /// how it could name a model the daemon would never pick. It runs here for
     /// both surfaces: the effective model is what the table selects, and the
     /// chain is resolved for *that*, not for what was asked.
@@ -351,7 +351,7 @@ policy_table:
 "#;
 
     /// The whole point of the phase: both surfaces answer with the same bytes.
-    /// `bitrouter route` goes through `report()`; the MCP `route_preview` tool
+    /// `bro route` goes through `report()`; the MCP `route_preview` tool
     /// goes through the `RouteQuery` port.
     #[tokio::test]
     async fn both_surfaces_produce_the_same_report() {
@@ -379,7 +379,7 @@ policy_table:
         assert_eq!(cli.provider_chain[0].service_id, "demo-model");
     }
 
-    /// The disagreement this phase resolves: `bitrouter route` used to skip the
+    /// The disagreement this phase resolves: `bro route` used to skip the
     /// policy table, so it named the requested model while the daemon would
     /// have run another one. Both surfaces now run it, and both say so.
     #[tokio::test]

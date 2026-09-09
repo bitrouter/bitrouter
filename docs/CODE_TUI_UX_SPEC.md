@@ -8,7 +8,7 @@ Supersedes the rendering decision in PR #900's conversation-first Code spec.
 
 ## 1. Decision and review boundary
 
-`bitrouter code` is a coding conversation, not a router dashboard. Its permanent
+`bro code` is a coding conversation, not a router dashboard. Its permanent
 surface is a transcript in the terminal's native scrollback, a docked composer,
 and compact session status. It has no global tabs, sidebar, home page, or
 permanent operations panel.
@@ -94,7 +94,7 @@ them.
 
 ### 3.1 Goals
 
-1. Make conversation the only persistent destination in `bitrouter code`.
+1. Make conversation the only persistent destination in `bro code`.
 2. Preserve the user's ordinary terminal history and native scroll controls.
 3. Make every temporary action return to the same draft, application focus, and
    detached-view location; native scrollback position remains terminal-owned.
@@ -656,7 +656,7 @@ update `skills/bitrouter/` and the agent-plugin manifests in the same change.
 
 | ID | Required evidence |
 | --- | --- |
-| A1 | Starting `bitrouter code` leaves the terminal on the normal buffer and preserves native scrollback. |
+| A1 | Starting `bro code` leaves the terminal on the normal buffer and preserves native scrollback. |
 | A2 | The ordinary Code UI contains no global `Page` navigation, tabs, sidebar, or Home screen. |
 | A3 | Submitted user, assistant, tool, diff, and completion entries remain correctly ordered in the retained journal; the owned live tail is patchable, while immutable native history is never falsely rewritten or duplicated. |
 | A4 | Opening and dismissing palette, picker, permission, and queue surfaces restores exact draft bytes, grapheme cursor, and application focus; no test claims control of the terminal's native scroll offset. |

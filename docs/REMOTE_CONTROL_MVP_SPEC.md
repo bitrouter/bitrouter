@@ -16,7 +16,7 @@ authenticated HTTP. It does **not** carry ACP sessions over the network.
 
 The proxy and every ACP agent stay together on the server machine. A client on
 another machine can inspect that BitRouter instance with the headless CLI or
-the interactive TUI. Remote agent work uses SSH (`ssh -t host bitrouter tui
+the interactive TUI. Remote agent work uses SSH (`ssh -t host bro tui
 <agent>`) until the separate ACP transport proposal is stable enough to
 implement.
 
@@ -79,13 +79,13 @@ config contents, or its control-socket path. There is no mutation endpoint.
 Remote selection is orthogonal to commands. The target is a named context:
 
 ```console
-bitrouter context add workstation \
+bro context add workstation \
   --endpoint https://router.example/control/v1 \
   --token-env WORKSTATION_BITROUTER_TOKEN
-bitrouter --context workstation status
-bitrouter --context workstation models
-bitrouter --context workstation route openai/gpt-5
-bitrouter --context workstation tui
+bro --context workstation status
+bro --context workstation models
+bro --context workstation route openai/gpt-5
+bro --context workstation tui
 ```
 
 The local context continues to use the Unix socket, local config, and local
@@ -120,7 +120,7 @@ side effect.
    status/models/route/requests, and server tests.
 2. HTTP action client plus explicit endpoint targeting.
 3. Named contexts with credential references and no-local-fallback tests.
-4. General `bitrouter tui` home/dashboard backed by the same action client.
+4. General `bro tui` home/dashboard backed by the same action client.
 5. Packaging, tunnel/reverse-proxy examples, compatibility tests, and threat
    review.
 

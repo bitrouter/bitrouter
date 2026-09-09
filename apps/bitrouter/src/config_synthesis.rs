@@ -381,7 +381,7 @@ mod tests {
         McpServer {
             name: "bitrouter_tools".to_string(),
             transport: McpTransport::Stdio {
-                command: "bitrouter".to_string(),
+                command: "bro".to_string(),
                 args: vec!["mcp".to_string(), "serve".to_string()],
             },
         }

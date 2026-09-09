@@ -117,7 +117,7 @@ Measured in this worktree at `f4da66f3`, not inferred from the issue.
 | MCP `status` is a `GET /v1/models` in disguise | [`local.rs:131`](../crates/bitrouter-mcp/src/backend/local.rs:131) |
 | CLI `status` is a control-socket probe, and a stopped daemon is exit 0 | [`main.rs:3240`](../apps/bitrouter/src/main.rs:3240) → [`StatusReport::stopped`](../apps/bitrouter/src/output/reports/daemon.rs) |
 | The two status payloads share exactly one field (`listen`), and it means different things | `{listen, models, providers}` vs `{running, pid, listen, models, socket}`; MCP's `listen` is the *client's* `--local-url`, not what the daemon reports |
-| `route_preview` config fallback runs the policy table; `bitrouter route` does not | [`routing_preview.rs:131`](../apps/bitrouter/src/routing_preview.rs:131) vs [`commands.rs:215`](../apps/bitrouter/src/commands.rs:215) |
+| `route_preview` config fallback runs the policy table; `bro route` does not | [`routing_preview.rs:131`](../apps/bitrouter/src/routing_preview.rs:131) vs [`commands.rs:215`](../apps/bitrouter/src/commands.rs:215) |
 | …and their report keys differ | `requested_model` / `provider_chain[].api_protocol` vs `model` / `chain[].protocol` |
 | `route_preview` snapshots config **once, at `mcp serve` start** | [`RoutingPreview::new`](../apps/bitrouter/src/routing_preview.rs:47) is called during `McpAction::Serve` wiring ([`main.rs:2260`](../apps/bitrouter/src/main.rs:2260)); a `bitrouter.yaml` edit is invisible to a long-lived server that the CLI would pick up |
 | Three skills discovery rules over two roots | `discover_all_skills` walks `root`, `root/skills`, `root/.claude/skills` ([`format.rs:137`](../apps/bitrouter/src/skills/format.rs:137)); `list_installed` reads only `<root>/.claude/skills` ([`root.rs:39`](../apps/bitrouter/src/skills/root.rs:39)); `skills/list` adds dir-name == frontmatter-name + format-bounds validation ([`skills_catalog.rs:63`](../apps/bitrouter/src/skills_catalog.rs:63)) |
@@ -182,7 +182,7 @@ than one surface.
                                 │ implements
 ┌───────────────────────────────▼─────────────────────────────────────────────┐
 │  apps/bitrouter/src/actions/status.rs   ← the one implementation            │
-│  apps/bitrouter/src/main.rs  `bitrouter status` → output.emit(&report)      │
+│  apps/bitrouter/src/main.rs  `bro status` → output.emit(&report)      │
 │  impl CliReport for StatusReport         ← human rendering, app-side        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -273,7 +273,7 @@ The asserted containments are:
   subcommands; a renamed leaf fails the test.
 - **Every row's `mcp_tool`, where present, advertises the row's schema.**
   `tool.output_schema == Some(Arc::new((row.output_schema)()))`.
-- **Not asserted:** that every CLI leaf has a row. `bitrouter policy verify`
+- **Not asserted:** that every CLI leaf has a row. `bro policy verify`
   needs no MCP tool and should not need a table entry to exist.
 
 The wired-builder requirement is real work: `CAPABILITIES` registers routers
@@ -295,7 +295,7 @@ home moved. The HTTP-profile assertion (invariant 2) stays crate-side in
 
 Each phase is independently shippable, ends green, and fixes user-visible
 behavior. The issue's "first PR (fixes, no framework)" is honored where it is
-actually framework-free — but *"`route_preview` and `bitrouter route` share one
+actually framework-free — but *"`route_preview` and `bro route` share one
 report type"* **is** the framework, so it moves to phase 3.
 
 ### Phase 0 — free fixes, no types moved
@@ -310,7 +310,7 @@ report type"* **is** the framework, so it moves to phase 3.
     surfaced on `StatusInfo::Cloud`) rather than dead code.
 - Fix [`README.md:95`](../crates/bitrouter-mcp/README.md:95): point at
   `docs/CLI.md`'s new origin-server section, not a file that never existed.
-- Add a `bitrouter mcp serve` section to `docs/CLI.md`: transports, backends,
+- Add a `bro mcp serve` section to `docs/CLI.md`: transports, backends,
   the tool table, and which profile carries which tools.
 - Update `skills/bitrouter/SKILL.md` / `references/` in the same change (the
   CLAUDE.md lockstep rule), since the tool table is agent-facing.
@@ -346,7 +346,7 @@ consequences it did not predict:
   surface invariant 5 forbids. `DaemonResponse::Status` was extended with
   `providers` (`#[serde(default)]`, so the control-socket wire stays compatible),
   derived from the `ModelInfo { id, providers }` list the daemon already walks to
-  count models. `bitrouter status` gains a real provider list as a side effect.
+  count models. `bro status` gains a real provider list as a side effect.
 - **The HTTP profile needed a way to keep `status`.**
   `serve_http_on(Arc<dyn Backend>, …)` is pinned by `multitenant_http.rs`, so
   nothing outside the backend can reach the builder there.
@@ -392,7 +392,7 @@ consequences it did not predict:
   (built-in defaults → `discover_models` → `list_models`), so **MCP gains
   standalone operation**: `list_models` stops requiring a running daemon, which
   is the difference an agent notices first.
-- Shared `ModelsReport { models: Vec<ModelInfo> }`; `bitrouter models --provider`
+- Shared `ModelsReport { models: Vec<ModelInfo> }`; `bro models --provider`
   becomes a filter on the same report, and the MCP tool grows the same optional
   filter argument.
 
@@ -412,16 +412,16 @@ decision:
   which that daemon would refuse. Measured on a two-provider config with a
   `claude-code` credential in the store: config-only listed 2 models, the live
   table 10. So the implementation is daemon-first with a config fallback, the
-  order `route_preview` and `bitrouter route` already use, and the fallback is
+  order `route_preview` and `bro route` already use, and the fallback is
   what delivers the standalone win the phase was named for. The daemon path is a
   new control-socket verb (`DaemonCommand::Models` →
   `DaemonResponse::Models { models: Vec<ModelInfo> }`), returning whole the list
   `Status` already walks to produce its count.
-  - Consequence the phase text did not anticipate: **`bitrouter models` becomes
+  - Consequence the phase text did not anticipate: **`bro models` becomes
     daemon-aware too.** One implementation means one behaviour, and the CLI leaf
     gains the subscription models it used to drop. The daemon is the one serving
     that leaf's config (the socket resolves from the same `--config`), so
-    `bitrouter models -c other.yaml` still answers about `other.yaml`.
+    `bro models -c other.yaml` still answers about `other.yaml`.
   - Config resolution happens **per call**, not at `mcp serve` start, so the
     stale-snapshot bug phase 3 has to fix for `route_preview` is not reproduced
     here.
@@ -449,7 +449,7 @@ decision:
   router will accept" versus "what this config would accept" is exactly the
   distinction an agent deciding whether it may route needs. `resolved_via:
   ModelsSource::{Live, Config}` carries it, mirroring `route_preview`'s field of
-  the same name. **This changes `bitrouter models --json`'s shape** — additively:
+  the same name. **This changes `bro models --json`'s shape** — additively:
   `models[]` and its entries are untouched, so a consumer reading models keeps
   working, but the object gains a key. Worth stating because it is an
   agent-readable surface.
@@ -485,14 +485,14 @@ One action, `route`, with input `{ model, prompt: Option<String> }` and one
 decisions, not just plumbing:
 
 - **Policy.** Both surfaces run the policy table in the config fallback. Today
-  only `route_preview` does, which means `bitrouter route` can name a model the
+  only `route_preview` does, which means `bro route` can name a model the
   daemon would never pick. The report carries `requested_model`,
   `effective_model`, `effective_effort`, and `policy_decision`, and `resolved_via`
   distinguishes `daemon` (policy applied upstream, no static decision to show)
   from `config` / `zero-config`.
 - **Key names.** The action keeps `route_preview`'s richer vocabulary
   (`provider_chain[].api_protocol`, `estimated_cost`), because it is the superset
-  and the one an agent reads. `bitrouter route --json` changes shape; that is a
+  and the one an agent reads. `bro route --json` changes shape; that is a
   breaking CLI change and belongs in the changelog.
 - **Config freshness.** The adapter resolves config **per call** instead of
   snapshotting at `mcp serve` start, closing the stale-preview bug. `--config`
@@ -534,7 +534,7 @@ and two deletions it did not mention:
 - **The CLI needed `--prompt`.** The shared input is `{ model, prompt }`, but
   §6 said nothing about how the CLI expresses the second half — and without it
   the two surfaces still answer different questions, because the policy table
-  keys on the agent-loop step the *prompt* implies. `bitrouter route` gains
+  keys on the agent-loop step the *prompt* implies. `bro route` gains
   `--prompt <text>`; it is additive, so it is not part of the D1 break.
 - **`--config` was never about a new flag.** "`--config` stops being a CLI-only
   capability" reads like `mcp serve --config <path>`; what it means, and what
@@ -558,7 +558,7 @@ and two deletions it did not mention:
   the right answer to it.
 
 One thing the phase deliberately did **not** unify: `commands::resolve_route`
-survives, because `bitrouter spawn`'s Codex preflight
+survives, because `bro spawn`'s Codex preflight
 (`apps/bitrouter/src/spawn.rs`) still calls it. That check asks a different
 question — "does this model resolve at all" — and pulling it into the `route`
 action would make a preflight depend on the policy table. Noted rather than
@@ -578,7 +578,7 @@ the CLI and invisible to the agent, and the reverse for `./skills/foo`.
 - **One validation policy.** SEP-2640's dir-name == frontmatter-name rule is the
   strict one. Rather than silently applying it to one surface, the shared
   `SkillRow` carries `valid: bool` + `problem: Option<String>`, `skills/list`
-  filters to valid entries (the SEP requires it), and both `bitrouter skills list`
+  filters to valid entries (the SEP requires it), and both `bro skills list`
   and `skills_search` show the invalid ones *marked*. An agent then learns why a
   skill it can see on disk is unusable — today it just isn't there.
 - **`path` is disambiguated** into `dir` and `skill_md`. Both surfaces get both.
@@ -588,7 +588,7 @@ the CLI and invisible to the agent, and the reverse for `./skills/foo`.
   `--backend skills` stdio-only holds identically for stdio `mcp serve`, so an
   `mcp install`-ed client finally sees skills. `--backend skills` survives as the
   narrow gateway subprocess profile.
-- `skills_get` keeps `cli_leaf: None`. Adding `bitrouter skills show` is not
+- `skills_get` keeps `cli_leaf: None`. Adding `bro skills show` is not
   needed by this work and would be dead surface.
 
 **[corrected post-implementation]** Four corrections, plus the SEP work the
@@ -601,7 +601,7 @@ phase text predates.
   and leaves no way to exercise the global root in a test without mutating that
   environment for every other test in the process — so the phase's own
   acceptance criterion ("a user-global skill appears identically in
-  `bitrouter skills list` and `skills_search`") was unassertable. `Global` now
+  `bro skills list` and `skills_search`") was unassertable. `Global` now
   *holds* the home directory, resolved once at `SkillsRoot::global()`. The two
   scopes are `cli_scope(-g)` and `mcp_scope`, and the second is literally the
   first's two cases together, which is what makes "MCP gains user-global skills
@@ -727,7 +727,7 @@ What that resolves, and what it does not:
   is generally before its report type is shared. The backlog is empty, not
   abolished.
 - **`cli_leaf: None` still means something.** `skills_get` is also a
-  one-surface row (§6 phase 4 explains why adding `bitrouter skills show` for
+  one-surface row (§6 phase 4 explains why adding `bro skills show` for
   the table's sake would be dead surface), so
   `every_actions_row_resolves_to_a_cli_leaf` still has a row to skip and still
   asserts the four leaves that do resolve.
@@ -777,7 +777,7 @@ superseded: `complete` was **removed**, not deferred and not port-ified, and
 D1, D3 and D4 carry recommendations and await sign-off. **D2 is decided** — see
 its own note.
 
-### D1 — does `bitrouter route --json` get to change shape?
+### D1 — does `bro route --json` get to change shape?
 
 > **Decided (human sign-off, 2026-09-04): option (a) — break it, changelog it.**
 > No longer a recommendation. The reasoning below stood; it was chosen, not
@@ -829,7 +829,7 @@ question it was named for twice over:
   BitRouter *does* know that deployment's spend — `metering::store`'s
   `spend_summary(TimeWindow)` is the same read `LocalCostFooter` already made.
   "Am I OK to spend?" had a real local answer the report simply did not carry.
-- **The two surfaces disagreed.** `bitrouter status` never populated `credits`;
+- **The two surfaces disagreed.** `bro status` never populated `credits`;
   only the MCP tool's cloud profile did. That is exactly the drift this spec
   exists to stop, and it slipped past the guard test — the guard pins the
   *schema* both surfaces advertise, not which fields each one fills. Worth
@@ -938,7 +938,7 @@ routing-table generation only if it shows up.**
   same over a config where the policy table selects a different effective model
   than the one requested, which is the case the two surfaces used to disagree
   on.)*
-- `bitrouter models` and `list_models` return the same models with the same
+- `bro models` and `list_models` return the same models with the same
   provider lists, with no daemon running. *(Met at phase 2:
   `actions::models::tests::both_surfaces_keep_every_provider_of_a_model` runs
   both surfaces against a config where one model has two providers and asserts
@@ -946,7 +946,7 @@ routing-table generation only if it shows up.**
 - `status` over MCP with the daemon stopped returns `running: false` and is not
   a tool error.
 - A skill with malformed frontmatter, a `./skills/foo` skill, and a user-global
-  skill each appear identically in `bitrouter skills list` and `skills_search`.
+  skill each appear identically in `bro skills list` and `skills_search`.
   *(Met at phase 4: `actions::skills::tests::one_disk_three_surfaces` builds all
   three on one disk and runs the CLI path, the port, and the SEP catalog
   together, asserting every CLI row appears byte-identically in the tool's

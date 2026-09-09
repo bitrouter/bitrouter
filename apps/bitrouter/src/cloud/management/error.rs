@@ -19,24 +19,28 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum Error {
     /// No credentials on disk — the user has not yet run
-    /// `bitrouter cloud login`.
-    #[error("not signed in — run `bitrouter cloud login` first")]
+    /// `bro cloud login`.
+    #[error(
+        "not signed in — run `{} cloud login` first",
+        bitrouter_sdk::invocation::name()
+    )]
     NotSignedIn,
 
     /// The stored credential carries no namespace, but the requested
     /// operation is namespace-scoped. The CLI's device-flow tokens are
     /// always namespace-baked, so in practice this means the credential
-    /// file predates namespace-scoping — re-running `bitrouter cloud
+    /// file predates namespace-scoping — re-running `bro cloud
     /// login` mints a namespace-bound token.
     #[error(
-        "credential is not scoped to a namespace — run `bitrouter cloud login` to get a \
-         namespace-scoped credential"
+        "credential is not scoped to a namespace — run `{} cloud login` to get a \
+         namespace-scoped credential",
+        bitrouter_sdk::invocation::name()
     )]
     NoNamespace,
 
     /// OAuth token resolution or refresh failed (e.g. refresh token
     /// expired, AS metadata unreachable). The user should re-run
-    /// `bitrouter cloud login`.
+    /// `bro cloud login`.
     #[error("failed to resolve a BitRouter Cloud access token: {0:#}")]
     Auth(#[source] anyhow::Error),
 
@@ -110,7 +114,7 @@ pub enum Error {
 impl Error {
     /// When this is a 403 carrying a `missing required scope: <name>`
     /// description, return the scope name. Used by the CLI to print
-    /// the `bitrouter cloud login --scope …` hint.
+    /// the `bro cloud login --scope …` hint.
     pub fn missing_scope(&self) -> Option<&str> {
         match self {
             Error::Forbidden { missing_scope, .. } => missing_scope.as_deref(),

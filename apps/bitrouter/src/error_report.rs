@@ -24,6 +24,8 @@
 
 use std::io::Write;
 
+use bitrouter_sdk::invocation;
+
 use crate::style::Palette;
 
 /// Print an anyhow error chain to stderr in the documented CLI shape.
@@ -158,19 +160,19 @@ pub(crate) fn hint_for(root: &str) -> Option<String> {
     }
     // `-c <missing>` user error.
     if root.contains("does not exist (passed via -c)") {
-        return Some(
+        return Some(format!(
             "Drop `-c <path>` to use the default resolution order, or run\n\
-             `bitrouter init -c <path>` to write a starter config there."
-                .into(),
-        );
+             `{cli} init -c <path>` to write a starter config there.",
+            cli = invocation::name()
+        ));
     }
     // BITROUTER_HOME set but file missing.
     if root.contains("BITROUTER_HOME is set to") {
-        return Some(
+        return Some(format!(
             "Unset `BITROUTER_HOME`, or run\n\
-             `bitrouter init -c $BITROUTER_HOME/bitrouter.yaml` to scaffold one."
-                .into(),
-        );
+             `{cli} init -c $BITROUTER_HOME/bitrouter.yaml` to scaffold one.",
+            cli = invocation::name()
+        ));
     }
     // The database wouldn't open. Match the specific phrasing from
     // `BitrouterError::internal(format!("connecting to database {url}: …"))`

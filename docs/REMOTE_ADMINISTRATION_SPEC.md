@@ -266,7 +266,7 @@ and upstream errors against this boundary. No general file or log read endpoint.
 
 ### Invocation and admission
 
-`bitrouter --context workstation reload` means: reload the server-owned source
+`bro --context workstation reload` means: reload the server-owned source
 as it exists when the server prepares the operation. It neither uploads files
 nor forwards the client's environment. It does not claim to apply a previously
 reviewed immutable candidate. Policy publication and a frozen dry-run/apply
@@ -342,7 +342,7 @@ client wait is 30 seconds; on expiry emit `running` plus the request/instance ID
 and exit nonzero. A proposed recovery command is:
 
 ```console
-bitrouter --context workstation operations show <request-id> --instance <boot-id>
+bro --context workstation operations show <request-id> --instance <boot-id>
 ```
 
 This resource command requires an explicit remote context and queries the

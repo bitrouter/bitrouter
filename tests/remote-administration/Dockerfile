@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/src/target \
     cargo build --locked --package bitrouter \
-    && install -D -m 0755 /src/target/debug/bitrouter /out/bitrouter \
+    && install -D -m 0755 /src/target/debug/bro /out/bro \
     && /bin/bash -o pipefail -c 'cargo test --locked --package bitrouter --lib --no-run --message-format=json | python3 tests/remote-administration/select-test-binary.py /out/bitrouter-lib-tests'
 
 FROM debian:bookworm-slim AS runtime
@@ -34,7 +34,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN install -d -m 0755 /tls
 
-COPY --from=build /out/bitrouter /usr/local/bin/bitrouter
+COPY --from=build /out/bro /usr/local/bin/bro
 COPY --from=build /out/bitrouter-lib-tests /usr/local/bin/bitrouter-lib-tests
 COPY tests/remote-administration/mock-openai.py /usr/local/libexec/mock-openai.py
 COPY tests/remote-administration/server-entrypoint.sh /usr/local/bin/remote-admin-server

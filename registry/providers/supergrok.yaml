@@ -5,7 +5,7 @@
 #
 # The `supergrok` handler is implemented in bitrouter_providers::supergrok: it
 # adopts the Grok CLI's OIDC session (`~/.grok/auth.json`) via
-# `bitrouter providers login supergrok`, sets `Authorization: Bearer <jwt>`
+# `bro providers login supergrok`, sets `Authorization: Bearer <jwt>`
 # against `api.x.ai/v1`, and refreshes via the public OIDC client below. The
 # subscription grant is distinct from the metered `xai` API-key provider.
 name: supergrok

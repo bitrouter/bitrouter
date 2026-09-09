@@ -1,6 +1,6 @@
 //! The `status` action: *is BitRouter up, and am I OK to spend?*
 //!
-//! One report type, shared by `bitrouter status` and the MCP `status` tool, so
+//! One report type, shared by `bro status` and the MCP `status` tool, so
 //! the CLI's `--json` and the tool's structured content are the same bytes.
 //! The crate owns the type and the port; the implementation lives app-side
 //! (over the daemon's control socket, plus the local metering database) or,

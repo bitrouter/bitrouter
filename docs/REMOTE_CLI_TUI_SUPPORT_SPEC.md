@@ -127,14 +127,14 @@ Non-goals for v1:
 Proposed commands (none of these new flags exist at the baseline):
 
 ```sh
-bitrouter context add workstation --endpoint https://router.example.net \
+bro context add workstation --endpoint https://router.example.net \
   --token-env BITROUTER_WORKSTATION_CONTROL_TOKEN --workspace bitrouter
-bitrouter --context workstation status --human
-bitrouter --context workstation models
-bitrouter --context workstation route bitrouter/auto
-bitrouter --context workstation spawn claude-acp -p 'review the changes'
-bitrouter --context workstation chat claude-acp
-bitrouter --endpoint https://router.example.net --control-token-env BR_CONTROL_TOKEN \
+bro --context workstation status --human
+bro --context workstation models
+bro --context workstation route bitrouter/auto
+bro --context workstation spawn claude-acp -p 'review the changes'
+bro --context workstation chat claude-acp
+bro --endpoint https://router.example.net --control-token-env BR_CONTROL_TOKEN \
   chat codex-acp --workspace bitrouter
 ```
 
@@ -192,7 +192,7 @@ keeps the draft, and shows `Reconnecting…`; success restores the same session.
 
 ```text
 Computer A                                Computer B
-CLI output / TUI renderer                 bitrouter serve
+CLI output / TUI renderer                 bro serve
     |                                          |
     +-- shared action ports -- HTTPS ----------+-- remote control API
     |                                          |      |
@@ -219,7 +219,7 @@ Add an app-owned optional control listener, configured separately from inference
 Recommended v1 deployment: loopback `127.0.0.1:4358` behind an operator-managed
 TLS reverse proxy on B; both listener and hostname are configurable, and `4358`
 is a **proposed** default. Keep `4356` and existing MCP binds unchanged.
-`bitrouter serve` supervises this listener alongside inference and the local
+`bro serve` supervises this listener alongside inference and the local
 control socket. It does not start a second daemon or install a service.
 
 Native control TLS is deferred. The v1 listener refuses non-loopback addresses;
@@ -595,7 +595,7 @@ inference keys (`brvk_*`, cloud API keys, or `skip_auth`) never authorize
 management. A control token never goes in the harness environment, endpoint
 plan, ACP metadata, model request, trace, or diagnostic output.
 
-Propose local-only `bitrouter control token create|list|revoke` commands. Create
+Propose local-only `bro control token create|list|revoke` commands. Create
 uses OS cryptographic randomness (at least 256 bits), writes the bearer only to
 an explicit owner-only output file, and returns non-secret credential metadata.
 Server storage keeps a digest, credential ID, principal ID, expiry, scopes, and

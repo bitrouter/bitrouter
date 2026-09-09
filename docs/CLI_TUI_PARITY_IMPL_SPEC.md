@@ -547,8 +547,8 @@ pub struct SessionPorts {
 }
 
 impl SessionPorts {
-    /// The same three constructors `bitrouter status`, `bitrouter models` and
-    /// `bitrouter route` call (`main.rs:3363`, `:3510`, `:3462`), with the
+    /// The same three constructors `bro status`, `bro models` and
+    /// `bro route` call (`main.rs:3363`, `:3510`, `:3462`), with the
     /// same arguments. A1 holds this function to those three.
     pub fn open(source: ConfigSource, socket: PathBuf) -> Self {
         Self {
@@ -744,8 +744,8 @@ pub chat: ChatConfig,
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChatConfig {
-    /// Prompt-expansion commands. `/name args` in `bitrouter chat`, or
-    /// `bitrouter acp prompt "/name args"`, sends `prompt` with `$ARGUMENTS`
+    /// Prompt-expansion commands. `/name args` in `bro chat`, or
+    /// `bro acp prompt "/name args"`, sends `prompt` with `$ARGUMENTS`
     /// replaced by `args`. There is deliberately no key that runs anything.
     #[serde(default)]
     pub commands: Vec<PromptCommandConfig>,
@@ -1210,7 +1210,7 @@ produces them yet, and a variant with no producer is dead.
 ### Phase 1 — `SessionPorts`, proved on `/status`
 
 Ships: `/status` in the interactive and piped `chat`, rendering the same lines
-`bitrouter status --human` renders with the palette off.
+`bro status --human` renders with the palette off.
 
 | File | Change |
 |---|---|
@@ -1220,11 +1220,11 @@ Ships: `/status` in the interactive and piped `chat`, rendering the same lines
 | `apps/bitrouter/src/acp_cli.rs` | `SessionPorts::open(source.clone(), crate::daemon::socket_path_for(source, &config))` beside `:1295`; passed to `run` and `chat_plain` |
 | `apps/bitrouter/src/chat/session.rs` | `ports: &SessionPorts` parameter on both loops; the `Effect::Action` arm and `plain_lines` ([§5](#5-rendering)); `chat_plain`'s `Action` arm writes `render_to_vec` bytes to stdout |
 | `apps/bitrouter/src/chat/mod.rs` | **G4, G5** — six strings appended to `forbidden` |
-| `docs/CLI.md`, `skills/bitrouter/references/cli.md` | `/status` row; a sentence that its output is `bitrouter status --human`'s |
+| `docs/CLI.md`, `skills/bitrouter/references/cli.md` | `/status` row; a sentence that its output is `bro status --human`'s |
 
 **Done when:** `/status` with the daemon up shows the running block; with the
 daemon down shows `running: false` as a notice, not an error; `echo /status |
-bitrouter chat <agent>` prints the same block to stdout; the bytes of the
+bro chat <agent>` prints the same block to stdout; the bytes of the
 notice equal `Output::new(Format::Human).render_to_vec(&report)` for the same
 report (assert in a driver test with a stub `SessionPorts`—the stub is the one
 place a second `impl StatusQuery` is legitimate); A1, G4, G5 pass; the chat
@@ -1236,7 +1236,7 @@ default is (a), and G4 is the enforcement. See [§8](#8-open-decisions--what-eac
 ### Phase 2 — `/models [provider]` and `/preview <model>`
 
 Ships: the two remaining reads. `preview` is D8's option (b) as the default —
-`/route` keeps meaning the picker, `/preview` means `bitrouter route`'s
+`/route` keeps meaning the picker, `/preview` means `bro route`'s
 read — so every name means one thing on both surfaces.
 
 | File | Change |
@@ -1245,8 +1245,8 @@ read — so every name means one thing on both surfaces.
 | `apps/bitrouter/src/actions/session.rs` | `run`'s `"list_models"` and `"route"` arms ([§3.3](#33-sessionports--appsbitroutersrcactionssessionrs-new-phase-1)); `summary_for` arms; **A1** extended to both |
 | `docs/CLI.md`, `skills/bitrouter/references/cli.md` | two rows; the `/route`-versus-`/preview` sentence |
 
-**Done when:** `/models anthropic` renders what `bitrouter models --provider
-anthropic --human` renders; `/preview gpt-5` renders what `bitrouter route gpt-5
+**Done when:** `/models anthropic` renders what `bro models --provider
+anthropic --human` renders; `/preview gpt-5` renders what `bro route gpt-5
 --human` renders (palette off); `/preview` with no argument answers with the
 usage line, not a panic; checked by hand at 60 columns that `models` on the
 default catalog wraps acceptably — if it does not, `list_models` loses its
@@ -1256,7 +1256,7 @@ The picker and `/models` disagreeing about what is routable is
 `ACTIONS_SPEC.md` phase 5's daemon-side fix, not this phase's; this phase does
 not wait on it.
 
-### Phase 3 — `bitrouter acp commands`, and the shared commands report
+### Phase 3 — `bro acp commands`, and the shared commands report
 
 Ships: the headless twin of `/commands` — a set-C verb acquiring a CLI leaf —
 and `/commands` rendering through the shared report. Research phase 0.5, taking
@@ -1276,7 +1276,7 @@ D14's and D15's recommendations as the default ([§8](#8-open-decisions--what-ea
 | `crates/bitrouter-tui/src/render/session.rs` | `commands(..)` deleted |
 | `docs/CLI.md`, `skills/bitrouter/references/cli.md` | the `acp commands` leaf; `/commands` now documents three outcomes |
 
-**Done when:** `bitrouter acp commands --agent <id> --json` prints a
+**Done when:** `bro acp commands --agent <id> --json` prints a
 `CommandsReport`; against a harness that never sends the update it prints
 `received: false` and an empty agent group after `wait_ms`; `--source agent`
 filters; `--human` output and the TUI's `/commands` notice are the same bytes
@@ -1305,11 +1305,11 @@ typing `/review the diff` in `chat` and running `acp prompt --agent x "/review
 the diff"` both send `Review: the diff` (assert the expanded text in the
 `session/prompt` request — the `acp prompt` path has NDJSON tests to extend);
 `/commands` shows a "config" group; a config naming `status` fails
-`bitrouter chat` and `bitrouter config validate` with a message naming both.
+`bro chat` and `bro config validate` with a message naming both.
 
 ### Not phased
 
-- **`bitrouter chat --command <name>` / `acp prompt "/status"` reaching the
+- **`bro chat --command <name>` / `acp prompt "/status"` reaching the
   action ports headlessly.** The resolver makes it a one-line change; nothing
   asks for it (research D12). Add when something does.
 - **Widening the HTTP profile from `Reach`.** G6 makes the guard table-driven;
@@ -1341,7 +1341,7 @@ merging, per [§1.1](#11-which-tree-this-is-written-against).)
 | **D3** — `reload` | open | nothing | excluded; no row | If admitted: a `reload` row would need an inverse (R5) or R5 weakened; also the policy-table reload bug `ACP_TUI_SPEC.md` §6 records. Not a row edit — a rule change |
 | **D4** — session-scoped `trajectory` | open | nothing | out of scope; own issue | A metering-attribution question first |
 | **D5** — settle the scope empirically | open | nothing here; **orders track 2's triage** | proceed — phases 1–2 build exactly the members the D5 hypothesis names (`status`, `models`, `route`) | If a **C**-marked non-hostile command turns up: one row, one `summary_for` arm, one `run` arm — the mechanism absorbs it. If a hostile one turns up: track 2 |
-| **D6** — `skills list` | open | nothing | excluded | If admitted: `skills_search.tui_command = Some("skills")`, a fourth `Arc<dyn SkillsQuery>` on `SessionPorts` built from the same roots `bitrouter skills list` resolves, one `run` arm, `Reach` stays `HostBound` (has a leaf, so G2 passes) |
+| **D6** — `skills list` | open | nothing | excluded | If admitted: `skills_search.tui_command = Some("skills")`, a fourth `Arc<dyn SkillsQuery>` on `SessionPorts` built from the same roots `bro skills list` resolves, one `run` arm, `Reach` stays `HostBound` (has a leaf, so G2 passes) |
 | **D7** — a CLI leaf for `route/set` | **decided (b), but not buildable here** — [§2.2](#22-d7-decided-b--the-cli-leaf-is-not-buildable-in-this-stack) | nothing — the default is the pre-decision state | **B-D7:** `route_set`/`route_reset` ship as set-C rows (`cli_leaf: None`, `reach: SessionBound`); G2's set-C clause stays in force | Needs, from #863 or a successor: (i) a `DaemonCommand` that lists live controllers/sessions, (ii) a daemon→controller lease-change notification so the footer can follow, (iii) then a clap leaf and a row edit. The maintainer's stated need (pick model and provider headlessly) is met at launch by `--model provider:model` today |
 | **D8** — `/route` overloading | open | **Phase 2's second name** | **(b)** `/preview <model>` reads; `/route` keeps meaning the picker | (a) or (c) are **not free**: two rows would want `tui_command: Some("route")`, which G1 forbids, so `Command` would need an arity field and `resolve` an arity rule. (b) costs one name and no type |
 | **D9** — argument grammar | open | nothing until a command needs two positionals | whitespace split into `Vec<String>`; never one string | The declaration-on-the-row form the research spec leans to would add a field to `Command`; do it with the first command that needs it |
@@ -1433,11 +1433,11 @@ Per-phase *done-when*s are in [§7](#7-phases). Across the whole of track 1:
   By construction for the three reads (one function); asserted by the
   `commands_report` unit tests for the fourth.
 - By hand, once per phase that adds a command: a routed `chat` session, a
-  `--direct` session, and a piped `echo '/<cmd>' | bitrouter chat <agent>`,
+  `--direct` session, and a piped `echo '/<cmd>' | bro chat <agent>`,
   each at 60 columns; `stty -a` reports a restored terminal afterwards (the
   three exits in `chat/mod.rs`'s module doc are unchanged, but the test is
   cheap).
-- `bitrouter acp commands --agent <id>` against a harness that advertises
+- `bro acp commands --agent <id>` against a harness that advertises
   commands, one that advertises an empty list, and one that never sends the
   update: three distinguishable reports.
 

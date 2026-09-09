@@ -12,8 +12,11 @@ rust-version.workspace = true
 name = "bitrouter"
 path = "src/lib.rs"
 
+# The CLI is invoked as `bro`. The package, the library, and the product
+# keep the `bitrouter` name; installers add a deprecated `bitrouter` alias
+# (see `[dist.bin-aliases]` in `dist-workspace.toml`).
 [[bin]]
-name = "bitrouter"
+name = "bro"
 path = "src/main.rs"
 
 [dependencies]
@@ -62,7 +65,7 @@ semver = "1"
 # dependency is what makes that a compile error rather than a convention.
 bitrouter-tui = { path = "../../crates/bitrouter-tui", version = "=1.0.0-alpha.30" }
 # Terminal *I/O*, which is this process's: owning stdin, bracketed paste, and
-# reading key events for `bitrouter chat`. Not drawing — see above.
+# reading key events for `bro chat`. Not drawing — see above.
 crossterm.workspace = true
 jsonschema = { version = "0.47.0", default-features = false }
 rmcp = { workspace = true, features = ["server", "macros", "transport-io"] }

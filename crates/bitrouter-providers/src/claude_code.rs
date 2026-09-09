@@ -112,7 +112,7 @@ pub struct ClaudeCodeAuthApplier {
     store_path: std::path::PathBuf,
     refresh_client: reqwest::Client,
     /// OAuth client id used for the refresh grant. Mirrors what the
-    /// `bitrouter providers login claude-code` flow wrote.
+    /// `bro providers login claude-code` flow wrote.
     client_id: String,
     /// Token endpoint used for the refresh grant.
     token_endpoint: String,
@@ -321,9 +321,11 @@ impl ClaudeCodeAuthApplier {
             .as_ref()
             .ok_or_else(|| BitrouterError::Upstream {
                 status: 401,
-                message: "cannot locate the Claude Code session (no home directory) — set HOME \
-                      or run `bitrouter providers login claude-code`"
-                    .into(),
+                message: format!(
+                    "cannot locate the Claude Code session (no home directory) — set HOME or \
+                     run `{} providers login claude-code`",
+                    bitrouter_sdk::invocation::name()
+                ),
             })?;
         let live = store
             .read()
@@ -331,10 +333,11 @@ impl ClaudeCodeAuthApplier {
         let Some(live) = live else {
             return Err(BitrouterError::Upstream {
                 status: 401,
-                message: "no Claude Code session found — run `claude auth login` (or \
-                          `bitrouter providers login claude-code`) to sign in to your Claude \
-                          subscription"
-                    .into(),
+                message: format!(
+                    "no Claude Code session found — run `claude auth login` (or `{} providers \
+                     login claude-code`) to sign in to your Claude subscription",
+                    bitrouter_sdk::invocation::name()
+                ),
             });
         };
         let token = if needs_refresh(&live.token) {
@@ -397,9 +400,10 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
         AuthCodeError::OAuthError { error, description } => BitrouterError::Upstream {
             status: 401,
             message: format!(
-                "claude-code OAuth refresh failed ({error}{}). Re-run `bitrouter providers login \
+                "claude-code OAuth refresh failed ({error}{}). Re-run `{cli} providers login \
                  claude-code`.",
-                description.map(|d| format!(": {d}")).unwrap_or_default()
+                description.map(|d| format!(": {d}")).unwrap_or_default(),
+                cli = bitrouter_sdk::invocation::name()
             ),
         },
         other => BitrouterError::Upstream {
@@ -432,8 +436,10 @@ impl AuthApplier for ClaudeCodeAuthApplier {
             // No subscription credential — there is no API-key fallback here.
             return Err(BitrouterError::Upstream {
                 status: 401,
-                message: "no Claude Code session — run `bitrouter providers login claude-code`"
-                    .into(),
+                message: format!(
+                    "no Claude Code session — run `{} providers login claude-code`",
+                    bitrouter_sdk::invocation::name()
+                ),
             });
         };
         let bearer = format!("Bearer {}", token.access_token);
@@ -703,7 +709,7 @@ mod tests {
         let err = applier.apply(req, &cc_target(None)).await.unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("bitrouter providers login claude-code"),
+            msg.contains("bro providers login claude-code"),
             "expected helpful hint, got: {msg}"
         );
     }

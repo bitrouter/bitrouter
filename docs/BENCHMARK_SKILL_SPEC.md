@@ -150,7 +150,7 @@ a worktree only after the human explicitly selects its repository, ref, and
 path. Never search unrelated local worktrees and call a discovered file an
 official template. If the selected release has no compatible official
 template, report that the default is unavailable and ask the user to choose an
-existing or custom config; do not silently substitute `bitrouter init` output.
+existing or custom config; do not silently substitute `bro init` output.
 If an existing or managed endpoint cannot attest its version, label provenance
 as unverified and do not claim an exact release or template match.
 

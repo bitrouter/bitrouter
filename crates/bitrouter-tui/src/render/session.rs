@@ -7,7 +7,7 @@
 //! | Variant | Where |
 //! |---|---|
 //! | `Plan` | the document, in order, patched in place like a tool call |
-//! | `AvailableCommandsUpdate` | the journal holds it; the *app* renders it, through the report `bitrouter acp commands` shares, so one session is not described two ways |
+//! | `AvailableCommandsUpdate` | the journal holds it; the *app* renders it, through the report `bro acp commands` shares, so one session is not described two ways |
 //! | `CurrentModeUpdate` | the footer |
 //! | `ConfigOptionUpdate` | the footer |
 //! | `SessionInfoUpdate` | the footer, as the title |
@@ -77,7 +77,7 @@ pub fn plain_lines(bytes: &[u8]) -> Vec<Line<'static>> {
 
 /// Expand tabs to the next eight-column stop.
 ///
-/// A CLI report may hold a real tab — `bitrouter models --human` separates its
+/// A CLI report may hold a real tab — `bro models --human` separates its
 /// two columns with one so a shell can `cut -f1`, which is right for a pipe and
 /// unsafe here. The differential writer measures a row with `unicode-width`,
 /// where a tab counts one column, while the terminal advances the cursor to the

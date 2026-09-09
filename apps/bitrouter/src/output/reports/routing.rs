@@ -1,16 +1,17 @@
 //! Reports for `models` and `providers list`.
 
 use bitrouter_mcp::actions::models::{ModelsReport, ModelsSource};
+use bitrouter_sdk::invocation;
 use serde::Serialize;
 
 use crate::output::CliReport;
 use crate::output::human::{Human, Table};
 
-/// The human view of `bitrouter models`.
+/// The human view of `bro models`.
 ///
 /// The report type itself is
 /// [`bitrouter_mcp::actions::models::ModelsReport`]: the
-/// `list_models` tool returns the same type, so `bitrouter models --json` and
+/// `list_models` tool returns the same type, so `bro models --json` and
 /// the tool's structured content are the same bytes. Rendering stays here — a
 /// local trait on a foreign type is legal, and it keeps [`Human`] out of the
 /// crate.
@@ -26,10 +27,11 @@ impl CliReport for ModelsReport {
         // catalog needs no annotation, a projected one does — a provider whose
         // credential only resolves at daemon start-up is missing from it.
         if self.resolved_via == ModelsSource::Config {
-            return h.note(
+            return h.note(&format!(
                 "Listed from config — no daemon answered. \
-                 Run `bitrouter start` for the live catalog.",
-            );
+                 Run `{} start` for the live catalog.",
+                invocation::name()
+            ));
         }
         Ok(())
     }
@@ -44,7 +46,7 @@ pub struct ProviderRow {
     pub api_base: String,
 }
 
-/// Result of `bitrouter providers list`.
+/// Result of `bro providers list`.
 #[derive(Serialize)]
 pub struct ProvidersReport {
     pub providers: Vec<ProviderRow>,

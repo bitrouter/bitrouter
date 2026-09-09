@@ -23,7 +23,7 @@ pub const REGISTRY_URL: &str =
     "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
 
 /// How long a registry fetch may take before the CLI gives up. Discovery is a
-/// convenience; a slow CDN must not hang `bitrouter agents`.
+/// convenience; a slow CDN must not hang `bro agents`.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The registry document root.
@@ -86,7 +86,7 @@ pub struct StdioInvocation {
 /// How an entry can be installed, for listings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallSupport {
-    /// `npx`/`uvx` — `bitrouter agents install` emits a ready stub.
+    /// `npx`/`uvx` — `bro agents install` emits a ready stub.
     Stub(&'static str),
     /// `binary`-only — must be installed manually (no checksums to verify).
     Manual,

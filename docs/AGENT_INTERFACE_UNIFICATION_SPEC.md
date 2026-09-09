@@ -16,12 +16,12 @@ followed the remote-control MVP.
 
 The product has two primary ways to control an ACP agent:
 
-- `bitrouter code` for a person; and
-- `bitrouter run` for automation or another agent.
+- `bro code` for a person; and
+- `bro run` for automation or another agent.
 
 It has one current local raw ACP transport entry point:
 
-- `bitrouter acp serve <agent>` for an ACP client that launches an agent
+- `bro acp serve <agent>` for an ACP client that launches an agent
   command and communicates over stdio.
 
 `acp serve` is a BitRouter CLI name, not an ACP protocol requirement. A future
@@ -29,7 +29,7 @@ network-capable ACP client may instead connect directly to an ACP endpoint
 exposed by the BitRouter daemon. Both transports must terminate in the same
 ACP service and controller/session implementation.
 
-Native harness shortcuts such as `bitrouter claude` and `bitrouter codex` are
+Native harness shortcuts such as `bro claude` and `bro codex` are
 launchers, not additional BitRouter agent UIs. They hand the terminal to the
 harness's own interface after applying BitRouter's routing integration.
 
@@ -45,28 +45,28 @@ The target public surface is:
 
 ```text
 Native harness UI
-  bitrouter claude [options] [-- <claude args>]
-  bitrouter claude-code [options] [-- <claude args>]  # alias
-  bitrouter codex [options] [-- <codex args>]
-  bitrouter launch <agent> [options] [-- <agent args>]
+  bro claude [options] [-- <claude args>]
+  bro claude-code [options] [-- <claude args>]  # alias
+  bro codex [options] [-- <codex args>]
+  bro launch <agent> [options] [-- <agent args>]
 
 BitRouter-owned ACP clients
-  bitrouter code [agent] [session options]
-  bitrouter run <agent> [prompt | -] [session/output options]
+  bro code [agent] [session options]
+  bro run <agent> [prompt | -] [session/output options]
 
 Protocol plumbing (normally launched by a client or plugin)
-  bitrouter acp serve <agent> [controller options]  # local stdio
-  bitrouter mcp serve                               # local stdio
+  bro acp serve <agent> [controller options]  # local stdio
+  bro mcp serve                               # local stdio
 
 MCP diagnostics
-  bitrouter mcp check [server]
+  bro mcp check [server]
 
 Agent management
-  bitrouter agents list
-  bitrouter agents inspect <agent>
-  bitrouter agents check [agent]
-  bitrouter agents conformance <agent>
-  bitrouter agents scaffold <agent>
+  bro agents list
+  bro agents inspect <agent>
+  bro agents check [agent]
+  bro agents conformance <agent>
+  bro agents scaffold <agent>
 ```
 
 The visible `spawn` command is retired. `acp prompt` and `chat` are also removed
@@ -133,19 +133,19 @@ this spec.
 
 ### 3.1 Goals
 
-1. Give users one memorable BitRouter TUI, `bitrouter code`, from which they
+1. Give users one memorable BitRouter TUI, `bro code`, from which they
    can select and control any locally available ACP-compatible agent.
-2. Give automation one canonical headless command, `bitrouter run`.
+2. Give automation one canonical headless command, `bro run`.
 3. Give command-spawning ACP clients one canonical local stdio entry point,
-   `bitrouter acp serve`.
-4. Make common native harness launches as direct as `bitrouter claude` and
-   `bitrouter codex` without losing the generic `launch` escape hatch.
+   `bro acp serve`.
+4. Make common native harness launches as direct as `bro claude` and
+   `bro codex` without losing the generic `launch` escape hatch.
 5. Resolve a human-facing agent name consistently across native, TUI,
    headless, diagnostic, and protocol entry points.
 6. Expose harness-native list/load/resume/close lifecycle operations in the
    Code TUI when the harness advertises them.
 7. Let one ACP agent delegate a bounded task to another by invoking the same
-   `bitrouter run` contract a human or script uses.
+   `bro run` contract a human or script uses.
 8. Keep CLI stdout stable and machine-parseable, TUI behavior capability-led,
    ACP protocol-transparent, and MCP action-oriented.
 9. Make local and remote operational actions share one neutral action contract.
@@ -178,7 +178,7 @@ this spec.
 | facet | A way an agent can be driven: native UI or ACP |
 | controller | BitRouter's connection-level ACP proxy around one adapter process |
 | native session | An ACP session created and identified by the adapter/harness |
-| Code TUI | BitRouter's full-screen ACP client, entered with `bitrouter code` |
+| Code TUI | BitRouter's full-screen ACP client, entered with `bro code` |
 | action | A bounded typed operation such as status, list models, route preview, or recent requests |
 | available agent | A catalog or configured agent BitRouter can start on demand; not necessarily a running process |
 | connected agent | A live adapter/controller connection owned by the current process |
@@ -219,9 +219,9 @@ never guesses.
 The same input may resolve to different facets by command:
 
 ```text
-bitrouter claude          -> Claude native facet
-bitrouter code claude     -> Claude ACP facet
-bitrouter run claude ...  -> Claude ACP facet
+bro claude          -> Claude native facet
+bro code claude     -> Claude ACP facet
+bro run claude ...  -> Claude ACP facet
 ```
 
 Machine output always carries the resolved canonical agent and adapter IDs.
@@ -231,16 +231,16 @@ Human output may keep the friendly name.
 
 The initial first-class shortcuts are:
 
-- `bitrouter claude`, canonical;
-- `bitrouter claude-code`, an alias of `claude`; and
-- `bitrouter codex`, canonical.
+- `bro claude`, canonical;
+- `bro claude-code`, an alias of `claude`; and
+- `bro codex`, canonical.
 
 Additional shortcuts require an explicit CLI change and compatibility review.
 They are not generated automatically from registry data. All other native
-facets remain reachable through `bitrouter launch <agent>`.
+facets remain reachable through `bro launch <agent>`.
 
 This avoids making a registry update unexpectedly reserve a top-level command
-or turning a typo such as `bitrouter stats` into process execution.
+or turning a typo such as `bro stats` into process execution.
 
 ---
 
@@ -249,13 +249,13 @@ or turning a typo such as `bitrouter stats` into process execution.
 ### 6.1 Command grammar
 
 ```text
-bitrouter claude [--model ID] [--base-url URL] [--no-install]
+bro claude [--model ID] [--base-url URL] [--no-install]
                  [--no-start] [--check] [-- <claude args...>]
 
-bitrouter codex  [--model ID] [--base-url URL] [--no-install]
+bro codex  [--model ID] [--base-url URL] [--no-install]
                  [--no-start] [--check] [-- <codex args...>]
 
-bitrouter launch <agent> [--model ID] [--base-url URL] [--no-install]
+bro launch <agent> [--model ID] [--base-url URL] [--no-install]
                          [--no-start] [--check] [-- <agent args...>]
 ```
 
@@ -294,23 +294,23 @@ endpoint, but it does not make the native UI remote.
 
 ---
 
-## 7. `bitrouter code`: the BitRouter-owned ACP TUI
+## 7. `bro code`: the BitRouter-owned ACP TUI
 
 ### 7.1 Command grammar
 
 ```text
-bitrouter code
-bitrouter code <agent>
-bitrouter code <agent> --load <native-session-id>
-bitrouter code <agent> --resume <native-session-id>
-bitrouter --context <name> code
+bro code
+bro code <agent>
+bro code <agent> --load <native-session-id>
+bro code <agent> --resume <native-session-id>
+bro --context <name> code
 ```
 
 `--load` and `--resume` are mutually exclusive and capability-gated.
 `code <agent>` opens a new native session by default. Bare `code` opens the
 home screen.
 
-`bitrouter tui` and `bitrouter tui <agent>` remain hidden compatibility aliases
+`bro tui` and `bro tui <agent>` remain hidden compatibility aliases
 for `code` and `code <agent>` respectively.
 
 Under the HTTP-only remote-control MVP, `--context <remote> code` opens only
@@ -443,12 +443,12 @@ not an OS sandbox or independent filesystem proof.
 
 ---
 
-## 8. `bitrouter run`: the headless ACP client
+## 8. `bro run`: the headless ACP client
 
 ### 8.1 Command grammar
 
 ```text
-bitrouter run <agent> [<prompt> | -]
+bro run <agent> [<prompt> | -]
   [--prompt-file PATH]
   [--load NATIVE_SESSION_ID | --resume NATIVE_SESSION_ID]
   [--cwd PATH]
@@ -540,7 +540,7 @@ numeric assignments are frozen with implementation tests before release.
 ### 9.1 Command grammar
 
 ```text
-bitrouter acp serve <agent>
+bro acp serve <agent>
   [--turn-timeout SECS]
   [--direct] [--model ID] [--base-url URL] [--no-start]
   [-c PATH]
@@ -597,9 +597,9 @@ may eventually be exposed in three ways:
 
 | Transport path | Intended client | Status |
 | --- | --- | --- |
-| `bitrouter acp serve <agent>` over stdin/stdout | Local client that launches an agent command | Current canonical path |
+| `bro acp serve <agent>` over stdin/stdout | Local client that launches an agent command | Current canonical path |
 | Direct daemon ACP endpoint | Network-capable ACP client | Deferred until the remote transport is stable and supported |
-| Local `bitrouter acp connect <context> <agent>` stdio bridge | Stdio-only client reaching a remote daemon | Deferred with remote ACP |
+| Local `bro acp connect <context> <agent>` stdio bridge | Stdio-only client reaching a remote daemon | Deferred with remote ACP |
 
 A network-capable client connects directly to the daemon endpoint and does not
 run `acp serve` on its own computer. A stdio-only client may eventually spawn
@@ -628,7 +628,7 @@ network transport does not create another agent lifecycle interface.
 The first delegation mechanism is the headless CLI itself:
 
 ```sh
-bitrouter run codex \
+bro run codex \
   --result-schema @review.schema.json \
   "Review this patch and return findings only"
 ```
@@ -791,8 +791,8 @@ differ, but they all map to the same canonical action ID.
 status report. The canonical command becomes:
 
 ```sh
-bitrouter requests [--limit N]
-bitrouter --context workstation requests [--limit N]
+bro requests [--limit N]
+bro --context workstation requests [--limit N]
 ```
 
 `status --requests` remains a hidden compatibility spelling. The Code TUI and
@@ -826,8 +826,8 @@ These roles share protocol code but are not one user workflow.
 Only two canonical MCP commands remain in the target CLI:
 
 ```text
-bitrouter mcp serve
-bitrouter mcp check [server]
+bro mcp serve
+bro mcp check [server]
 ```
 
 `mcp serve` is advanced transport plumbing, not a human interaction surface.
@@ -883,7 +883,7 @@ BitRouter CLI on its computer. Only a stdio-only host needs a future local
 compatibility bridge:
 
 ```text
-MCP host ──stdio──> bitrouter mcp connect <context>
+MCP host ──stdio──> bro mcp connect <context>
                               └──Streamable HTTP──> /mcp-control
 ```
 
@@ -1025,7 +1025,7 @@ implementation commit as any affected CLI or MCP invocation.
 - Update CLI docs, skill references, completions, and plugin manifests where
   their invocation changes.
 
-Completion criterion: `bitrouter --help` communicates the target mental model
+Completion criterion: `bro --help` communicates the target mental model
 without requiring the reader to understand ACP.
 
 ### Phase 1 — agent resolver and shared session host
@@ -1064,7 +1064,7 @@ can create or continue a harness-native session without an alternate command.
 - Keep drafts across operations navigation.
 - Preserve terminal and log safety.
 
-Completion criterion: a user can launch bare `bitrouter code`, select an ACP
+Completion criterion: a user can launch bare `bro code`, select an ACP
 agent, complete a turn, inspect routing/requests/models, and return without
 leaving the application or corrupting the terminal.
 
@@ -1083,7 +1083,7 @@ without BitRouter storing a transcript or scanning private harness files.
 
 - Move the action contract to a neutral home.
 - Add canonical IDs/versions/exposure/auth metadata.
-- Promote recent requests to `bitrouter requests`.
+- Promote recent requests to `bro requests`.
 - Make HTTP capabilities versioned action descriptors.
 - Keep `mcp serve` as the protocol-pure local stdio origin endpoint used by
   hosts, launchers, and plugin manifests.
@@ -1101,7 +1101,7 @@ server, and neither path falls back to the wrong machine.
 
 ### Phase 6 — bounded delegation
 
-- Prove agent-to-agent use through `bitrouter run` end to end.
+- Prove agent-to-agent use through `bro run` end to end.
 - Add target/depth/concurrency/budget policy.
 - Add parent-child tracing and metering correlation.
 - Decide separately whether an MCP `delegate` wrapper is justified.
@@ -1212,9 +1212,9 @@ The design is implemented when all of the following are true:
 
 1. `spawn`, `chat`, `tui`, and `acp prompt` are absent from normal help and
    remain tested compatibility aliases for the declared window.
-2. `bitrouter claude` and `bitrouter codex` perform the same reversible native
+2. `bro claude` and `bro codex` perform the same reversible native
    integration as generic `launch` without editing permanent harness config.
-3. `bitrouter code` is the only documented BitRouter-owned TUI entry.
+3. `bro code` is the only documented BitRouter-owned TUI entry.
 4. Bare Code can select an available ACP agent and run a conversation.
 5. Code operations use the same reports as the headless CLI locally and over
    the existing remote HTTP context.

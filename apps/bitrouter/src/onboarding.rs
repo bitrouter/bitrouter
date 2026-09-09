@@ -13,6 +13,7 @@ use bitrouter_providers::hosted::account::credentials::default_credentials_path;
 use bitrouter_providers::hosted::account::manager::CredentialManager;
 use bitrouter_providers::hosted::applier::PROVIDER_ID;
 use bitrouter_providers::oauth::credential_store::CredentialStore;
+use bitrouter_sdk::invocation;
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -287,7 +288,10 @@ impl OnboardingStatusReport {
             action: "status",
             configured: true,
             signals: parts,
-            hint: "run `bitrouter` to start an ACP coding session".to_string(),
+            hint: format!(
+                "run `{}` to start an ACP coding session",
+                invocation::name()
+            ),
         }
     }
 }
@@ -295,7 +299,7 @@ impl OnboardingStatusReport {
 impl CliReport for OnboardingStatusReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         h.line(&format!(
-            "bitrouter is configured ({}) — {}",
+            "BitRouter is configured ({}) — {}",
             if self.signals.is_empty() {
                 "credentials present".to_string()
             } else {
@@ -361,11 +365,10 @@ async fn start_default_chat(
     source: &crate::paths::ConfigSource,
     config: bitrouter_sdk::config::Config,
 ) -> Result<()> {
-    let agent = config
-        .chat
-        .agent
-        .clone()
-        .context("no default ACP harness; run `bitrouter init`")?;
+    let agent =
+        config.chat.agent.clone().with_context(|| {
+            format!("no default ACP harness; run `{} init`", invocation::name())
+        })?;
     let routing = crate::acp_cli::RoutingOptions {
         model: config.chat.model.clone(),
         ..Default::default()
@@ -470,7 +473,7 @@ fn acp_id(agent: SpawnAgent) -> &'static str {
     }
 }
 
-/// `bitrouter init [flags]`. Runs the wizard interactively, or headlessly when
+/// `bro init [flags]`. Runs the wizard interactively, or headlessly when
 /// `--yes` is set (or no TTY is attached). `--reset` clears credentials first.
 pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
     let manager = crate::cloud::default_manager()?;
@@ -686,7 +689,7 @@ async fn run_interactive(
     // --- Step 1: credentials ---
     let mut configured = signals.already_configured();
     let mut skipped: Vec<String> = Vec::new();
-    // Apply any flag-supplied credentials first (so `bitrouter init --api-key …`
+    // Apply any flag-supplied credentials first (so `bro init --api-key …`
     // / `--provider …` seed before we prompt), then either accept the detected
     // set (`--use-detected`) or open the interactive credential menu.
     apply_flag_credentials(
@@ -939,7 +942,7 @@ async fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Res
     actions.extend([AfterAction::Serve, AfterAction::Exit]);
     items.extend([
         Item::new("Start the daemon", "print connection instructions"),
-        Item::new("Save and exit", "run bitrouter whenever you're ready"),
+        Item::new("Save and exit", "run bro whenever you're ready"),
     ]);
     let selected = crate::prompt::select(
         "Step 3/3 — Finish",
@@ -1002,7 +1005,7 @@ fn build_snippet(listen: &str) -> Snippet {
     let anthropic =
         format!("export ANTHROPIC_BASE_URL={base_url}\nexport ANTHROPIC_AUTH_TOKEN={token}");
     let openai = format!("export OPENAI_BASE_URL={v1}\nexport OPENAI_API_KEY={token}");
-    let codex = format!("bitrouter code codex --base-url {base_url}");
+    let codex = format!("{} code codex --base-url {base_url}", invocation::name());
     Snippet {
         base_url,
         anthropic,
@@ -1131,15 +1134,25 @@ async fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
 fn print_hint() {
     let p = crate::style::Palette::for_stderr();
     eprintln!(
-        "{cyan}{bold}info:{reset} setup is not complete. Run `bitrouter` in a terminal or `bitrouter init --yes`:",
+        "{cyan}{bold}info:{reset} setup is not complete. Run `{cli}` in a terminal or `{cli} init --yes`:",
         cyan = p.cyan,
         bold = p.bold,
         reset = p.reset,
+        cli = invocation::name(),
     );
     eprintln!();
-    eprintln!("  bitrouter init                 # guided setup wizard (interactive)");
-    eprintln!("  bitrouter cloud login          # one BitRouter Cloud account, every model");
-    eprintln!("  bitrouter providers login claude-code   # a subscription you already pay for");
+    eprintln!(
+        "  {cli} init                 # guided setup wizard (interactive)",
+        cli = invocation::name()
+    );
+    eprintln!(
+        "  {cli} cloud login          # one BitRouter Cloud account, every model",
+        cli = invocation::name()
+    );
+    eprintln!(
+        "  {cli} providers login claude-code   # a subscription you already pay for",
+        cli = invocation::name()
+    );
     eprintln!("  export OPENAI_API_KEY=…        # or any BYOK provider key, then re-run");
     eprintln!();
 }
@@ -1332,7 +1345,7 @@ mod tests {
         );
         assert_eq!(
             snippet.codex,
-            "bitrouter code codex --base-url http://127.0.0.1:4356"
+            "bro code codex --base-url http://127.0.0.1:4356"
         );
     }
 

@@ -223,7 +223,7 @@ class UnixSocketTrap:
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--binary", default="bitrouter")
+    parser.add_argument("--binary", default="bro")
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--ca", type=Path)
     return parser.parse_args()
@@ -599,7 +599,7 @@ def main() -> int:
                 [configured_trap, default_trap],
                 config_before,
                 metering_before,
-                ("cannot run against a remote bitrouter context",),
+                ("cannot run against a remote BitRouter context",),
             )
         finally:
             if monitor is not None:
