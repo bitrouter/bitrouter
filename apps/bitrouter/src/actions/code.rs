@@ -117,7 +117,7 @@ impl CodeServices {
                 )
             }
         } else {
-            format!("bitrouter code · {}", std::env::current_dir()?.display())
+            conversation_label(&std::env::current_dir()?)
         };
         Ok(Arc::new(Self {
             target,
@@ -149,7 +149,7 @@ impl CodeServices {
         };
         let source = source.clone();
         let socket = crate::daemon::socket_path_for(&source, &config);
-        let label = format!("bitrouter code · {}", std::env::current_dir()?.display());
+        let label = conversation_label(&std::env::current_dir()?);
         let initial_launch = InitialLaunch {
             agent_id: agent_id.to_string(),
             selection: SessionSelection::New,
@@ -355,6 +355,14 @@ impl CodeServices {
     }
 }
 
+fn conversation_label(workspace: &Path) -> String {
+    let short = workspace
+        .file_name()
+        .unwrap_or(workspace.as_os_str())
+        .to_string_lossy();
+    format!("bitrouter code · {short}")
+}
+
 /// A socket or named remote target exposes only daemon reports. The typed
 /// session controls and route mutations require a local ACP session; route
 /// preview remains because it is a read-only report on both operation targets.
@@ -372,7 +380,9 @@ fn agent_is_selectable(row: &crate::agents::ListRow) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CodeServices, agent_is_selectable, operation_command_supported};
+    use super::{
+        CodeServices, agent_is_selectable, conversation_label, operation_command_supported,
+    };
     use crate::acp_cli::{LaunchOptions, RoutingOptions, SessionSelection, SpawnContext};
     use crate::dashboard::SessionRequest;
     use crate::paths::ConfigSource;
@@ -384,6 +394,14 @@ mod tests {
             turn_timeout: None,
             routing: RoutingOptions::default(),
         }
+    }
+
+    #[test]
+    fn conversation_welcome_uses_only_the_short_workspace_name() {
+        assert_eq!(
+            conversation_label(std::path::Path::new("/workspaces/bitrouter")),
+            "bitrouter code · bitrouter"
+        );
     }
 
     #[test]

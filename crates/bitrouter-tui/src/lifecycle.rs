@@ -31,6 +31,23 @@ pub fn enter_alternate_screen() -> io::Result<()> {
     execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)
 }
 
+/// Leave only the alternate screen owned by a detached view.
+///
+/// Raw mode, bracketed paste, and enhanced keyboard handling belong to the
+/// surrounding session and deliberately remain active. Repeated calls are
+/// harmless, which lets the normal draw path recover after a failed detached
+/// render without accidentally tearing down session input.
+pub fn leave_alternate_screen() -> io::Result<()> {
+    if ALTERNATE_SCREEN.swap(false, Ordering::SeqCst) {
+        execute!(
+            io::stdout(),
+            crossterm::cursor::Show,
+            crossterm::terminal::LeaveAlternateScreen
+        )?;
+    }
+    Ok(())
+}
+
 /// Request disambiguated Enter modifiers on supporting terminals. Older
 /// terminals ignore the sequence; Alt+Enter and Ctrl+J remain available.
 pub fn enable_session_keys() -> io::Result<()> {
@@ -62,9 +79,7 @@ pub fn restore() {
         crossterm::event::DisableBracketedPaste,
         crossterm::cursor::Show
     );
-    if ALTERNATE_SCREEN.swap(false, Ordering::SeqCst) {
-        let _ = execute!(out, crossterm::terminal::LeaveAlternateScreen);
-    }
+    let _ = leave_alternate_screen();
     // XTWINOPS pop: put the user's window title back.
     let _ = write!(out, "\x1b[23;0t");
     let _ = out.flush();
