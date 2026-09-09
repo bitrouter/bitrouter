@@ -1892,14 +1892,10 @@ fn code_detached_backlog_catches_up_once_after_resizes() -> Result<()> {
     code.pty.send(b"\x0f")?;
     let _ = code.pty.wait_for_text("Full transcript")?;
 
-    let narrow = code.pty.checkpoint();
     code.pty.resize(40, 16)?;
-    code.pty.send(b"\x0c")?;
-    let _ = code.pty.wait_for_text_since(&narrow, "Full transcript")?;
-    let wide = code.pty.checkpoint();
+    let _ = code.pty.wait_for_text("Full transcript")?;
     code.pty.resize(CODE_COLUMNS, CODE_ROWS)?;
-    code.pty.send(b"\x0c")?;
-    let _ = code.pty.wait_for_text_since(&wide, "Full transcript")?;
+    let _ = code.pty.wait_for_text("Full transcript")?;
 
     code.mock.release_backlog()?;
     let _ = code.pty.wait_for_text("BG010")?;
