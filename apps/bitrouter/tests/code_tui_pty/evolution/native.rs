@@ -468,7 +468,10 @@ fn trial_sessions(
                         .learning_status("native-terminal-trial")
                         .await
                     {
-                        Err(error) if error.to_string().contains("changed while reading") => {
+                        Err(error)
+                            if error.to_string().contains("changed while reading")
+                                || error.to_string().ends_with("; retry") =>
+                        {
                             tokio::time::sleep(Duration::from_millis(25)).await;
                             continue;
                         }
