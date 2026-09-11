@@ -15,7 +15,8 @@ use super::toolset::{ToolContext, ToolsetRegistry};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::types::{
     Content, ExecutionResult, FinishReason, Message, Prompt, ProviderMetadata, Role,
-    ServerToolCall, ServerToolKind, ServerToolStatus, Tool, ToolResultOutput, Usage, UsageOrigin,
+    ServerToolCall, ServerToolKind, ServerToolStatus, Tool, ToolChoice, ToolResultOutput, Usage,
+    UsageOrigin,
 };
 
 /// One upstream turn for a working prompt — the loop's callback into the
@@ -98,6 +99,13 @@ impl ServerToolLoop {
         base: &Prompt,
         ctx: &ToolContext,
     ) -> Result<(Prompt, std::collections::BTreeSet<String>)> {
+        // A no-tool request must not acquire executable capabilities from the
+        // server configuration. Both streaming and non-streaming paths use this
+        // ownership set, so even an unexpected upstream call is handed back
+        // without invoking a tool or listing a remote toolset.
+        if base.tool_choice == Some(ToolChoice::None) {
+            return Ok((base.clone(), Default::default()));
+        }
         let (injected, owned) = self.registry.list_all(ctx).await?;
         let mut working = base.clone();
         working.tools.retain(|t| {
@@ -613,6 +621,24 @@ mod tests {
             text: s.to_string(),
             provider_metadata: ProviderMetadata::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn no_tool_choice_does_not_inject_or_execute_server_tools() -> Result<()> {
+        let loop_ = loop_with(&["search"], false, ServerToolLoopConfig::default());
+        let mut base = base_prompt();
+        base.tool_choice = Some(ToolChoice::None);
+        let upstream = ScriptedUpstream::new(vec![exec(vec![tool_call("search")])]);
+        let result = loop_.run(&base, &tool_ctx(), &upstream).await?;
+        let seen = upstream.seen();
+        assert_eq!(seen.len(), 1);
+        assert!(seen.iter().all(|prompt| prompt.tools.is_empty()));
+        assert!(result.server_tool_calls.is_empty());
+        assert!(matches!(
+            result.result.content.first(),
+            Some(Content::ToolCall { .. })
+        ));
+        Ok(())
     }
 
     #[tokio::test]

@@ -88,6 +88,8 @@ pub enum CommandTarget {
     },
     /// Open the agent selector.
     ChooseAgent,
+    /// Create a fresh native session using the current agent's launch settings.
+    NewSession,
     /// Open the native session selector.
     OpenSession,
     /// Open ACP-led agent settings.
@@ -300,6 +302,8 @@ pub enum CodeEffect {
     },
     /// Open the app-supplied agent selector.
     ChooseAgent,
+    /// Create a fresh session with the current agent.
+    NewSession,
     /// Open the app-supplied session selector.
     OpenSession,
     /// Open ACP-led settings.
@@ -1040,6 +1044,16 @@ impl CodeState {
     }
 
     fn choice_event(&mut self, event: &Event) -> Vec<CodeEffect> {
+        if let Event::Paste(text) = event {
+            if let Surface::Palette(list) | Surface::Selector(list) = &mut self.surface {
+                list.query
+                    .push_str(&text.replace("\r\n", "\n").replace('\r', "\n"));
+                list.filter();
+                list.sync_slash_draft(&mut self.editor);
+            }
+            // A pasted newline is data, not confirmation of an operator action.
+            return Vec::new();
+        }
         let Some(key) = pressed(event) else {
             return Vec::new();
         };
@@ -1165,6 +1179,7 @@ impl CodeState {
                 vec![CodeEffect::LocalAction { action, args }]
             }
             CommandTarget::ChooseAgent => vec![CodeEffect::ChooseAgent],
+            CommandTarget::NewSession => vec![CodeEffect::NewSession],
             CommandTarget::OpenSession => vec![CodeEffect::OpenSession],
             CommandTarget::Settings => vec![CodeEffect::Settings],
             CommandTarget::Report { id } => vec![CodeEffect::Report { id }],
@@ -2009,7 +2024,9 @@ impl CodeState {
             return command;
         }
         let unavailable = match &command.target {
-            CommandTarget::ChooseAgent => self.session_replacement_reason(),
+            CommandTarget::ChooseAgent | CommandTarget::NewSession => {
+                self.session_replacement_reason()
+            }
             CommandTarget::OpenSession => self.session_replacement_reason().or_else(|| {
                 (!self.session_active)
                     .then_some("Choose an agent before opening a native session".to_string())
@@ -2442,7 +2459,10 @@ fn refresh_selector_list(list: &mut ChoiceList, selectors: &[Selector]) -> bool 
 }
 
 fn is_async_mutation_selector(selector: &str) -> bool {
-    selector == "route" || selector == "mode" || selector.starts_with("config:")
+    selector == "route"
+        || selector == "mode"
+        || selector.starts_with("config:")
+        || selector.starts_with("evolution:")
 }
 
 fn surface_returns_to_permission(surface: &Surface) -> bool {
@@ -2771,7 +2791,7 @@ fn dock_height(state: &CodeState, size: Size) -> u16 {
     }
     let status: u16 = if size.width < 68 { 4 } else { 2 };
     let hint: u16 = 1;
-    let content = match state.surface {
+    let content = match &state.surface {
         Surface::Conversation => {
             let queue = if state.queued_preview_len() == 0 {
                 0
@@ -2786,6 +2806,16 @@ fn dock_height(state: &CodeState, size: Size) -> u16 {
                 .saturating_add(composer_height(state, size.width))
         }
         Surface::Inspector(_) => 0,
+        Surface::Selector(list) if list.detail.contains('\n') => {
+            // Rubric instructions must stay visible with the score choices,
+            // including on a narrow terminal using the native scrollback dock.
+            let detail_rows = choice_detail_lines(list, size.width).len();
+            transient_budget.max(
+                u16::try_from(detail_rows)
+                    .unwrap_or(u16::MAX)
+                    .saturating_add(5),
+            )
+        }
         _ => transient_budget,
     };
     status
@@ -3665,23 +3695,44 @@ fn hint(state: &CodeState) -> String {
     }
 }
 
+fn choice_detail_lines(list: &ChoiceList, width: u16) -> Vec<Line<'static>> {
+    if !list.detail.contains('\n') {
+        return Vec::new();
+    }
+    sanitize(&list.detail)
+        .lines()
+        .flat_map(|line| wrap(&Line::from(line.to_owned()), width.max(1)))
+        .collect()
+}
+
 fn render_choice_list(frame: &mut Frame<'_>, viewport: Rect, list: &ChoiceList) {
     let area = viewport;
     frame.render_widget(Clear, area);
+    let detail = choice_detail_lines(list, area.width);
+    let heading_height = u16::try_from(detail.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(1)
+        .min(area.height.saturating_sub(3).max(1));
     let [heading, query, choices, footer] = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(heading_height),
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(1),
     ])
     .areas(area);
     frame.render_widget(
-        Block::default()
-            .borders(Borders::TOP)
-            .title(format!(" {} ", safe_one_line(&list.title))),
+        Paragraph::new(detail)
+            .style(Style::default().fg(Color::DarkGray))
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .title(format!(" {} ", safe_one_line(&list.title))),
+            ),
         heading,
     );
-    let query_text = if list.query.is_empty() {
+    let query_text = if list.query.is_empty() && list.detail.contains('\n') {
+        "› Type to filter".to_string()
+    } else if list.query.is_empty() {
         format!("› Type to filter · {}", safe_one_line(&list.detail))
     } else {
         format!("› {}", safe_one_line(&list.query))
@@ -4739,6 +4790,12 @@ mod tests {
                 CommandTarget::OpenSession,
             ),
             Command::new(
+                "New session",
+                "Fresh transcript",
+                CommandOwner::BitRouter,
+                CommandTarget::NewSession,
+            ),
+            Command::new(
                 "Agent settings",
                 "Settings reported by the agent",
                 CommandOwner::BitRouter,
@@ -4766,7 +4823,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             _ => Vec::new(),
         };
-        assert_eq!(working_reasons.len(), 3);
+        assert_eq!(working_reasons.len(), 4);
         assert!(
             working_reasons
                 .iter()
@@ -4791,7 +4848,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             _ => Vec::new(),
         };
-        assert_eq!(permission_reasons.len(), 3);
+        assert_eq!(permission_reasons.len(), 4);
         assert!(
             permission_reasons
                 .iter()
@@ -4849,6 +4906,38 @@ mod tests {
     }
 
     #[test]
+    fn selector_rubric_instructions_are_visible_with_search_and_scores() -> io::Result<()> {
+        for (width, height) in [(40, 16), (80, 24), (120, 40)] {
+            let mut state = active_state();
+            state.set_selectors(vec![Selector::new(
+                "rubric",
+                "Delivery",
+                "Weight 4. Always applicable.\n0: Not delivered; 0.5: Partly delivered; 1: Delivered and supported by original evidence.",
+                vec![SelectorRow::new("score", "Score and applicability", "Choose a score")],
+            )]);
+            assert!(state.open_selector("rubric"));
+            let size = Size::new(width, height);
+            let mut terminal = Terminal::new(TestBackend::new(width, dock_height(&state, size)))?;
+            terminal.draw(|frame| {
+                let _ = render_dock(frame, &state, size);
+            })?;
+            let screen = grid(terminal.backend());
+            let visible_text = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+            for text in [
+                "Always applicable",
+                "0: Not delivered",
+                "original evidence",
+                "Type to filter",
+                "Score and applicability",
+                "Enter select",
+            ] {
+                assert!(visible_text.contains(text), "missing {text}: {screen}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn selectors_preserve_explicit_custom_values() {
         let mut state = active_state();
         state.set_selectors(vec![
@@ -4872,6 +4961,61 @@ mod tests {
             [CodeEffect::Select { selector, id, custom: true }]
                 if selector == "native-session" && id == "x"
         ));
+    }
+
+    #[test]
+    fn failed_evaluation_selection_preserves_its_picker_and_coding_draft() {
+        let mut state = CodeState::new(CodeStatus::default());
+        let _ = state.step(paste("Keep this coding prompt"));
+        state.set_selectors(vec![Selector::new(
+            "evolution:score:0",
+            "Delivery score",
+            "Recorded evidence only",
+            vec![SelectorRow::new("1", "Met", "")],
+        )]);
+        assert!(state.open_selector("evolution:score:0"));
+        let effects = state.step(press(KeyCode::Enter));
+        assert!(
+            matches!(effects.as_slice(), [CodeEffect::Select { selector, id, .. }] if selector == "evolution:score:0" && id == "1")
+        );
+        assert!(state.selector_mutation_failed("evolution:score:0"));
+        state.open_inspector(Inspector::new(
+            "Evaluation failed",
+            "A newer assessment was selected",
+        ));
+        let _ = state.step(press(KeyCode::Esc));
+        assert!(
+            matches!(&state.surface, Surface::Selector(list) if list.title == "Delivery score")
+        );
+        assert_eq!(state.editor().text(), "Keep this coding prompt");
+    }
+
+    #[test]
+    fn pasted_evaluation_reason_requires_confirmation_and_survives_a_failed_submission() {
+        let mut state = CodeState::new(CodeStatus::default());
+        let _ = state.step(paste("Unsubmitted coding prompt"));
+        state.set_selectors(vec![
+            Selector::new(
+                "evolution:reason:0",
+                "Explain the score",
+                "Recorded evidence",
+                Vec::new(),
+            )
+            .allow_custom("Your explanation"),
+        ]);
+        assert!(state.open_selector("evolution:reason:0"));
+        let explanation = "Tests passed.\r\n人工复核：still needs review.";
+        assert!(state.step(paste(explanation)).is_empty());
+        assert_eq!(state.editor().text(), "Unsubmitted coding prompt");
+        let expected = explanation.replace("\r\n", "\n");
+        let effects = state.step(press(KeyCode::Enter));
+        assert!(
+            matches!(effects.as_slice(), [CodeEffect::Select { selector, id, custom: true }]
+            if selector == "evolution:reason:0" && id == &expected)
+        );
+        assert!(state.selector_mutation_failed("evolution:reason:0"));
+        assert!(matches!(&state.surface, Surface::Selector(list) if list.query == expected));
+        assert_eq!(state.editor().text(), "Unsubmitted coding prompt");
     }
 
     #[test]

@@ -20,6 +20,14 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — authoritative boundary
   for ACP controller topology, harness-owned sessions, endpoint configuration,
   native identity, and session-scoped routing.
+- [`ACP_EVOLUTION_SPEC.md`](ACP_EVOLUTION_SPEC.md) — **implemented; controlled
+  serving acceptance passed; historical calibration pending.** Recorded-evidence
+  rubric evaluation, checkpoint feedback, batched
+  Thompson sampling and session-sticky policy blocks. The
+  [experiment report](ACP_EVOLUTION_EXPERIMENTS.md) separates controlled results,
+  negative findings and remaining historical-data/product validation. The
+  [main integration validation](ACP_EVOLUTION_PR_VALIDATION.md) records the
+  `bro`/scrollback integration and final judge lease regression checks.
 - [`CODE_TUI_UX_SPEC.md`](CODE_TUI_UX_SPEC.md) — **implemented; locally verified.**
   Replaces the seven-view Code dashboard with a conversation, contextual
   pickers/inspectors, and agent/route/activity/attributed-cost status; defines
@@ -106,3 +114,7 @@ The **product** documentation that used to live here now lives in the
   here as usual — the tables follow automatically.
 - On each release, an agent in `bitrouter-docs` drafts a docs update from the
   changelog for human review.
+
+- [Real Codex subscription ACP pilot](ACP_SUBSCRIPTION_PILOT.md): controlled tasks, frozen evidence, model-reference comparisons and observed follow-up issues.
+- [Rubric v2 fresh-task comparison](ACP_RUBRIC_V2_HOLDOUT.md): four additional subscription task families, revised responsibility semantics, preserved unknown validation and version-compatibility checks.
+- [TS goal audit](ACP_TS_GOAL_AUDIT.md): requirement-level evidence for the controlled reward pilot, learner experiments and serving implementation; separate limits on natural-history and live-benefit claims.

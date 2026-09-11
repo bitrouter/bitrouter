@@ -139,6 +139,16 @@ pub enum DaemonCommand {
     /// a serialized HTTP request.  The local control socket remains a
     /// host-local transport with its own contract.
     Inspect { inspection: DaemonInspection },
+    /// Local, owner-scoped checkpoint evolution control.
+    Evolution {
+        operation: crate::evolution::operator::EvolutionOperation,
+    },
+    /// Acknowledge request inventory for a recorder before capture starts.
+    AcpRecordingRegister {
+        connection_id: String,
+        api_principal: String,
+        controller_instance_id: String,
+    },
     /// Remove every route lease in one principal/controller namespace.
     AcpControllerCleanup {
         /// Opaque principal derived from the normal API credential, or local.
@@ -258,6 +268,13 @@ pub enum DaemonResponse {
     ReloadState { state: ReloadState },
     /// A typed administration inspection result.
     Inspection { report: DaemonInspectionReport },
+    Evolution {
+        report: Box<crate::evolution::operator::EvolutionReport>,
+    },
+    /// This daemon shares the recorder's database and records gateway requests.
+    AcpRecordingRegistered {
+        registration: crate::evolution::inventory::CoverageRegistration,
+    },
     /// Daemon-confirmed route state for one native ACP session.
     AcpRouteState {
         /// Live model selectors accepted as logical routes.
@@ -519,6 +536,8 @@ pub async fn run_control_socket(
         AcpControlPlane {
             runtime: Arc::new(AcpRuntime::new()),
             metering,
+            inventory: None,
+            evolution: None,
         },
     )
     .await
@@ -538,6 +557,10 @@ pub struct AcpControlPlane {
     pub runtime: Arc<AcpRuntime>,
     /// Settled-request store behind session-attributed spend.
     pub metering: MeteringStore,
+    /// The inventory installed in this daemon's model request pipeline.
+    pub inventory: Option<crate::evolution::inventory::GatewayInventory>,
+    /// Live route validation and checkpoint worker status, when installed.
+    pub evolution: Option<crate::evolution::runtime::EvolutionRuntime>,
 }
 
 pub async fn run_control_socket_with_acp_runtime(
@@ -662,6 +685,41 @@ async fn dispatch(
 ) -> DaemonResponse {
     match command {
         DaemonCommand::Stop => DaemonResponse::Ok,
+        DaemonCommand::Evolution { operation } => {
+            let Some(runtime) = &acp.evolution else {
+                return DaemonResponse::Error {
+                    message: "checkpoint evolution is unavailable on this daemon".into(),
+                };
+            };
+            match runtime.operate("local", operation).await {
+                Ok(report) => DaemonResponse::Evolution {
+                    report: Box::new(report),
+                },
+                Err(error) => DaemonResponse::Error {
+                    message: error.to_string(),
+                },
+            }
+        }
+        DaemonCommand::AcpRecordingRegister {
+            connection_id,
+            api_principal,
+            controller_instance_id,
+        } => {
+            let Some(inventory) = &acp.inventory else {
+                return DaemonResponse::Error {
+                    message: "gateway request inventory is unavailable on this daemon".into(),
+                };
+            };
+            match inventory
+                .register_capture(&connection_id, &api_principal, &controller_instance_id)
+                .await
+            {
+                Ok(registration) => DaemonResponse::AcpRecordingRegistered { registration },
+                Err(error) => DaemonResponse::Error {
+                    message: error.to_string(),
+                },
+            }
+        }
         DaemonCommand::Reload { env } => match reloader.reload_with_env(env).await {
             Ok(()) => {
                 tracing::info!("reload succeeded");

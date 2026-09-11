@@ -2680,6 +2680,28 @@ async fn open_capture(
             route_scope_id: binding.map(|value| value.api_principal.clone()),
         })
         .await?;
+    if let Some(binding) = binding {
+        let command = crate::daemon::DaemonCommand::AcpRecordingRegister {
+            connection_id: recorder.connection_id().to_owned(),
+            api_principal: binding.api_principal.clone(),
+            controller_instance_id: binding.controller_instance_id.clone(),
+        };
+        let acknowledged = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::daemon::send_command(&binding.socket_path, &command),
+        )
+        .await;
+        match acknowledged {
+            Ok(Ok(crate::daemon::DaemonResponse::AcpRecordingRegistered { registration }))
+                if registration.connection_id == recorder.connection_id()
+                    && registration.version == crate::evolution::inventory::INVENTORY_VERSION
+                    && registration.invalid_reason.is_none() => {}
+            response => tracing::warn!(
+                ?response,
+                "ACP capture has no acknowledged gateway cost coverage"
+            ),
+        }
+    }
     Ok(Some(recorder))
 }
 
@@ -3607,6 +3629,9 @@ pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
         ..Default::default()
     }
 }
+
+#[cfg(all(test, unix))]
+mod evolution_acceptance;
 
 #[cfg(test)]
 mod auth_report_tests {

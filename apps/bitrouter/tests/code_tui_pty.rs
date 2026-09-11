@@ -37,6 +37,9 @@ const LEAVE_ALTERNATE_SCREEN: &str = "\x1b[?1049l";
 const BEGIN_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026h";
 const END_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026l";
 
+#[path = "code_tui_pty/evolution.rs"]
+mod evolution;
+
 /// A deliberately small ACP agent. Its responses are protocol-shaped JSON, not
 /// terminal snapshots, so test failures describe lifecycle behavior instead of
 /// an incidental escape-sequence layout.
@@ -53,6 +56,7 @@ control_path = os.environ.get("BITROUTER_PTY_CONTROL")
 pending_prompt = None
 permission_ids = set()
 prompt_count = 0
+current_session_id = "pty-native"
 state_lock = threading.Lock()
 output_lock = threading.Lock()
 
@@ -64,12 +68,12 @@ def send(value):
 def respond(request_id, result):
     send({"jsonrpc": "2.0", "id": request_id, "result": result})
 
-def update(text, session_id="pty-native"):
+def update(text, session_id=None):
     send({
         "jsonrpc": "2.0",
         "method": "session/update",
         "params": {
-            "sessionId": session_id,
+            "sessionId": session_id or current_session_id,
             "update": {
                 "sessionUpdate": "agent_message_chunk",
                 "content": {"type": "text", "text": text},
@@ -190,6 +194,8 @@ with open(capture_path, "ab") as capture:
                 "agentInfo": {"name": "pty-minimal", "version": "1"},
             })
         elif method == "session/new":
+            if scenario == "fresh-sessions":
+                current_session_id = "pty-fresh-" + str(os.getpid())
             if scenario in ("settings-confirmed", "settings-failure"):
                 respond(request_id, {
                     "sessionId": "pty-native",
@@ -198,8 +204,8 @@ with open(capture_path, "ab") as capture:
                 })
                 update("FXSET")
             else:
-                respond(request_id, {"sessionId": "pty-native"})
-            update("FXRD")
+                respond(request_id, {"sessionId": current_session_id})
+            update("FXRD " + current_session_id if scenario == "fresh-sessions" else "FXRD")
         elif method == "session/load":
             if scenario == "session-lifecycle":
                 session_id = message["params"].get("sessionId", "native-a12-load")
@@ -228,7 +234,11 @@ with open(capture_path, "ab") as capture:
                 respond(request_id, {"configOptions": []})
         elif method == "session/prompt":
             prompt_count += 1
-            if scenario == "delayed-cancel":
+            if scenario == "fresh-sessions" and "wait-for-timeout" in json.dumps(message):
+                with state_lock:
+                    pending_prompt = request_id
+                update("FXWAIT")
+            elif scenario == "delayed-cancel":
                 with state_lock:
                     pending_prompt = request_id
                 update("FXCN")
@@ -282,6 +292,7 @@ enum MockScenario {
     SettingsConfirmed,
     SettingsFailure,
     SessionLifecycle,
+    FreshSessions,
 }
 
 impl MockScenario {
@@ -297,6 +308,7 @@ impl MockScenario {
             Self::SettingsConfirmed => "settings-confirmed",
             Self::SettingsFailure => "settings-failure",
             Self::SessionLifecycle => "session-lifecycle",
+            Self::FreshSessions => "fresh-sessions",
         }
     }
 }

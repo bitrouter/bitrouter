@@ -2724,6 +2724,18 @@ struct PolicySnapshot {
     digest: Option<String>,
     routers: BTreeMap<String, Arc<PolicyTableRouter>>,
     administration: Option<crate::actions::administration::PolicyReport>,
+    document: Option<PolicyLock>,
+}
+
+/// Exact live policy input retained while an evolution admission is prepared.
+/// This exposes the in-memory version; reading a newer file from disk would
+/// incorrectly validate a candidate against policy state that is not serving.
+pub(crate) struct PolicyRoutingSnapshot(Arc<PolicySnapshot>);
+
+impl PolicyRoutingSnapshot {
+    pub(crate) fn document(&self) -> Option<&PolicyLock> {
+        self.0.document.as_ref()
+    }
 }
 
 /// Fully built policy candidate that has not yet replaced the live snapshot.
@@ -2874,6 +2886,7 @@ impl PolicyRuntime {
         Ok(PreparedPolicySnapshot(Arc::new(PolicySnapshot {
             path: loaded.as_ref().map(|lock| lock.path.clone()),
             digest: loaded.as_ref().map(|lock| lock.digest.clone()),
+            document: loaded.as_ref().map(|lock| lock.document.clone()),
             routers,
             administration: Some(crate::actions::administration::PolicyReport::from_loaded(
                 config,
@@ -2888,6 +2901,19 @@ impl PolicyRuntime {
             .snapshot
             .write()
             .unwrap_or_else(PoisonError::into_inner) = prepared.0;
+    }
+
+    pub(crate) fn routing_snapshot(&self) -> PolicyRoutingSnapshot {
+        let snapshot = match self.snapshot.read() {
+            Ok(snapshot) => snapshot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        PolicyRoutingSnapshot(snapshot)
+    }
+
+    pub(crate) fn matches_routing_snapshot(&self, expected: &PolicyRoutingSnapshot) -> bool {
+        let current = self.routing_snapshot();
+        Arc::ptr_eq(&current.0, &expected.0)
     }
 
     /// Inspection data captured with the same policy version used for routing.

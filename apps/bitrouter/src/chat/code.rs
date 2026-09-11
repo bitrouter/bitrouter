@@ -16,6 +16,9 @@ use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use tokio_util::sync::CancellationToken;
 
 use crate::acp_cli::{SessionHandle, SessionSelection};
+use crate::actions::code::evolution::candidate::CandidateDraft;
+use crate::actions::code::evolution::manual::ReviewDraft;
+use crate::actions::code::evolution::{Panel, SessionRef};
 use crate::actions::code::{CodeServices, OpenedSession};
 use crate::dashboard::SessionRequest;
 
@@ -23,6 +26,7 @@ use super::code_controls::{picker, row};
 use super::code_wire::{CodeWire, WireEvent};
 
 enum JobResult {
+    Evolution(Box<Panel>),
     Opened(Box<OpenedSession>),
     Selected {
         handle: Box<SessionHandle>,
@@ -59,6 +63,24 @@ struct Runtime {
     route_probe: Option<LocalBoxFuture<'static, Result<String>>>,
     disconnected_details: Option<String>,
     mutation_selector: Option<String>,
+    evolution_review: Option<ReviewDraft>,
+    evolution_candidate: Option<CandidateDraft>,
+    last_launch: Option<SessionRequest>,
+}
+
+fn fresh_request(previous: Option<&SessionRequest>, agent: String) -> SessionRequest {
+    if let Some(previous) = previous.filter(|request| request.agent == agent) {
+        let mut request = previous.clone();
+        request.selection = SessionSelection::New;
+        request
+    } else {
+        SessionRequest {
+            agent,
+            selection: SessionSelection::New,
+            turn_timeout: None,
+            routing: Default::default(),
+        }
+    }
 }
 
 pub(crate) async fn run(
@@ -87,6 +109,9 @@ pub(crate) async fn run(
         route_probe: None,
         disconnected_details: None,
         mutation_selector: None,
+        evolution_review: None,
+        evolution_candidate: None,
+        last_launch: None,
     };
     runtime
         .state
@@ -278,6 +303,7 @@ impl Runtime {
     }
 
     fn start(&mut self, request: SessionRequest) {
+        self.last_launch = Some(request.clone());
         self.retain_session_details();
         self.job_blocks_prompt = true;
         self.route_probe = None;
@@ -409,6 +435,20 @@ impl Runtime {
                     .boxed_local(),
                 );
             }
+            CodeEffect::NewSession => {
+                self.idle()?;
+                ensure!(
+                    self.state.queue_len() == 0,
+                    "Resolve queued work before opening another session"
+                );
+                let agent = self
+                    .last_launch
+                    .as_ref()
+                    .context("Choose an agent first")?
+                    .agent
+                    .clone();
+                self.start(fresh_request(self.last_launch.as_ref(), agent));
+            }
             CodeEffect::OpenSession => self.open_sessions()?,
             CodeEffect::Settings => {
                 self.idle()?;
@@ -474,7 +514,10 @@ impl Runtime {
     }
 
     fn local_action(&mut self, action: &str, args: Vec<String>) -> Result<()> {
-        if matches!(action, "route_set" | "route_reset") {
+        if action == "evolution" {
+            ensure!(args.is_empty(), "usage: /evolution");
+            self.evolution_action("evolution:menu", "open".into())?;
+        } else if matches!(action, "route_set" | "route_reset") {
             self.idle()?;
             self.job_blocks_prompt = true;
             self.route_probe = None;
@@ -512,6 +555,40 @@ impl Runtime {
         Ok(())
     }
 
+    fn evolution_action(&mut self, selector: &str, choice: String) -> Result<()> {
+        if selector == "evolution:checkpoint" && choice.starts_with("freeze:") {
+            self.idle()?;
+        }
+        let session = self.wire.handle.as_ref().map(|handle| SessionRef {
+            source: handle.agent_id.clone(),
+            session_id: handle.session_id.to_string(),
+        });
+        let draft = self.evolution_review.clone();
+        let candidate = self.evolution_candidate.clone();
+        let services = self.services.clone();
+        let selector = selector.to_owned();
+        self.job_blocks_prompt = false;
+        self.job = Some(
+            async move {
+                Ok(JobResult::Evolution(Box::new(
+                    services
+                        .evolution_step(&selector, &choice, session, draft, candidate)
+                        .await?,
+                )))
+            }
+            .boxed_local(),
+        );
+        Ok(())
+    }
+
+    fn clear_evolution_drafts(&mut self) {
+        self.evolution_review = None;
+        self.evolution_candidate = None;
+        self.selectors
+            .retain(|selector| !selector.id.starts_with("evolution:"));
+        self.state.set_selectors(self.selectors.clone());
+    }
+
     fn open_sessions(&mut self) -> Result<()> {
         self.idle()?;
         ensure!(
@@ -540,18 +617,14 @@ impl Runtime {
 
     fn selected(&mut self, selector: &str, id: String, custom: bool) -> Result<()> {
         match selector {
+            _ if selector.starts_with("evolution:") => self.evolution_action(selector, id)?,
             "agent" => {
                 self.idle()?;
                 ensure!(
                     self.state.queue_len() == 0,
                     "Resolve queued work before changing agents"
                 );
-                self.start(SessionRequest {
-                    agent: id,
-                    selection: SessionSelection::New,
-                    turn_timeout: None,
-                    routing: Default::default(),
-                });
+                self.start(fresh_request(self.last_launch.as_ref(), id));
             }
             "preview" => self.report("route", vec![id]),
             "policy" => self.report("policy_show", vec![id]),
@@ -653,7 +726,11 @@ impl Runtime {
             }
             _ => anyhow::bail!("Unknown selection surface `{selector}`"),
         }
-        if selector == "route" || selector == "mode" || selector.starts_with("config:") {
+        if selector == "route"
+            || selector == "mode"
+            || selector.starts_with("config:")
+            || selector.starts_with("evolution:")
+        {
             self.mutation_selector = Some(selector.to_string());
         }
         Ok(())
@@ -710,7 +787,30 @@ impl Runtime {
     fn job_result(&mut self, result: JobResult) {
         let settings_changed = matches!(&result, JobResult::Config(_) | JobResult::Mode(_));
         match result {
+            JobResult::Evolution(panel) => {
+                if panel.clear_drafts {
+                    self.clear_evolution_drafts();
+                }
+                if let Some(candidate) = panel.candidate {
+                    self.evolution_candidate = Some(candidate);
+                }
+                if let Some(review) = panel.review {
+                    self.evolution_review = Some(review);
+                }
+                if let Some(selector) = panel.selector {
+                    self.selector(selector);
+                }
+                if let Some(inspector) = panel.inspector {
+                    self.state.open_inspector(inspector);
+                }
+            }
             JobResult::Opened(opened) => {
+                if let Some(launch) = &mut self.last_launch {
+                    // Use the resolved identity when the original launch used
+                    // a friendly alias such as "codex".
+                    launch.agent = opened.handle.agent_id.clone();
+                }
+                self.clear_evolution_drafts();
                 self.disconnected_details = None;
                 self.templates = opened.prompt_commands;
                 self.state.reset_session();
@@ -742,6 +842,7 @@ impl Runtime {
             } => {
                 match result {
                     Ok(()) => {
+                        self.clear_evolution_drafts();
                         self.disconnected_details = None;
                         self.wire.reattach(*handle);
                         self.state.reset_session();
@@ -976,6 +1077,16 @@ impl Runtime {
                 CommandOwner::BitRouter,
                 CommandTarget::ChooseAgent,
             ));
+            let mut fresh = Command::new(
+                "New session",
+                "Fresh transcript with the same agent and launch settings",
+                CommandOwner::BitRouter,
+                CommandTarget::NewSession,
+            );
+            if self.last_launch.is_none() {
+                fresh = fresh.unavailable("Choose an agent first");
+            }
+            commands.push(fresh);
             let mut sessions = Command::new(
                 "Open session",
                 "Load or resume a native session",
@@ -1068,6 +1179,17 @@ impl Runtime {
             }
             commands.push(command);
         }
+        if self.services.evolution_available() {
+            commands.push(Command::new(
+                "/evolution",
+                "Checkpoint evidence, manual evaluation and evolution modes",
+                CommandOwner::BitRouter,
+                CommandTarget::LocalAction {
+                    action: "evolution".into(),
+                    args: Vec::new(),
+                },
+            ));
+        }
         let typed = self
             .services
             .commands(self.wire.handle.as_ref().map(|handle| &handle.client));
@@ -1154,5 +1276,37 @@ async fn next_route(probe: &mut Option<LocalBoxFuture<'static, Result<String>>>)
     match probe {
         Some(probe) => probe.await,
         None => std::future::pending().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::acp_cli::RoutingOptions;
+
+    #[test]
+    fn fresh_session_retains_same_agent_launch_settings_without_replaying_native_history() {
+        let previous = SessionRequest {
+            agent: "codex-acp".into(),
+            selection: SessionSelection::Load("earlier-native-session".into()),
+            turn_timeout: Some(37),
+            routing: RoutingOptions {
+                direct: true,
+                base_url: Some("http://127.0.0.1:7777".into()),
+                model: Some("gpt-5.2".into()),
+                no_start: true,
+            },
+        };
+        let next = fresh_request(Some(&previous), "codex-acp".into());
+        assert_eq!(next.selection, SessionSelection::New);
+        assert_eq!(next.routing, previous.routing);
+        assert_eq!(next.turn_timeout, Some(37));
+        assert!(matches!(previous.selection, SessionSelection::Load(_)));
+        // An unrelated harness must not inherit another harness's model alias
+        // or gateway override merely because it was selected afterwards.
+        let other = fresh_request(Some(&previous), "claude-acp".into());
+        assert_eq!(other.selection, SessionSelection::New);
+        assert_eq!(other.routing, RoutingOptions::default());
+        assert_eq!(other.turn_timeout, None);
     }
 }

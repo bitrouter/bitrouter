@@ -35,6 +35,7 @@ pub mod dashboard;
 pub mod db;
 pub mod error_report;
 pub mod eval;
+pub mod evolution;
 pub mod gateways;
 pub mod harness;
 mod local_cli;

@@ -8,6 +8,7 @@ use crate::acp_cli::{RoutingOptions, SessionSelection};
 use crate::contexts::RemoteContext;
 
 /// An optional ACP session to open when Code starts.
+#[derive(Clone)]
 pub struct SessionRequest {
     pub agent: String,
     pub selection: SessionSelection,

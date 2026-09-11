@@ -87,6 +87,23 @@ impl CanonicalStore {
         identity: &SessionIdentity,
         input: RevisionInput,
     ) -> Result<AssessmentRevision> {
+        self.submit_assessment_checked(identity, input, |_| Box::pin(async { Ok(()) }))
+            .await
+    }
+
+    /// App-owned automatic workers may fence selection against their control
+    /// epoch. The check runs in the same transaction, before canonical locks.
+    /// It may only inspect/lock local state, never perform network/model work.
+    pub(crate) async fn submit_assessment_checked<F>(
+        &self,
+        identity: &SessionIdentity,
+        input: RevisionInput,
+        precondition: F,
+    ) -> Result<AssessmentRevision>
+    where
+        F: for<'a> FnOnce(&'a DatabaseTransaction) -> futures::future::BoxFuture<'a, Result<()>>
+            + Send,
+    {
         let cp = self
             .checkpoint_content(identity, &input.checkpoint_id)
             .await?
@@ -96,6 +113,7 @@ impl CanonicalStore {
         let revision_id = digest(&(&key, &input.submission_id))?;
         let input_digest = digest(&input)?;
         let tx = self.db.begin().await?;
+        precondition(&tx).await?;
         let keys: BTreeSet<_> = cp
             .segments
             .iter()

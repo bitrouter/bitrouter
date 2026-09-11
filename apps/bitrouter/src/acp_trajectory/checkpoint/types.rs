@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use super::super::{CanonicalEvent, RequestAssociation, SessionIdentity};
 
+/// Own-session requests extend through their observed canonical head, while
+/// inherited fork prefixes retain their original temporal boundary.
+pub const RESOURCE_MEMBERSHIP_VERSION: &str = "native-head-resources-v2";
+
 /// An immutable raw observation reference, including its original content digest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventReference {
@@ -29,6 +33,8 @@ pub struct PrefixSegment {
     pub parent_key: Option<String>,
     pub parent_watermark: Option<i64>,
     pub events: Vec<EventReference>,
+    /// Creation requests and cross-session fork completion evidence, bounded
+    /// by the source connection's observed prefix.
     pub setup: Vec<EventReference>,
     pub connections: Vec<ConnectionObservation>,
     pub boundary_at: String,
@@ -68,7 +74,22 @@ pub struct CheckpointContent {
 
 /// A separate immutable observation of locally recorded metering/route evidence.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayCoverage {
+    pub version: String,
+    /// Coverage is limited to BitRouter-managed model requests.
+    pub scope: String,
+    /// Capture connection ID to acknowledgement revision; None means absent.
+    pub revisions: BTreeMap<String, Option<i64>>,
+    pub reasons: Vec<String>,
+}
+
+/// A separate immutable observation of locally recorded metering/route evidence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceObservation {
+    /// None denotes the earlier frozen-timestamp membership rule. Historical
+    /// observations retain their rule; new observations use the current version.
+    #[serde(default)]
+    pub membership_version: Option<String>,
     pub observation_id: String,
     pub checkpoint_id: String,
     pub revision: i64,
@@ -80,6 +101,9 @@ pub struct ResourceObservation {
     pub known_cost_micro_usd: i64,
     pub unpriced_requests: usize,
     pub metering_complete: bool,
+    /// Older correlated metering snapshots do not establish complete coverage.
+    #[serde(default)]
+    pub gateway_coverage: Option<GatewayCoverage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,7 +175,7 @@ pub struct AssessmentRevision {
     pub created_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EffectiveAssessment {
     pub identity: SessionIdentity,
     pub current_watermark: i64,
