@@ -212,7 +212,7 @@ fn finish_coding_turn(code: &mut CodeFixture, before: &PtyCheckpoint) -> Result<
         code.pty.wait_for_screen_inner(
             Some(&answered),
             "accepted coding command resumed",
-            |screen| !screen.contains("Permission needed") && !screen.contains("┌ Permission"),
+            |screen| !screen.contains("Permission needed") && !screen.contains(" Permission ─"),
         )?;
     }
     bail!("coding worker repeatedly requested permission")

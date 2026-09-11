@@ -459,7 +459,7 @@ fn trial_sessions(
         code.pty.send(b"\r")?;
         code.pty
             .wait_for_text_since(&checkpoint, "Turn completed")?;
-        runtime.block_on(async {
+        let learning = runtime.block_on(async {
             tokio::time::timeout(PTY_TIMEOUT, async {
                 loop {
                     let report = match service
@@ -491,7 +491,27 @@ fn trial_sessions(
             })
             .await
             .context("native trial did not enter comparable learning")?
-        })?;
+        });
+        if let Err(error) = learning {
+            let report = runtime.block_on(
+                service
+                    .evolution
+                    .service("local")?
+                    .learning_status("native-terminal-trial"),
+            )?;
+            let key = identity.key()?;
+            eprintln!(
+                "Native trial {count}: {}",
+                json!({
+                    "identity": identity,
+                    "unavailable": report.unavailable.get(&key),
+                    "observation": report.observations.sessions.get(&key),
+                    "effective": runtime.block_on(read_effective(service, &identity))?,
+                    "screen": code.pty.screen.screen().contents(),
+                })
+            );
+            return Err(error);
+        }
         let executions = runtime.block_on(service.evolution.executions(&identity))?;
         ensure!(
             !executions.is_empty(),
