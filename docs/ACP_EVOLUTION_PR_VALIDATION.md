@@ -33,10 +33,11 @@ records source hashes, test scopes, prior failures and local log hashes.
 | Maintained Codex and Claude terminal checks | 4 passed; no leaked-handle warning |
 | Pinned fixture worker cleanup | No worker remained |
 
-The regular suite and doc tests ran at `a22024dc`. The only later source
-change is the opt-in worker fixture's handling of an explicitly retryable
-concurrent assessment snapshot. The final native checks and Clippy include it;
-production code is identical. Loopback tests use
+The recorded regular suite and doc tests ran at `a22024dc`. At the PR
+submission snapshot, the only later source change was the opt-in worker
+fixture's handling of an explicitly retryable concurrent assessment snapshot.
+The recorded native checks and Clippy include it; production code is identical.
+Subsequent CI fixes are listed below. Loopback tests use
 `NO_PROXY=localhost,127.0.0.1,::1` and the lowercase equivalent to bypass the
 operator's system proxy.
 
@@ -88,3 +89,17 @@ remain historical snapshots.
 `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`
 passed locally, together with formatting and diff checks. The local rustdoc log
 SHA-256 is `6bcbd91624cbc692a6c1a4c6b5c2fd20edaf46cce67bccd58be922ef7073c6ab`.
+
+## CI follow-up: Windows scheduler fixture
+
+Windows CI exposed a YAML parsing failure in the persistent scheduler fixture:
+the temporary database path was inserted into a double-quoted YAML scalar, so
+Windows backslashes were interpreted as escapes. The fixture now assigns the
+database URL directly to the parsed configuration. This is a test-only change;
+the existing concurrent-worker test still verifies that separate runtimes share
+one judge lease and one canonical assessment revision.
+
+After this fix, the full local regular suite passed again: 3,395 passed and 22
+skipped. All-target, all-feature Clippy with warnings denied, formatting and
+diff checks also passed. The regular-suite log SHA-256 is
+`26d503b14a89d3e816e5d80ab11fc5c857f9ecc5666e97d7b3ca6942d7628e04`.

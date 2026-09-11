@@ -51,8 +51,8 @@ async fn fixture_with_storage(mode: EvolutionMode, persistent: bool) -> Result<F
     } else {
         "sqlite::memory:".into()
     };
-    let config: Config = bitrouter_sdk::config::parse_with(
-        &r#"
+    let mut config: Config = bitrouter_sdk::config::parse_with(
+        r#"
 server:
   skip_auth: true
 database:
@@ -64,10 +64,10 @@ providers:
     api_base: "http://127.0.0.1:1"
     api_key: fixture-only
     models: [{id: judge}]
-"#
-        .replace("sqlite::memory:", &database),
+"#,
         |_| None,
     )?;
+    config.database.url = database;
     let assembled =
         crate::assemble::build_app_with_path(&config, Some(&home.path().join("bitrouter.yaml")))
             .await?;
