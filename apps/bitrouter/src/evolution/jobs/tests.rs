@@ -276,6 +276,65 @@ async fn completed_job_is_idempotent_without_another_model_call() -> Result<()> 
 }
 
 #[tokio::test]
+async fn stopping_lease_renewal_drains_database_io_and_preserves_the_memory_database() -> Result<()>
+{
+    let (jobs, identity, checkpoint) = setup().await?;
+    let job = jobs
+        .enqueue(&identity, &checkpoint, "fixture:judge", None)
+        .await?;
+    let (revision, _): (_, JudgeJob) = jobs
+        .store
+        .get(KIND, &job.job_id)
+        .await?
+        .context("missing job")?;
+    jobs.store
+        .update(KIND, &job.job_id, revision, |stored: &mut JudgeJob| {
+            stored.lease_owner = Some("renewal-test".into());
+            Ok(())
+        })
+        .await?;
+    let (claimed_revision, _): (_, JudgeJob) = jobs
+        .store
+        .get(KIND, &job.job_id)
+        .await?
+        .context("missing claimed job")?;
+
+    // Hold the pool's only connection so renewal is suspended in acquisition.
+    // Poll explicitly: a stop must wait for that operation, not drop its future.
+    let transaction = jobs.store.db.begin().await?;
+    tokio::time::pause();
+    let stop = tokio_util::sync::CancellationToken::new();
+    let renewal = jobs.renew_lease(&job.job_id, "renewal-test", &stop);
+    tokio::pin!(renewal);
+    assert!(futures::poll!(&mut renewal).is_pending());
+    // Pass the timer wheel's rounded deadline, rather than landing on it.
+    tokio::time::advance(std::time::Duration::from_secs(31)).await;
+    assert!(futures::poll!(&mut renewal).is_pending());
+    stop.cancel();
+    assert!(futures::poll!(&mut renewal).is_pending());
+    tokio::time::resume();
+    transaction.commit().await?;
+    renewal.await?;
+
+    let (renewed_revision, renewed): (_, JudgeJob) = jobs
+        .store
+        .get(KIND, &job.job_id)
+        .await?
+        .context("renewed job missing")?;
+    assert_eq!(renewed_revision, claimed_revision + 1);
+    assert!(renewed.lease_until.is_some());
+    assert_eq!(
+        jobs.canonical
+            .checkpoint_content(&identity, &checkpoint)
+            .await?
+            .checkpoint
+            .checkpoint_id,
+        checkpoint
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn cached_response_survives_restart_without_calling_the_model() -> Result<()> {
     let (jobs, identity, checkpoint) = setup().await?;
     let mut job = jobs

@@ -397,14 +397,21 @@ impl JudgeJobs {
                 .context("judge attempt identity missing")?;
             let response = {
                 let future = judge::evaluate(pipeline, &job.model, request_id, &input);
-                let renewal = self.renew_lease(&job.job_id, owner);
+                let stop = tokio_util::sync::CancellationToken::new();
+                let renewal = self.renew_lease(&job.job_id, owner, &stop);
                 tokio::pin!(future, renewal);
                 // Both futures remain polled while waiting for database I/O.
                 // Awaiting renewal inside a selected branch could suspend a
-                // pipeline hook that holds the pool's only connection. Drop
-                // the losing future here, before taking another store lock.
+                // pipeline hook that holds the pool's only connection. Once
+                // the pipeline completes, drain any in-flight renewal before
+                // taking another lock: cancelling SQLx connection acquisition
+                // can discard the sole connection of an in-memory database.
                 tokio::select! {
-                    response = &mut future => response?,
+                    response = &mut future => {
+                        stop.cancel();
+                        renewal.await?;
+                        response?
+                    },
                     result = &mut renewal => {
                         result?;
                         anyhow::bail!("judge lease renewal stopped")
@@ -463,10 +470,24 @@ impl JudgeJobs {
         Ok(())
     }
 
-    async fn renew_lease(&self, id: &str, owner: &str) -> Result<()> {
-        let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
+    async fn renew_lease(
+        &self,
+        id: &str,
+        owner: &str,
+        stop: &tokio_util::sync::CancellationToken,
+    ) -> Result<()> {
+        let period = std::time::Duration::from_secs(30);
+        // Claiming the job already writes a fresh lease; no immediate renewal
+        // is needed for a fast response.
+        let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
         loop {
-            heartbeat.tick().await;
+            tokio::select! {
+                biased;
+                _ = stop.cancelled() => return Ok(()),
+                _ = heartbeat.tick() => {},
+            }
+            // Cancellation only stops the next tick, never database I/O that
+            // has already started.
             self.owned_update(id, owner, |job| {
                 job.lease_until = Some((Utc::now() + chrono::Duration::minutes(2)).to_rfc3339());
                 Ok(())
