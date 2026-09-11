@@ -412,6 +412,12 @@ fn code_checkpoint_history_displays_recorded_revisions_without_changing_the_curr
             .current_revision,
         selected.current_revision
     );
+    // The stored revision inspector returns to its manual review selector;
+    // close that selector separately before sending the composer's exit key.
+    let returning = code.pty.checkpoint();
+    code.pty.send(b"\x1b")?;
+    code.pty
+        .wait_for_text_since(&returning, "Manual checkpoint evaluation")?;
     code.close_to_composer()?;
     code.pty.send(b"\x04")?;
     code.assert_terminal_restored()

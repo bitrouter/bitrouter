@@ -349,7 +349,7 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
     );
     assert_restored_dispatch(&mut code, &runtime, &service, &identity)?;
     open_evolution(&mut code)?;
-    choose(&mut code, "Evolution mode", "┌Evolution mode─")?;
+    choose(&mut code, "Evolution mode", " Evolution mode ─")?;
     choose(&mut code, "Off", "Checkpoint evaluation and evolution")?;
     ensure!(
         runtime

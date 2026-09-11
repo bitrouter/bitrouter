@@ -4922,6 +4922,7 @@ mod tests {
                 let _ = render_dock(frame, &state, size);
             })?;
             let screen = grid(terminal.backend());
+            let visible_text = screen.split_whitespace().collect::<Vec<_>>().join(" ");
             for text in [
                 "Always applicable",
                 "0: Not delivered",
@@ -4930,7 +4931,7 @@ mod tests {
                 "Score and applicability",
                 "Enter select",
             ] {
-                assert!(screen.contains(text), "missing {text}: {screen}");
+                assert!(visible_text.contains(text), "missing {text}: {screen}");
             }
         }
         Ok(())

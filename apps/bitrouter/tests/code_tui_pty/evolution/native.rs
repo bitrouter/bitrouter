@@ -374,7 +374,7 @@ async fn evaluated(service: &NativeService, agent: &str) -> Result<SessionIdenti
 
 fn create_candidate(code: &mut CodeFixture, agent: &str) -> Result<()> {
     open_evolution(code)?;
-    choose(code, "Evolution mode", "┌Evolution mode─")?;
+    choose(code, "Evolution mode", " Evolution mode ─")?;
     choose_at(code, "Automatic", 1, "Checkpoint evaluation and evolution")?;
     choose(
         code,
@@ -611,9 +611,9 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
     };
     code.pty.wait_for_text("activity: ready")?;
     open_evolution(&mut code)?;
-    choose(&mut code, "Judge model", "┌Judge model─")?;
+    choose(&mut code, "Judge model", " Judge model ─")?;
     choose(&mut code, "judge", "Checkpoint evaluation and evolution")?;
-    choose(&mut code, "Evolution mode", "┌Evolution mode─")?;
+    choose(&mut code, "Evolution mode", " Evolution mode ─")?;
     // Off also matches "automatic" in its explanatory text.
     choose_at(
         &mut code,
@@ -650,7 +650,7 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
     // All changes below use the terminal's local control flow, without scoring
     // or policy registration calls from the acceptance harness.
     open_evolution(&mut code)?;
-    choose(&mut code, "Evolution mode", "┌Evolution mode─")?;
+    choose(&mut code, "Evolution mode", " Evolution mode ─")?;
     choose(&mut code, "Manual", "Checkpoint evaluation and evolution")?;
     choose(
         &mut code,
@@ -663,12 +663,12 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
         "Manual checkpoint evaluation",
     )?;
     choose(&mut code, "Delivery", "Score and applicability")?;
-    choose(&mut code, "Score and applicability", "┌Score Delivery─")?;
+    choose(&mut code, "Score and applicability", " Score Delivery ─")?;
     choose(&mut code, "0.5", "Select supporting evidence")?;
     choose(
         &mut code,
         "Explain applicability and score",
-        "┌Explain Delivery─",
+        " Explain Delivery ─",
     )?;
     choose(
         &mut code,
@@ -680,7 +680,7 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
         "Back to evaluation",
         "Manual checkpoint evaluation",
     )?;
-    choose(&mut code, "Overall feedback", "┌Overall feedback─")?;
+    choose(&mut code, "Overall feedback", " Overall feedback ─")?;
     choose(
         &mut code,
         "Native terminal manual correction",
@@ -729,7 +729,7 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
     assert_restored_dispatch(&mut code, &runtime, &service, &trial_identity)?;
 
     open_evolution(&mut code)?;
-    choose(&mut code, "Evolution mode", "┌Evolution mode─")?;
+    choose(&mut code, "Evolution mode", " Evolution mode ─")?;
     choose(&mut code, "Off", "Checkpoint evaluation and evolution")?;
     assert_eq!(
         runtime

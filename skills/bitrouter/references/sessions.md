@@ -265,8 +265,10 @@ bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH judge-job JOB_ID [--r
 
 Creation rejects an outdated watermark. Existing checkpoints keep original tool
 versions when a session appends. Resource refresh reads existing local records
-only; omit `--refresh` to inspect observation history. No judge, harness, test,
-PR query, or routing publication is started by these commands.
+only; omit `--refresh` to inspect observation history. Creation and resource
+inspection do not invoke a judge, harness, test, PR query, or route publication.
+The explicit `judge` and `judge-job --resume` operations can invoke the configured
+model as described below.
 
 An assessment JSON object requires `submission_id`, `checkpoint_id`,
 `expected_revision` (null only for the first selection), `source` (`human` or

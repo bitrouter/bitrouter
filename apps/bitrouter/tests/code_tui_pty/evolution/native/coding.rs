@@ -249,9 +249,9 @@ fn launch(
     };
     code.pty.wait_for_text("activity: ready")?;
     open_evolution(&mut code)?;
-    choose(&mut code, "Judge model", "┌Judge model─")?;
+    choose(&mut code, "Judge model", " Judge model ─")?;
     choose(&mut code, "judge", "Checkpoint evaluation and evolution")?;
-    choose(&mut code, "Evolution mode", "┌Evolution mode─")?;
+    choose(&mut code, "Evolution mode", " Evolution mode ─")?;
     choose_at(
         &mut code,
         "Automatic",
