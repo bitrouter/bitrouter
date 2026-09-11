@@ -25,7 +25,9 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   rubric evaluation, checkpoint feedback, batched
   Thompson sampling and session-sticky policy blocks. The
   [experiment report](ACP_EVOLUTION_EXPERIMENTS.md) separates controlled results,
-  negative findings and remaining historical-data/product validation.
+  negative findings and remaining historical-data/product validation. The
+  [main integration validation](ACP_EVOLUTION_PR_VALIDATION.md) records the
+  `bro`/scrollback integration and final judge lease regression checks.
 - [`CODE_TUI_UX_SPEC.md`](CODE_TUI_UX_SPEC.md) — **implemented; locally verified.**
   Replaces the seven-view Code dashboard with a conversation, contextual
   pickers/inspectors, and agent/route/activity/attributed-cost status; defines
