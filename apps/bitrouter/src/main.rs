@@ -1564,6 +1564,23 @@ enum AcpRecordingAction {
 
 #[derive(Subcommand)]
 enum AcpCheckpointAction {
+    /// Judge an existing checkpoint with an explicitly selected configured model.
+    Judge {
+        checkpoint: String,
+        #[arg(long)]
+        model: String,
+    },
+    /// Inspect a durable judge job, or resume it with its recorded input and model.
+    JudgeJob {
+        job_id: String,
+        #[arg(long)]
+        resume: bool,
+    },
+    /// Prepare or submit evidence-grounded rubric scores from recorded content.
+    Rubric {
+        #[command(subcommand)]
+        action: bitrouter::evolution::scoring::ScoringCommand,
+    },
     /// Freeze exactly the currently observed prefix; rejects a stale watermark.
     Create {
         #[arg(long)]
@@ -1591,6 +1608,13 @@ enum AcpCheckpointAction {
 
 #[derive(Subcommand)]
 enum AcpCmd {
+    /// Control checkpoint feedback and policy-block evolution on the local daemon.
+    Evolution {
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        #[command(subcommand)]
+        action: bitrouter::evolution::operator::EvolutionAction,
+    },
     /// Freeze and evaluate already recorded native-session prefixes locally.
     Checkpoints {
         #[arg(long)]
@@ -3896,6 +3920,8 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         daemon::AcpControlPlane {
             runtime: acp_runtime_for_control,
             metering: bitrouter::metering::MeteringStore::new(assembled.db.clone()),
+            inventory: Some(assembled.evolution.inventory()),
+            evolution: Some(assembled.evolution.clone()),
         },
         Some(administration),
     );
@@ -3972,7 +3998,30 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     // that same future until axum and every required finalizer finish. An HTTP
     // failure still returns directly; a HUP listener failure only disables
     // reload signaling and leaves the server running.
+    let evolution_stop = tokio_util::sync::CancellationToken::new();
+    let evolution_worker = app.language_model().cloned().map(|pipeline| {
+        let worker =
+            bitrouter::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone());
+        let stop = evolution_stop.clone();
+        tokio::spawn(async move { worker.run(pipeline, stop).await })
+    });
+    let control = async {
+        let result = control.await;
+        evolution_stop.cancel();
+        result
+    };
+    let term = async {
+        let result = term.await;
+        evolution_stop.cancel();
+        result
+    };
     let result = supervise_http_shutdown(http, control, hup, term, http_shutdown_tx).await;
+    evolution_stop.cancel();
+    if let Some(worker) = evolution_worker
+        && worker.await.is_err()
+    {
+        tracing::warn!("checkpoint evolution worker ended unexpectedly");
+    }
 
     if let Some(publisher) = trajectory_outbox_for_shutdown {
         match publisher.drain_after_active_worker().await {
@@ -6261,6 +6310,23 @@ async fn resolve_prompt_input(
 
 async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
     match cmd {
+        AcpCmd::Evolution { config, action } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let cfg = bitrouter::paths::load_config(&source).await?;
+            let socket = daemon::socket_path_for(&source, &cfg);
+            let command = daemon::DaemonCommand::Evolution {
+                operation: action.operation().await?,
+            };
+            match daemon::send_command(&socket, &command)
+                .await
+                .context("checkpoint evolution requires the local serving daemon")?
+            {
+                daemon::DaemonResponse::Evolution { report } => output.emit(report.as_ref())?,
+                daemon::DaemonResponse::Error { message } => anyhow::bail!(message),
+                _ => anyhow::bail!("daemon returned an unexpected evolution response"),
+            }
+            Ok(())
+        }
         AcpCmd::Checkpoints {
             agent,
             session,
@@ -6276,13 +6342,89 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
             ))
             .await?;
             bitrouter::db::run_migrations(&db).await?;
-            let store = bitrouter::acp_trajectory::CanonicalStore::new(db);
+            let store = bitrouter::acp_trajectory::CanonicalStore::new(db.clone());
             let identity = bitrouter::acp_trajectory::SessionIdentity {
                 owner: "local".into(),
                 source: agent,
                 native_session_id: session,
             };
             let report = match action {
+                AcpCheckpointAction::Judge { checkpoint, model } => {
+                    let jobs = bitrouter::evolution::jobs::JudgeJobs::new(
+                        bitrouter::evolution::store::EvolutionStore::new(db, &identity.owner)?,
+                    );
+                    let job = jobs.enqueue(&identity, &checkpoint, &model, None).await?;
+                    let mut judge_config = cfg.clone();
+                    judge_config.database.url =
+                        bitrouter::db::anchor_url(&cfg.database.url, source.home());
+                    judge_config.server_tools = Default::default();
+                    judge_config.mcp_servers.clear();
+                    let judge_path = match &source {
+                        bitrouter::paths::ConfigSource::File(path) => path.clone(),
+                        bitrouter::paths::ConfigSource::Default { home } => {
+                            home.join("bitrouter.yaml")
+                        }
+                    };
+                    let assembled =
+                        bitrouter::build_app_with_path(&judge_config, Some(&judge_path)).await?;
+                    let pipeline = assembled
+                        .app
+                        .language_model()
+                        .context("judge requires a language model pipeline")?;
+                    let result = jobs.run(&job.job_id, pipeline).await.with_context(|| {
+                        format!("judge job {} failed; inspect it with judge-job", job.job_id)
+                    })?;
+                    output.emit(&bitrouter::evolution::scoring::ScoringReport::JudgeJob(
+                        result,
+                    ))?;
+                    return Ok(());
+                }
+                AcpCheckpointAction::JudgeJob { job_id, resume } => {
+                    let jobs = bitrouter::evolution::jobs::JudgeJobs::new(
+                        bitrouter::evolution::store::EvolutionStore::new(db, &identity.owner)?,
+                    );
+                    let job = jobs.get(&job_id).await?;
+                    anyhow::ensure!(
+                        job.identity == identity,
+                        "judge job belongs to another native session"
+                    );
+                    let result = if resume {
+                        let mut judge_config = cfg.clone();
+                        judge_config.database.url =
+                            bitrouter::db::anchor_url(&cfg.database.url, source.home());
+                        judge_config.server_tools = Default::default();
+                        judge_config.mcp_servers.clear();
+                        let judge_path = match &source {
+                            bitrouter::paths::ConfigSource::File(path) => path.clone(),
+                            bitrouter::paths::ConfigSource::Default { home } => {
+                                home.join("bitrouter.yaml")
+                            }
+                        };
+                        let assembled =
+                            bitrouter::build_app_with_path(&judge_config, Some(&judge_path))
+                                .await?;
+                        jobs.run(
+                            &job_id,
+                            assembled
+                                .app
+                                .language_model()
+                                .context("judge requires a language model pipeline")?,
+                        )
+                        .await?
+                    } else {
+                        job
+                    };
+                    output.emit(&bitrouter::evolution::scoring::ScoringReport::JudgeJob(
+                        result,
+                    ))?;
+                    return Ok(());
+                }
+                AcpCheckpointAction::Rubric { action } => {
+                    output.emit(
+                        &bitrouter::evolution::scoring::command(&store, &identity, action).await?,
+                    )?;
+                    return Ok(());
+                }
                 AcpCheckpointAction::Create { watermark } => CheckpointReport::Checkpoint(
                     store.freeze_checkpoint(&identity, watermark).await?,
                 ),

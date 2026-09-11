@@ -30,6 +30,7 @@ pub mod m20240101_000017_add_metering_route_scope;
 
 pub mod m20240101_000018_create_acp_capture;
 pub mod m20240101_000019_create_acp_checkpoints;
+pub mod m20240101_000020_create_checkpoint_evolution;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -59,6 +60,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000017_add_metering_route_scope::Migration),
             Box::new(m20240101_000018_create_acp_capture::Migration),
             Box::new(m20240101_000019_create_acp_checkpoints::Migration),
+            Box::new(m20240101_000020_create_checkpoint_evolution::Migration),
         ]
     }
 }

@@ -141,6 +141,22 @@ impl CanonicalStore {
         identity: &SessionIdentity,
         expected_watermark: i64,
     ) -> Result<Checkpoint> {
+        self.freeze_checkpoint_checked(identity, expected_watermark, |_| Box::pin(async { Ok(()) }))
+            .await
+    }
+
+    /// Automated discovery fences its feedback epoch in the same transaction
+    /// that freezes source references. No external work is allowed in the check.
+    pub(crate) async fn freeze_checkpoint_checked<F>(
+        &self,
+        identity: &SessionIdentity,
+        expected_watermark: i64,
+        precondition: F,
+    ) -> Result<Checkpoint>
+    where
+        F: for<'a> FnOnce(&'a DatabaseTransaction) -> futures::future::BoxFuture<'a, Result<()>>
+            + Send,
+    {
         ensure!(expected_watermark >= 0, "watermark must be nonnegative");
         let first = session(&self.db, &identity.key()?).await?;
         ensure!(
@@ -193,10 +209,35 @@ impl CanonicalStore {
             watermark = parent_watermark;
         }
         segments.reverse();
+        // A successful fork responds in the new child's native session. When
+        // that response closes a parent's recorded request, retain its source
+        // as a deletion/locking dependency without inheriting the child's work.
+        for expected in segments.iter().flat_map(|segment| &segment.setup) {
+            let raw =
+                events::Entity::find_by_id((expected.connection_id.clone(), expected.sequence))
+                    .one(&self.db)
+                    .await?
+                    .context("supplementary checkpoint evidence disappeared")?;
+            ensure!(
+                reference(&raw)? == *expected,
+                "supplementary checkpoint evidence changed"
+            );
+            if let Some(key) = raw.session_key
+                && !dependencies.contains_key(&key)
+            {
+                let dependency = session(&self.db, &key).await?;
+                ensure!(
+                    dependency.owner == identity.owner && dependency.source == identity.source,
+                    "supplementary checkpoint evidence crosses native scope"
+                );
+                dependencies.insert(key, dependency);
+            }
+        }
         let prefix_digest = content_digest(&segments)?;
         let checkpoint_id = digest(&(identity, expected_watermark, &prefix_digest))?;
         let family_id = self.family_id(identity).await?;
         let tx = self.db.begin().await?;
+        precondition(&tx).await?;
         // Stable lock ordering prevents two overlapping fork freezes from
         // acquiring parent/child locks in opposite orders.
         for (key, expected) in &dependencies {
@@ -284,7 +325,7 @@ impl CanonicalStore {
         let mut setup = Vec::new();
         let mut connection_ids = BTreeSet::new();
         let mut setup_calls = Vec::new();
-        let mut pending = BTreeSet::new();
+        let mut pending = BTreeMap::new();
         let mut observed_new = false;
         let mut observed_fork = false;
         for raw in &rows {
@@ -294,7 +335,7 @@ impl CanonicalStore {
                 let key = (raw.connection_id.clone(), call);
                 match event.kind {
                     CaptureKind::Request => {
-                        pending.insert(key);
+                        pending.insert(key, (event.method.clone(), raw.sequence));
                     }
                     CaptureKind::Response => {
                         pending.remove(&key);
@@ -322,6 +363,58 @@ impl CanonicalStore {
                 ));
             }
             events.push(reference(raw)?);
+        }
+        let mut cross_session_completions = Vec::new();
+        // ACP's fork response identifies the newly created session:
+        // https://docs.rs/agent-client-protocol/latest/agent_client_protocol/schema/v1/struct.ForkSessionResponse.html
+        for ((connection, call), (method, start)) in &pending {
+            if method != "session/fork" {
+                continue;
+            }
+            let Some(boundary) = rows
+                .iter()
+                .filter(|raw| &raw.connection_id == connection)
+                .map(|raw| raw.sequence)
+                .max()
+            else {
+                continue;
+            };
+            let candidates = super::events::Entity::find()
+                .filter(super::events::Column::ConnectionId.eq(connection))
+                .filter(super::events::Column::Sequence.gt(*start))
+                .filter(super::events::Column::Sequence.lte(boundary))
+                .all(&self.db)
+                .await?;
+            for raw in candidates {
+                let event: CaptureEvent = serde_json::from_str(&raw.event_json)?;
+                if event.kind != CaptureKind::Response
+                    || event.method != *method
+                    || event.call_id != Some(*call)
+                {
+                    continue;
+                }
+                let Some(child_key) = &raw.session_key else {
+                    continue;
+                };
+                let Some(child) = sessions::Entity::find_by_id(child_key)
+                    .one(&self.db)
+                    .await?
+                else {
+                    continue;
+                };
+                if !child.deleted
+                    && child.parent_key.as_ref() == Some(&row.session_key)
+                    && child.owner == row.owner
+                    && child.source == row.source
+                {
+                    setup.push(reference(&raw)?);
+                    cross_session_completions.push((connection.clone(), *call));
+                    break;
+                }
+            }
+        }
+        for key in cross_session_completions {
+            pending.remove(&key);
         }
         if !pending.is_empty() {
             gaps.push(format!("requests_pending_at_watermark:{}", row.session_key));
@@ -456,7 +549,7 @@ impl CanonicalStore {
         })
     }
 
-    async fn family_id(&self, identity: &SessionIdentity) -> Result<String> {
+    pub(crate) async fn family_id(&self, identity: &SessionIdentity) -> Result<String> {
         let mut key = identity.key()?;
         let mut visited = BTreeSet::new();
         loop {
@@ -484,6 +577,19 @@ pub(super) async fn delete_dependents(tx: &DatabaseTransaction, key: &str) -> Re
         .all(tx)
         .await?;
     for member in affected {
+        // A stopped judge may have cached a response quoting the deleted
+        // source, including through an inherited prefix. Remove those jobs
+        // in the same transaction that invalidates their checkpoint.
+        if let Some(cp) = checkpoints::Entity::find_by_id(&member.checkpoint_id)
+            .one(tx)
+            .await?
+        {
+            crate::evolution::store::records::Entity::delete_many()
+                .filter(crate::evolution::store::records::Column::SessionKey.eq(cp.session_key))
+                .filter(crate::evolution::store::records::Column::Kind.eq("judge_job"))
+                .exec(tx)
+                .await?;
+        }
         let revisions = revisions::Entity::find()
             .filter(revisions::Column::CheckpointId.eq(&member.checkpoint_id))
             .all(tx)

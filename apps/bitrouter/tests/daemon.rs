@@ -32,6 +32,113 @@ impl daemon::DaemonReloader for RoutingTableReloader {
 }
 use bitrouter_sdk::config;
 
+#[tokio::test]
+async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() -> anyhow::Result<()>
+{
+    use bitrouter::acp_trajectory::{CanonicalStore, RecordingScope};
+    let dir = tempdir("coverage");
+    let cfg_path = write_config(&dir, "sqlite::memory:").await;
+    let cfg = config::load(&cfg_path).await?;
+    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await?;
+    let recorder = CanonicalStore::new(assembled.db.clone())
+        .recorder(RecordingScope {
+            owner: "local".into(),
+            source: "fixture".into(),
+            controller_instance_id: Some("controller".into()),
+            route_scope_id: Some("principal".into()),
+        })
+        .await?;
+    let socket = dir.join("bitrouter.sock");
+    let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
+        socket.clone(),
+        Arc::new(assembled.app),
+        "127.0.0.1:1234".into(),
+        Arc::new(NoopReloader),
+        Arc::new(NoopObserveStatus { compiled_in: false }),
+        daemon::AcpControlPlane {
+            runtime: assembled.acp_runtime,
+            metering: MeteringStore::new(assembled.db.clone()),
+            inventory: Some(assembled.evolution.inventory()),
+            evolution: Some(assembled.evolution.clone()),
+        },
+    ));
+    wait_until_ready(&socket).await;
+    let command = |principal: &str| DaemonCommand::AcpRecordingRegister {
+        connection_id: recorder.connection_id().into(),
+        api_principal: principal.into(),
+        controller_instance_id: "controller".into(),
+    };
+    assert!(matches!(
+        daemon::send_command(&socket, &command("other")).await?,
+        DaemonResponse::Error { .. }
+    ));
+    let response = daemon::send_command(&socket, &command("principal")).await?;
+    let DaemonResponse::AcpRecordingRegistered { registration } = response else {
+        anyhow::bail!("coverage acknowledgement missing");
+    };
+    assert_eq!(registration.connection_id, recorder.connection_id());
+    assert_eq!(
+        registration.version,
+        bitrouter::evolution::inventory::INVENTORY_VERSION
+    );
+    assert!(registration.invalid_reason.is_none());
+    use bitrouter::evolution::{
+        control::EvolutionMode,
+        operator::{EvolutionOperation, EvolutionReport},
+    };
+    let response = daemon::send_command(
+        &socket,
+        &DaemonCommand::Evolution {
+            operation: EvolutionOperation::Status,
+        },
+    )
+    .await?;
+    let DaemonResponse::Evolution { report } = response else {
+        anyhow::bail!("evolution status missing");
+    };
+    let EvolutionReport::Status(status) = *report else {
+        anyhow::bail!("unexpected evolution report");
+    };
+    assert_eq!(status.control.mode, EvolutionMode::Off);
+    assert!(matches!(
+        daemon::send_command(
+            &socket,
+            &DaemonCommand::Evolution {
+                operation: EvolutionOperation::Mode {
+                    mode: EvolutionMode::Automatic,
+                    judge_model: None
+                },
+            }
+        )
+        .await?,
+        DaemonResponse::Error { .. }
+    ));
+    for mode in [EvolutionMode::Manual, EvolutionMode::Off] {
+        let response = daemon::send_command(
+            &socket,
+            &DaemonCommand::Evolution {
+                operation: EvolutionOperation::Mode {
+                    mode,
+                    judge_model: None,
+                },
+            },
+        )
+        .await?;
+        let DaemonResponse::Evolution { report } = response else {
+            anyhow::bail!("evolution mutation receipt missing");
+        };
+        let EvolutionReport::Status(status) = *report else {
+            anyhow::bail!("unexpected evolution report");
+        };
+        assert_eq!(status.control.mode, mode);
+        assert!(status.jobs.is_empty());
+    }
+    daemon::send_command(&socket, &DaemonCommand::Stop).await?;
+    server.await??;
+    tokio::fs::remove_dir_all(dir).await?;
+    Ok(())
+}
+
 fn tiny_config_yaml(db_url: &str) -> String {
     // Two providers declare overlapping models so Route returns a real chain.
     format!(
@@ -264,6 +371,8 @@ async fn api_principal_scoped_acp_routes_roundtrip_over_the_control_socket() {
         daemon::AcpControlPlane {
             runtime: runtime.clone(),
             metering: MeteringStore::new(assembled.db.clone()),
+            inventory: Some(assembled.evolution.inventory()),
+            evolution: Some(assembled.evolution.clone()),
         },
     ));
     wait_until_ready(&socket).await;
@@ -893,6 +1002,8 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
         daemon::AcpControlPlane {
             runtime: runtime.clone(),
             metering: metering.clone(),
+            inventory: Some(assembled.evolution.inventory()),
+            evolution: Some(assembled.evolution.clone()),
         },
     ));
     wait_until_ready(&socket).await;

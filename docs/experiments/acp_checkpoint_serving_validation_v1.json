@@ -1,0 +1,81 @@
+{
+  "kind": "controlled_serving_integration_validation",
+  "recorded_at": "2026-09-08T22:24:11.311623+00:00",
+  "git_base_commit": "ad2bab71968e40752fe175433b23fd2098307c81",
+  "scope": "Versioned serving adapter and regression checks; the complete checkpoint-to-publication TUI loop remains unfinished.",
+  "data": "Evolution integration cases use controlled ACP recordings, isolated SQLite databases and local HTTP upstreams; no historical-session accuracy or live routing benefit is measured.",
+  "checks": [
+    {
+      "command": "cargo nextest run --all-features --no-fail-fast",
+      "exit_code": 0,
+      "passed": 3304,
+      "failed": 0,
+      "skipped": 12
+    },
+    {
+      "command": "cargo test --all-features --doc",
+      "exit_code": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "command": "cargo clippy --all-features --all-targets -- -D warnings",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo fmt -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "source_files": {
+    "Cargo.lock": "sha256:7a3dada487bda898b19ba4c0f8b76c4795e25e31b4925d9b7854b97f824f0fdb",
+    "apps/bitrouter/Cargo.toml": "sha256:7bad249c0672fd4970cb4042bd20356db1e244520e4cb6fb7e40e08c26540c64",
+    "apps/bitrouter/examples/checkpoint_ts_simulation.rs": "sha256:45d32d25e8b83fe5942515baa81d8b69842aaf469aab1d1f7cff03e6fc16985d",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/assessment.rs": "sha256:da4cbf4a741aac48070ca1ba0d1ac1ef0bd566e5dd909fbb2e84a74befcf031f",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/mod.rs": "sha256:9aaa59dcde5e53e6e9003d387b767a50326d3542ef045c49e4ad4caedfd3b679",
+    "apps/bitrouter/src/assemble.rs": "sha256:c7a7e630e58b19ea3d6040f39ba18bc8aaa8959640315ec6e65b83597c45e5b0",
+    "apps/bitrouter/src/db/migration/m20240101_000020_create_checkpoint_evolution.rs": "sha256:d4213d5509356b10fcd2df5aceb3c6162b64e8a794a7f313853482c3761f4747",
+    "apps/bitrouter/src/db/migration/mod.rs": "sha256:eb171fbec77d417fd9d7958bc8496d49e2639140b35314ffcbc29b26853457f1",
+    "apps/bitrouter/src/eval/settlement.rs": "sha256:49c95c0a771c413a37531420bddc535a36d9887801077fc825d138db101f67aa",
+    "apps/bitrouter/src/evolution/bandit.rs": "sha256:4a718c9b12b0e3ebf4ebc89ae5c4649cacac8128b8408f75e6c7d465455d37ac",
+    "apps/bitrouter/src/evolution/catalog.rs": "sha256:768e37af6daf90057ceb69b6c94e550cce2e1527eee221f8c3c9c55459af415e",
+    "apps/bitrouter/src/evolution/control.rs": "sha256:0cec052736b0df2c2884a179a79b5236c1ddf40b3e2b569144feb34e911d1ee8",
+    "apps/bitrouter/src/evolution/evidence.rs": "sha256:dbcff57ad7798242a3d2fc80919b5efe14dd124c084aee360b60c28454fcc9af",
+    "apps/bitrouter/src/evolution/jobs/tests.rs": "sha256:ddf529e52ff40a31f0dbaea925a77f4978f68aa174a4a58b77703c3a56865a87",
+    "apps/bitrouter/src/evolution/jobs.rs": "sha256:9a298a16a09b48f145f7c935b545a0d917677b2a4c2d1420baadabb6f549bac7",
+    "apps/bitrouter/src/evolution/judge.rs": "sha256:471f89496e0202821fa501fff5e0238eb9f9f9b7aee43d5ca5af37aaee7539e2",
+    "apps/bitrouter/src/evolution/learning/tests.rs": "sha256:a405079d07dd92bc66990fe92c964fae0ada448c18e956841a3e315334981c04",
+    "apps/bitrouter/src/evolution/learning.rs": "sha256:a3b0a5331fba27b4dcf6aee0d3c3508158561ec52546fe62937d4910df723005",
+    "apps/bitrouter/src/evolution/mod.rs": "sha256:920f52273e831dfd78e1cd61bdef1491d4b696a93437fb77eeb1626d1398a464",
+    "apps/bitrouter/src/evolution/rubric.rs": "sha256:dd276a7a5195cbc85b6a3e391414f7496a1c8c928991c318d379f8ae416bab46",
+    "apps/bitrouter/src/evolution/runtime/tests/execution_guards.rs": "sha256:35ecf51d64f4cf2589e090b34ff890be087c477b4462af5b53130a713ee3f3a9",
+    "apps/bitrouter/src/evolution/runtime/tests.rs": "sha256:1626e0614d6814bb9a390a3c857ff6537118155fb96713bbe8913e369c1f9328",
+    "apps/bitrouter/src/evolution/runtime.rs": "sha256:76f26d7b85a6eeb50f9bed4e89ca4f1e82142d88d53f8719455c8c1ab3f96b33",
+    "apps/bitrouter/src/evolution/scoring.rs": "sha256:1af3b6bd0476b8444152d7ff0938d13110611a680dc68a769615e5bed4e47956",
+    "apps/bitrouter/src/evolution/service/tests.rs": "sha256:35535ee8841a9906621446af8f996699c70d213bddbd8a05455e7edcbda3ac81",
+    "apps/bitrouter/src/evolution/service.rs": "sha256:5011c67a3f53aa03e315ac3d0d0e4f05147b4daadea8a2b0fdf9107abfa4efc3",
+    "apps/bitrouter/src/evolution/store.rs": "sha256:3e9bd37b8816503e6ea50b260ac55336e9764ee98ff56d3316aac0b75ccf176e",
+    "apps/bitrouter/src/evolution/tests.rs": "sha256:fe53a2beda7779641c3045315c198d958d40f09b4657bf27ad961d56946cd797",
+    "apps/bitrouter/src/lib.rs": "sha256:58ca0d42d3f2bd69d29886b72564c425d9dfc9b2d84c0ae36c10adb40d16f692",
+    "apps/bitrouter/src/main.rs": "sha256:3e3b2fa9b959334c3ba2881a0ced59bfffbd25df9d435d5a6af71a7b8613e796",
+    "apps/bitrouter/src/metering/recorder.rs": "sha256:fddd5964c0bc6bc15b19bd509f3ab3f0f9db52bf96f56275fd5329e2f84934ae",
+    "apps/bitrouter/src/policy_lock.rs": "sha256:82f3dc95970766c0813312dc5c861e37a03316d37eb099fb5ec2540db18e087d",
+    "crates/bitrouter-sdk/src/config/routing_table.rs": "sha256:93410732f6ea5ecf768ad03b6e4d1cb4dcd9fe317096a324bfa866db2788e257",
+    "crates/bitrouter-sdk/src/language_model/server_tools/loop_controller.rs": "sha256:f5aa79106ddcf843af0ebc0e894c23547990ef6870ac51ddf45bdf8492b54488",
+    "crates/bitrouter-sdk/src/language_model/server_tools/stream.rs": "sha256:5e02c40e1cfa0c2b9a3ab1f1e687ce2f74b7cf353b9d577e28c9ffc2af2ab473"
+  },
+  "remaining": [
+    "historical ACP reference review and evaluator calibration",
+    "unresolved request inventory and complete checkpoint costs",
+    "automatic checkpoint and judge scheduling",
+    "post-adoption monitoring and reusable experiment revisions",
+    "TUI/operator controls",
+    "full capture-to-publication and mixed-reload integration tests",
+    "full publication-loop simulation, including missing and correlated feedback"
+  ]
+}

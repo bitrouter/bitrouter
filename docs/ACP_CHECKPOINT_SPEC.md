@@ -60,13 +60,36 @@ Consecutive identical observations are idempotent. If values change and later
 return to an earlier value, that return is a new ordered resource revision;
 it does not reactivate an old timestamp or leave a superseded value current.
 
-Session correlation alone cannot place every request into an old prefix. The
-observation includes a request only when its first local metering record or
-recorded route evidence precedes that segment's event boundary. This is a
-declared temporal correlation, not an exact tool-to-model join. A late request
-without such evidence is listed as unassigned. Route events after the boundary
-are excluded, and current configuration is never used to fill historical gaps.
-The first metering timestamp is not presented as the model's start time.
+Resource observations declare `membership_version`. The current
+`native-head-resources-v2` rule includes authenticated gateway requests from this
+native session whose admission observed a canonical head at or before the
+checkpoint watermark. This includes auxiliary calls after prompt completion at
+the same head. Their settlement advances the resource observation without
+changing the content checkpoint or requiring another quality judgment. A new
+prompt advances the content head before dispatch, so its calls cannot enter an
+older checkpoint. Inherited parent segments retain the original timestamp
+boundary; later parent work cannot enter a fork's resources.
+
+Unresolved gateway requests remain unknown throughout this native session's
+resource interval. Events from another session on the shared connection do not
+silently exclude them. The next event in this native session bounds the interval;
+subsequent unknown calls do not contaminate the older checkpoint. Pending calls
+and missing prices keep cost incomplete. Every inventory change fences resource
+selection and learning publication, including changes without a content append.
+
+Historical observations without `membership_version` retain the earlier
+timestamp-bound rule. Refresh appends a versioned resource revision; it does not
+rewrite history or rescore content. The evolution learner requires the current
+membership contract before using a complete cost. Completeness describes the
+observed managed request inventory, not a promise that an open session will make
+no further calls. Final closure additionally requires confirmed capture shutdown
+and settlement of every observed request.
+
+Legacy metering without authoritative canonical admission still uses temporal
+correlation: its first local metering record or recorded route evidence must
+precede the segment's event boundary. Late ambiguous requests remain unassigned.
+Route events after that boundary are excluded, and current configuration never
+fills historical gaps. The first metering timestamp is not a model start time.
 
 Family totals union requests rather than adding session or checkpoint totals.
 Conflicting resource snapshots for the same request mark its charge unknown

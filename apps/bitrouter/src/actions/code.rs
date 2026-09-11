@@ -20,6 +20,8 @@ use crate::contexts::RemoteContext;
 use crate::dashboard::SessionRequest;
 use crate::output::{CliReport, Format, Output};
 
+pub(crate) mod evolution;
+
 /// A selectable ACP facet, with its exact configured/catalog identity.
 pub(crate) struct AgentChoice {
     pub id: String,

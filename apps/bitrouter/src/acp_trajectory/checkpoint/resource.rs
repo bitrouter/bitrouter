@@ -1,6 +1,20 @@
 //! Resource snapshots can advance without mutating an immutable content prefix.
 
 use super::*;
+use crate::evolution::inventory::{coverage_matches, lock_connection};
+use crate::evolution::store::EvolutionStore;
+
+mod coverage;
+
+fn observation_digest(observation: &ResourceObservation) -> Result<String> {
+    digest(&(
+        &observation.membership_version,
+        &observation.requests,
+        &observation.unassigned_request_ids,
+        &observation.gateway_coverage,
+        observation.metering_complete,
+    ))
+}
 
 fn at_or_before(value: &str, boundary: &str) -> Result<bool> {
     if boundary.is_empty() {
@@ -31,9 +45,12 @@ impl CanonicalStore {
         identity: &SessionIdentity,
         id: &str,
     ) -> Result<ResourceObservation> {
-        let cp = self.checkpoint_content(identity, id).await?.checkpoint;
-        let mut requests = BTreeMap::new();
-        let mut unassigned = BTreeSet::new();
+        let content = self.checkpoint_content(identity, id).await?;
+        let inventory = self.inventory_coverage(&content).await?;
+        let cp = content.checkpoint;
+        let mut requests = inventory.requests;
+        let mut unassigned = inventory.unassigned;
+        let mut coverage = inventory.coverage;
         for segment in &cp.segments {
             let mut scoped = Vec::new();
             for captured in &segment.connections {
@@ -49,6 +66,11 @@ impl CanonicalStore {
                 scoped.push(row);
             }
             for mut request in self.associated_requests(&segment.identity, &scoped).await? {
+                // Canonical gateway admission takes precedence over loose
+                // metering correlations, including a known different session.
+                if inventory.known_ids.contains(&request.request_id) {
+                    continue;
+                }
                 let mut preceding = Vec::new();
                 for event in request.route_events {
                     if at_or_before(&event.captured_at, &segment.boundary_at)? {
@@ -66,6 +88,9 @@ impl CanonicalStore {
                 } else {
                     "; route_evidence_before_prefix_boundary"
                 });
+                coverage
+                    .reasons
+                    .push(format!("request_inventory_missing:{}", request.request_id));
                 requests.insert(request.request_id.clone(), request);
             }
         }
@@ -73,8 +98,17 @@ impl CanonicalStore {
         let requests: Vec<_> = requests.into_values().collect();
         let unassigned_request_ids: Vec<_> = unassigned.into_iter().collect();
         let (known_cost_micro_usd, unpriced_requests) = totals(&requests)?;
-        let content_digest = digest(&(&requests, &unassigned_request_ids))?;
+        if !unassigned_request_ids.is_empty() {
+            coverage.reasons.push("unassigned_requests".into());
+        }
+        if unpriced_requests != 0 {
+            coverage.reasons.push("request_cost_unknown".into());
+        }
+        coverage.reasons.sort();
+        coverage.reasons.dedup();
+        let metering_complete = coverage.reasons.is_empty();
         let mut observation = ResourceObservation {
+            membership_version: Some(RESOURCE_MEMBERSHIP_VERSION.into()),
             observation_id: String::new(),
             checkpoint_id: id.into(),
             revision: 1,
@@ -84,9 +118,23 @@ impl CanonicalStore {
             unassigned_request_ids,
             known_cost_micro_usd,
             unpriced_requests,
-            metering_complete: false,
+            metering_complete,
+            gateway_coverage: Some(coverage.clone()),
         };
+        let content_digest = observation_digest(&observation)?;
         let tx = self.db.begin().await?;
+        for (id, expected) in &inventory.connections {
+            let actual = lock_connection(&tx, id).await?;
+            ensure!(
+                actual.state == expected.state,
+                "capture health changed during resource observation; retry"
+            );
+        }
+        let store = EvolutionStore::new(self.db.clone(), &identity.owner)?;
+        ensure!(
+            coverage_matches(&store, &tx, &coverage.revisions).await?,
+            "gateway requests changed during resource observation; retry"
+        );
         let keys: BTreeSet<_> = cp
             .segments
             .iter()
@@ -103,7 +151,7 @@ impl CanonicalStore {
             .await?
         {
             let previous: ResourceObservation = serde_json::from_str(&existing.observation_json)?;
-            if digest(&(&previous.requests, &previous.unassigned_request_ids))? == content_digest {
+            if observation_digest(&previous)? == content_digest {
                 tx.commit().await?;
                 return Ok(previous);
             }

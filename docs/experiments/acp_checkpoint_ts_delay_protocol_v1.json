@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-09T14:40:44.175339+00:00",
+  "question": "Does the closed-cohort feedback barrier explain delayed-feedback learning throughput, and how does increasing the existing batch size affect liveness and harmful exposure?",
+  "status": "protocol_recorded_before_new_runs",
+  "scope": "Synthetic diagnostic and batch-size sensitivity using production controller and TS. No product defaults or quality/pending gates are changed. Historical v2 results for seeds 0..15 have already been inspected.",
+  "primary_comparison": {
+    "batch_sessions": [
+      16,
+      64
+    ],
+    "reconcile_every_arrivals": 16,
+    "scenarios": [
+      "delayed",
+      "beneficial",
+      "harmful",
+      "revised_long"
+    ],
+    "strategies": [
+      "guarded_fixed",
+      "thompson"
+    ],
+    "sessions_per_run": 1200,
+    "development_seeds": {
+      "start": 0,
+      "count": 16
+    },
+    "held_out_seeds": {
+      "start": 16,
+      "count": 16
+    }
+  },
+  "fixed_constraints": [
+    "Default prior, posterior draws, minimum-family and promotion thresholds",
+    "Four pending candidates and 200 total trial candidates",
+    "Sticky assignment, closed-cohort publication, revised-label replacement, rollback and monitoring semantics",
+    "Paired potential outcomes for each scenario and seed; no access to unselected potential outcomes by the learner"
+  ],
+  "analysis": [
+    "Attribute unenrolled baseline arrivals to closed-cohort feedback/reconciliation waits or other guards.",
+    "Inspect decision-time family counts, incomplete counts, posterior probability and allocation.",
+    "Report adoption within the workload separately from adoption during feedback drain.",
+    "Compare harmful trial/deployment exposure in harmful and long-revision scenarios; no favorable-only selection.",
+    "A positive synthetic result does not establish correctness under real judge errors or justify changing a product default by itself."
+  ],
+  "source_sha256": {
+    "apps/bitrouter/examples/checkpoint_ts_publication.rs": "c3f2e4b00065a094ff906a9fbb520b3367130f323c21f19c9993c938a22a2d93",
+    "apps/bitrouter/src/evolution/bandit.rs": "537dd9e203d4d04b0219ae3797e7b4b46238f8c8f3ef1b42654aa07bdb0069af",
+    "apps/bitrouter/src/evolution/control.rs": "9d09442d61d8f1247a26b36e3d3b1119fff440dd890d313e89a6846167b5ddc6"
+  },
+  "executable_sha256": "c0702c77a3cb9a2c29cdc69ce5fef471bc0792c814a4b4deda3b46aef06fdc2c"
+}

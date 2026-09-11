@@ -11,6 +11,7 @@
 //!   declares is a clean 404.
 
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 
@@ -60,6 +61,8 @@ fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
 /// A `RoutingTable` over an in-memory `bitrouter.yaml` config. Reloadable.
 pub struct ConfigRoutingTable {
     config: RwLock<Config>,
+    /// Advances under the config write lock, including A -> B -> A reloads.
+    generation: AtomicU64,
     /// The path the config was loaded from, for `reload()`.
     path: Option<std::path::PathBuf>,
     /// Serialises `reload()` against itself. SIGHUP + `bro reload`
@@ -74,6 +77,7 @@ impl ConfigRoutingTable {
     pub fn from_config(config: Config) -> Self {
         Self {
             config: RwLock::new(config),
+            generation: AtomicU64::new(0),
             path: None,
             reload_lock: tokio::sync::Mutex::new(()),
         }
@@ -86,6 +90,7 @@ impl ConfigRoutingTable {
     pub fn from_config_with_path(config: Config, path: impl Into<std::path::PathBuf>) -> Self {
         Self {
             config: RwLock::new(config),
+            generation: AtomicU64::new(0),
             path: Some(path.into()),
             reload_lock: tokio::sync::Mutex::new(()),
         }
@@ -97,6 +102,7 @@ impl ConfigRoutingTable {
         let config = crate::config::load(&path).await?;
         Ok(Self {
             config: RwLock::new(config),
+            generation: AtomicU64::new(0),
             path: Some(path),
             reload_lock: tokio::sync::Mutex::new(()),
         })
@@ -106,6 +112,28 @@ impl ConfigRoutingTable {
     /// test to assert the table adopted a hot-reloaded config.
     pub fn snapshot_config(&self) -> Config {
         self.config.read().expect("config lock poisoned").clone()
+    }
+
+    /// Capture configuration and its process-local generation together. App
+    /// controllers can validate dependencies before selection, then fence a
+    /// reload before dispatch without serializing credentials into a digest.
+    pub fn versioned_snapshot(&self) -> (u64, Config) {
+        let config = match self.config.read() {
+            Ok(config) => config,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        (self.generation.load(Ordering::Relaxed), config.clone())
+    }
+
+    /// Read the generation at the same synchronization boundary as routing.
+    /// A matching value only fences work through this check; the caller must
+    /// dispatch an already resolved chain after checking it.
+    pub fn generation(&self) -> u64 {
+        let _config = match self.config.read() {
+            Ok(config) => config,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        self.generation.load(Ordering::Relaxed)
     }
 
     /// Swap the table's `Config` for `fresh`, running model discovery
@@ -119,7 +147,7 @@ impl ConfigRoutingTable {
         let _guard = self.reload_lock.lock().await;
         let mut fresh = fresh;
         crate::config::discover_models(&mut fresh).await;
-        self.replace_prepared_config_locked(fresh);
+        self.replace_prepared_config_locked(fresh)?;
         Ok(())
     }
 
@@ -131,16 +159,23 @@ impl ConfigRoutingTable {
     /// table's own serialization with callers outside that coordinator.
     pub async fn replace_prepared_config(&self, fresh: Config) -> Result<()> {
         let _guard = self.reload_lock.lock().await;
-        self.replace_prepared_config_locked(fresh);
+        self.replace_prepared_config_locked(fresh)?;
         Ok(())
     }
 
-    fn replace_prepared_config_locked(&self, fresh: Config) {
+    fn replace_prepared_config_locked(&self, fresh: Config) -> Result<()> {
         let mut current = match self.config.write() {
             Ok(current) => current,
             Err(poisoned) => poisoned.into_inner(),
         };
+        let next = self
+            .generation
+            .load(Ordering::Relaxed)
+            .checked_add(1)
+            .ok_or_else(|| BitrouterError::internal("routing generation overflow"))?;
         *current = fresh;
+        self.generation.store(next, Ordering::Relaxed);
+        Ok(())
     }
 }
 
@@ -683,7 +718,7 @@ impl RoutingTable for ConfigRoutingTable {
         // WARN; they do not abort the reload — same policy as the initial
         // assembly path.
         crate::config::discover_models(&mut fresh).await;
-        *self.config.write().expect("config lock poisoned") = fresh;
+        self.replace_prepared_config_locked(fresh)?;
         Ok(())
     }
 

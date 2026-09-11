@@ -452,6 +452,11 @@ impl CanonicalStore {
 }
 
 impl Recorder {
+    /// Register gateway coverage before forwarding the first captured event.
+    pub fn connection_id(&self) -> &str {
+        &self.connection_id
+    }
+
     async fn append(&self, event: &CaptureEvent, state: &mut RecorderState) -> Result<()> {
         let mut call = event
             .call_id

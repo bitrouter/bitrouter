@@ -1,0 +1,1102 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-09T14:54:02.164208+00:00",
+  "scope": "512 synthetic production-controller runs; evidence about admission throughput and batch-size sensitivity, not real judge calibration, empirical coding quality, or net savings.",
+  "protocol": {
+    "path": "docs/experiments/acp_checkpoint_ts_delay_protocol_v1.json",
+    "sha256": "d3f9207f2dc761425b2da1ac195b35bfd720c83090d4f92adbdfb2aadf584e64"
+  },
+  "reproduction": {
+    "previous_result": "acp_checkpoint_ts_publication_v2.json",
+    "batch16_development_runs_compared": 128,
+    "differences_in_all_preexisting_run_fields": []
+  },
+  "raw_results": [
+    {
+      "path": "docs/experiments/acp_checkpoint_ts_delay_batch16_development_v1.json",
+      "sha256": "3b51f12d9f828ed88dfcd74de4fc8d6738113f802d40c3c9326f8ba6b2b8a180",
+      "runs": 32
+    },
+    {
+      "path": "docs/experiments/acp_checkpoint_ts_delay_batch16_development_controls_v1.json",
+      "sha256": "f1377b20f7706cb1dc14e7419c61a3c3db85a42b1a027cf195a5ed0405899710",
+      "runs": 96
+    },
+    {
+      "path": "docs/experiments/acp_checkpoint_ts_delay_batch16_held_out_v1.json",
+      "sha256": "60aef9021cc4de934273ce9f0a0c426ff083642783efc46f5003d68ba0072def",
+      "runs": 128
+    },
+    {
+      "path": "docs/experiments/acp_checkpoint_ts_delay_batch64_development_v1.json",
+      "sha256": "d39ccf65199e74accd25cad748bd9fe5d7ad753b7e9bd88328eb91d2216a7f05",
+      "runs": 32
+    },
+    {
+      "path": "docs/experiments/acp_checkpoint_ts_delay_batch64_development_controls_v1.json",
+      "sha256": "2dafceee0bf00d73a5c5ea72720207436d80fe72588a31d26ad2e99ceab66bdb",
+      "runs": 96
+    },
+    {
+      "path": "docs/experiments/acp_checkpoint_ts_delay_batch64_held_out_v1.json",
+      "sha256": "f9fab3d5a2cb4779a467c37d52df1228d87dd14f1c5eba6afcb0a38b1ca64f64",
+      "runs": 128
+    }
+  ],
+  "receipts": [
+    {
+      "command": [
+        "target/debug/examples/checkpoint_ts_publication",
+        "--scenario",
+        "delayed",
+        "--strategy",
+        "guarded-fixed",
+        "--strategy",
+        "thompson",
+        "--seeds",
+        "16",
+        "--sessions",
+        "1200",
+        "--batch-sessions",
+        "16",
+        "--trace",
+        "--output",
+        "docs/experiments/acp_checkpoint_ts_delay_batch16_development_v1.json"
+      ],
+      "exit_code": 0,
+      "seconds": 104.023,
+      "output_sha256": "e92689b2e4a1ec1dd0fb11d6ff1e180d05568cb5944ffc0551d52eadb7badae5"
+    },
+    {
+      "command": [
+        "target/debug/examples/checkpoint_ts_publication",
+        "--strategy",
+        "guarded-fixed",
+        "--strategy",
+        "thompson",
+        "--seeds",
+        "16",
+        "--seed-start",
+        "0",
+        "--sessions",
+        "1200",
+        "--batch-sessions",
+        "16",
+        "--trace",
+        "--output",
+        "docs/experiments/acp_checkpoint_ts_delay_batch16_development_controls_v1.json",
+        "--scenario",
+        "beneficial",
+        "--scenario",
+        "harmful",
+        "--scenario",
+        "revised-long"
+      ],
+      "exit_code": 0,
+      "seconds": 97.571,
+      "output_sha256": "57e07642e020f943a25a8ed86c9ceaa3d639129ab757614548d28907fcd68dd8"
+    },
+    {
+      "command": [
+        "target/debug/examples/checkpoint_ts_publication",
+        "--strategy",
+        "guarded-fixed",
+        "--strategy",
+        "thompson",
+        "--seeds",
+        "16",
+        "--seed-start",
+        "16",
+        "--sessions",
+        "1200",
+        "--batch-sessions",
+        "16",
+        "--trace",
+        "--output",
+        "docs/experiments/acp_checkpoint_ts_delay_batch16_held_out_v1.json",
+        "--scenario",
+        "delayed",
+        "--scenario",
+        "beneficial",
+        "--scenario",
+        "harmful",
+        "--scenario",
+        "revised-long"
+      ],
+      "exit_code": 0,
+      "seconds": 194.702,
+      "output_sha256": "8d48cf2594e658cce5c6b2cb7574111dbcd093eb80c88f339c89b0a48c60f80b"
+    },
+    {
+      "command": [
+        "target/debug/examples/checkpoint_ts_publication",
+        "--scenario",
+        "delayed",
+        "--strategy",
+        "guarded-fixed",
+        "--strategy",
+        "thompson",
+        "--seeds",
+        "16",
+        "--sessions",
+        "1200",
+        "--batch-sessions",
+        "64",
+        "--trace",
+        "--output",
+        "docs/experiments/acp_checkpoint_ts_delay_batch64_development_v1.json"
+      ],
+      "exit_code": 0,
+      "seconds": 96.842,
+      "output_sha256": "e92689b2e4a1ec1dd0fb11d6ff1e180d05568cb5944ffc0551d52eadb7badae5"
+    },
+    {
+      "command": [
+        "target/debug/examples/checkpoint_ts_publication",
+        "--strategy",
+        "guarded-fixed",
+        "--strategy",
+        "thompson",
+        "--seeds",
+        "16",
+        "--seed-start",
+        "0",
+        "--sessions",
+        "1200",
+        "--batch-sessions",
+        "64",
+        "--trace",
+        "--output",
+        "docs/experiments/acp_checkpoint_ts_delay_batch64_development_controls_v1.json",
+        "--scenario",
+        "beneficial",
+        "--scenario",
+        "harmful",
+        "--scenario",
+        "revised-long"
+      ],
+      "exit_code": 0,
+      "seconds": 105.669,
+      "output_sha256": "57e07642e020f943a25a8ed86c9ceaa3d639129ab757614548d28907fcd68dd8"
+    },
+    {
+      "command": [
+        "target/debug/examples/checkpoint_ts_publication",
+        "--strategy",
+        "guarded-fixed",
+        "--strategy",
+        "thompson",
+        "--seeds",
+        "16",
+        "--seed-start",
+        "16",
+        "--sessions",
+        "1200",
+        "--batch-sessions",
+        "64",
+        "--trace",
+        "--output",
+        "docs/experiments/acp_checkpoint_ts_delay_batch64_held_out_v1.json",
+        "--scenario",
+        "delayed",
+        "--scenario",
+        "beneficial",
+        "--scenario",
+        "harmful",
+        "--scenario",
+        "revised-long"
+      ],
+      "exit_code": 0,
+      "seconds": 197.47,
+      "output_sha256": "8d48cf2594e658cce5c6b2cb7574111dbcd093eb80c88f339c89b0a48c60f80b"
+    }
+  ],
+  "summary": [
+    {
+      "phase": "development",
+      "batch_sessions": 16,
+      "scenario": "beneficial",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 16,
+      "adopted_including_drain": 16,
+      "adopted_at_horizon": 16,
+      "mean_adoption_arrival_among_adopted": 289,
+      "adoption_arrival_range": [
+        224,
+        384
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 30.0625,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 4.25,
+      "mean_trial_sessions": 284.75,
+      "mean_cost_usd": 588.9637224375,
+      "mean_quality": 0.9400960443772229,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 4.25
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 35
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 16,
+      "scenario": "beneficial",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 16,
+      "adopted_including_drain": 16,
+      "adopted_at_horizon": 16,
+      "mean_adoption_arrival_among_adopted": 246,
+      "adoption_arrival_range": [
+        192,
+        320
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 30.875,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 24.625,
+      "mean_trial_sessions": 221.375,
+      "mean_cost_usd": 560.1363054375,
+      "mean_quality": 0.9401085381245917,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 24.625
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 35
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 16,
+      "scenario": "delayed",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 0,
+      "adopted_including_drain": 0,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": null,
+      "adoption_arrival_range": null,
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 17.5625,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1014.6875,
+      "mean_trial_sessions": 185.3125,
+      "mean_cost_usd": 1190.315974875,
+      "mean_quality": 0.9400077204703813,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_feedback": 931.5,
+        "closed_cohort_awaiting_reconciliation": 83.1875
+      },
+      "maximum_pending_candidates": 4,
+      "maximum_trial_candidates": 27
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 16,
+      "scenario": "delayed",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 0,
+      "adopted_including_drain": 1,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": 1265,
+      "adoption_arrival_range": [
+        1265,
+        1265
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 18.25,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1018.375,
+      "mean_trial_sessions": 181.625,
+      "mean_cost_usd": 1189.88294525,
+      "mean_quality": 0.939997778566453,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_feedback": 934.5625,
+        "closed_cohort_awaiting_reconciliation": 83.8125
+      },
+      "maximum_pending_candidates": 4,
+      "maximum_trial_candidates": 32
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 16,
+      "scenario": "harmful",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 0,
+      "adopted_including_drain": 0,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": null,
+      "adoption_arrival_range": null,
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 8.4375,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1117.3125,
+      "mean_trial_sessions": 82.6875,
+      "mean_cost_usd": 1195.3233696875,
+      "mean_quality": 0.9373199748363774,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 1.3125,
+        "withdrawn": 1116.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 10
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 16,
+      "scenario": "harmful",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 0,
+      "adopted_including_drain": 0,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": null,
+      "adoption_arrival_range": null,
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 8.4375,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1117.3125,
+      "mean_trial_sessions": 82.6875,
+      "mean_cost_usd": 1195.3233696875,
+      "mean_quality": 0.9373199748363774,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 1.3125,
+        "withdrawn": 1116.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 10
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 16,
+      "scenario": "revised_long",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 5,
+      "adopted_including_drain": 5,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": 188.8,
+      "adoption_arrival_range": [
+        160,
+        224
+      ],
+      "harmful_adoptions": 5,
+      "mean_trial_candidates": 32.9375,
+      "mean_harmful_deployment_sessions": 12,
+      "mean_unenrolled_baseline_sessions": 863.6875,
+      "mean_trial_sessions": 324.3125,
+      "mean_cost_usd": 1172.7011065625,
+      "mean_quality": 0.9254791539835737,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 4.6875,
+        "withdrawn": 859.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 50
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 16,
+      "scenario": "revised_long",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 7,
+      "adopted_including_drain": 7,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": 205.71428571428572,
+      "adoption_arrival_range": [
+        160,
+        256
+      ],
+      "harmful_adoptions": 7,
+      "mean_trial_candidates": 48.9375,
+      "mean_harmful_deployment_sessions": 16,
+      "mean_unenrolled_baseline_sessions": 902.375,
+      "mean_trial_sessions": 281.625,
+      "mean_cost_usd": 1159.6655349375,
+      "mean_quality": 0.9189412241779498,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 51.375,
+        "withdrawn": 851.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 83
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 64,
+      "scenario": "beneficial",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 16,
+      "adopted_including_drain": 16,
+      "adopted_at_horizon": 16,
+      "mean_adoption_arrival_among_adopted": 354,
+      "adoption_arrival_range": [
+        272,
+        464
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 30.75,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 55.75,
+      "mean_trial_sessions": 298.25,
+      "mean_cost_usd": 630.929172,
+      "mean_quality": 0.940078207546512,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 55.75
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 36
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 64,
+      "scenario": "beneficial",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 16,
+      "adopted_including_drain": 16,
+      "adopted_at_horizon": 16,
+      "mean_adoption_arrival_among_adopted": 287,
+      "adoption_arrival_range": [
+        208,
+        336
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 30.8125,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 57.625,
+      "mean_trial_sessions": 229.375,
+      "mean_cost_usd": 587.1497449375,
+      "mean_quality": 0.9401157575975448,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 57.625
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 32
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 64,
+      "scenario": "delayed",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 14,
+      "adopted_including_drain": 16,
+      "adopted_at_horizon": 14,
+      "mean_adoption_arrival_among_adopted": 1020.5625,
+      "adoption_arrival_range": [
+        832,
+        1236
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 30.4375,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 719.4375,
+      "mean_trial_sessions": 297.5625,
+      "mean_cost_usd": 1062.7155349375,
+      "mean_quality": 0.9400058592183453,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_feedback": 657.875,
+        "closed_cohort_awaiting_reconciliation": 61.5625
+      },
+      "maximum_pending_candidates": 4,
+      "maximum_trial_candidates": 36
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 64,
+      "scenario": "delayed",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 16,
+      "adopted_including_drain": 16,
+      "adopted_at_horizon": 16,
+      "mean_adoption_arrival_among_adopted": 931,
+      "adoption_arrival_range": [
+        720,
+        1152
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 30.1875,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 699.625,
+      "mean_trial_sessions": 231.375,
+      "mean_cost_usd": 1006.876098375,
+      "mean_quality": 0.9400722163566582,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_feedback": 641.75,
+        "closed_cohort_awaiting_reconciliation": 57.875
+      },
+      "maximum_pending_candidates": 4,
+      "maximum_trial_candidates": 36
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 64,
+      "scenario": "harmful",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 0,
+      "adopted_including_drain": 0,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": null,
+      "adoption_arrival_range": null,
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 8.375,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1117.6875,
+      "mean_trial_sessions": 82.3125,
+      "mean_cost_usd": 1195.367961,
+      "mean_quality": 0.9373382883978999,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 13.6875,
+        "withdrawn": 1104.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 10
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 64,
+      "scenario": "harmful",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 0,
+      "adopted_including_drain": 0,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": null,
+      "adoption_arrival_range": null,
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 8.375,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1117.6875,
+      "mean_trial_sessions": 82.3125,
+      "mean_cost_usd": 1195.367961,
+      "mean_quality": 0.9373382883978999,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 13.6875,
+        "withdrawn": 1104.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 10
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 64,
+      "scenario": "revised_long",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 2,
+      "adopted_including_drain": 2,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": 208,
+      "adoption_arrival_range": [
+        208,
+        208
+      ],
+      "harmful_adoptions": 2,
+      "mean_trial_candidates": 33.5,
+      "mean_harmful_deployment_sessions": 4,
+      "mean_unenrolled_baseline_sessions": 874.4375,
+      "mean_trial_sessions": 321.5625,
+      "mean_cost_usd": 1177.5793939375,
+      "mean_quality": 0.927909817889622,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 59.4375,
+        "withdrawn": 815.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 48
+    },
+    {
+      "phase": "development",
+      "batch_sessions": 64,
+      "scenario": "revised_long",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 3,
+      "adopted_including_drain": 3,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": 240,
+      "adoption_arrival_range": [
+        176,
+        336
+      ],
+      "harmful_adoptions": 3,
+      "mean_trial_candidates": 55.3125,
+      "mean_harmful_deployment_sessions": 7,
+      "mean_unenrolled_baseline_sessions": 887.6875,
+      "mean_trial_sessions": 305.3125,
+      "mean_cost_usd": 1161.3654595625,
+      "mean_quality": 0.9197977462931907,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 101.6875,
+        "withdrawn": 786.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 80
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 16,
+      "scenario": "beneficial",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 16,
+      "adopted_including_drain": 16,
+      "adopted_at_horizon": 16,
+      "mean_adoption_arrival_among_adopted": 281,
+      "adoption_arrival_range": [
+        176,
+        416
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 28.6875,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 5.125,
+      "mean_trial_sessions": 275.875,
+      "mean_cost_usd": 583.0859323125,
+      "mean_quality": 0.9400390978699047,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 5.125
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 34
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 16,
+      "scenario": "beneficial",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 16,
+      "adopted_including_drain": 16,
+      "adopted_at_horizon": 16,
+      "mean_adoption_arrival_among_adopted": 230,
+      "adoption_arrival_range": [
+        160,
+        288
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 29.9375,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 21.625,
+      "mean_trial_sessions": 208.375,
+      "mean_cost_usd": 549.059711625,
+      "mean_quality": 0.9400503825154941,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 21.625
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 33
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 16,
+      "scenario": "delayed",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 0,
+      "adopted_including_drain": 1,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": 1281,
+      "adoption_arrival_range": [
+        1281,
+        1281
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 18.75,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1016.6875,
+      "mean_trial_sessions": 183.3125,
+      "mean_cost_usd": 1187.3836630625,
+      "mean_quality": 0.9401970219565716,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_feedback": 935.3125,
+        "closed_cohort_awaiting_reconciliation": 81.375
+      },
+      "maximum_pending_candidates": 4,
+      "maximum_trial_candidates": 29
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 16,
+      "scenario": "delayed",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 1,
+      "adopted_including_drain": 3,
+      "adopted_at_horizon": 1,
+      "mean_adoption_arrival_among_adopted": 1196.6666666666667,
+      "adoption_arrival_range": [
+        1152,
+        1237
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 20.375,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1019.75,
+      "mean_trial_sessions": 177.25,
+      "mean_cost_usd": 1184.3885355625,
+      "mean_quality": 0.9401897215769339,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_feedback": 938.5625,
+        "closed_cohort_awaiting_reconciliation": 81.1875
+      },
+      "maximum_pending_candidates": 4,
+      "maximum_trial_candidates": 32
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 16,
+      "scenario": "harmful",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 0,
+      "adopted_including_drain": 0,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": null,
+      "adoption_arrival_range": null,
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 9.0625,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1117.625,
+      "mean_trial_sessions": 82.375,
+      "mean_cost_usd": 1192.1608253125,
+      "mean_quality": 0.937270699382678,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 1.625,
+        "withdrawn": 1116.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 11
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 16,
+      "scenario": "harmful",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 0,
+      "adopted_including_drain": 0,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": null,
+      "adoption_arrival_range": null,
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 9.0625,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1117.625,
+      "mean_trial_sessions": 82.375,
+      "mean_cost_usd": 1192.1608253125,
+      "mean_quality": 0.937270699382678,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 1.625,
+        "withdrawn": 1116.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 11
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 16,
+      "scenario": "revised_long",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 6,
+      "adopted_including_drain": 6,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": 170.66666666666666,
+      "adoption_arrival_range": [
+        128,
+        240
+      ],
+      "harmful_adoptions": 6,
+      "mean_trial_candidates": 30,
+      "mean_harmful_deployment_sessions": 18,
+      "mean_unenrolled_baseline_sessions": 886.9375,
+      "mean_trial_sessions": 295.0625,
+      "mean_cost_usd": 1168.7404944375,
+      "mean_quality": 0.9245999532751835,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 4.9375,
+        "withdrawn": 882.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 42
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 16,
+      "scenario": "revised_long",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 10,
+      "adopted_including_drain": 10,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": 195.2,
+      "adoption_arrival_range": [
+        128,
+        256
+      ],
+      "harmful_adoptions": 10,
+      "mean_trial_candidates": 40.6875,
+      "mean_harmful_deployment_sessions": 25,
+      "mean_unenrolled_baseline_sessions": 924.6875,
+      "mean_trial_sessions": 250.3125,
+      "mean_cost_usd": 1157.211673875,
+      "mean_quality": 0.9188146533787243,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 33.6875,
+        "withdrawn": 891.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 80
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 64,
+      "scenario": "beneficial",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 16,
+      "adopted_including_drain": 16,
+      "adopted_at_horizon": 16,
+      "mean_adoption_arrival_among_adopted": 332,
+      "adoption_arrival_range": [
+        224,
+        432
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 29.125,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 44.5625,
+      "mean_trial_sessions": 287.4375,
+      "mean_cost_usd": 615.918292125,
+      "mean_quality": 0.9400521845903185,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 44.5625
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 34
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 64,
+      "scenario": "beneficial",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 16,
+      "adopted_including_drain": 16,
+      "adopted_at_horizon": 16,
+      "mean_adoption_arrival_among_adopted": 267,
+      "adoption_arrival_range": [
+        176,
+        320
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 30.5,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 51.3125,
+      "mean_trial_sessions": 215.6875,
+      "mean_cost_usd": 572.7285914375,
+      "mean_quality": 0.9400073770349517,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 51.3125
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 36
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 64,
+      "scenario": "delayed",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 15,
+      "adopted_including_drain": 15,
+      "adopted_at_horizon": 15,
+      "mean_adoption_arrival_among_adopted": 1006.9333333333333,
+      "adoption_arrival_range": [
+        800,
+        1184
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 30.125,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 718.5,
+      "mean_trial_sessions": 300.5,
+      "mean_cost_usd": 1062.4730843125,
+      "mean_quality": 0.9402914034868214,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_feedback": 661.9375,
+        "closed_cohort_awaiting_reconciliation": 56.5625
+      },
+      "maximum_pending_candidates": 4,
+      "maximum_trial_candidates": 35
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 64,
+      "scenario": "delayed",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 16,
+      "adopted_including_drain": 16,
+      "adopted_at_horizon": 16,
+      "mean_adoption_arrival_among_adopted": 942,
+      "adoption_arrival_range": [
+        720,
+        1088
+      ],
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 30.5625,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 711.3125,
+      "mean_trial_sessions": 230.6875,
+      "mean_cost_usd": 1012.05569475,
+      "mean_quality": 0.9402976547156466,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_feedback": 652.6875,
+        "closed_cohort_awaiting_reconciliation": 58.625
+      },
+      "maximum_pending_candidates": 4,
+      "maximum_trial_candidates": 36
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 64,
+      "scenario": "harmful",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 0,
+      "adopted_including_drain": 0,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": null,
+      "adoption_arrival_range": null,
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 8.1875,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1125.75,
+      "mean_trial_sessions": 74.25,
+      "mean_cost_usd": 1192.7261745625,
+      "mean_quality": 0.9375526586666296,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 12.75,
+        "withdrawn": 1113.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 11
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 64,
+      "scenario": "harmful",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 0,
+      "adopted_including_drain": 0,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": null,
+      "adoption_arrival_range": null,
+      "harmful_adoptions": 0,
+      "mean_trial_candidates": 8.1875,
+      "mean_harmful_deployment_sessions": 0,
+      "mean_unenrolled_baseline_sessions": 1125.75,
+      "mean_trial_sessions": 74.25,
+      "mean_cost_usd": 1192.7261745625,
+      "mean_quality": 0.9375526586666296,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 12.75,
+        "withdrawn": 1113.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 11
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 64,
+      "scenario": "revised_long",
+      "strategy": "guarded_fixed",
+      "runs": 16,
+      "adopted_within_workload": 2,
+      "adopted_including_drain": 2,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": 200,
+      "adoption_arrival_range": [
+        144,
+        256
+      ],
+      "harmful_adoptions": 2,
+      "mean_trial_candidates": 31.125,
+      "mean_harmful_deployment_sessions": 4,
+      "mean_unenrolled_baseline_sessions": 886,
+      "mean_trial_sessions": 310,
+      "mean_cost_usd": 1177.021656625,
+      "mean_quality": 0.9287964203746623,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 45.0,
+        "withdrawn": 841.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 44
+    },
+    {
+      "phase": "held_out",
+      "batch_sessions": 64,
+      "scenario": "revised_long",
+      "strategy": "thompson",
+      "runs": 16,
+      "adopted_within_workload": 5,
+      "adopted_including_drain": 5,
+      "adopted_at_horizon": 0,
+      "mean_adoption_arrival_among_adopted": 227.2,
+      "adoption_arrival_range": [
+        144,
+        272
+      ],
+      "harmful_adoptions": 5,
+      "mean_trial_candidates": 46.4375,
+      "mean_harmful_deployment_sessions": 9,
+      "mean_unenrolled_baseline_sessions": 913.5,
+      "mean_trial_sessions": 277.5,
+      "mean_cost_usd": 1163.9702245625,
+      "mean_quality": 0.9221459033360122,
+      "mean_wait_counts": {
+        "closed_cohort_awaiting_reconciliation": 79.5,
+        "withdrawn": 834.0
+      },
+      "maximum_pending_candidates": 1,
+      "maximum_trial_candidates": 76
+    }
+  ],
+  "decision": "Keep the product default batch size at 16. Batch 64 is a demonstrated sensitivity setting for this delayed workload, with slower immediate-feedback promotion and unresolved erroneous-label adoption. No production learner/prior/quality/pending setting was changed.",
+  "algorithm_interpretation": [
+    "Cold-start requires 20 measured families per arm before posterior-based expansion; low 10% allocation combined with a 16-member closed-cohort feedback barrier limits candidate evidence under long delay.",
+    "The development delayed TS run leaves a mean 1018.375 arrivals unenrolled, of which 934.5625 wait for cohort feedback and 83.8125 wait for reconciliation.",
+    "Increasing the existing cohort size alone improves synthetic throughput; no pending outcome is imputed and the quality/publication gates remain intact.",
+    "Fewer harmful adoptions do not eliminate wrong-label risk. Trial and deployment exposures are reported separately.",
+    "The simulation now follows production staging of a promotion proposal for an open cohort while checking that no adoption occurs."
+  ],
+  "references": [
+    {
+      "title": "Thompson Sampling with Unrestricted Delays",
+      "url": "https://arxiv.org/abs/2202.12431",
+      "use": "TS can update from arriving feedback under its stated stochastic delay assumptions; our cohort barrier is an additional design choice. The paper does not establish guarantees for our NIG multi-metric posterior, revised rubrics or informative missingness."
+    },
+    {
+      "title": "Online Learning under Delayed Feedback",
+      "url": "https://proceedings.mlr.press/v28/joulani13.html",
+      "use": "Background on separating action count from received feedback in delayed online learning."
+    }
+  ],
+  "remaining": [
+    "Historical canonical-trajectory reference review and judge calibration remain unavailable.",
+    "Changing or adapting cohort admission requires further outcome-dependent delay/missingness and actual serving validation; the sensitivity experiment does not implement that change.",
+    "Late erroneous rewards still cause harmful adoption under both batch sizes."
+  ]
+}

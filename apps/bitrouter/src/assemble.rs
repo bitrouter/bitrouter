@@ -90,6 +90,9 @@ pub struct Assembled {
     /// Live named routing policies loaded from `policy-lock.yaml`. The model
     /// selector and daemon reloader share this last-known-good registry.
     pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
+    /// Canonical checkpoint evolution. Mode is owner-scoped and disabled until
+    /// explicitly enabled; this handle shares the serving routing snapshots.
+    pub evolution: crate::evolution::runtime::EvolutionRuntime,
     /// Generic eval exchange used by the local CLI and REST control plane.
     pub eval_service: EvalService,
     /// Always-active encrypted provider continuation registry.
@@ -771,6 +774,13 @@ pub async fn build_app_with_path(
     .await
     .context("loading policy-lock.yaml")?;
     let policy_runtime_for_selector = policy_runtime.clone();
+    let evolution = crate::evolution::runtime::EvolutionRuntime::new(
+        db.clone(),
+        routing_table.clone(),
+        policy_runtime.clone(),
+    );
+    let evolution_for_hooks = evolution.clone();
+    let judge_costs = crate::evolution::costs::JudgeCosts::new(db.clone());
     #[cfg(test)]
     let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
@@ -796,6 +806,7 @@ pub async fn build_app_with_path(
             lm.model_selector(policy_runtime_for_selector);
             lm.route_hook(continuation_for_route);
             lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
+            lm.route_hook(evolution_for_hooks.clone());
             lm.required_finalizer(continuation_for_finalization);
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion
@@ -805,8 +816,11 @@ pub async fn build_app_with_path(
             if server_tools_enabled {
                 lm.pre_request_hook(ServerToolDeclarationsHook);
             }
-            // Stage 1, in order: auth → request-session normalization →
-            // continuation → policy. Session normalization may apply a
+            // Reserved judge IDs are checked even before auth, so an early
+            // rejection cannot overwrite an existing attempt's metering row.
+            lm.pre_request_hook(judge_costs.clone());
+            // Remaining Stage 1: auth → request-session normalization →
+            // continuation → canonical evolution → policy. Session normalization may apply a
             // API-principal-scoped route lease before Stage 2 model selection;
             // explicit routes and provider continuations retain precedence.
             // The guardrail plugin appends its hooks after this closure (see
@@ -814,6 +828,7 @@ pub async fn build_app_with_path(
             lm.pre_request_hook(AuthHook::new(db_for_hooks.clone()));
             lm.pre_request_hook(SessionContextHook::new(acp_runtime_for_session));
             lm.pre_request_hook(continuation_for_pre_request);
+            lm.pre_request_hook(evolution_for_hooks.clone());
             lm.pre_request_hook(PolicyHook::new(
                 policy_store.clone(),
                 Some(metering_store_for_policy),
@@ -825,6 +840,8 @@ pub async fn build_app_with_path(
                 lm.observe_hook(OtelObserveHook::new(exporter));
             }
             lm.observe_hook(response_observer);
+            lm.observe_hook(evolution_for_hooks.clone());
+            lm.observe_hook(judge_costs.clone());
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
@@ -833,6 +850,8 @@ pub async fn build_app_with_path(
                 MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
                     .with_reconciliation_provider("bitrouter"),
             );
+            lm.settlement_recorder(evolution_for_hooks);
+            lm.settlement_recorder(judge_costs);
             let eval_recorder = EvalSettlementRecorder::new(
                 eval_store_for_recorder,
                 pending_eval_decisions,
@@ -924,6 +943,7 @@ pub async fn build_app_with_path(
         acp_runtime,
         policy_store: policy_store_for_reload,
         policy_runtime,
+        evolution,
         eval_service,
         continuation_registry,
         #[cfg(test)]

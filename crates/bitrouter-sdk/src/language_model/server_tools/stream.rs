@@ -427,6 +427,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_tool_choice_hands_back_streamed_calls_without_a_second_turn() -> Result<()> {
+        let mut prompt = base_prompt();
+        prompt.tool_choice = Some(crate::language_model::types::ToolChoice::None);
+        let upstream = Arc::new(FailingSecondTurnStream {
+            calls: AtomicUsize::new(0),
+        });
+        let mut stream = loop_()
+            .run_stream(&prompt, &tool_ctx(), upstream.clone())
+            .await?;
+        let mut parts = Vec::new();
+        while let Some(part) = stream.next().await {
+            parts.push(part?);
+        }
+        assert_eq!(upstream.calls.load(Ordering::SeqCst), 1);
+        assert!(
+            parts
+                .iter()
+                .any(|part| matches!(part, StreamPart::ToolCallDelta { .. }))
+        );
+        assert!(
+            !parts
+                .iter()
+                .any(|part| matches!(part, StreamPart::ServerToolCall { .. }))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn first_upstream_failure_is_returned_before_stream_start() {
         let result = loop_()
             .run_stream(&base_prompt(), &tool_ctx(), Arc::new(FailingStartStream))

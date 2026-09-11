@@ -230,6 +230,19 @@ and charge provenance. Tool-to-request relationships that ACP does not expose
 remain unresolved. Direct/remote or unmetered requests cannot be claimed as
 complete local cost; observed costs are summed over unique request IDs.
 
+The local controller acknowledges gateway request coverage with the serving
+daemon before capture starts. An older daemon, a different database or an
+unavailable control socket leaves coverage incomplete. Reconnect recording after
+a serving runtime restart; a used connection cannot be acknowledged retroactively.
+This handshake requires no additional flag and does not enable evolution.
+Checkpoint resource output exposes `gateway_coverage` and its incompleteness
+reasons. `metering_complete` covers only BitRouter-managed model requests: prompt
+boundaries must be closed, capture acknowledged and healthy, and every request
+attributed and settled with complete attempt costs. Requests with uncertain
+identity, missing prices or incomplete fallback costs prevent completeness.
+`resources --refresh` can incorporate late settlement without changing the frozen
+content. Observed subtotals remain available while completeness is false.
+
 ### Checkpoints and imported assessments
 
 Read the native session's `head` from `acp recordings show`, then freeze that
@@ -244,6 +257,10 @@ bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH submit assessment.jso
 bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH history
 bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH effective
 bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH family
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH rubric prepare CHECKPOINT_ID
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH rubric submit rubric.json
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH judge CHECKPOINT_ID --model MODEL
+bro acp checkpoints --agent SOURCE NATIVE_ID --config PATH judge-job JOB_ID [--resume]
 ```
 
 Creation rejects an outdated watermark. Existing checkpoints keep original tool
@@ -271,3 +288,220 @@ An append marks the previous label stale. Fork views expose related labels as
 one family and union request costs rather than adding checkpoint totals. Deleting
 recordings also invalidates referencing checkpoints and removes their assessment
 text, including inherited references in descendant checkpoints.
+
+For built-in rubric scoring, `rubric prepare` exports the library and cited
+checkpoint evidence. `rubric submit` uses the same identity envelope as a generic
+assessment but replaces `assessment` and `reason` with `evaluation`. That object
+contains `rubric_version: "coding-checkpoint-rubric-v2"`, every library criterion
+in `items`, optional `diagnostics` (use an empty array when absent),
+`severe_violation`, `violation_evidence`, and `summary`. Each item needs
+`criterion_id`, `applicability`, `selection_reason`, `score`, `evidence`, and
+`explanation`. See `docs/CLI.md` in the source repository for the full contract.
+The app computes digests and fixed-weight missing-value bounds. These bounds are
+not confidence intervals. Positive verification needs a recorded tool result;
+the agent's assertion alone is insufficient. Use `agentic` provenance for model
+review, even if the model is replacing a human reviewer. Both commands are local
+and neither invokes a model nor changes routes.
+
+Evidence now identifies `projection_version: "recorded-acp-quality-evidence-v2"`.
+Session-result usage/model metadata is excluded while original citations and stop
+or error reasons are preserved. Raw task/tool content can still reveal identity.
+Review-only work is assessed under delivery, without a separate repair obligation.
+Explicitly forbidden/deferred execution is outside checkpoint verification scope;
+required checks blocked by the environment remain applicable but unknown.
+Historical v1 labels stay readable and cannot be pooled with v2. Pending jobs with
+an obsolete input contract are retired before another model request is reserved;
+explicit `judge` uses the current evaluator without silently converting history.
+
+`judge CHECKPOINT_ID --model MODEL` explicitly sends that frozen evidence to a
+configured model and stores an `agentic` rubric revision through a durable job.
+It offers no tools and sets no product token/cost ceiling. `judge-job JOB_ID`
+inspects the job; add `--resume` to recover an interrupted attempt after its lease
+expires. Completed jobs and cached responses are reused without another model
+call. Failed or uncertain attempts keep their distinct request IDs; a job allows
+at most three model attempts. A stale worker cannot overwrite a manual correction.
+Source deletion also clears cached judge text. None of these commands activates
+a routing experiment.
+
+### Checkpoint feedback and evolution modes
+
+Use the existing local daemon's config for these owner-local controls:
+
+```bash
+bro acp evolution --config PATH status
+bro acp evolution --config PATH mode off
+bro acp evolution --config PATH mode manual
+bro acp evolution --config PATH mode automatic --judge-model MODEL
+bro acp evolution --config PATH register block.json
+bro acp evolution --config PATH revise next-block.json --expected-experiment EXPERIMENT_ID
+bro acp evolution --config PATH restore BLOCK_ID --expected-experiment EXPERIMENT_ID --expected-revision REVISION --reason "Reason for withdrawal"
+bro acp evolution --config PATH learning BLOCK_ID [--experiment EXPERIMENT_ID]
+bro acp evolution --config PATH improve BLOCK_ID [--experiment EXPERIMENT_ID]
+```
+
+The daemon must already be running; these commands do not start it. Evolution
+defaults to `off`. `manual` freezes eligible recorded prompt stops without a
+model call; use the checkpoint rubric commands above to supply scores.
+`automatic` adds background judging with the saved or supplied model. The saved
+judge survives mode changes. There is no product token or cost ceiling.
+
+Trials require a new recorded session. Command-list, config, mode and session-info
+notifications do not disqualify it. Earlier assistant content, tools, usage and
+unknown/malformed updates prevent late enrollment; this includes worker warnings
+sent as assistant text, such as missing metadata for a custom model alias. Check
+the enrollment's `admission_reason`; later requests retain the same exclusion.
+
+Automatic discovery starts with stops recorded after the current mode/model
+epoch began. It does not silently evaluate all older sessions. Recording must be
+enabled separately. A continued session gets a new checkpoint, while its old
+effective contribution is replaced. Historical checkpoints can still be judged
+explicitly. Queued automatic jobs become `superseded` when their prefix,
+assessment revision or feedback epoch changes; they cannot overwrite a manual
+correction. Restart reuses durable jobs and valid cached responses.
+
+Resource membership `native-head-resources-v2` includes this session's calls
+through its checkpoint head, including post-stop auxiliary calls at the same
+head. Cost refresh does not rescore content. The next prompt advances the head;
+forks still exclude later parent work. Unknown or unfinished calls keep cost
+incomplete. Old resource records remain historical and must refresh before
+learning uses them. Final worker-exit totals also require clean capture closure
+and settled outcomes; an open-session snapshot can still gain further costs.
+
+`status` shows mode, blocks, worker progress, checkpoint cursors and job summaries.
+Its `judge_costs` report gives owner, native-session and job totals with
+per-request completeness. Costs are current metering estimates; retry amounts
+are a subset of the total, not an extra charge to add. Failed, superseded and
+older checkpoint attempts retain their spend. Missing metering, unknown usage
+or prices, interrupted calls, pending reconciliation and missing fallback-hop
+costs keep the total unknown while preserving known subtotals. Status refresh
+reads late receipts without rerunning the judge. The TUI status inspector shows
+the owner total, retry subset and job costs. Coding spend is separate; this
+report does not establish net routing savings.
+Deleting recorded content still removes cached judge text; content-free cost
+reservations retain those attempts' spend. The report labels costs whose job
+details are unavailable as an included subset. Deleted legacy jobs without
+reservations cannot be reconstructed.
+`register` imports a complete policy-block definition and validates it against
+live routes without enabling evolution. `learning` inspects evidence and a plan.
+`improve` can publish an eligible allocation, adoption or withdrawal; background
+reconciliation also runs while enabled. Off stops new automatic judging,
+exploratory assignment and publication, retaining adopted baselines. Existing
+committed assessment receipts may be repaired while off without new scoring.
+
+`restore` explicitly withdraws the current experiment, including while Off,
+without enabling evolution or altering unrelated blocks. Copy the experiment
+and block revision from `learning` or `status`; stale targets are rejected.
+The reason is retained in publication history, separately from rubric evidence.
+An identical retry acknowledges its original receipt without withdrawing any
+subsequent revision. Serving resolves the last supported baseline, falling back
+to configured routing when dependency guards fail; in-flight requests are not
+restarted and session overrides retain precedence. In the TUI, open **Policy
+block evidence → Restore supported baseline**, enter a reason, review the
+target, close the inspector with Esc and select **Restore this baseline**.
+Reason and evaluation fields accept pasted text; Enter confirms the input.
+The block inspector also shows its experiment's publication history.
+
+The evidence view reports usable session groups separately for quality, cost
+and duration in each arm, together with the reviewed experiment's configured
+minimum. Archived experiments retain their own minimum. Related forks share a
+group; assigned sessions, repeated assessments and prior strength do not add
+observed groups. Reaching the minimum does not by itself permit adoption:
+quality and resource criteria must also pass. If an older daemon omits the
+minimum, the UI does not substitute a default. Counts describe usable evidence,
+not proof of statistical independence.
+
+Learner v2 keeps bounded initial exposure during cold start until each arm has
+enough independent quality, cost and latency observations. Pending/cumulative
+trial limits and quality withdrawal remain active. A reduced existing rate is
+not restored automatically. An incompatible persisted plan holds new trial
+admission until reconciliation, without another judge call or reassignment of
+existing native sessions.
+
+`revise` starts another experiment for the same block, using the current
+`experiment_id` from `status` as `--expected-experiment`. Preserve the agent
+source and complete selector/fingerprint matcher set. Baselines inherit the
+previous supported routes: an adopted candidate or the retained baseline. A
+changed route contract or declared dependency requires baselines equal to the
+configured selectors. The live runtime checks this; the command preserves mode.
+The new experiment has fresh learner/cohort state. Old sessions keep their
+version and arm, and old feedback stays in `archived_experiments`.
+
+`learning` and `improve` accept `--experiment` to target an archived version.
+Archived trials cannot enroll or newly adopt; late corrections or monitoring of
+their existing members can still withdraw an adoption and its dependent later
+versions. Routing uses the last supported baseline after withdrawal, with live
+route validation. Omitting `--experiment` targets the current version.
+
+`learning` and the TUI block inspector separate original trial evidence from
+quality monitoring of new sessions after adoption. `improve` and the worker can
+withdraw an adopted block on supported quality-floor or severe-violation alarms;
+corrections to the original trial can also invalidate adoption. Monitoring does
+not add randomized samples or establish continuing comparative savings. Sessions
+first admitted while off are not enrolled retroactively when reenabled.
+
+In a local coding TUI, open **`/evolution`** from the composer or Ctrl-P. It
+provides status, mode and judge selection, current-session checkpoint review,
+candidate creation and policy-block evidence/reconciliation. A local serving daemon and
+recorded ACP session are required for checkpoint operations. Remote and
+explicit-socket operations-only targets do not offer these controls. Changing
+the judge preserves the current mode, including off.
+
+After trial registration, use Ctrl-P → **New session** to start a fresh native
+session with the same agent, model, routing flags and turn timeout. Existing
+native sessions keep their assignments. The previous connection closes before
+the new one starts; no load or history replay is requested. Selecting the same
+agent preserves these launch settings too; selecting a different agent uses
+default launch options. Finish the current turn, permissions and queued work
+before switching sessions.
+
+**Session checkpoints → Evaluate the current recorded prefix** freezes the
+observed prefix at idle without calling a model. Select each rubric's score,
+uncertainty or permitted non-applicability; choose original evidence and explain
+the score/applicability. The rubric menu displays its weight, applicability and
+scoring anchors above the choices, wrapped to the terminal width. Custom scores
+range from 0 to 1. **Read recorded
+evidence** opens the full frozen content. Positive verification requires a tool
+observation. Add overall feedback and select **Review and submit**; Escape from
+the preview returns to the save/edit choices. The displayed quality range is a
+missing-evidence bound, not statistical confidence.
+
+**Evaluation history** lists the opened checkpoint's stored revisions and shows
+their scores, source/evaluator, explanations, citations, replacements and
+retractions. Inspection leaves the draft unchanged. A current checkpoint uses
+its selected revision as the starting point; a historical checkpoint prefers
+its latest manual revision, then its latest automatic one. Retractions and
+unsupported rubric formats leave the draft unscored. Saving a historical
+correction retains it without replacing a newer prefix's selected evaluation.
+Reopen the review to refresh its history snapshot.
+
+Manual revisions preserve checkpoint and expected revision identity. Errors
+retain the unsaved draft; a newer assessment cannot be overwritten by a stale
+draft. An unchanged retry reuses the submission ID. New session content is not
+silently included. Drafts live only in this TUI process; opening another session
+or discarding the draft clears them.
+
+**Create a candidate experiment** selects the current preset/virtual route and
+candidate route for the connected agent. Add related rules to the same block,
+choose manual or configured-judge feedback, and enter the trial reason and
+relationship to other experiments. **Review experiment** validates live routes
+and shows complete fallback chains, prompt-default presence, quality gates and
+trial limits. Escape returns to **Register this experiment**, **Refresh preview**
+and **Edit candidate**. Registration preserves mode and does not reassign the
+current session. Changed routes or settings require re-review; unchanged retries
+return the existing experiment. Failed actions retain the draft, which can also
+be resumed after a transport disconnect. Opening another session or discarding
+clears it. Manual review and candidate drafts are mutually exclusive.
+
+**Start the next experiment** selects a block for the connected agent. The draft
+preserves its name, matcher set, TS settings and declared dependencies, and fills
+in supported baselines. Edit its candidate routes, evaluator and trial reason,
+then review and register. The preview identifies a required rebase after route
+changes. A stale predecessor or changed route/settings requires a fresh review.
+**Experiment history** opens each archived version's evidence; reconciliation
+stays bound to that version. Lost registration replies return the original
+experiment receipt even after later revisions exist.
+
+Initial TUI candidate creation uses default TS parameters. The `register` and
+`revise` CLI commands also support fingerprints, dependencies and custom
+parameters. Changing evaluators can leave an experiment waiting for comparable
+feedback, because numeric scores from different evaluators are not pooled.
