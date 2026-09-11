@@ -2,7 +2,7 @@
 
 Recorded September 12, 2026 (Asia/Shanghai). The feature was integrated with main
 `23cc1644` (`bro` invocation and native terminal scrollback).
-The final code/fixture source is `85c69d35`. The
+The code/fixture snapshot at PR submission is `85c69d35`. The
 [machine-readable receipt](experiments/acp_evolution_pr_validation_20260912.json)
 records source hashes, test scopes, prior failures and local log hashes.
 
@@ -77,3 +77,14 @@ calibration, TS superiority or live multi-model savings. The simulation retains
 its negative findings, including harmful adoption after prolonged incorrect
 provisional labels. Raw local logs and private traces remain outside this repo;
 the committed receipt contains summaries and provenance hashes.
+
+## CI follow-up: Rust documentation links
+
+The first CI run rejected four bare reference URLs under rustdoc's
+warnings-as-errors policy. The module comments now use explicit Markdown
+links. This changes documentation only; the prior experiment source hashes
+remain historical snapshots.
+
+`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`
+passed locally, together with formatting and diff checks. The local rustdoc log
+SHA-256 is `6bcbd91624cbc692a6c1a4c6b5c2fd20edaf46cce67bccd58be922ef7073c6ab`.

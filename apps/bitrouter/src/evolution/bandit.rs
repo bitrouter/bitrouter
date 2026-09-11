@@ -5,8 +5,8 @@
 //! Mean sampling uses its marginal Student-t posterior. This is a working
 //! statistical model, not a distribution-free quality guarantee.
 //! Unknown observations do not become fractional Bernoulli successes.
-//! Reference: https://proceedings.mlr.press/v28/agrawal13.html
-//! Conjugate update: https://www.cs.ubc.ca/~murphyk/Papers/bayesGauss.pdf
+//! Reference: <https://proceedings.mlr.press/v28/agrawal13.html>
+//! Conjugate update: <https://www.cs.ubc.ca/~murphyk/Papers/bayesGauss.pdf>
 
 use std::collections::BTreeMap;
 

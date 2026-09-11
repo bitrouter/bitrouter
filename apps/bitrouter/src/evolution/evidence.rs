@@ -1,7 +1,7 @@
 //! A judge sees a frozen, cited ACP prefix, without model prices or routing labels.
 //!
-//! Protocol references: https://agentclientprotocol.com/protocol/tool-calls and
-//! https://agentclientprotocol.com/protocol/terminals . Only recorded envelopes
+//! Protocol references: <https://agentclientprotocol.com/protocol/tool-calls> and
+//! <https://agentclientprotocol.com/protocol/terminals>. Only recorded envelopes
 //! are projected; these methods are never invoked by evaluation.
 
 use std::collections::BTreeMap;
