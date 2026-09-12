@@ -32,6 +32,7 @@ fn target(provider: &str) -> RoutingTarget {
         api_key_override: None,
         api_base_override: None,
         auth_scheme: Default::default(),
+        headers: Vec::new(),
     }
 }
 
@@ -2818,6 +2819,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
         api_key_override: None,
         api_base_override: None,
         auth_scheme: Default::default(),
+        headers: Vec::new(),
     };
     let prompt = Prompt {
         model: "m".into(),
@@ -3197,6 +3199,7 @@ fn auth_retry_target(api_base: String) -> RoutingTarget {
         api_key_override: None,
         api_base_override: None,
         auth_scheme: Default::default(),
+        headers: Vec::new(),
     }
 }
 

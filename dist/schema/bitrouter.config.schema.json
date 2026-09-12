@@ -1191,11 +1191,18 @@
         },
         "derives": {
           "default": null,
-          "description": "Inherit defaults from another provider in this config (acceptance F20 /\nv0 `derives`). The named provider's `api_protocol`, `rate_limits`,\n`models`, `tags` and `auto_discover` flow into *this* provider's empty\nfields; explicit fields here win. Resolved by\n[`resolve_derivations`] after the config is parsed.",
+          "description": "Inherit defaults from another provider in this config (acceptance F20 /\nv0 `derives`). The named provider's `headers`, `api_protocol`,\n`rate_limits`, `models`, `tags` and `auto_discover` flow into *this*\nprovider's empty fields; explicit fields here win. Resolved by\n[`resolve_derivations`] after the config is parsed.",
           "type": [
             "string",
             "null"
           ]
+        },
+        "headers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ProviderHeaderConfig"
+          },
+          "description": "Additional headers applied to every inference request for this\nprovider. A string is shorthand for a static default. The expanded\nform can opt into forwarding the same inbound header, which overrides\nthe default for that request.",
+          "type": "object"
         },
         "models": {
           "description": "Declared model entries. Empty + `auto_discover` triggers discovery.",
@@ -1236,6 +1243,39 @@
         "timeouts": {
           "$ref": "#/$defs/TimeoutConfig",
           "description": "Per-provider upstream timeout overrides. Each set field layers over the\nresolved global [`UpstreamConfig::timeouts`]; unset fields inherit it.\nNot inherited via [`derives`](Self::derives)."
+        }
+      },
+      "type": "object"
+    },
+    "ProviderHeaderConfig": {
+      "anyOf": [
+        {
+          "description": "Static value; equivalent to `{ default: value, passthrough: false }`.",
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/ProviderHeaderPolicy",
+          "description": "Expanded default/passthrough policy."
+        }
+      ],
+      "description": "One provider header entry in `bitrouter.yaml`.\n\nA scalar string is shorthand for a static default with passthrough\ndisabled. The mapping form supports an optional `default` and an explicit\ninbound `passthrough` switch."
+    },
+    "ProviderHeaderPolicy": {
+      "additionalProperties": false,
+      "description": "Expanded provider header behavior.",
+      "properties": {
+        "default": {
+          "default": null,
+          "description": "Static value used when no allowed inbound value is present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "passthrough": {
+          "default": false,
+          "description": "Allow the inbound request's value(s) to override the static default.",
+          "type": "boolean"
         }
       },
       "type": "object"

@@ -1793,6 +1793,7 @@ policies:
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            headers: Vec::new(),
         };
         let prompt = prompt();
         let ctx = PipelineContext::new(PipelineRequest::new(
