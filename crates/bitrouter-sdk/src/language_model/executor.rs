@@ -1880,10 +1880,10 @@ mod beta_forward_tests {
 
     fn ctx_with_beta(beta: Option<&str>) -> PipelineContext {
         let mut headers = http::HeaderMap::new();
-        if let Some(b) = beta {
-            if let Ok(value) = http::HeaderValue::from_str(b) {
-                headers.insert("anthropic-beta", value);
-            }
+        if let Some(b) = beta
+            && let Ok(value) = http::HeaderValue::from_str(b)
+        {
+            headers.insert("anthropic-beta", value);
         }
         ctx_with_headers(headers)
     }
