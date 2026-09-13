@@ -1284,6 +1284,7 @@ mod tests {
                 api_key_override: None,
                 api_base_override: None,
                 auth_scheme: AuthScheme::XApiKey,
+                headers: Vec::new(),
             }],
         );
         let mut builder = PipelineBuilder::new();
@@ -1326,6 +1327,7 @@ mod tests {
                 api_key_override: None,
                 api_base_override: None,
                 auth_scheme: AuthScheme::XApiKey,
+                headers: Vec::new(),
             }],
         );
         let observed = Arc::new(std::sync::Mutex::new(None));

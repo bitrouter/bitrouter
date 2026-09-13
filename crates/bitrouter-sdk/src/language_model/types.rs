@@ -2192,6 +2192,104 @@ pub enum AuthScheme {
     Bearer,
 }
 
+/// One provider-configured outbound HTTP header policy.
+///
+/// The routing layer resolves the provider's YAML entry into this validated
+/// wire representation. [`crate::language_model::HttpExecutor`] applies it to
+/// every request for the target: an explicitly allowed inbound value wins over
+/// [`Self::default`], while a rule without either suppresses that header.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OutboundHeaderRule {
+    name: http::HeaderName,
+    default: Option<http::HeaderValue>,
+    passthrough: bool,
+}
+
+impl OutboundHeaderRule {
+    /// Validate and construct an outbound header rule.
+    pub fn new(
+        name: impl AsRef<str>,
+        default: Option<&str>,
+        passthrough: bool,
+    ) -> crate::Result<Self> {
+        let raw_name = name.as_ref();
+        let name = http::HeaderName::from_bytes(raw_name.as_bytes()).map_err(|error| {
+            crate::BitrouterError::bad_request(format!(
+                "invalid provider header name '{raw_name}': {error}"
+            ))
+        })?;
+        if is_reserved_provider_header(&name) {
+            return Err(crate::BitrouterError::bad_request(format!(
+                "provider header '{}' is reserved",
+                name.as_str()
+            )));
+        }
+        let default = default
+            .map(|value| {
+                http::HeaderValue::from_str(value).map_err(|error| {
+                    crate::BitrouterError::bad_request(format!(
+                        "invalid value for provider header '{}': {error}",
+                        name.as_str()
+                    ))
+                })
+            })
+            .transpose()?;
+        Ok(Self {
+            name,
+            default,
+            passthrough,
+        })
+    }
+
+    /// The canonical, case-insensitive HTTP field name.
+    pub fn name(&self) -> &http::HeaderName {
+        &self.name
+    }
+
+    /// The configured static fallback value, if any.
+    pub fn default(&self) -> Option<&http::HeaderValue> {
+        self.default.as_ref()
+    }
+
+    /// Whether the same inbound request header may override the default.
+    pub fn passthrough(&self) -> bool {
+        self.passthrough
+    }
+}
+
+impl std::fmt::Debug for OutboundHeaderRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutboundHeaderRule")
+            .field("name", &self.name)
+            .field("has_default", &self.default.is_some())
+            .field("passthrough", &self.passthrough)
+            .finish()
+    }
+}
+
+fn is_reserved_provider_header(name: &http::HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "authorization"
+            | "proxy-authorization"
+            | "x-api-key"
+            | "x-goog-api-key"
+            | "host"
+            | "content-length"
+            | "content-type"
+            | "transfer-encoding"
+            | "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "trailer"
+            | "te"
+            | "upgrade"
+            | "traceparent"
+            | "tracestate"
+            | "x-bitrouter-request-id"
+    )
+}
+
 /// One hop in a fallback chain: a concrete provider + model + connection info.
 ///
 /// The `Debug` impl redacts `api_key` and `api_key_override` (v0 audit S9):
@@ -2237,6 +2335,9 @@ pub struct RoutingTarget {
     /// transport (`x-api-key` vs `Authorization: Bearer`); others ignore it.
     /// Defaults to [`AuthScheme::XApiKey`].
     pub auth_scheme: AuthScheme,
+    /// Validated static/default and inbound-passthrough header policies for
+    /// every request to this provider.
+    pub headers: Vec<OutboundHeaderRule>,
 }
 
 impl std::fmt::Debug for RoutingTarget {
@@ -2261,6 +2362,7 @@ impl std::fmt::Debug for RoutingTarget {
             )
             .field("api_base_override", &self.api_base_override)
             .field("auth_scheme", &self.auth_scheme)
+            .field("headers", &self.headers)
             .finish()
     }
 }

@@ -193,7 +193,7 @@ fn build_targets(
     provider: &crate::config::ProviderConfig,
     model_id: &str,
     inbound: Option<&ApiProtocol>,
-) -> Vec<RoutingTarget> {
+) -> Result<Vec<RoutingTarget>> {
     // Protocol-native routing: prefer the inbound protocol when this upstream
     // supports it (a faithful same-protocol round-trip), else the provider's
     // configured default head.
@@ -226,12 +226,13 @@ fn build_targets(
     let reasoning_effort = provider
         .model_config(model_id)
         .and_then(|model| model.reasoning_effort.clone());
+    let headers = provider.outbound_headers()?;
 
     if provider.accounts.is_empty() {
         let api_base = protocol_base
             .map(str::to_string)
             .unwrap_or_else(|| provider.api_base.clone());
-        return vec![RoutingTarget {
+        return Ok(vec![RoutingTarget {
             provider_name: provider_id.to_string(),
             service_id: service_id.to_string(),
             api_base,
@@ -245,7 +246,8 @@ fn build_targets(
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
-        }];
+            headers,
+        }]);
     }
 
     let n = provider.accounts.len();
@@ -253,7 +255,7 @@ fn build_targets(
         crate::config::AccountStrategy::Failover => 0,
         crate::config::AccountStrategy::Balance => balance_offset(provider_id, n),
     };
-    (0..n)
+    Ok((0..n)
         .map(|i| {
             let idx = (i + offset) % n;
             let account = &provider.accounts[idx];
@@ -286,9 +288,10 @@ fn build_targets(
                 api_key_override: None,
                 api_base_override: None,
                 auth_scheme: Default::default(),
+                headers: headers.clone(),
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Pick the wire protocol for a target: the inbound protocol when the upstream
@@ -396,7 +399,7 @@ fn resolve_virtual_model(
                 provider,
                 &endpoint.service_id,
                 prefs.inbound_protocol.as_ref(),
-            ),
+            )?,
         ));
     }
 
@@ -450,12 +453,12 @@ fn resolve_clean_route_chain(
         && let Some(provider) = config.providers.get(provider_id)
         && provider.active
     {
-        return Ok(build_targets(
+        return build_targets(
             provider_id,
             provider,
             model_id,
             prefs.inbound_protocol.as_ref(),
-        ));
+        );
     }
 
     // ---- Strategy 2: explicit virtual model ----
@@ -503,7 +506,7 @@ fn resolve_clean_route_chain(
                     provider,
                     clean,
                     prefs.inbound_protocol.as_ref(),
-                ),
+                )?,
             ));
         }
     }

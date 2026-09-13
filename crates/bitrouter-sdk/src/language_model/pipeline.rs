@@ -1414,6 +1414,7 @@ mod policy_effort_target_tests {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            headers: Vec::new(),
         }
     }
 

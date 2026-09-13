@@ -1283,6 +1283,7 @@ fn target_token_limit_override_wins_over_inbound_spelling() {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            headers: Vec::new(),
         };
         let rendered = adapter.render_request_for_target(&prompt, &target).unwrap();
         assert_eq!(rendered[outbound_field], 99);
@@ -1316,6 +1317,7 @@ fn chat_target_omits_explicitly_unsupported_optional_fields() {
         api_key_override: None,
         api_base_override: None,
         auth_scheme: Default::default(),
+        headers: Vec::new(),
     };
 
     let rendered = chat.render_request_for_target(&prompt, &target).unwrap();
@@ -1347,6 +1349,7 @@ fn chat_target_does_not_silently_drop_store_true() {
         api_key_override: None,
         api_base_override: None,
         auth_scheme: Default::default(),
+        headers: Vec::new(),
     };
 
     let error = chat
@@ -1412,6 +1415,7 @@ fn chat_target_emits_one_token_alias_despite_cross_protocol_extra_pollution() {
                 api_key_override: None,
                 api_base_override: None,
                 auth_scheme: Default::default(),
+                headers: Vec::new(),
             };
             let rendered = adapter_for(ApiProtocol::ChatCompletions)
                 .render_request_for_target(&prompt, &target)
@@ -2408,6 +2412,7 @@ fn messages_no_beta_header_is_emitted() {
         api_key_override: None,
         api_base_override: None,
         auth_scheme: Default::default(),
+        headers: Vec::new(),
     };
     let req = futures::executor::block_on(transport.authorise(req, &target)).unwrap();
     assert!(
@@ -2439,6 +2444,7 @@ fn messages_auth_scheme_selects_one_credential_header() {
         api_key_override: None,
         api_base_override: None,
         auth_scheme: AuthScheme::XApiKey,
+        headers: Vec::new(),
     };
 
     // Default (x-api-key) scheme → `x-api-key` only.

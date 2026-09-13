@@ -330,6 +330,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
                 api_key_override: None,
                 api_base_override: None,
                 auth_scheme: AuthScheme::XApiKey,
+                headers: Vec::new(),
             },
             HopOutcome::Generated(&execution),
         )

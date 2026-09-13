@@ -18,7 +18,7 @@
 //! # let _ = routing; Ok(()) }
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -27,7 +27,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::HttpTimeouts;
 use crate::language_model::routing::SortOrder;
-use crate::language_model::types::{ApiProtocol, ModelCompatibility, ProtocolList};
+use crate::language_model::types::{
+    ApiProtocol, ModelCompatibility, OutboundHeaderRule, ProtocolList,
+};
 
 pub mod pattern;
 pub mod presets;
@@ -1094,6 +1096,11 @@ pub struct ProviderConfig {
     pub api_base: String,
     /// Upstream API key (often a `${VAR}` reference).
     pub api_key: String,
+    /// Additional headers applied to every inference request for this
+    /// provider. A string is shorthand for a static default. The expanded
+    /// form can opt into forwarding the same inbound header, which overrides
+    /// the default for that request.
+    pub headers: BTreeMap<String, ProviderHeaderConfig>,
     /// Glob-prefix `api_protocol` pattern list — each pattern maps to an
     /// ordered set of supported wire protocols (the head is the preferred
     /// default). Precedence: per-model override > longest matching pattern >
@@ -1120,9 +1127,9 @@ pub struct ProviderConfig {
     /// Free-form tags, used by `RoutingPrefs.require_tags` filtering.
     pub tags: Vec<String>,
     /// Inherit defaults from another provider in this config (acceptance F20 /
-    /// v0 `derives`). The named provider's `api_protocol`, `rate_limits`,
-    /// `models`, `tags` and `auto_discover` flow into *this* provider's empty
-    /// fields; explicit fields here win. Resolved by
+    /// v0 `derives`). The named provider's `headers`, `api_protocol`,
+    /// `rate_limits`, `models`, `tags` and `auto_discover` flow into *this*
+    /// provider's empty fields; explicit fields here win. Resolved by
     /// [`resolve_derivations`] after the config is parsed.
     pub derives: Option<String>,
     /// Multiple credentials for this one provider — e.g. two
@@ -1148,6 +1155,46 @@ pub struct ProviderConfig {
     /// resolved global [`UpstreamConfig::timeouts`]; unset fields inherit it.
     /// Not inherited via [`derives`](Self::derives).
     pub timeouts: TimeoutConfig,
+}
+
+/// One provider header entry in `bitrouter.yaml`.
+///
+/// A scalar string is shorthand for a static default with passthrough
+/// disabled. The mapping form supports an optional `default` and an explicit
+/// inbound `passthrough` switch.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum ProviderHeaderConfig {
+    /// Static value; equivalent to `{ default: value, passthrough: false }`.
+    Static(String),
+    /// Expanded default/passthrough policy.
+    Policy(ProviderHeaderPolicy),
+}
+
+impl ProviderHeaderConfig {
+    fn default_value(&self) -> Option<&str> {
+        match self {
+            Self::Static(value) => Some(value),
+            Self::Policy(policy) => policy.default.as_deref(),
+        }
+    }
+
+    fn passthrough(&self) -> bool {
+        match self {
+            Self::Static(_) => false,
+            Self::Policy(policy) => policy.passthrough,
+        }
+    }
+}
+
+/// Expanded provider header behavior.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProviderHeaderPolicy {
+    /// Static value used when no allowed inbound value is present.
+    pub default: Option<String>,
+    /// Allow the inbound request's value(s) to override the static default.
+    pub passthrough: bool,
 }
 
 /// One credential within a multi-account provider. An account varies
@@ -1214,6 +1261,7 @@ impl std::fmt::Debug for ProviderConfig {
                     "<redacted>"
                 },
             )
+            .field("headers", &self.headers.keys().collect::<Vec<_>>())
             .field("api_protocol", &self.api_protocol)
             .field("protocol_endpoints", &self.protocol_endpoints)
             .field("rate_limits", &self.rate_limits)
@@ -1235,6 +1283,7 @@ impl Default for ProviderConfig {
         Self {
             api_base: String::new(),
             api_key: String::new(),
+            headers: BTreeMap::new(),
             api_protocol: PatternMap::new(),
             protocol_endpoints: HashMap::new(),
             rate_limits: PatternMap::new(),
@@ -1253,6 +1302,22 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
+    fn outbound_headers(&self) -> Result<Vec<OutboundHeaderRule>> {
+        let mut names = HashSet::new();
+        let mut rules = Vec::with_capacity(self.headers.len());
+        for (name, config) in &self.headers {
+            let rule = OutboundHeaderRule::new(name, config.default_value(), config.passthrough())?;
+            if !names.insert(rule.name().clone()) {
+                return Err(BitrouterError::bad_request(format!(
+                    "duplicate provider header '{}'",
+                    rule.name().as_str()
+                )));
+            }
+            rules.push(rule);
+        }
+        Ok(rules)
+    }
+
     /// Resolve either the registry's canonical model id or its provider-native
     /// dispatch id to the same metadata entry. Explicit `provider:model`
     /// routes commonly use the native id, but must retain the registry's
@@ -1679,6 +1744,9 @@ where
     // Validated post-`resolve_derivations` so an inherited `api_base` is
     // checked against the *effective* value.
     for (id, provider) in &config.providers {
+        provider.outbound_headers().map_err(|error| {
+            BitrouterError::bad_request(format!("provider '{id}' has invalid headers: {error}"))
+        })?;
         for model in &provider.models {
             if let Some(reasoning_effort) = &model.reasoning_effort {
                 if !model
@@ -1904,6 +1972,9 @@ fn resolve_one_derivation(
     // intrinsic to the child (you almost always want different endpoints).
     if child.api_protocol.is_empty() {
         child.api_protocol = parent.api_protocol.clone();
+    }
+    if child.headers.is_empty() {
+        child.headers = parent.headers.clone();
     }
     if child.protocol_endpoints.is_empty() {
         child.protocol_endpoints = parent.protocol_endpoints.clone();
