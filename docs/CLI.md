@@ -555,7 +555,7 @@ manifest with a `digest` and a byte `size` per file.
 
 Spend reaches an MCP client as **typed structured content** under `status`'s
 `spend`, read from the local metering database — the same ledger
-`bro status` and `bro cost` report from, so the surfaces cannot
+`bro status` and `bro requests` report from, so the surfaces cannot
 disagree about what has been spent.
 
 ### Hidden compatibility: `bro mcp install`
