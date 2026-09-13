@@ -3100,7 +3100,7 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             // it, and only it knows the pid, the models count and the provider
             // set. The config source resolves the local metering database, so
             // the tool's `spend` block is the same ledger `bro status`
-            // and `bro cost` read.
+            // and `bro requests` read.
             let status = socket.map(|socket| {
                 std::sync::Arc::new(bitrouter::actions::status::DaemonStatus::new(
                     socket, source,
