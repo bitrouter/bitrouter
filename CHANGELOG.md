@@ -7,6 +7,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Breaking (CLI): the invocation is now `bro`.** `bitrouter <cmd>` becomes
+  `bro <cmd>`. Only the invocation changed — the product, crate, npm package,
+  Homebrew tap, `bitrouter.yaml`, `~/.bitrouter`, `BITROUTER_*` environment
+  variables, `brk_` key prefix, and telemetry identifiers keep their names.
+  Shell, PowerShell, npm, and Homebrew installers additionally create a
+  deprecated `bitrouter` alias; invoking it prints one migration note on
+  stderr while preserving structured stdout. The alias is installer-only,
+  release archives contain `bro`, and the alias is removed in 1.0.0.
+
+## [1.0.0-alpha.30](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.29...v1.0.0-alpha.30)
+
+
+### ⛰️ Features
+
+- *(cli)* Unify ACP lifecycle surfaces ([#885](https://github.com/bitrouter/bitrouter/pull/885)) - ([63b05b8](https://github.com/bitrouter/bitrouter/commit/63b05b874db10ba29fb73d3c923e99a5c329757d))
+
+### 🐛 Bug Fixes
+
+- *(sdk)* Deduplicate server-tool stream usage ([#895](https://github.com/bitrouter/bitrouter/pull/895)) - ([4c01593](https://github.com/bitrouter/bitrouter/commit/4c01593e82aada654e024079026797da93bce7fb))
+
+
+## [1.0.0-alpha.29](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.28...v1.0.0-alpha.29)
+
+
+### ⛰️ Features
+
+- *(cli)* Complete searchable ACP onboarding ([#888](https://github.com/bitrouter/bitrouter/pull/888)) - ([ef2c13a](https://github.com/bitrouter/bitrouter/commit/ef2c13a8185cc736f86c7837d86e2ed9bc22325a))
+
+### 🐛 Bug Fixes
+
+- *(sdk)* Preserve routed cache usage ([#893](https://github.com/bitrouter/bitrouter/pull/893)) - ([94a5ee9](https://github.com/bitrouter/bitrouter/commit/94a5ee9855be917b1a9d839cee24d8ee41271483))
+
+
+## [1.0.0-alpha.28](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.27...v1.0.0-alpha.28)
+
+
+### ⛰️ Features
+
+- *(acp)* Headless permission policy and output formats ([#866](https://github.com/bitrouter/bitrouter/pull/866)) - ([878178a](https://github.com/bitrouter/bitrouter/commit/878178a45d84a805d0ae1a489ecf60f79f575a6a))
+- *(acp)* Read harness authentication from the protocol ([#860](https://github.com/bitrouter/bitrouter/pull/860)) - ([205f5d1](https://github.com/bitrouter/bitrouter/commit/205f5d149bb01bd5b601aa20d7064209fe5b379f))
+- *(acp)* Harden v1 controller routing ([#853](https://github.com/bitrouter/bitrouter/pull/853)) - ([d97924e](https://github.com/bitrouter/bitrouter/commit/d97924e78c7dab7c6fdf93c779014583e079b97e))
+- *(acp)* Add controller identity and session routing ([#852](https://github.com/bitrouter/bitrouter/pull/852)) - ([d392008](https://github.com/bitrouter/bitrouter/commit/d3920084d0f8ddc8ac0d9ef1d1994e2b2d2b9908))
+- *(acp)* Add multi-session controller ([#849](https://github.com/bitrouter/bitrouter/pull/849)) - ([d6e9327](https://github.com/bitrouter/bitrouter/commit/d6e93272a70a3ecc6b807848a4447188296f6513))
+- *(acp)* Rebuild the ACP agent surface and add the chat TUI ([#816](https://github.com/bitrouter/bitrouter/pull/816)) - ([f3f86ab](https://github.com/bitrouter/bitrouter/commit/f3f86ab2d47bf560a85a0ca57055458958512914))
+- *(actions)* [**breaking**] One table for status, list_models, route ([#869](https://github.com/bitrouter/bitrouter/pull/869)) - ([956f394](https://github.com/bitrouter/bitrouter/commit/956f39489456dec937393b204d44c039157fc68d))
+- *(chat)* Resolve slash commands against the actions table ([#880](https://github.com/bitrouter/bitrouter/pull/880)) - ([61dd773](https://github.com/bitrouter/bitrouter/commit/61dd77333a91f7aab01647b0ae7d8625d3039ffe))
+- *(cli)* Operate trajectory history - ([87695fb](https://github.com/bitrouter/bitrouter/commit/87695fb5a60715cfbc657b58a4b960155c49065d))
+- *(eval)* Publish trajectory operations - ([3c250db](https://github.com/bitrouter/bitrouter/commit/3c250db59629e95b365bcdbe3f3877a165ddfabc))
+- *(eval)* Add generic route evaluation workflow ([#763](https://github.com/bitrouter/bitrouter/pull/763)) - ([4b86a51](https://github.com/bitrouter/bitrouter/commit/4b86a5134d5c5e239c5b4ae8097f9da243ec2de7))
+- *(eval)* Make policy locks the routing source ([#762](https://github.com/bitrouter/bitrouter/pull/762)) - ([ef3fb69](https://github.com/bitrouter/bitrouter/commit/ef3fb6993605351dabc635e5a7bab89ca4937907))
+- *(launch)* Route every catalog harness ([#781](https://github.com/bitrouter/bitrouter/pull/781)) - ([5cefa6d](https://github.com/bitrouter/bitrouter/commit/5cefa6da240cddbd5763f6eb04ec3b4750125798))
+- *(mcp)* [**breaking**] Drop the complete tool from the origin server ([#875](https://github.com/bitrouter/bitrouter/pull/875)) - ([be7e21c](https://github.com/bitrouter/bitrouter/commit/be7e21c8209040ec4b866e0a7d1c23181bd6d5b8))
+- *(mcp)* Upgrade to stable rmcp 3.1 for MCP 2026-07-28 ([#760](https://github.com/bitrouter/bitrouter/pull/760)) - ([5536fe5](https://github.com/bitrouter/bitrouter/commit/5536fe525829ec51d373ac611ae89d1fed449dfc))
+- *(observability)* [**breaking**] Live router view and hosted launch ([#803](https://github.com/bitrouter/bitrouter/pull/803)) - ([25f69b7](https://github.com/bitrouter/bitrouter/commit/25f69b71f5660253c7ee46874b460370e954060d))
+- *(optimize)* Add agentic workflow loop ([#777](https://github.com/bitrouter/bitrouter/pull/777)) - ([6b0e73e](https://github.com/bitrouter/bitrouter/commit/6b0e73e5c68992eda45d755a799b24cfde2a3351))
+- *(policy)* Route models by reasoning effort ([#804](https://github.com/bitrouter/bitrouter/pull/804)) - ([fa402d4](https://github.com/bitrouter/bitrouter/commit/fa402d489ace1ecd7d7f5ac5bc01577b35ea8958))
+- *(policy)* Route agent workflows by predicted role ([#790](https://github.com/bitrouter/bitrouter/pull/790)) - ([05fedf9](https://github.com/bitrouter/bitrouter/commit/05fedf9437a0d3c7beacd517b69c5fc590d47777))
+- *(policy)* Add trajectory progress guard - ([8f03e48](https://github.com/bitrouter/bitrouter/commit/8f03e4801caa74d2dbb7fe40161b2c71baa91733))
+- *(policy)* Harden cost-aware workflow routing ([#768](https://github.com/bitrouter/bitrouter/pull/768)) - ([185c5a1](https://github.com/bitrouter/bitrouter/commit/185c5a1aa792c63990e5bba78e462104e1e42fe6))
+- *(policy)* Generalize agent trace routing ([#757](https://github.com/bitrouter/bitrouter/pull/757)) - ([2722d77](https://github.com/bitrouter/bitrouter/commit/2722d77bc9f6d184e6dd37e5cd769ac48de93b70))
+- *(registry)* Add agents and runtimes as a primitive pair ([#879](https://github.com/bitrouter/bitrouter/pull/879)) - ([f8c09b1](https://github.com/bitrouter/bitrouter/commit/f8c09b154256b704082aa20d89de1380b07e74f1))
+- *(router)* Add shadow classifier bakeoff ([#865](https://github.com/bitrouter/bitrouter/pull/865)) - ([d77d52d](https://github.com/bitrouter/bitrouter/commit/d77d52d50969f8a6a6c4d9961827601b4782620a))
+- *(router)* Freeze routing measurement ([#862](https://github.com/bitrouter/bitrouter/pull/862)) - ([c2f7c78](https://github.com/bitrouter/bitrouter/commit/c2f7c783122b3f70b02f797622ca0fef09784bce))
+- *(skills)* [**breaking**] Unify discovery and conform to SEP-2640 ([#870](https://github.com/bitrouter/bitrouter/pull/870)) - ([7ee79ea](https://github.com/bitrouter/bitrouter/commit/7ee79eab35700d02bd3b6e795b0f5aafab36a64d))
+- *(skills)* [**breaking**] Serve over MCP (SEP-2640), cut installer ([#770](https://github.com/bitrouter/bitrouter/pull/770)) - ([afeb3ab](https://github.com/bitrouter/bitrouter/commit/afeb3ab50d663199843cc1984fbfc0bf4de02814))
+- *(substrate)* Detach/reattach session robustness ([#743](https://github.com/bitrouter/bitrouter/pull/743)) - ([9fb7f92](https://github.com/bitrouter/bitrouter/commit/9fb7f92a588608c424e73ee5dea28d1475244fc9))
+- *(trajectory)* Reduce replayable health - ([53114b4](https://github.com/bitrouter/bitrouter/commit/53114b404e66202aa35340db4a547cd4c5e75bdd))
+- *(trajectory)* Add durable event ledger - ([41ef9ad](https://github.com/bitrouter/bitrouter/commit/41ef9ad3a892df40c5ebf47e6b38555b98318171))
+- Optimize routes from observed history ([#833](https://github.com/bitrouter/bitrouter/pull/833)) - ([9fa7a4c](https://github.com/bitrouter/bitrouter/commit/9fa7a4c9973164bf2cb9b5f7339476b365888254))
+- Publish bitrouter/auto as the router slug ([#788](https://github.com/bitrouter/bitrouter/pull/788)) - ([8b702eb](https://github.com/bitrouter/bitrouter/commit/8b702eb9376ea10025e5d4f1643a23e14f9e4565))
+- Guide @auto workflow optimization ([#779](https://github.com/bitrouter/bitrouter/pull/779)) - ([bbca8ec](https://github.com/bitrouter/bitrouter/commit/bbca8eca2185bc036fb3d6ab3974dc1f07cfca59))
+- Add MCP registry discovery (mcp search/list/add) ([#759](https://github.com/bitrouter/bitrouter/pull/759)) - ([6096874](https://github.com/bitrouter/bitrouter/commit/60968740e275e2ee84cc42f94dd184a775592d64))
+- Add cache-aware routing, Terminus 2 identity, and Claude bridge ([#717](https://github.com/bitrouter/bitrouter/pull/717)) - ([0a4f3ee](https://github.com/bitrouter/bitrouter/commit/0a4f3ee9b93958a3f6fc9725c1dbad334545a8f7))
+
+### 🐛 Bug Fixes
+
+- *(auth)* Preserve fallback semantics - ([6f6185d](https://github.com/bitrouter/bitrouter/commit/6f6185d13522d3f496c9d54e7b72d7a035e5f657))
+- *(auth)* Redact extension failures - ([1a41c85](https://github.com/bitrouter/bitrouter/commit/1a41c85206327c76982e479880e393bf67cc14e4))
+- *(chat)* Show the session log when a launch fails ([#857](https://github.com/bitrouter/bitrouter/pull/857)) - ([6ca6e60](https://github.com/bitrouter/bitrouter/commit/6ca6e60066c1e0bb8955b3a65a544bb49cb650b8))
+- *(cli)* Onboard into the default ACP TUI ([#886](https://github.com/bitrouter/bitrouter/pull/886)) - ([d357ee9](https://github.com/bitrouter/bitrouter/commit/d357ee9a0370238ceb0ad4a6b6ba006a966b30da))
+- *(cli)* Harden trajectory operations - ([9ea8d4a](https://github.com/bitrouter/bitrouter/commit/9ea8d4a314880cdbef4eeafbe87a1de48b18b9cc))
+- *(config)* Make server.log_level set the log filter ([#806](https://github.com/bitrouter/bitrouter/pull/806)) - ([6c90156](https://github.com/bitrouter/bitrouter/commit/6c9015690342fbae8d661aa8676fea149d7cb0a9))
+- *(daemon)* Authenticate restart kill target - ([ba3a5a4](https://github.com/bitrouter/bitrouter/commit/ba3a5a45c4d86b2c275a6bde1c7ba52aac5695cf))
+- *(daemon)* Await restart process exit - ([159270e](https://github.com/bitrouter/bitrouter/commit/159270e0d3f5dd5670d6972c66e61c997461eb16))
+- *(db)* Normalize anchored SQLite URLs on Windows - ([7193cd9](https://github.com/bitrouter/bitrouter/commit/7193cd92c403034a1e1c5d9f78b4f77a4b124358))
+- *(eval)* Preserve unguarded policy subjects - ([2fffd8f](https://github.com/bitrouter/bitrouter/commit/2fffd8f7d311e97c33017b1eb5e06eab63010a85))
+- *(eval)* Scope trajectory decision credit - ([9bb038f](https://github.com/bitrouter/bitrouter/commit/9bb038fcf77607f1dec3eb4f733ac4c129462ff3))
+- *(launch)* Say `launch:` not `spawn:` in console output ([#798](https://github.com/bitrouter/bitrouter/pull/798)) - ([ea92378](https://github.com/bitrouter/bitrouter/commit/ea923785ad598dd853fd95778f74a4cc296fbf74))
+- *(pipeline)* Settle routing failures - ([3db74eb](https://github.com/bitrouter/bitrouter/commit/3db74ebabb75c545c868adcfaedc69923edfe1df))
+- *(policy)* Bind progress guard evidence - ([fcbbacc](https://github.com/bitrouter/bitrouter/commit/fcbbacc1bbb792b798773a5d169420a95dbfaa79))
+- *(policy)* Make runtime mode authoritative ([#761](https://github.com/bitrouter/bitrouter/pull/761)) - ([a44a6c8](https://github.com/bitrouter/bitrouter/commit/a44a6c87f0a9da357d44eb5cca57e70914c8381c))
+- *(protocol)* Preserve Anthropic tool extension fields ([#774](https://github.com/bitrouter/bitrouter/pull/774)) - ([119cd0f](https://github.com/bitrouter/bitrouter/commit/119cd0f0935d9d77beeae9d8671b14c817bb1a96))
+- *(responses)* Budget shutdown drain per batch - ([5b13538](https://github.com/bitrouter/bitrouter/commit/5b13538fe66c3894c59120bbcb5f111c7fb89f6e))
+- *(responses)* Drain after slow reconciler shutdown - ([06b25fa](https://github.com/bitrouter/bitrouter/commit/06b25fad4b1012ee17dce6ec96a150f28a49b523))
+- *(responses)* Close continuation safety gaps - ([8028ef2](https://github.com/bitrouter/bitrouter/commit/8028ef24d2a0a732b25b1d619dc0b99114eebeb8))
+- *(responses)* Require graceful reconciliation - ([82ed064](https://github.com/bitrouter/bitrouter/commit/82ed064f6f532304185fe4b49db637a6911cbc07))
+- *(responses)* Fence continuation reconciliation - ([e964467](https://github.com/bitrouter/bitrouter/commit/e964467fc72104711f26fc7313025c2b7c391da3))
+- *(responses)* Bound continuation ownership state - ([3a044ce](https://github.com/bitrouter/bitrouter/commit/3a044ce11b76dbbcb2dd74e8efd2447c227d9316))
+- *(responses)* Close continuation publication races - ([b8c96d4](https://github.com/bitrouter/bitrouter/commit/b8c96d4f547a10c2c4a89a9b10cc715bf9fa279c))
+- *(responses)* Harden continuation publication - ([c3c35b3](https://github.com/bitrouter/bitrouter/commit/c3c35b38f26f546733827fb8abdc5bda0d5f5d96))
+- *(responses)* Authorize continuation on delivery - ([2b2a5e1](https://github.com/bitrouter/bitrouter/commit/2b2a5e156e72c16a18c5b5564596a1390c80cba4))
+- *(responses)* Harden continuation delivery - ([371aeb2](https://github.com/bitrouter/bitrouter/commit/371aeb24f3205b755c9393cd717c5cb7f1f07dab))
+- *(responses)* Bind completed continuation - ([5d1b662](https://github.com/bitrouter/bitrouter/commit/5d1b66266d1b83bb496b4d6c6e8f9cd3cb9bd7f9))
+- *(responses)* Persist gateway continuation - ([7623a0f](https://github.com/bitrouter/bitrouter/commit/7623a0f846b344798ef54c5d18b16416a7452607))
+- *(responses)* Preserve native continuation - ([c297c29](https://github.com/bitrouter/bitrouter/commit/c297c29c799a4f2c3035e42eaa370827cc9c5a03))
+- *(responses)* Stabilize stream identity - ([f05add8](https://github.com/bitrouter/bitrouter/commit/f05add8c89c90f6d5542033c983e99cb4ce37a9b))
+- *(responses)* Include response creation time - ([e84ec0d](https://github.com/bitrouter/bitrouter/commit/e84ec0d8b04d109985d123474cf39ac516180467))
+- *(router)* Correct research measurement reports ([#874](https://github.com/bitrouter/bitrouter/pull/874)) - ([4fcd801](https://github.com/bitrouter/bitrouter/commit/4fcd8018d8c6141a2e08105bad894d33c8298900))
+- *(sdk)* Normalize routed stream usage ([#887](https://github.com/bitrouter/bitrouter/pull/887)) - ([b26635b](https://github.com/bitrouter/bitrouter/commit/b26635b5909e1d69a59a193aa520a9832e21726f))
+- *(tests)* Escape Windows database URLs in YAML - ([1b5a29f](https://github.com/bitrouter/bitrouter/commit/1b5a29f07441292ed4b48e2a587121df742bc877))
+- *(tests)* Drain settlements before restart assertions - ([a621140](https://github.com/bitrouter/bitrouter/commit/a621140dbefa8521b89a9c8ba74cbb1362e21036))
+- *(trajectory)* Hold continuation starts at episode head ([#829](https://github.com/bitrouter/bitrouter/pull/829)) - ([01d8892](https://github.com/bitrouter/bitrouter/commit/01d88924a38e07b1e4511c344421b036bbd0b741))
+- *(trajectory)* Align start and settlement clocks - ([8c63b43](https://github.com/bitrouter/bitrouter/commit/8c63b439d77df5c371ac67cfef70cc95e1cb839b))
+- *(trajectory)* Count recovery transitions - ([8738aaa](https://github.com/bitrouter/bitrouter/commit/8738aaacde94b4ef7799b107154d5f60180edcb8))
+- *(trajectory)* Preserve truncated ancestry honesty - ([4677b61](https://github.com/bitrouter/bitrouter/commit/4677b61cb6789fae2ab4d0f13ee57dcf659f31f0))
+- *(trajectory)* Correct outbox delivery audit - ([f582224](https://github.com/bitrouter/bitrouter/commit/f58222498ba8325807234faa4aba5e20d3750ba5))
+- *(trajectory)* Bind reused evaluation - ([970952d](https://github.com/bitrouter/bitrouter/commit/970952d68cdeefc3d5ca27d884fa3deb0d1e088a))
+- *(trajectory)* Stabilize failed retries - ([9bff7c7](https://github.com/bitrouter/bitrouter/commit/9bff7c7fbe7445f1cf9f4408401649be761c491d))
+- *(trajectory)* Expose ancestry conflicts - ([2dc8559](https://github.com/bitrouter/bitrouter/commit/2dc8559fa525eb1da1e57557fe92ceac6d872189))
+- *(trajectory)* Separate hold from tier selection - ([3625eb4](https://github.com/bitrouter/bitrouter/commit/3625eb4d6713da9b78720906106465b40aa4160f))
+- *(trajectory)* Validate initial episode start - ([e5c8b71](https://github.com/bitrouter/bitrouter/commit/e5c8b715f84d08def66eb7b1e5a5ad7af2330b7b))
+- *(trajectory)* Enforce replay lifecycle - ([8f57f0a](https://github.com/bitrouter/bitrouter/commit/8f57f0a2bb6143bc263b830d7e79d10c03641535))
+- *(trajectory)* Bind native evidence key - ([779aa83](https://github.com/bitrouter/bitrouter/commit/779aa83ad1f6c2db14efa4819a972f3d9313920f))
+- *(trajectory)* Close correlation edge cases - ([d0bc7ff](https://github.com/bitrouter/bitrouter/commit/d0bc7ff27df03db0391d0ce018dc71f75c1aed6d))
+- *(trajectory)* Harden correlation runtime - ([d6700ca](https://github.com/bitrouter/bitrouter/commit/d6700cad3d787b7740d1abe595ce05dc1a6d190a))
+- *(trajectory)* Harden ledger persistence - ([1316b40](https://github.com/bitrouter/bitrouter/commit/1316b403ab8242f97e9793ec95222e235b2e15bc))
+- Point stale surfaces at commands that exist ([#799](https://github.com/bitrouter/bitrouter/pull/799)) - ([4eccfe9](https://github.com/bitrouter/bitrouter/commit/4eccfe9b08cb2d607cb16c482d61c24ab48bc999))
+- Harden provider fallback errors ([#755](https://github.com/bitrouter/bitrouter/pull/755)) - ([0b03e2a](https://github.com/bitrouter/bitrouter/commit/0b03e2a3ed7d0abbf0ddd3755b36f22def30aa38))
+
+### 🚜 Refactor
+
+- *(acp)* [**breaking**] One ACP stack, from the engine to a flat chat loop ([#848](https://github.com/bitrouter/bitrouter/pull/848)) - ([4aa89a7](https://github.com/bitrouter/bitrouter/commit/4aa89a7a69e16ab4a3c20983198583bda5a68be0))
+- *(acp)* Move the ACP proxy engine into bitrouter-sdk ([#793](https://github.com/bitrouter/bitrouter/pull/793)) - ([72636a2](https://github.com/bitrouter/bitrouter/commit/72636a2a011068d5f45c9e63c9665c209543a22f))
+- *(docs)* Consolidate internal specs under docs/ ([#750](https://github.com/bitrouter/bitrouter/pull/750)) - ([b83775d](https://github.com/bitrouter/bitrouter/commit/b83775da9b67d0029bc6c17be76901e8effca823))
+- *(policy)* Make selection trajectory-aware - ([a27548c](https://github.com/bitrouter/bitrouter/commit/a27548cecbe753d962ee668ee14c26c0152b94c5))
+- *(sdk)* [**breaking**] Move the OTLP renderer out of the SDK ([#851](https://github.com/bitrouter/bitrouter/pull/851)) - ([28fe8ef](https://github.com/bitrouter/bitrouter/commit/28fe8efd788b9070cbbc11ddddf4e59728f74a5f))
+- *(substrate)* Drop detach/reattach + fleet machinery ([#751](https://github.com/bitrouter/bitrouter/pull/751)) - ([641d384](https://github.com/bitrouter/bitrouter/commit/641d3844be54a8b24d37958480134ad383004d10))
+- *(tui)* [**breaking**] Move all drawing into bitrouter-tui ([#830](https://github.com/bitrouter/bitrouter/pull/830)) - ([afd3b5a](https://github.com/bitrouter/bitrouter/commit/afd3b5a3610754d0e8205629d9def2dda81701ff))
+- Consolidate BitRouter Cloud SDK ownership ([#846](https://github.com/bitrouter/bitrouter/pull/846)) - ([85bf264](https://github.com/bitrouter/bitrouter/commit/85bf264c27f53cec1bf5c56b7f3763475562d2da))
+- Unify task-aware routing on agent_route/v1 ([#828](https://github.com/bitrouter/bitrouter/pull/828)) - ([ee4dbb2](https://github.com/bitrouter/bitrouter/commit/ee4dbb2e3930b5187828da6849af290d4e71882a))
+
+### 📚 Documentation
+
+- Sync status and launch docs ([#840](https://github.com/bitrouter/bitrouter/pull/840)) - ([5775cbc](https://github.com/bitrouter/bitrouter/commit/5775cbc0eea6ec4501fe7462ce4b44299b9cf3cb))
+- Harden Harbor EC2 network preflight ([#838](https://github.com/bitrouter/bitrouter/pull/838)) - ([9e05f3b](https://github.com/bitrouter/bitrouter/commit/9e05f3ba21fd2f802cdb96764ce0a188ce69b298))
+- Align docs with current CLI surfaces ([#802](https://github.com/bitrouter/bitrouter/pull/802)) - ([109f3ec](https://github.com/bitrouter/bitrouter/commit/109f3ece91cde14d0a248ec2141355014a63c36b))
+- Correct routing surface docs ([#741](https://github.com/bitrouter/bitrouter/pull/741)) - ([735b316](https://github.com/bitrouter/bitrouter/commit/735b3162dd29264ced65d2e655fa4b47d68f188f))
+
+### ⚡ Performance
+
+- *(trajectory)* Bound prefix lookup cardinality - ([af531e1](https://github.com/bitrouter/bitrouter/commit/af531e188ef6954f623d950699962a3d086f9668))
+- *(trajectory)* Bound prefix correlation - ([ae6baac](https://github.com/bitrouter/bitrouter/commit/ae6baaca9785c33cd50de3252127796649b9ae23))
+
+### 🧪 Testing
+
+- *(trajectory)* Prove progress control - ([2cf82f1](https://github.com/bitrouter/bitrouter/commit/2cf82f1f8e82453138c61d34c25bad5d3c72bdda))
+
+
 - **Headless permissions and formats for `acp prompt` / `spawn -p`.** A
   headless run used to deny every `session/request_permission`; now the caller
   states the rule: `--deny-all` (still the default), `--approve-reads` (the ACP
@@ -22,6 +180,236 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interpreter (`chat/effects.rs`) that the interactive TUI, the piped `chat`,
   and `acp prompt` all run — the first session-verb parity between the
   terminal and the headless CLI.
+
+- **Breaking (MCP):** the origin MCP server's `complete` tool is **removed**.
+  MCP is BitRouter's control and introspection surface; running a completion is
+  what the daemon's HTTP inference API is for. Use it instead — it is the
+  transport built for inference, and it always had the surface the tool did
+  not: streaming, the full parameter set, and the metering path.
+
+  ```jsonc
+  // before — MCP tools/call
+  { "name": "complete",
+    "arguments": { "model": "openai/gpt-4o",
+                   "messages": [{ "role": "user", "content": "hi" }] } }
+  ```
+
+  ```bash
+  # after — the daemon's HTTP API (OpenAI-shaped; /v1/messages is the
+  # Anthropic-shaped twin)
+  curl http://127.0.0.1:4356/v1/chat/completions \
+    -H 'content-type: application/json' \
+    -d '{"model":"openai/gpt-4o","messages":[{"role":"user","content":"hi"}]}'
+  ```
+
+  What remains on `bitrouter mcp serve` is `list_models`, `status`,
+  `route_preview` and the skills pair: what is routable, where it would go, and
+  what it has cost. The stdio profile is now `list_models` + `status` +
+  `route_preview` + `skills_search` + `skills_get`; the HTTP profile is
+  `list_models`, plus `status` where the backend can answer it.
+
+  The one-line spend footer went with it. It only ever rode successful
+  `complete` results; `status` reports the same figure as typed structured
+  content under `spend`, from the same metering database, with `unpriced` and
+  the remaining cap a footer had no room for.
+
+  **Breaking (Rust API):** `bitrouter_mcp::backend::Backend::complete` and the
+  `CompleteRequest` / `CompleteResponse` / `Usage` types are gone; `Backend` is
+  now a pure port-handover trait (`status_port` + `models_port`). Also removed:
+  `server::Builder::completion`, `server::CostFooter`,
+  `BitrouterMcp::with_cost_footer`, `server::CompleteArgs`, and
+  `ServeOptions::cost_footer`. `server::serve_stdio` loses its `cost_footer`
+  parameter and now takes the handler alone. `serve_http_on`, `CloudBackend`
+  and `CloudAuth` are unchanged.
+
+- **Breaking (MCP wire, SEP-2640):** the skills extension's `resources` field
+  now matches the specification the MCP Core Maintainers **accepted on
+  2026-09-03**. BitRouter previously implemented an earlier draft and emitted
+  entries a conforming host must refuse. Three changes:
+
+  ```jsonc
+  // before — a skill entry BitRouter published
+  {
+    "uri": "skill://pdf-processing/SKILL.md",
+    "frontmatter": { "name": "pdf-processing", "description": "…" },
+    "resources": [
+      { "uri": "skill://pdf-processing/SKILL.md", "digest": "sha256:…" }
+    ]
+  }
+
+  // after
+  {
+    "uri": "skill://pdf-processing/SKILL.md",
+    "frontmatter": { "name": "pdf-processing", "description": "…" },
+    "resources": [
+      { "uri": "skill://pdf-processing/SKILL.md", "digest": "sha256:…",
+        "size": 5120 }                 // new, REQUIRED on every entry
+    ]
+  }
+  ```
+
+  1. **`size` is required** on every `resources` entry — the file's raw byte
+     length. It lets a host budget a skill from the listing alone, and a read
+     whose length differs from `size` is now a verification failure *equivalent
+     to a digest mismatch*, whether or not the digest is computed.
+  2. **`resources` is required, and "dynamic" is a string marker.** The draft
+     let the key be omitted to mean "generated dynamically"; the accepted
+     specification requires the key and takes either the complete array or the
+     literal string `"dynamic"`. An entry with neither "is invalid, and hosts
+     MUST NOT load it". The gateway therefore no longer republishes an upstream
+     entry that omits `resources`; it skips it, as it already skipped other
+     malformed entries.
+  3. **Per-skill limits are fixed**: 512 `resources` entries and 16 MiB
+     (16,777,216 bytes) summed over `size`. BitRouter will not serve or
+     re-publish a skill exceeding either.
+
+  **Breaking (Rust API):** `bitrouter_sdk::mcp::skills::SkillResource` gains
+  `size: u64`, and `SkillEntry::resources` changes from
+  `Option<Vec<SkillResource>>` to the new `SkillResources` enum
+  (`Enumerated(Vec<SkillResource>)` | `Dynamic`).
+
+- **Breaking (CLI):** `bitrouter skills list --json` changes shape, and the
+  command sees more skills than it used to. `bitrouter skills list` and the MCP
+  `skills_search` tool are now one action over one report type.
+
+  ```jsonc
+  // before
+  { "skills": [{ "name": "alpha", "path": "/p/.claude/skills/alpha" }] }
+
+  // after
+  { "skills": [{
+      "name": "alpha",
+      "description": "What alpha does",          // new
+      "dir": "/p/.claude/skills/alpha",          // was `path`
+      "skill_md": "/p/.claude/skills/alpha/SKILL.md",  // new
+      "valid": true,                             // new
+      "problem": "…"                             // new, omitted when valid
+  }] }
+  ```
+
+  `path` meant the skill *directory* to the CLI and the *`SKILL.md` file* to the
+  MCP tool. Neither was wrong; sharing one key for both was, so both surfaces
+  now carry `dir` and `skill_md`.
+
+  Three behaviour fixes ride along, all from collapsing three discovery rules
+  over two roots into one:
+
+  - **All three conventional layouts are listed.** `bitrouter skills list` read
+    only `<root>/.claude/skills`, so a `./skills/foo` skill was invisible to it
+    while the agent could see it.
+  - **A skill that cannot be loaded is listed and explained**, with
+    `valid: false` and a `problem`, instead of being listed unmarked by the CLI
+    and dropped silently by the agent's surface. SEP-2640's `skills/list` still
+    publishes only the loadable ones, which the specification requires.
+  - **The MCP surfaces read the user-global root**, which only `-g` used to
+    reach. An agent no longer misses a skill because of where it was installed.
+
+- **Fixed (MCP):** a `bitrouter mcp install`-ed client now sees the skills
+  tools. `mcp install` writes `["mcp", "serve"]`, but the skills and SEP-2640
+  surfaces were wired only under `mcp serve --backend skills`, so an installed
+  client never saw a skill. Every **stdio** profile now carries them — the
+  identity argument that makes `--backend skills` stdio-only (the server is a
+  subprocess of the caller whose machine it is) holds identically for stdio
+  `mcp serve`. The multi-tenant HTTP profile is unchanged and still carries
+  neither.
+
+- **Breaking (CLI):** `bitrouter route --json` changes shape. `bitrouter route`
+  and the MCP `route_preview` tool are now one action over one report type, and
+  the report keeps `route_preview`'s richer vocabulary — it was the superset,
+  and it is the one an agent reads. Duplicated keys for one fact are exactly the
+  drift the unification exists to remove, so the old names are gone rather than
+  deprecated.
+
+  ```jsonc
+  // before — `bitrouter route gpt-5 --json`
+  {
+    "model": "gpt-5",
+    "resolved_via": "config",
+    "chain": [{ "provider": "openai", "service_id": "gpt-5", "protocol": "openai" }]
+  }
+
+  // after
+  {
+    "requested_model": "gpt-5",          // was `model`
+    "effective_model": "gpt-5-codex",    // new: what the policy table selects
+    "effective_effort": "high",          // new, omitted when policy selects none
+    "resolved_via": "config",            // now live | config | zero_config
+                                         // (was live daemon | config | zero-config)
+    "policy_decision": { … },            // new, omitted on the live-daemon path
+    "provider_chain": [                  // was `chain`
+      { "provider": "openai", "service_id": "gpt-5-codex", "api_protocol": "openai" }
+                                         // `protocol` → `api_protocol`
+    ],
+    "estimated_cost": { … }              // new, omitted when the registry prices nothing
+  }
+  ```
+
+  Migration is mechanical: `.model` → `.requested_model` (read
+  `.effective_model` if you want what would actually run), `.chain` →
+  `.provider_chain`, `.chain[].protocol` → `.provider_chain[].api_protocol`,
+  and `.resolved_via == "live daemon"` → `"live"` / `"zero-config"` →
+  `"zero_config"`. The `resolved_via` values are now the same words
+  `bitrouter models --json` uses for the same fact (`live` / `config`), instead
+  of two spellings that almost matched.
+
+  Two behaviour fixes ride along. `bitrouter route` now runs the **policy
+  table** in its config fallback, as `route_preview` always did — it could
+  previously name a model the daemon would never pick, which is why
+  `effective_model` is a separate field from `requested_model`. (The
+  live-daemon path is unchanged on both surfaces: the daemon's `route` verb
+  resolves the model as given, so a `live` answer reports
+  `effective_model == requested_model` and no `policy_decision`.) And
+  `route_preview` now resolves config **per call** instead of snapshotting it at
+  `bitrouter mcp serve` start, so an edited `bitrouter.yaml` is visible to a
+  long-lived MCP server, as it always was to the CLI.
+
+- **Breaking (Rust API):** `bitrouter_mcp::capabilities::routing` is gone. The
+  routing port moved to `bitrouter_mcp::actions::route` and is now typed:
+  `RoutingQuery::preview(RoutePreviewArgs) -> serde_json::Value` becomes
+  `RouteQuery::route(RouteInput) -> RouteReport`. `ServeOptions::routing` takes
+  the new trait object.
+
+- **Breaking (MCP tools):** the origin server's `status` and `list_models`
+  tools return the same report types as `bitrouter status` and
+  `bitrouter models`, and advertise them as `output_schema`.
+  - `list_models` was a bare `[{ id, provider }]` that kept only the **first**
+    provider of each model. It is now
+    `{ models: [{ id, providers: [...] }], resolved_via: "live" | "config" }`
+    — the whole fallback chain per model — with an optional `provider`
+    argument (the same filter as `bitrouter models --provider`). On
+    stdio + local it reads the daemon's live routing table over the control
+    socket and falls back to a config parse, so it **answers with no daemon
+    running**; `resolved_via` says which view it is.
+  - `status` was a `GET /v1/models` in disguise (`{ listen, models, providers }`
+    locally, the raw balance on cloud). It is now
+    `{ running, pid?, listen?, models?, providers, socket?, spend? }`: a
+    stopped daemon is `running: false`, **not a tool error**, and `spend`
+    carries two independent halves — `spent` (today's locally metered
+    estimate, with `unpriced` saying how partial it is) and `limit` (a
+    metered account's remaining credit). It is no longer served on HTTP +
+    local — nothing on that transport can read the daemon's control socket —
+    and no longer carries the free-text spend footer, which is now the typed
+    `spend` block (the footer is gone from the server entirely — see the
+    `complete` removal above).
+
+- `bitrouter status --json` gains `providers[]` (the distinct providers
+  behind the routable models) and `spend`; `bitrouter models --json` gains
+  `resolved_via`. Both are additive — every pre-existing key is unchanged.
+  `bitrouter models` now prefers the running daemon's catalog, like
+  `bitrouter route`, and falls back to the config parse it always used;
+  standalone answers (`models`, `route`, `spawn`'s Codex preflight) now
+  resolve a config the way the daemon does, so a subscription-backed
+  provider (`claude-code`, `google-ai`) is no longer missing from them.
+
+- **Breaking (Rust API):** `bitrouter_mcp::backend::{ModelInfo, StatusInfo,
+  ProviderStatus}` and `Backend::{list_models, status}` are gone; `Backend`
+  gains `status_port` / `models_port` (`Option<Arc<dyn StatusQuery>>` /
+  `Option<Arc<dyn ModelsQuery>>`), `Builder::completion_local` is gone (its
+  `models(...)` half is what survives — see the `complete` removal above), and
+  `ServeOptions` gains
+  `status` and `models`. `bitrouter_sdk::language_model::routing::ModelInfo`
+  is the element type of the shared report and now derives `JsonSchema`,
+  `PartialEq` and `Eq`.
 
 - **Breaking (CLI):** `bitrouter skills add`, `remove`, `find`, and `update` are
   removed, along with the `bitrouter-skills` crate that backed them. Installing

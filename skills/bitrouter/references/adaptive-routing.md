@@ -18,7 +18,7 @@ provider its tiers name.
 The whole `bitrouter/` namespace is reserved and resolved locally, so an
 unrecognised slug is a clean `400` rather than a provider lookup. Requesting
 `bitrouter/auto` before a policy is bound reports the missing binding and names
-`bitrouter policy init`; it does not fall back to a provider default.
+`bro policy init`; it does not fall back to a provider default.
 
 The same policy is also reachable through the generic `@preset[:variant]` form
 (`@auto`, `@auto:cost`) that every preset uses; `bitrouter/auto` is the
@@ -26,8 +26,8 @@ documented spelling. Explicit physical model ids remain passthrough. Copy the te
 the daemon with its config and validate it before serving traffic:
 
 ```bash
-bitrouter config validate --config bitrouter.yaml
-bitrouter serve --config bitrouter.yaml
+bro config validate --config bitrouter.yaml
+bro serve --config bitrouter.yaml
 ```
 
 `policy init` writes `policy.mode: adaptive`, allowing an explicit optimizer or
@@ -103,11 +103,11 @@ an operator action.
 The normal history-driven lifecycle is:
 
 ```bash
-bitrouter policy init auto --preset auto --economy provider:model
+bro policy init auto --preset auto --economy provider:model
 # run a coding agent or Terminal Bench normally through bitrouter/auto
-bitrouter eval result submit result.json --config bitrouter.yaml
-bitrouter optimize run --policy auto --config bitrouter.yaml
-bitrouter optimize status --policy auto --config bitrouter.yaml
+bro eval result submit result.json --config bitrouter.yaml
+bro optimize run --policy auto --config bitrouter.yaml
+bro optimize status --policy auto --config bitrouter.yaml
 ```
 
 Repeat normal traced work, external Eval submission, and `optimize run` until
@@ -127,7 +127,7 @@ reference verbatim and never invent or edit it; the evaluator-owned `cohort`
 field does not assign experiment membership.
 
 The hot path never reads Eval rows. `frozen` and `adaptive` route identically;
-mode controls write authority, not request-time learning. `bitrouter policy
+mode controls write authority, not request-time learning. `bro policy
 verify --evidence` reconstructs an active compiled lock's evidence root when
 the local ledger is available. Shipping only the lock preserves routing
 behavior; the ledger is needed only for audit or later optimization.

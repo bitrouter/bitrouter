@@ -11,6 +11,10 @@
 # Windows runners regardless of the user's `core.autocrlf` setting.
 *.json text eol=lf
 
+# Seeded experiment receipts are retained for audit, with prose interpretation
+# beside them. Collapse their generated diffs by default during code review.
+docs/experiments/*.json linguist-generated=true
+
 # Terminal fixtures (`apps/bitrouter/src/tui/fixtures/*.vt`) are raw PTY byte
 # streams replayed verbatim through the VT emulator. They are not text: a CR
 # is a meaningful control byte, so `text=auto` normalising CRLF -> LF would

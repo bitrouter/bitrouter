@@ -94,7 +94,7 @@ pub struct RequestMetric {
     pub user_id: String,
     /// API key id that made the request.
     pub api_key_id: String,
-    /// The `bitrouter launch` session this request belongs to, if any.
+    /// The `bro launch` session this request belongs to, if any.
     pub launch_id: Option<String>,
     /// Normalized ACP/native identity, absent for ordinary model API traffic.
     pub session_identity: Option<MeteringSessionIdentity>,

@@ -349,6 +349,7 @@ pub struct Controller<A> {
     config: ControllerConfig,
     route_control: Option<Arc<dyn RouteControl>>,
     session_cost: Option<Arc<dyn SessionCost>>,
+    capture: Option<Arc<dyn super::capture::CapturePort>>,
 }
 
 impl<A> Controller<A>
@@ -362,6 +363,7 @@ where
             config,
             route_control: None,
             session_cost: None,
+            capture: None,
         }
     }
 
@@ -380,6 +382,13 @@ where
         self
     }
 
+    /// Record observable session traffic durably before it reaches a client.
+    #[must_use]
+    pub fn capture(mut self, capture: Arc<dyn super::capture::CapturePort>) -> Self {
+        self.capture = Some(capture);
+        self
+    }
+
     /// Serve the controller on a manager-facing ACP transport.
     pub async fn run(
         self,
@@ -387,17 +396,53 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         let route_control = self.route_control;
         let disconnect_control = route_control.clone();
+        let capture_metadata = serde_json::json!({
+            "harness_id": self.config.identity.harness_id,
+            "adapter_package": self.config.identity.adapter_package,
+            "adapter_version": self.config.identity.adapter_version,
+        });
         let proxy = ControllerProxy {
             config: self.config,
             route_control,
             session_cost: self.session_cost,
         };
-        let result = ConductorImpl::new_agent(
-            "bitrouter-acp-controller",
-            ProxiesAndAgent::new(self.agent).proxy(proxy),
-        )
-        .run(transport)
-        .await;
+        let capture = self.capture;
+        let mut components = ProxiesAndAgent::new(self.agent);
+        if let Some(port) = &capture {
+            super::capture::record(
+                port.as_ref(),
+                super::capture::CaptureEvent {
+                    direction: super::capture::CaptureDirection::Controller,
+                    kind: super::capture::CaptureKind::Connected,
+                    call_id: None,
+                    method: "controller/connect".into(),
+                    payload: capture_metadata,
+                },
+            )
+            .await?;
+            components = components.proxy(super::capture::CaptureProxy {
+                port: Arc::clone(port),
+            });
+        }
+        let result = ConductorImpl::new_agent("bitrouter-acp-controller", components.proxy(proxy))
+            .run(transport)
+            .await;
+        let captured_close = match capture {
+            Some(port) => {
+                super::capture::record(
+                    port.as_ref(),
+                    super::capture::CaptureEvent {
+                        direction: super::capture::CaptureDirection::Controller,
+                        kind: super::capture::CaptureKind::Disconnected,
+                        call_id: None,
+                        method: "controller/disconnect".into(),
+                        payload: serde_json::json!({"clean": result.is_ok()}),
+                    },
+                )
+                .await
+            }
+            None => Ok(()),
+        };
         let disconnected = match disconnect_control {
             Some(control) => control
                 .disconnected()
@@ -407,7 +452,7 @@ where
         };
         match result {
             Err(error) => Err(error),
-            Ok(()) => disconnected,
+            Ok(()) => disconnected.and(captured_close),
         }
     }
 }
@@ -1011,6 +1056,25 @@ mod tests {
         receiver
             .await
             .map_err(|_| agent_client_protocol::Error::internal_error())?
+    }
+
+    #[derive(Default)]
+    struct RecordingCapture(Mutex<Vec<crate::acp::capture::CaptureEvent>>);
+
+    #[async_trait::async_trait]
+    impl crate::acp::capture::CapturePort for RecordingCapture {
+        async fn record(
+            &self,
+            event: crate::acp::capture::CaptureEvent,
+        ) -> Result<(), crate::acp::capture::CaptureError> {
+            self.0
+                .lock()
+                .map_err(|_| {
+                    crate::acp::capture::CaptureError("capture test mutex poisoned".into())
+                })?
+                .push(event);
+            Ok(())
+        }
     }
 
     struct RecordingAgent {
@@ -2512,6 +2576,7 @@ mod tests {
     #[tokio::test]
     async fn native_multi_session_lifecycle_is_transparent() -> anyhow::Result<()> {
         let state = Arc::new(TransparentState::default());
+        let capture = Arc::new(RecordingCapture::default());
         let controller = Controller::new(
             TransparentAgent {
                 state: Arc::clone(&state),
@@ -2521,7 +2586,8 @@ mod tests {
                 "@agentclientprotocol/codex-acp",
                 "1.7.0",
             )),
-        );
+        )
+        .capture(capture.clone());
         let updates = Arc::new(Mutex::new(Vec::<(String, Option<Meta>)>::new()));
         let observed_updates = Arc::clone(&updates);
         let (manager_out, controller_in) = duplex(16_384);
@@ -2764,12 +2830,31 @@ mod tests {
             !serde_json::to_string(&requests)?.contains("record_id"),
             "controller generated a local session alias"
         );
+        let recorded = capture
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("capture mutex poisoned"))?;
+        assert!(
+            recorded
+                .iter()
+                .any(|event| event.method == "session/prompt")
+        );
+        assert!(
+            recorded
+                .iter()
+                .any(|event| event.kind == crate::acp::capture::CaptureKind::Response)
+        );
+        assert!(!recorded.iter().any(|event| matches!(
+            event.method.as_str(),
+            "authenticate" | "providers/set" | "session/list"
+        )));
         Ok(())
     }
 
     #[tokio::test]
     async fn callbacks_and_unknown_extensions_are_bidirectional() -> anyhow::Result<()> {
         let state = Arc::new(CallbackState::default());
+        let capture = Arc::new(RecordingCapture::default());
         let controller = Controller::new(
             CallbackAgent {
                 state: Arc::clone(&state),
@@ -2779,7 +2864,8 @@ mod tests {
                 "@agentclientprotocol/claude-agent-acp",
                 "0.70.0",
             )),
-        );
+        )
+        .capture(capture.clone());
         let (manager_out, controller_in) = duplex(16_384);
         let (controller_out, manager_in) = duplex(16_384);
         let controller_transport = agent_client_protocol::ByteStreams::new(
@@ -3072,6 +3158,24 @@ mod tests {
         assert!(state.terminal_completed.load(Ordering::SeqCst));
         assert!(state.elicitation_completed.load(Ordering::SeqCst));
         assert!(state.extension_completed.load(Ordering::SeqCst));
+        let recorded = capture
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("capture mutex poisoned"))?;
+        assert!(
+            recorded
+                .iter()
+                .any(|event| event.method == "session/prompt")
+        );
+        assert!(
+            recorded
+                .iter()
+                .any(|event| event.kind == crate::acp::capture::CaptureKind::Response)
+        );
+        assert!(!recorded.iter().any(|event| matches!(
+            event.method.as_str(),
+            "authenticate" | "providers/set" | "session/list"
+        )));
         Ok(())
     }
 

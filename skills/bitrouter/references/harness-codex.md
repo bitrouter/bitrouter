@@ -1,66 +1,59 @@
-# Harness: Codex CLI
+# Harness: Codex
 
-Wire OpenAI's Codex CLI to route its model calls through BitRouter.
+Codex has two deliberate BitRouter facets:
 
-> **Cloud users:** swap `http://localhost:4356/v1` -> `https://api.bitrouter.ai/v1` and export `BITROUTER_API_KEY=brk_*`. No daemon to install. See `references/cloud-setup.md`.
+- `bro code codex` drives the built-in `codex-acp` adapter inside
+  BitRouter's full-screen ACP lifecycle UI.
+- `bro codex` launches Codex's own native interface with reversible
+  one-shot configuration overrides.
 
-## Prerequisites
-
-- BitRouter installed and running (`bitrouter status` shows green), unless using Cloud.
-- Codex CLI installed (`curl -fsSL https://chatgpt.com/codex/install.sh | sh`).
-- A BitRouter model id to use, such as `openai/gpt-5-codex`, `openai/gpt-5.1`, or any configured alias.
-
-## Preferred launch path
-
-Use `bitrouter launch` when you want a reversible, per-process setup:
+For local ACP sessions, install Node.js 22+ and `npx`. No `agents:` YAML is
+required. A ChatGPT Codex subscription can be imported with:
 
 ```bash
-bitrouter launch --agent codex
-bitrouter launch --agent codex -- --model openai/gpt-5-codex
+bro providers login openai-codex --import-existing
+bro init --yes --harness codex --after exit
 ```
 
-The wrapper does not edit `~/.codex/config.toml`. It injects one-shot Codex `-c` overrides:
-
-```text
-model_provider="bitrouter"
-model_providers.bitrouter.name="BitRouter"
-model_providers.bitrouter.base_url="http://localhost:4356/v1"
-model_providers.bitrouter.wire_api="responses"
-```
-
-If `BITROUTER_API_KEY` is set, `spawn` forwards it with `env_key="BITROUTER_API_KEY"`. Otherwise it injects a local placeholder bearer token, which works with the `skip_auth: true` default from `bitrouter init`.
-
-## Permanent Codex config
-
-For a durable setup, add a user-level provider to `~/.codex/config.toml`:
-
-```toml
-model_provider = "bitrouter"
-
-[model_providers.bitrouter]
-name = "BitRouter"
-base_url = "http://localhost:4356/v1"
-wire_api = "responses"
-# env_key = "BITROUTER_API_KEY"  # Cloud or authenticated local daemon
-```
-
-Codex appends `/responses` to the provider base URL. Do not use `wire_api = "chat"` with current Codex builds.
-
-## Model selection
-
-Codex's `model` setting or `codex --model <id>` can be any BitRouter registry id. `bitrouter launch --agent codex` deliberately does not force a model; it only changes the provider so the configured or forwarded model routes through BitRouter.
+## ACP session
 
 ```bash
-codex --model openai/gpt-5-codex
-bitrouter launch --agent codex -- --model anthropic/claude-sonnet-4-6
+bro code codex
+bro run codex "summarize this repo"
+bro acp serve codex
 ```
 
-## Verify
+The pinned `@agentclientprotocol/codex-acp@1.10.0` adapter uses a local Codex
+CLI when its version is at least 0.153.3. Older, missing, failing, or
+unresponsive CLIs use the adapter's bundled worker. `CODEX_PATH` can select a
+worker explicitly; it does not bypass ACP. `--direct` keeps the adapter's own
+provider authentication; ordinary sessions route through BitRouter and can
+auto-start the local daemon.
+
+With an active `openai-codex` provider, no model pin is needed: the ACP adapter
+keeps the Codex CLI's native default and model picker. BitRouter maps its
+declared native model names to the Codex subscription at gateway ingress.
+Generic API calls still require an explicit subscription route; canonical ids,
+provider-qualified routes, presets, and user-defined virtual models retain
+their normal routing behavior. A daemon reload updates this mapping too.
+
+`init --model ID` saves the default model. `code codex --model ID` overrides it
+for one session. No vendor CLI config file is rewritten.
+
+## Native interface
 
 ```bash
-codex --version
-bitrouter launch --agent codex -- --version
-tail -n 20 ~/.bitrouter/bitrouter.log
+bro codex
+bro codex -- --model openai/gpt-5-codex
 ```
 
-For live requests, check the BitRouter request logs — the `request finished` line records the `provider`, `model`, and `account` that answered — to confirm which upstream served the request.
+The native launcher supplies a `bitrouter` model provider for
+`http://localhost:4356/v1` with `wire_api="responses"` through one-shot `-c`
+arguments; it does not edit `~/.codex/config.toml`. `BITROUTER_API_KEY` is used
+when set, otherwise the launcher supplies the placeholder accepted by the
+`skip_auth: true` local default. Everything after `--` is forwarded verbatim,
+and a missing local daemon is auto-started unless `--no-start` is set.
+
+Existing Codex processes must be restarted before changed provider routing
+takes effect. Inspect routed traffic with `bro requests`; ACP session
+diagnostics live under the BitRouter home in `logs/session-*.log`.

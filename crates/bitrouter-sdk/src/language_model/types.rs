@@ -1640,15 +1640,19 @@ pub struct Usage {
     pub reasoning_tokens: u64,
     /// Cache-read input tokens — already-cached prompt content that the
     /// provider served from cache. Subset of `prompt_tokens`. Maps to
-    /// Messages' `usage.cache_read_input_tokens`
-    /// (<https://docs.anthropic.com/en/api/messages>) and to Chat Completions'
-    /// `usage.prompt_tokens_details.cached_tokens`. Default 0 when the
-    /// upstream reports no cache stats.
+    /// Messages' `usage.cache_read_input_tokens`, Chat Completions'
+    /// `usage.prompt_tokens_details.cached_tokens`, Responses'
+    /// `usage.input_tokens_details.cached_tokens`, and Gemini's
+    /// `usageMetadata.cachedContentTokenCount`. Default 0 when the upstream
+    /// reports no cache stats.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub cache_read_tokens: u64,
     /// Cache-write input tokens — prompt content written to the cache this
     /// turn. Subset of `prompt_tokens`. Maps to Messages'
-    /// `usage.cache_creation_input_tokens`.
+    /// `usage.cache_creation_input_tokens`, Chat Completions'
+    /// `usage.prompt_tokens_details.cache_write_tokens`, and Responses'
+    /// `usage.input_tokens_details.cache_write_tokens`. Gemini exposes no
+    /// corresponding write-side counter.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub cache_write_tokens: u64,
     /// Provider-executed web-search calls this turn. Maps to Anthropic
@@ -2019,6 +2023,10 @@ pub enum StreamPart {
         name: Option<String>,
         /// Arguments fragment.
         arguments: String,
+        /// Source-native call type and namespace, sent with the opening delta.
+        /// Responses custom tools use plain text input instead of JSON arguments.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        provider_metadata: ProviderMetadata,
     },
     /// A complete **provider/router-executed** tool call, emitted whole (not as
     /// [`Self::ToolCallDelta`] fragments). The server-side tool loop emits this
@@ -2184,6 +2192,104 @@ pub enum AuthScheme {
     Bearer,
 }
 
+/// One provider-configured outbound HTTP header policy.
+///
+/// The routing layer resolves the provider's YAML entry into this validated
+/// wire representation. [`crate::language_model::HttpExecutor`] applies it to
+/// every request for the target: an explicitly allowed inbound value wins over
+/// [`Self::default`], while a rule without either suppresses that header.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OutboundHeaderRule {
+    name: http::HeaderName,
+    default: Option<http::HeaderValue>,
+    passthrough: bool,
+}
+
+impl OutboundHeaderRule {
+    /// Validate and construct an outbound header rule.
+    pub fn new(
+        name: impl AsRef<str>,
+        default: Option<&str>,
+        passthrough: bool,
+    ) -> crate::Result<Self> {
+        let raw_name = name.as_ref();
+        let name = http::HeaderName::from_bytes(raw_name.as_bytes()).map_err(|error| {
+            crate::BitrouterError::bad_request(format!(
+                "invalid provider header name '{raw_name}': {error}"
+            ))
+        })?;
+        if is_reserved_provider_header(&name) {
+            return Err(crate::BitrouterError::bad_request(format!(
+                "provider header '{}' is reserved",
+                name.as_str()
+            )));
+        }
+        let default = default
+            .map(|value| {
+                http::HeaderValue::from_str(value).map_err(|error| {
+                    crate::BitrouterError::bad_request(format!(
+                        "invalid value for provider header '{}': {error}",
+                        name.as_str()
+                    ))
+                })
+            })
+            .transpose()?;
+        Ok(Self {
+            name,
+            default,
+            passthrough,
+        })
+    }
+
+    /// The canonical, case-insensitive HTTP field name.
+    pub fn name(&self) -> &http::HeaderName {
+        &self.name
+    }
+
+    /// The configured static fallback value, if any.
+    pub fn default(&self) -> Option<&http::HeaderValue> {
+        self.default.as_ref()
+    }
+
+    /// Whether the same inbound request header may override the default.
+    pub fn passthrough(&self) -> bool {
+        self.passthrough
+    }
+}
+
+impl std::fmt::Debug for OutboundHeaderRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutboundHeaderRule")
+            .field("name", &self.name)
+            .field("has_default", &self.default.is_some())
+            .field("passthrough", &self.passthrough)
+            .finish()
+    }
+}
+
+fn is_reserved_provider_header(name: &http::HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "authorization"
+            | "proxy-authorization"
+            | "x-api-key"
+            | "x-goog-api-key"
+            | "host"
+            | "content-length"
+            | "content-type"
+            | "transfer-encoding"
+            | "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "trailer"
+            | "te"
+            | "upgrade"
+            | "traceparent"
+            | "tracestate"
+            | "x-bitrouter-request-id"
+    )
+}
+
 /// One hop in a fallback chain: a concrete provider + model + connection info.
 ///
 /// The `Debug` impl redacts `api_key` and `api_key_override` (v0 audit S9):
@@ -2229,6 +2335,9 @@ pub struct RoutingTarget {
     /// transport (`x-api-key` vs `Authorization: Bearer`); others ignore it.
     /// Defaults to [`AuthScheme::XApiKey`].
     pub auth_scheme: AuthScheme,
+    /// Validated static/default and inbound-passthrough header policies for
+    /// every request to this provider.
+    pub headers: Vec<OutboundHeaderRule>,
 }
 
 impl std::fmt::Debug for RoutingTarget {
@@ -2253,6 +2362,7 @@ impl std::fmt::Debug for RoutingTarget {
             )
             .field("api_base_override", &self.api_base_override)
             .field("auth_scheme", &self.auth_scheme)
+            .field("headers", &self.headers)
             .finish()
     }
 }

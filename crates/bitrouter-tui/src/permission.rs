@@ -96,6 +96,15 @@ impl Prompt {
         self.kind
     }
 
+    /// The exact options supplied by the agent.
+    ///
+    /// The conversation-first permission surface renders these labels and
+    /// preserves their ids until the user explicitly highlights and confirms
+    /// one. Returning a slice keeps the request itself owned here.
+    pub fn options(&self) -> &[PermissionOption] {
+        &self.options
+    }
+
     /// The prompt as it appears in the live area.
     ///
     /// One line: the terminal rows here are borrowed from the user's shell,
@@ -160,15 +169,13 @@ impl Prompt {
     /// understands. `None` when the agent offered no way to say no, in which
     /// case the caller cancels — never silently allows.
     pub fn deny(&self) -> Option<PermissionOptionId> {
-        self.options
-            .iter()
-            .find(|option| {
-                matches!(
-                    option.kind,
-                    PermissionOptionKind::RejectOnce | PermissionOptionKind::RejectAlways
-                )
-            })
-            .map(|option| option.option_id.clone())
+        let of = |kind: PermissionOptionKind| {
+            self.options
+                .iter()
+                .find(|option| option.kind == kind)
+                .map(|option| option.option_id.clone())
+        };
+        of(PermissionOptionKind::RejectOnce).or_else(|| of(PermissionOptionKind::RejectAlways))
     }
 
     /// The outcome to resolve this request with when nobody answered it.

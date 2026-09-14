@@ -1,4 +1,4 @@
-//! `bitrouter cloud login` / `logout` device-flow entry points.
+//! `bro cloud login` / `logout` device-flow entry points.
 //!
 //! The CLI in `apps/bitrouter/src/main.rs` parses the subcommand + flags
 //! into [`LoginInputs`] and hands off to the functions here.
@@ -16,7 +16,7 @@ use bitrouter_providers::hosted::account::settings::{
     Settings, require_secure_url, resolve, resolve_from_env,
 };
 
-/// User-supplied flag values for `bitrouter cloud login` / `logout`.
+/// User-supplied flag values for `bro cloud login` / `logout`.
 /// The CLI passes them straight through.
 #[derive(Default, Clone)]
 pub struct LoginInputs {
@@ -53,7 +53,7 @@ pub fn http_client() -> Result<reqwest::Client> {
 }
 
 /// Run the device-authorization grant against the configured AS and
-/// persist the resulting tokens. Used by `bitrouter cloud login`.
+/// persist the resulting tokens. Used by `bro cloud login`.
 pub async fn login(
     manager: Arc<CredentialManager>,
     inputs: LoginInputs,
@@ -170,7 +170,7 @@ pub async fn login_api_key(
 }
 
 /// Revoke the stored tokens (best-effort) and clear the local file.
-/// Used by `bitrouter cloud logout`.
+/// Used by `bro cloud logout`.
 pub async fn logout(manager: Arc<CredentialManager>, inputs: LoginInputs) -> Result<()> {
     let prior = match manager
         .current()

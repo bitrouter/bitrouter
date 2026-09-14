@@ -392,7 +392,7 @@ impl PolicyTable {
 /// Build it from [`PolicyTableConfig`] via [`PolicyTableRouter::from_config`]
 /// (`None` when no tiers are defined) or [`PolicyTableRouter::new`].
 pub struct PolicyTableRouter {
-    /// Swappable so `bitrouter reload` can install a fresh spec into the
+    /// Swappable so `bro reload` can install a fresh spec into the
     /// *live* transform. The router itself is baked into the built `App` and
     /// cannot be re-registered, so the reloadable unit has to be the table
     /// inside it rather than the router around it.
@@ -450,7 +450,7 @@ impl PolicyTableRouter {
         }
     }
 
-    /// Install a freshly built spec into this live router (`bitrouter reload`).
+    /// Install a freshly built spec into this live router (`bro reload`).
     ///
     /// Returns whether the swap happened; a poisoned lock is reported rather
     /// than silently dropping the operator's new table.

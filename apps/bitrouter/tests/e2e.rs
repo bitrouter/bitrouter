@@ -1292,6 +1292,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: AuthScheme::Bearer,
+            headers: Vec::new(),
         }],
     );
 

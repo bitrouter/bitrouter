@@ -80,6 +80,6 @@ pub mod otel;
 
 /// Whether the OpenTelemetry exporter is compiled in (under any transport).
 ///
-/// The binary reports this through `bitrouter observe status` so an operator
+/// The binary reports this through `bro observe status` so an operator
 /// can tell "the feature is off" from "the daemon is down".
 pub const OTEL_ENABLED: bool = cfg!(feature = "__otel-core");

@@ -1,4 +1,4 @@
-//! Render (and optionally write) MCP client config blocks for `bitrouter mcp serve`.
+//! Render (and optionally write) MCP client config blocks for `bro mcp serve`.
 
 /// Supported clients.
 #[derive(Debug, Clone, Copy)]
@@ -11,7 +11,7 @@ pub enum Client {
 pub fn render_block(_client: Client) -> serde_json::Value {
     serde_json::json!({
         "mcpServers": {
-            "bitrouter": { "command": "bitrouter", "args": ["mcp", "serve"] }
+            "bitrouter": { "command": "bro", "args": ["mcp", "serve"] }
         }
     })
 }
@@ -48,6 +48,6 @@ mod tests {
         merge_into(&mut existing, &render_block(Client::Claude));
         assert_eq!(existing["theme"], "dark");
         assert_eq!(existing["mcpServers"]["other"]["command"], "x");
-        assert_eq!(existing["mcpServers"]["bitrouter"]["command"], "bitrouter");
+        assert_eq!(existing["mcpServers"]["bitrouter"]["command"], "bro");
     }
 }

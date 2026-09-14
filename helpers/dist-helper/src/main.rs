@@ -53,7 +53,7 @@ enum RegistryCommand {
     },
     /// Sync canonical model lifecycle and provider catalog feeds.
     Sync {
-        /// Write provider YAML updates. Without this, print a dry-run report.
+        /// Write canonical and provider YAML updates. Otherwise, print a dry-run report.
         #[arg(long)]
         write: bool,
         /// Write a Markdown summary suitable for the registry sync PR body.

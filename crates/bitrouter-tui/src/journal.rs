@@ -123,6 +123,12 @@ pub struct Journal {
     tools: HashMap<ToolCallId, ToolCall>,
     plan: Option<Plan>,
     commands: Vec<AvailableCommand>,
+    /// Whether an `available_commands_update` has arrived at all.
+    ///
+    /// Separate from `commands` being empty, because the two mean different
+    /// things: an agent that has said nothing yet may still speak, and one
+    /// that said *none* will not.
+    commands_received: bool,
     mode: Option<SessionModeId>,
     config: Vec<SessionConfigOption>,
     title: Option<String>,
@@ -177,6 +183,7 @@ impl Journal {
             }
             SessionUpdate::AvailableCommandsUpdate(update) => {
                 self.commands = update.available_commands;
+                self.commands_received = true;
             }
             SessionUpdate::CurrentModeUpdate(update) => self.mode = Some(update.current_mode_id),
             SessionUpdate::ConfigOptionUpdate(update) => self.config = update.config_options,
@@ -199,6 +206,18 @@ impl Journal {
             // nothing to repaint.
             _ => {}
         }
+    }
+
+    /// End the current unkeyed message run at a prompt lifecycle boundary.
+    ///
+    /// ACP v1 permits chunks without a message id. Such chunks remain one run
+    /// while a response streams, but a completed prompt is an equally real
+    /// boundary even when the agent did not send a tool call or a user echo
+    /// between its final chunk and the next turn's first chunk. The interactive
+    /// reducer calls this when a prompt starts or settles so adjacent turns do
+    /// not become one wrapped transcript paragraph.
+    pub fn finish_stream(&mut self) {
+        self.close_run();
     }
 
     /// The document, in first-seen order.
@@ -225,6 +244,12 @@ impl Journal {
     /// The slash commands the agent offers.
     pub fn commands(&self) -> &[AvailableCommand] {
         &self.commands
+    }
+
+    /// Whether the agent has sent its command list at all — as distinct from
+    /// having sent an empty one.
+    pub fn commands_received(&self) -> bool {
+        self.commands_received
     }
 
     /// The session's current mode, if the agent reports one.
@@ -718,6 +743,34 @@ mod tests {
             vec![true, false],
             "the closed run is complete, the open one is not"
         );
+    }
+
+    /// Prompt lifecycle boundaries are document boundaries when an ACP v1
+    /// agent omits message ids. The next turn must not glue its opening status
+    /// onto the prior turn's final sentence.
+    #[test]
+    fn an_explicit_stream_boundary_splits_unkeyed_turns() {
+        let mut journal = Journal::default();
+        journal.apply(SessionUpdate::AgentMessageChunk(chunk(
+            "first turn complete",
+        )));
+        journal.finish_stream();
+        journal.apply(SessionUpdate::AgentMessageChunk(chunk(
+            "second turn started",
+        )));
+
+        assert_eq!(
+            document(&journal),
+            vec![
+                ("agent".to_string(), "first turn complete".to_string()),
+                ("agent".to_string(), "second turn started".to_string()),
+            ]
+        );
+        let complete: Vec<bool> = messages(&journal)
+            .iter()
+            .map(|message| message.complete)
+            .collect();
+        assert_eq!(complete, vec![true, false]);
     }
 
     /// A message id seen again keeps the place it already had. Patches never

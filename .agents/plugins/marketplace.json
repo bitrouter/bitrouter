@@ -4,7 +4,7 @@
   "plugins": [
     {
       "name": "bitrouter",
-      "description": "Cost-optimize your agentic loops: the bitrouter setup skill plus the origin MCP server, for in-session model arbitrage with a spend footer on every routed call.",
+      "description": "Cost-optimize your agentic loops: the bitrouter setup skill plus the origin MCP server, so a session can see what is routable, how it would route, and what it has cost.",
       "source": "."
     }
   ]

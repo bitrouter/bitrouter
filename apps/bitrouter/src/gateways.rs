@@ -67,7 +67,7 @@ pub fn gateway_servers(
         transport: McpTransport::Stdio {
             command: std::env::current_exe()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "bitrouter".to_string()),
+                .unwrap_or_else(|_| bitrouter_sdk::invocation::name().to_string()),
             args: ["mcp", "serve", "--backend", "skills"]
                 .map(str::to_string)
                 .to_vec(),

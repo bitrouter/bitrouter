@@ -132,6 +132,8 @@
   max_input_tokens: 1050000
   max_output_tokens: 128000
   release_date: 2026-09-04
+  open_weights: false
+  family: gpt
 - id: openai/gpt-6-astra-pro
   name: 'OpenAI: GPT-6 Astra Pro'
   input_modalities:

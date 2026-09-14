@@ -1179,6 +1179,7 @@ impl InboundAdapter for MessagesAdapter {
             block_index: 0,
             pending_sources: Vec::new(),
             pending_reasoning: None,
+            pending_usage: None,
         })
     }
 }
@@ -2299,6 +2300,7 @@ impl StreamDecoder for MessagesStreamDecoder {
                             id: tool_id,
                             name,
                             arguments: String::new(),
+                            provider_metadata: Default::default(),
                         });
                     }
                 }
@@ -2336,6 +2338,7 @@ impl StreamDecoder for MessagesStreamDecoder {
                                 id,
                                 name: None,
                                 arguments: partial.to_string(),
+                                provider_metadata: Default::default(),
                             });
                         }
                     }
@@ -2551,6 +2554,7 @@ struct MessagesStreamEncoder {
     /// reasoning has no valid signature, so it must not be exposed as a
     /// `thinking` block on this wire.
     pending_reasoning: Option<String>,
+    pending_usage: Option<Usage>,
 }
 
 impl MessagesStreamEncoder {
@@ -2876,6 +2880,7 @@ impl StreamEncoder for MessagesStreamEncoder {
                 id,
                 name,
                 arguments,
+                ..
             } => {
                 self.pending_reasoning = None;
                 if let Some(name) = name.as_deref().filter(|n| !n.is_empty()) {
@@ -3002,14 +3007,15 @@ impl StreamEncoder for MessagesStreamEncoder {
                     self.pending_sources.push(serde_json::Value::Object(entry));
                 }
             }
-            StreamPart::Usage { .. } => {}
+            StreamPart::Usage { usage } => self.pending_usage = Some(usage.clone()),
             StreamPart::ResponseStarted { .. } => {
                 // Observability-only metadata (upstream response id); the
                 // Messages-protocol client gets its id from the
                 // `message_start` event `ensure_started` emits.
             }
             StreamPart::Finish { reason } => {
-                self.emit_terminal(&mut frames, &finish_to_stop_reason(reason), None);
+                let usage = self.pending_usage.take();
+                self.emit_terminal(&mut frames, &finish_to_stop_reason(reason), usage);
             }
             StreamPart::ResponseCompleted { status, usage, .. } => {
                 // Inbound was Responses; map its status onto Messages'
@@ -3019,7 +3025,8 @@ impl StreamEncoder for MessagesStreamEncoder {
                 } else {
                     "end_turn"
                 };
-                self.emit_terminal(&mut frames, stop_reason, usage.clone());
+                let usage = usage.clone().or_else(|| self.pending_usage.take());
+                self.emit_terminal(&mut frames, stop_reason, usage);
             }
         }
         Ok(frames)

@@ -67,7 +67,7 @@ The class where a mistake grants consent that nobody gave.
 | **I2** | A selection is validated against the offered options; an unknown id becomes the reject option, never the fabricated id | `translate.rs` `sanitize_selection`, called by the shared client's parked handler | `translate.rs` `sanitize_selection_preserves_exact_known_id`, `:625`, `:641` | `bitrouter-sdk::acp::translate` (pure fn, unmoved) — **landed** | existing three |
 | **I3** | `Cancelled` passes through as `Cancelled` — it is never upgraded to a selection | `translate.rs` `sanitize_selection` | `translate.rs` `sanitize_selection_cancelled_passes_through` `sanitize_selection_cancelled_passes_through` | shared client | existing |
 | **I4** | Each request is answered **exactly once**; later answers are no-ops | `client.rs` `PermissionResolver::answer` — `guard.take()`, first wins | `client.rs` `a_permission_is_answered_exactly_once` | shared client — **landed** | `client.rs` `a_permission_is_answered_exactly_once` |
-| **I5** | A permission outstanding when a **turn is cancelled** is denied, not left for whichever keystroke arrives next | `bitrouter-tui` `machine::abandon` — every path out of `Phase::Answering` that is not a choice emits `Effect::Resolve` with `Prompt::unanswered()` **first**, queued questions included; the driver's `Effect::Cancel` then calls `AcpClient::deny_outstanding_permissions` **while the connection is live**, for anything the client emitted that never reached the machine | `permission.rs` `an_unanswered_permission_takes_the_reject_option`, `an_unanswered_permission_never_resolves_to_consent` (the rule); `machine.rs` `every_way_out_of_a_question_denies_it_first` (T2), `declining_a_question_leaves_the_turn_running` (T3), `leaving_a_question_never_leaves_it_unanswered` (T7); the ledger half by `client.rs` `teardown_denies_an_outstanding_permission` | state machine reducer — **landed** | T2, T3, T7 |
+| **I5** | Explicit interactive turn cancellation resolves all pending permissions as `RequestPermissionOutcome::Cancelled`; dismissal while continuing uses offered reject-once, otherwise cancelled | `code.rs` queues choices by identity; `chat/code_wire.rs` cancels pending and ledger requests before sending `session/cancel`, retaining the prompt until settlement or shared grace expiry | Code reducer, wire, SDK protocol, and real-PTY acceptance tests | Shared Code interaction core; SDK abandonment/headless deny semantics remain distinct | See `CODE_TUI_UX_PROGRESS.md` for current verification |
 | **I6** | A **headless** path answers rather than hanging the harness, and answers *deny* unless the caller said otherwise | `chat/effects.rs` `Wire::answer` under a `bitrouter_tui::permission::Policy`, whose default is deny-all; `acp_cli.rs` `prompt` answers with the flagged policy, `chat_plain` with the default. An approval the agent offered no allow option for resolves to the reject option (`Prompt::answer`) | `tests/acp.rs` `prompt_headless_denies_permission_and_completes` (default, exit 5), `prompt_approve_all_selects_the_allow_option`, `prompt_approve_reads_reads_the_kind`, `prompt_permission_policy_title_head_wins`; `machine.rs` `a_policy_that_cannot_approve_reports_deny` | NDJSON + pipe presentations — **landed** | as listed |
 | **I7** | A permission outstanding at **session teardown** is denied | `client.rs` `AcpClient::shutdown` denies, then waits (bounded) for the parked handlers to answer before the transport goes; the command loop and the driver tail repeat it for the drop path | `client.rs` `teardown_denies_an_outstanding_permission` | shared client teardown — **landed** | `client.rs` `teardown_denies_an_outstanding_permission` |
 
@@ -86,13 +86,12 @@ The class where a mistake grants consent that nobody gave.
 | **I8** | A turn exceeding `--turn-timeout` is cancelled **cooperatively** (`session/cancel`), given `TURN_CANCEL_GRACE` (3s) to comply, then failed | `client.rs` `AcpClient::prompt_typed` — for `prompt`, `chat`, and piped `chat` alike | `client.rs` `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission` | shared client — **landed** | `client.rs` `turn_timeout_cancels_cooperatively_and_denies_the_parked_permission`; `tests/acp.rs` `prompt_turn_timeout_fails_the_turn_instead_of_hanging` |
 | **I9** | Turns queued behind a cancelled one resolve to `StopReason::Cancelled` rather than running | `turn::TurnController` — **deleted** with the engine | its queue tests went with it | **none — not load-bearing** | n/a |
 
-I9 is safe to drop: every production caller sends one prompt at a time —
-`chat` (a turn is started only from `Phase::Idle`, and the phase does not
-return to `Idle` until the turn has settled or been cancelled, so the machine
-cannot express two), `chat_plain`, and `prompt`'s `run_turn` (at most two
-*sequential* turns via the repair re-prompt). The only path that could have
-issued concurrent prompts on one session was `down.rs`'s `SessionAgent`, now
-unreachable. **Say so in the commit rather than letting it disappear.**
+The deleted controller queue remains absent. Code's explicit process-local
+follow-up queue is a client feature: it dispatches one prompt only after normal
+`end_turn` and settled permissions. Cancellation, refusal, limit stops, errors,
+and disconnect pause it for explicit action. `chat_plain` and one-shot repair
+turns remain sequential. This queue does not reuse uncertain connections or
+claim native mid-turn steering.
 
 I8 is **not** safe to drop. `--turn-timeout` is a documented flag on `chat`,
 `acp prompt`, `acp serve`, and `spawn`, and `skills/bitrouter/references/cli.md`

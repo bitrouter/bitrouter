@@ -1,0 +1,543 @@
+{
+  "version": "acp-subscription-real-task-pilot-v1",
+  "status": "complete controlled pilot; product corrections and natural-usage validation remain",
+  "artifact_root": "/Users/archer/.codex/worktrees/f171/bitrouter-ws/studies/acp-subscription-pilot-20260910",
+  "source_head": "ad2bab71968e40752fe175433b23fd2098307c81",
+  "binary_sha256": "70a701b6218e59e574c6c279e97c1b0999e03137a3cf667843533651ae7f3788",
+  "metrics": {
+    "primary_families": 5,
+    "supplemental_units": 2,
+    "primary_capture_gaps": 0,
+    "scalar": {
+      "paired": 5,
+      "overall_agreement": 4,
+      "false_success_relative_to_model_reference": 1,
+      "unknown": 0
+    },
+    "rubric": {
+      "paired": 5,
+      "overall_agreement": 4,
+      "false_success_relative_to_model_reference": 0,
+      "unknown": 1,
+      "applicability_disagreements": [
+        {
+          "stem": "01-pagination-turn1",
+          "criterion": "review_resolution",
+          "reference": "applicable",
+          "rubric": "not_applicable"
+        }
+      ],
+      "criterion_score_pairs": 14,
+      "criterion_score_mae": 0.05357142857142857
+    }
+  },
+  "runtime": {
+    "audited_at": "2026-09-11T15:02:33.998701+00:00",
+    "all_latest_comparators_complete": true,
+    "invalid_citations": [],
+    "sealed_reference_artifacts_unchanged": 36,
+    "units": 7,
+    "primary_families": 5,
+    "attempts": {
+      "reference": {
+        "attempts": 7,
+        "successful": 7,
+        "failed": 0,
+        "sum_attempt_elapsed_s": 666.379,
+        "successful_median_elapsed_s": 98.105
+      },
+      "scalar": {
+        "attempts": 15,
+        "successful": 7,
+        "failed": 8,
+        "sum_attempt_elapsed_s": 3792.385,
+        "successful_median_elapsed_s": 19.52
+      },
+      "rubric": {
+        "attempts": 10,
+        "successful": 7,
+        "failed": 3,
+        "sum_attempt_elapsed_s": 3158.194,
+        "successful_median_elapsed_s": 60.942
+      }
+    },
+    "metering_groups": {
+      "coding": {
+        "requests": 34,
+        "failed_requests": 2,
+        "known_prompt_tokens": 354949,
+        "known_completion_tokens": 5142,
+        "known_cache_read_tokens": 48000,
+        "unpriced_requests": 34,
+        "usd_cost": null
+      },
+      "review": {
+        "requests": 32,
+        "failed_requests": 11,
+        "known_prompt_tokens": 94552,
+        "known_completion_tokens": 44007,
+        "known_cache_read_tokens": 0,
+        "unpriced_requests": 32,
+        "usd_cost": null
+      }
+    },
+    "observed_providers": [
+      "openai-codex"
+    ],
+    "revision_integrity": {
+      "original_checkpoint_id": "6a30e04b912cfd8b678d2e19d4a213c2fb479546f027abc8b23acc25219a2060",
+      "original_head": 37,
+      "after_append_head": 52,
+      "original_content_byte_identical_after_append": true,
+      "sha256": "270106bfb7f1bd082c6edbd93f174b4668a83489eac2ebbcad722f7d3ca2bb01"
+    },
+    "limitations": [
+      "Failure durations span suspended/interrupted execution and are elapsed wall time, not isolated model latency.",
+      "Recorded token subtotals do not establish zero usage for failed calls with unavailable usage.",
+      "All provider prices are unknown on this subscription path; no USD savings or learner promotion inferred."
+    ]
+  },
+  "rows": [
+    {
+      "stem": "01-pagination-turn1",
+      "primary": true,
+      "family_id": "4d43d0a780b253d301dcd0a8f729e485c753a466c37e7b19bbee897449a5aacd",
+      "checkpoint_id": "34cbb1cefea757683960dd6c5ef3d24e371d211b2af32c2582214b51fcee1c02",
+      "capture_gaps": [],
+      "heuristic": {
+        "verification_signal": "verified_check",
+        "last_edit_index": 10,
+        "checks": [
+          {
+            "index": 13,
+            "status": "verified_check",
+            "evidence": {
+              "node_id": "5aa117f9-fdde-4a75-a331-ce4e08edfcde:23",
+              "digest": "ac67ed972cd766c6231eac693e3d2cc76d321e5ef1ed2db7d24a09965a4cafe2"
+            }
+          }
+        ],
+        "overall_outcome": "unknown",
+        "scope": "Check execution only; no inferred task delivery, defect causation or user acceptance."
+      },
+      "judgments": {
+        "reference": {
+          "outcome": "supported_success",
+          "score": 1.0,
+          "bounds": {
+            "lower": 1.0,
+            "upper": 1.0,
+            "unknown_weight": 0,
+            "applicable_weight": 12,
+            "severe_violation": false
+          },
+          "citations": {
+            "count": 27,
+            "invalid": []
+          }
+        },
+        "scalar": {
+          "outcome": "supported_success",
+          "score": 1,
+          "citations": {
+            "count": 4,
+            "invalid": []
+          }
+        },
+        "rubric": {
+          "job_status": "completed",
+          "bounds": {
+            "lower": 1.0,
+            "upper": 1.0,
+            "unknown_weight": 0,
+            "applicable_weight": 10,
+            "severe_violation": false
+          },
+          "outcome": "supported_success",
+          "citations": {
+            "count": 14,
+            "invalid": []
+          }
+        }
+      }
+    },
+    {
+      "stem": "02-no-execution-turn1",
+      "primary": true,
+      "family_id": "fe7fe97efde26ff5f950a406fa265abbdb8a62cd6b1bec52688a1ad09a741701",
+      "checkpoint_id": "7cc8b7ce539233042c86e0232f80a6d307778daa2ea3478f5cfc4edbae2673e9",
+      "capture_gaps": [],
+      "heuristic": {
+        "verification_signal": "unknown",
+        "last_edit_index": 8,
+        "checks": [],
+        "overall_outcome": "unknown",
+        "scope": "Check execution only; no inferred task delivery, defect causation or user acceptance."
+      },
+      "judgments": {
+        "reference": {
+          "outcome": "supported_success",
+          "score": 1.0,
+          "bounds": {
+            "lower": 1.0,
+            "upper": 1.0,
+            "unknown_weight": 0,
+            "applicable_weight": 10,
+            "severe_violation": false
+          },
+          "citations": {
+            "count": 22,
+            "invalid": []
+          }
+        },
+        "scalar": {
+          "outcome": "supported_success",
+          "score": 1,
+          "citations": {
+            "count": 6,
+            "invalid": []
+          }
+        },
+        "rubric": {
+          "job_status": "completed",
+          "bounds": {
+            "lower": 0.85,
+            "upper": 0.85,
+            "unknown_weight": 0,
+            "applicable_weight": 10,
+            "severe_violation": false
+          },
+          "outcome": "supported_success",
+          "citations": {
+            "count": 13,
+            "invalid": []
+          }
+        }
+      }
+    },
+    {
+      "stem": "03-missing-dependency-turn1",
+      "primary": true,
+      "family_id": "a8ae07dfe3c181d5ded7532724392a46704e0c306a09366ed4c50a228f7d20ec",
+      "checkpoint_id": "aec284c8eb9cd46463cca4cad240969599144594dd90a6fff34342d10c157fa5",
+      "capture_gaps": [],
+      "heuristic": {
+        "verification_signal": "observed_check_failure",
+        "last_edit_index": 7,
+        "checks": [
+          {
+            "index": 10,
+            "status": "observed_check_failure",
+            "evidence": {
+              "node_id": "64f3a98a-b4d0-4de7-aca7-855ae7bbe421:21",
+              "digest": "85851f44675855f63ef07d7697e29c1680d7492353d61ed77e2e9b5df4b11275"
+            }
+          }
+        ],
+        "overall_outcome": "unknown",
+        "scope": "Check execution only; no inferred task delivery, defect causation or user acceptance."
+      },
+      "judgments": {
+        "reference": {
+          "outcome": "partial_or_failure",
+          "score": 0.75,
+          "bounds": {
+            "lower": 0.6,
+            "upper": 0.6,
+            "unknown_weight": 0,
+            "applicable_weight": 10,
+            "severe_violation": false
+          },
+          "citations": {
+            "count": 23,
+            "invalid": []
+          }
+        },
+        "scalar": {
+          "outcome": "supported_success",
+          "score": 0.98,
+          "citations": {
+            "count": 7,
+            "invalid": []
+          }
+        },
+        "rubric": {
+          "job_status": "completed",
+          "bounds": {
+            "lower": 0.7,
+            "upper": 0.7,
+            "unknown_weight": 0,
+            "applicable_weight": 10,
+            "severe_violation": false
+          },
+          "outcome": "partial_or_failure",
+          "citations": {
+            "count": 16,
+            "invalid": []
+          }
+        }
+      }
+    },
+    {
+      "stem": "04-requirement-change-turn1",
+      "primary": true,
+      "family_id": "dae6b29abef912070b8e5e1d10c740dc836dd48a757e6e0b093ec37519ae2963",
+      "checkpoint_id": "6a30e04b912cfd8b678d2e19d4a213c2fb479546f027abc8b23acc25219a2060",
+      "capture_gaps": [],
+      "heuristic": {
+        "verification_signal": "verified_check",
+        "last_edit_index": 14,
+        "checks": [
+          {
+            "index": 10,
+            "status": "verified_check",
+            "evidence": {
+              "node_id": "e0245e26-c697-43d6-a59d-e5c2871797d0:21",
+              "digest": "dc5e27df80c889ab8a70fb7560894a814f062e2aa44c81dbc825ecdecd5f45ed"
+            }
+          },
+          {
+            "index": 17,
+            "status": "verified_check",
+            "evidence": {
+              "node_id": "e0245e26-c697-43d6-a59d-e5c2871797d0:33",
+              "digest": "d91b0d983cea53c6acf3b14a6fb26146a9494328f6525a39c9532f06ece54e81"
+            }
+          }
+        ],
+        "overall_outcome": "unknown",
+        "scope": "Check execution only; no inferred task delivery, defect causation or user acceptance."
+      },
+      "judgments": {
+        "reference": {
+          "outcome": "supported_success",
+          "score": 1.0,
+          "bounds": {
+            "lower": 1.0,
+            "upper": 1.0,
+            "unknown_weight": 0,
+            "applicable_weight": 10,
+            "severe_violation": false
+          },
+          "citations": {
+            "count": 23,
+            "invalid": []
+          }
+        },
+        "scalar": {
+          "outcome": "supported_success",
+          "score": 1,
+          "citations": {
+            "count": 6,
+            "invalid": []
+          }
+        },
+        "rubric": {
+          "job_status": "completed",
+          "bounds": {
+            "lower": 1.0,
+            "upper": 1.0,
+            "unknown_weight": 0,
+            "applicable_weight": 10,
+            "severe_violation": false
+          },
+          "outcome": "supported_success",
+          "citations": {
+            "count": 19,
+            "invalid": []
+          }
+        }
+      }
+    },
+    {
+      "stem": "04-requirement-change-turn2",
+      "primary": false,
+      "family_id": "dae6b29abef912070b8e5e1d10c740dc836dd48a757e6e0b093ec37519ae2963",
+      "checkpoint_id": "047567bafba03134188e766355ad2b692b6943c8ac9a4bbce3548609d0139caa",
+      "capture_gaps": [
+        "history_across_load_or_resume_unknown:8a9afed3-b5a2-48d5-9186-0f4955ea7e89"
+      ],
+      "heuristic": {
+        "verification_signal": "unknown",
+        "last_edit_index": 24,
+        "checks": [
+          {
+            "index": 10,
+            "status": "verified_check",
+            "evidence": {
+              "node_id": "e0245e26-c697-43d6-a59d-e5c2871797d0:21",
+              "digest": "dc5e27df80c889ab8a70fb7560894a814f062e2aa44c81dbc825ecdecd5f45ed"
+            }
+          },
+          {
+            "index": 17,
+            "status": "verified_check",
+            "evidence": {
+              "node_id": "e0245e26-c697-43d6-a59d-e5c2871797d0:33",
+              "digest": "d91b0d983cea53c6acf3b14a6fb26146a9494328f6525a39c9532f06ece54e81"
+            }
+          }
+        ],
+        "overall_outcome": "unknown",
+        "scope": "Check execution only; no inferred task delivery, defect causation or user acceptance."
+      },
+      "judgments": {
+        "reference": {
+          "outcome": "supported_success",
+          "score": 1.0,
+          "bounds": {
+            "lower": 0.8636363636363636,
+            "upper": 0.8636363636363636,
+            "unknown_weight": 0,
+            "applicable_weight": 11,
+            "severe_violation": false
+          },
+          "citations": {
+            "count": 24,
+            "invalid": []
+          }
+        },
+        "scalar": {
+          "outcome": "supported_success",
+          "score": 1,
+          "citations": {
+            "count": 6,
+            "invalid": []
+          }
+        },
+        "rubric": {
+          "job_status": "completed",
+          "bounds": {
+            "lower": 0.5909090909090909,
+            "upper": 0.8636363636363636,
+            "unknown_weight": 3,
+            "applicable_weight": 11,
+            "severe_violation": false
+          },
+          "outcome": "unknown",
+          "citations": {
+            "count": 21,
+            "invalid": []
+          }
+        }
+      }
+    },
+    {
+      "stem": "05-review-only-turn1",
+      "primary": true,
+      "family_id": "c6a18ba4bc10e9336ef0088ed31ae875ad838abf069b186856b91cb3da0a5629",
+      "checkpoint_id": "ed63eafb0cc6679e48e0918952554ab300bc894d85f33a154169e80fc0f5c567",
+      "capture_gaps": [],
+      "heuristic": {
+        "verification_signal": "unknown",
+        "last_edit_index": -1,
+        "checks": [],
+        "overall_outcome": "unknown",
+        "scope": "Check execution only; no inferred task delivery, defect causation or user acceptance."
+      },
+      "judgments": {
+        "reference": {
+          "outcome": "supported_success",
+          "score": 1.0,
+          "bounds": {
+            "lower": 0.7777777777777778,
+            "upper": 0.7777777777777778,
+            "unknown_weight": 0,
+            "applicable_weight": 9,
+            "severe_violation": false
+          },
+          "citations": {
+            "count": 17,
+            "invalid": []
+          }
+        },
+        "scalar": {
+          "outcome": "supported_success",
+          "score": 1,
+          "citations": {
+            "count": 4,
+            "invalid": []
+          }
+        },
+        "rubric": {
+          "job_status": "completed",
+          "bounds": {
+            "lower": 0.7777777777777778,
+            "upper": 1.0,
+            "unknown_weight": 2,
+            "applicable_weight": 9,
+            "severe_violation": false
+          },
+          "outcome": "unknown",
+          "citations": {
+            "count": 18,
+            "invalid": []
+          }
+        }
+      }
+    },
+    {
+      "stem": "startup-unsupported-mini",
+      "primary": false,
+      "family_id": "2ed76fa4098a6ee58c744bf1b0e1088d31fb5e6b90b4f02efd59446d368d36a4",
+      "checkpoint_id": "f98a8fa68a613e79c50b20bc8c799f2931ce9e46bd7d1f357b221cc8d12b9f64",
+      "capture_gaps": [],
+      "heuristic": {
+        "verification_signal": "unknown",
+        "last_edit_index": -1,
+        "checks": [],
+        "overall_outcome": "unknown",
+        "scope": "Check execution only; no inferred task delivery, defect causation or user acceptance."
+      },
+      "judgments": {
+        "reference": {
+          "outcome": "partial_or_failure",
+          "score": 0,
+          "bounds": {
+            "lower": 0.3,
+            "upper": 0.3,
+            "unknown_weight": 0,
+            "applicable_weight": 10,
+            "severe_violation": false
+          },
+          "citations": {
+            "count": 13,
+            "invalid": []
+          }
+        },
+        "scalar": {
+          "outcome": "partial_or_failure",
+          "score": 0,
+          "citations": {
+            "count": 3,
+            "invalid": []
+          }
+        },
+        "rubric": {
+          "job_status": "completed",
+          "bounds": {
+            "lower": 0.0,
+            "upper": 0.0,
+            "unknown_weight": 0,
+            "applicable_weight": 10,
+            "severe_violation": false
+          },
+          "outcome": "partial_or_failure",
+          "citations": {
+            "count": 10,
+            "invalid": []
+          }
+        }
+      }
+    }
+  ],
+  "artifacts": {
+    "README.md": "f9240d3baf06067589e28bb2a8312d308b6e86b12395c23a7e885b03e8b02138",
+    "analysis.json": "2a274e7df71bfc10822470b29ec9ec847b90757e2bceb303a1b239150cfc3880",
+    "audit-final.json": "65eedcae266f7411ac86efb992e4234fba27974b88e25aa9c25f5e2d613e5b67",
+    "metering-final.json": "e74ad84c4fbc29f323278ab00b70182bdc84b9e46141b5232558df00e72b6d5e",
+    "reference-seal.json": "630588ace419bf9337d773b93e7a49bdda420e904cf411c44c59cc9c55897248",
+    "revision-integrity.json": "827761aa95191104d1e9b3912af0396ce63cf4cf514ad6731bda9f22790d17f7",
+    "manifest.initial.json": "cc106831b88160a2c3536e0e49d1c24535dbd9d3dfefd2498310302c925d9734"
+  }
+}

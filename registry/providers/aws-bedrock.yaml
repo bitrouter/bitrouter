@@ -174,6 +174,15 @@ models:
         cache_write: 12.5
       output_tokens:
         text: 50
+  - id: openai/gpt-6-astra
+    provider_model_id: openai.gpt-6-astra
+    pricing:
+      input_tokens:
+        no_cache: 11
+        cache_read: 1.1
+        cache_write: 13.75
+      output_tokens:
+        text: 55
 auto_sync:
   feed: models_dev
   key: amazon-bedrock

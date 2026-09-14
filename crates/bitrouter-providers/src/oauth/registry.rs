@@ -23,7 +23,7 @@ pub struct PkceProvider {
     /// as the lookup key here and as the [`crate::oauth::credential_store`]
     /// key the resulting credential is stored under.
     pub provider_id: &'static str,
-    /// Human label for `bitrouter providers login` output (e.g. "Claude
+    /// Human label for `bro providers login` output (e.g. "Claude
     /// Pro/Max subscription").
     pub display_name: &'static str,
     /// Local TCP port to bind for the redirect listener. `None` → ask the
@@ -57,7 +57,7 @@ pub fn has_pkce_flow(provider_id: &str) -> bool {
     find(provider_id).is_some()
 }
 
-/// All registered PKCE providers — useful for `bitrouter providers login` UX
+/// All registered PKCE providers — useful for `bro providers login` UX
 /// that wants to list every supported subscription flow.
 pub fn all() -> Vec<PkceProvider> {
     vec![anthropic(), openai_codex()]

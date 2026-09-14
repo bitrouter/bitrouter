@@ -1,4 +1,4 @@
-//! Terminal renderer for BitRouter's ACP chat session.
+//! Terminal renderers for BitRouter's coding conversation and operations surfaces.
 //!
 //! # The boundary, and what it is now for
 //!
@@ -48,11 +48,12 @@
 //!
 //! # What is still out of scope
 //!
-//! **Session-scoped only.** There is no metering store here, no daemon control
-//! socket, no request history — nothing daemon-wide is reachable, so nothing
-//! daemon-wide can be drawn. What one session did is the whole subject, and
-//! `bitrouter status --requests` is where the other question is answered.
+//! There is no metering store here, no daemon control socket, and no HTTP
+//! client. Session updates and operation reports are plain input supplied by
+//! the application, so drawing can never become a second implementation of an
+//! action.
 
+pub mod code;
 pub mod cost;
 pub mod editor;
 pub mod journal;
@@ -63,6 +64,7 @@ pub mod permission;
 pub mod picker;
 pub mod plain;
 pub mod render;
+pub mod select;
 pub mod view;
 pub mod wrap;
 pub mod writer;

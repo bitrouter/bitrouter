@@ -429,13 +429,13 @@ failure by default.
 The shipped policy surface is:
 
 ```text
-bitrouter policy compile --output <candidate.yaml> [--eval-snapshot sha256:...]
-bitrouter policy check --config <bitrouter.yaml>
-bitrouter policy diff <active.yaml> <candidate.yaml>
-bitrouter policy publish <candidate.yaml> --config <bitrouter.yaml>
-bitrouter policy verify --evidence --config <bitrouter.yaml>
-bitrouter policy evolve --apply --config <bitrouter.yaml>
-bitrouter policy rollback <digest> --config <bitrouter.yaml>
+bro policy compile --output <candidate.yaml> [--eval-snapshot sha256:...]
+bro policy check --config <bitrouter.yaml>
+bro policy diff <active.yaml> <candidate.yaml>
+bro policy publish <candidate.yaml> --config <bitrouter.yaml>
+bro policy verify --evidence --config <bitrouter.yaml>
+bro policy evolve --apply --config <bitrouter.yaml>
+bro policy rollback <digest> --config <bitrouter.yaml>
 ```
 
 `publish` is the canonical promotion boundary because it promotes the exact
@@ -446,13 +446,13 @@ shortcut for legacy migration compilation.
 The shipped eval surface is:
 
 ```text
-bitrouter eval subject put <subject.json>
-bitrouter eval subject get <eval-id>
-bitrouter eval subject list
-bitrouter eval result submit <result.json>
-bitrouter eval snapshot freeze [--at RFC3339]
-bitrouter eval snapshot get <sha256-root>
-bitrouter eval status
+bro eval subject put <subject.json>
+bro eval subject get <eval-id>
+bro eval subject list
+bro eval result submit <result.json>
+bro eval snapshot freeze [--at RFC3339]
+bro eval snapshot get <sha256-root>
+bro eval status
 ```
 
 REST mirrors the same library operations:

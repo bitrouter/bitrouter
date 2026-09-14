@@ -4,6 +4,118 @@ use super::*;
 use crate::language_model::types::{ApiProtocol, ReasoningEffort};
 
 #[test]
+fn provider_headers_accept_static_and_passthrough_forms() -> crate::Result<()> {
+    let config = parse_with(
+        r#"
+inherit_defaults: false
+providers:
+  opencode-go:
+    api_base: https://opencode.ai/zen/go/v1
+    api_key: test
+    headers:
+      x-opencode-session:
+        default: claude-code
+        passthrough: true
+      user-agent: my-agent/1.0
+      x-rejected:
+        passthrough: false
+"#,
+        |_| None,
+    )?;
+
+    let chain = routing_table::resolve_route_chain(
+        &config,
+        "opencode-go:test-model",
+        &crate::language_model::RoutingPrefs::default(),
+    )?;
+    let target = chain
+        .first()
+        .ok_or_else(|| BitrouterError::internal("provider route was empty"))?;
+    let session = target
+        .headers
+        .iter()
+        .find(|rule| rule.name() == "x-opencode-session")
+        .ok_or_else(|| BitrouterError::internal("session header rule was not routed"))?;
+    assert!(session.passthrough());
+    assert_eq!(
+        session.default().and_then(|value| value.to_str().ok()),
+        Some("claude-code")
+    );
+    let user_agent = target
+        .headers
+        .iter()
+        .find(|rule| rule.name() == "user-agent")
+        .ok_or_else(|| BitrouterError::internal("user-agent rule was not routed"))?;
+    assert!(!user_agent.passthrough());
+    assert_eq!(
+        user_agent.default().and_then(|value| value.to_str().ok()),
+        Some("my-agent/1.0")
+    );
+    let rejected = target
+        .headers
+        .iter()
+        .find(|rule| rule.name() == "x-rejected")
+        .ok_or_else(|| BitrouterError::internal("reject rule was not routed"))?;
+    assert!(!rejected.passthrough());
+    assert!(rejected.default().is_none());
+    Ok(())
+}
+
+#[test]
+fn provider_headers_are_inherited_when_child_declares_none() -> crate::Result<()> {
+    let config = parse_with(
+        r#"
+inherit_defaults: false
+providers:
+  parent:
+    api_base: https://parent.example/v1
+    headers:
+      x-provider-version: v1
+  child:
+    derives: parent
+    api_base: https://child.example/v1
+"#,
+        |_| None,
+    )?;
+    assert_eq!(
+        config.providers["child"].headers,
+        config.providers["parent"].headers
+    );
+    Ok(())
+}
+
+#[test]
+fn provider_headers_reject_invalid_reserved_and_duplicate_names() {
+    for (headers, expected) in [
+        ("'bad header': value", "invalid provider header name"),
+        (
+            "x-test: \"line\\nbreak\"",
+            "invalid value for provider header 'x-test'",
+        ),
+        (
+            "authorization: value",
+            "provider header 'authorization' is reserved",
+        ),
+        (
+            "User-Agent: first\n      user-agent: second",
+            "duplicate provider header 'user-agent'",
+        ),
+        (
+            "x-test:\n        default: value\n        typo: true",
+            "did not match any variant",
+        ),
+    ] {
+        let yaml = format!(
+            "inherit_defaults: false\nproviders:\n  test:\n    api_base: https://api.example/v1\n    headers:\n      {headers}\n"
+        );
+        let error = parse_with(&yaml, |_| None)
+            .err()
+            .unwrap_or_else(|| BitrouterError::internal("invalid provider header was accepted"));
+        assert!(error.to_string().contains(expected), "got: {error}");
+    }
+}
+
+#[test]
 fn policy_table_accepts_scalar_and_model_effort_targets() -> crate::Result<()> {
     let config = parse_with(
         r#"
@@ -156,6 +268,8 @@ fn provider_model_rejects_malformed_reasoning_effort_capabilities() -> crate::Re
 fn defaults_are_sane() {
     let cfg = Config::default();
     assert_eq!(cfg.server.listen, "0.0.0.0:4356");
+    assert!(!cfg.control.enabled);
+    assert_eq!(cfg.control.listen, "127.0.0.1:4358");
     assert!(
         !cfg.server.skip_auth,
         "skip_auth code default must be false"
@@ -166,6 +280,20 @@ fn defaults_are_sane() {
     assert_eq!(cfg.trajectory.outbox_batch_size, 100);
     assert_eq!(cfg.continuation.retention_days, 30);
     assert_eq!(cfg.continuation.prune_batch_size, 1_000);
+}
+
+#[test]
+fn remote_control_is_explicitly_opt_in_and_keeps_loopback_default() -> crate::Result<()> {
+    let cfg = parse_with(
+        r#"
+control:
+  enabled: true
+"#,
+        |_| None,
+    )?;
+    assert!(cfg.control.enabled);
+    assert_eq!(cfg.control.listen, "127.0.0.1:4358");
+    Ok(())
 }
 
 #[test]
@@ -320,7 +448,7 @@ fn env_substitution_skips_full_line_comments() {
 
 #[test]
 fn env_substitution_skips_indented_comments() {
-    // Mirrors the `bitrouter init` starter config: a commented example deep in
+    // Mirrors the `bro init` starter config: a commented example deep in
     // the file referencing an unset var must not break loading.
     let yaml = "providers:\n  # opencode: { key: \"${OPENCODE_KEY_A}\" }\n  openai: {}";
     let out = substitute_with(yaml, |_| None).unwrap();
@@ -1563,4 +1691,32 @@ fn mcp_upstream_protocol_opts_in_by_version_string() {
         parse("mcp:\n  upstream_protocol: \"2099-01-01\"\n").is_err(),
         "unknown protocol version must not parse"
     );
+}
+
+/// `chat.commands` deserializes, and `description` is optional.
+#[test]
+fn chat_prompt_commands_deserialize() {
+    let cfg = parse(
+        r#"
+chat:
+  commands:
+    - name: review
+      description: review a diff
+      prompt: "Review this: $ARGUMENTS"
+    - name: ship
+      prompt: "Ship it"
+"#,
+    )
+    .expect("parse");
+    assert_eq!(cfg.chat.commands.len(), 2);
+    assert_eq!(cfg.chat.commands[0].name, "review");
+    assert_eq!(cfg.chat.commands[0].prompt, "Review this: $ARGUMENTS");
+    assert_eq!(cfg.chat.commands[1].description, "", "description defaults");
+}
+
+/// A config with no `chat:` block still loads — the whole section is optional.
+#[test]
+fn chat_is_optional() {
+    let cfg = parse("providers: {}\n").expect("parse");
+    assert!(cfg.chat.commands.is_empty());
 }

@@ -1,4 +1,4 @@
-//! Integration tests for `bitrouter acp serve|prompt`.
+//! Integration tests for `bro acp serve|prompt`.
 //!
 //! Test 1 (`prompt_ndjson`) — in-process: build a `Config` with a bash ACP
 //! stub agent, call [`bitrouter::acp_cli::prompt`] with a `Vec<u8>` sink,
@@ -7,7 +7,7 @@
 //!   - the final line is `{"type":"result","stop_reason":"EndTurn"}`.
 //!
 //! Test 2 (`serve_subprocess_e2e`) — subprocess: write a temp config YAML,
-//! spawn `bitrouter acp serve --agent stub --config <path>` as a child
+//! spawn `bro acp serve --agent stub --config <path>` as a child
 //! process, drive its stdio with raw JSON-RPC NDJSON (the ACP wire format),
 //! and assert the full `initialize` → `session/new` → `session/prompt` round-
 //! trip succeeds, including the forwarded `session/update` carrying "hi".
@@ -18,6 +18,79 @@ use std::collections::HashMap;
 
 use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
+
+// ===== process working directory =====
+//
+// Several tests below need the process to sit in a scratch directory, because
+// `Session::launch` resolves paths against `current_dir()`. The working
+// directory is **process**-global, and how much that matters depends on the
+// runner: `cargo nextest` gives each test its own process, so the original
+// code was safe under it, but `cargo test` runs the whole file as threads in
+// one process — and both are sanctioned by this repo's CLAUDE.md.
+//
+// Under `cargo test` the unsynchronized version raced in a way that was easy
+// to misread as a real failure: each test deletes its scratch directory when
+// it finishes, so a *different* test could find itself standing in a directory
+// that no longer existed. The symptoms landed far from the cause — a panicking
+// `current_dir()`, a prompt that failed for no visible reason, a subprocess
+// that timed out — and a different subset failed on every run.
+//
+// [`CwdGuard`] makes ownership of the directory explicit and exclusive.
+
+/// Serializes every test that depends on the process working directory.
+static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Where the process started, captured before any test has moved it. Restoring
+/// to this rather than to whatever was current at acquisition means a stray
+/// unguarded `set_current_dir` cannot become the "original" that every later
+/// test restores to.
+static ORIGINAL_CWD: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| std::env::current_dir().expect("a valid startup cwd"));
+
+/// Exclusive ownership of the process working directory for one test.
+///
+/// Restoring happens in `Drop`, so it also runs when a test panics while
+/// holding the guard — without that, one failure would leave the directory
+/// pointing at a deleted temp dir and cascade into every test that ran after
+/// it.
+///
+/// The guard is held across `.await`, which is normally a deadlock hazard for
+/// a blocking mutex. It is safe here because every holder is a `#[tokio::test]`
+/// with its own current-thread runtime on its own libtest thread: blocking
+/// while waiting parks that one test's thread, never a runtime shared with the
+/// task that would release the lock.
+struct CwdGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl CwdGuard {
+    /// Take the directory and move into `dir`.
+    fn enter(dir: &std::path::Path) -> Self {
+        let guard = Self::hold();
+        std::env::set_current_dir(dir).expect("set_current_dir");
+        guard
+    }
+
+    /// Take the directory without moving, for a test that only needs it to
+    /// stay put — `serve_subprocess_e2e` spawns a child that inherits it.
+    fn hold() -> Self {
+        // A poisoned lock means some earlier test panicked while holding it.
+        // Its `Drop` already restored the directory, so there is no broken
+        // state to protect and the poison is recovered rather than propagated
+        // into an unrelated failure.
+        let lock = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::sync::LazyLock::force(&ORIGINAL_CWD);
+        Self { _lock: lock }
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&*ORIGINAL_CWD);
+    }
+}
 
 /// Bash ACP stub: initialize → session/new → prompt emits one update then
 /// end_turn. Identical to the stubs used in the substrate engine/down tests.
@@ -61,11 +134,7 @@ fn stub_config() -> Config {
 async fn prompt_ndjson() {
     let base = tempfile::tempdir().expect("tempdir");
 
-    // Change cwd to the temp dir; restore on exit. `set_current_dir` is
-    // process-global, but each nextest test runs in its own process, so this
-    // does not race other tests under the default `cargo nextest` runner.
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -82,8 +151,6 @@ async fn prompt_ndjson() {
         },
     };
     let result = bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf).await;
-
-    let _ = std::env::set_current_dir(&orig_dir);
 
     result.expect("acp_cli::prompt should succeed");
 
@@ -244,8 +311,7 @@ const OK_SCHEMA: &str =
 /// terminal result line.
 async fn result_line_for(script: &str) -> serde_json::Value {
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -273,7 +339,6 @@ async fn result_line_for(script: &str) -> serde_json::Value {
         &mut buf,
     )
     .await;
-    let _ = std::env::set_current_dir(&orig_dir);
     result.expect("prompt should succeed");
 
     let output = String::from_utf8(buf).expect("valid utf8");
@@ -427,7 +492,7 @@ async fn routing_returns_and_applies_one_endpoint_plan() -> anyhow::Result<()> {
     let AcpTransport::Stdio { args, env, .. } = &entry.transport;
     assert_eq!(
         args,
-        &["-y", "@agentclientprotocol/claude-agent-acp@0.70.0"]
+        &["-y", "@agentclientprotocol/claude-agent-acp@0.75.1"]
     );
     assert_eq!(env.get("ANTHROPIC_BASE_URL"), Some(&daemon.uri()));
     assert_eq!(
@@ -526,6 +591,18 @@ async fn rpc_round_trip(
     }
 }
 
+/// Budget for the **first** round-trip against a freshly spawned child.
+///
+/// This is not measuring the same thing as the steady-state deadline. Request
+/// id 1 also pays for the process spawn and the dynamic linking of a large
+/// debug binary, which on a loaded machine dominates the handshake itself.
+/// Under CPU saturation it was the *only* round-trip that ever elapsed — the
+/// steady-state ones stayed in the milliseconds — so separating it keeps the
+/// tight stalled-child deadline where it actually detects a stall, instead of
+/// widening every deadline to accommodate one slow step. The test is still
+/// bounded, so a child that never starts fails rather than hanging the runner.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Run one round-trip under `timeout`; panic on elapse so a stalled server
 /// never hangs the test runner.
 async fn bounded_round_trip(
@@ -575,7 +652,7 @@ agents:
             done
 "#;
 
-/// Spawn `bitrouter acp serve --agent stub --config <path>` as a child process
+/// Spawn `bro acp serve --agent stub --config <path>` as a child process
 /// and drive it with raw JSON-RPC NDJSON — the actual ACP wire format over
 /// stdio. This exercises the path that the in-process `down.rs` duplex tests
 /// cannot: real OS-level stdio pipes and the CLI entry point.
@@ -601,6 +678,10 @@ async fn serve_subprocess_e2e() {
     /// handshake, tight enough to fail fast on a stalled child.
     const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
+    // The spawned child inherits this process's working directory, so this
+    // test needs it to stay put even though it never moves it itself.
+    let _cwd = CwdGuard::hold();
+
     // Write the config YAML to a temp file.
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join("bitrouter.yaml");
@@ -614,10 +695,7 @@ async fn serve_subprocess_e2e() {
     } else {
         "release"
     };
-    let binary = workspace_root
-        .join("target")
-        .join(profile)
-        .join("bitrouter");
+    let binary = workspace_root.join("target").join(profile).join("bro");
 
     if !binary.exists() {
         eprintln!(
@@ -627,7 +705,7 @@ async fn serve_subprocess_e2e() {
         return;
     }
 
-    // Spawn `bitrouter acp serve --agent stub --config <path>`.
+    // Spawn `bro acp serve --agent stub --config <path>`.
     // Redirect stderr to a temp file so we can inspect it on failure.
     let stderr_path = dir.path().join("serve.stderr");
     let stderr_file = std::fs::File::create(&stderr_path).expect("stderr file");
@@ -650,7 +728,7 @@ async fn serve_subprocess_e2e() {
         // a stalled server is reaped rather than leaked.
         .kill_on_drop(true)
         .spawn()
-        .expect("spawn bitrouter acp serve");
+        .expect("spawn bro acp serve");
 
     let mut child_stdin = child.stdin.take().expect("child stdin");
     let child_stdout = child.stdout.take().expect("child stdout");
@@ -667,7 +745,7 @@ async fn serve_subprocess_e2e() {
             "params": { "protocolVersion": 1 }
         }),
         "1",
-        RPC_TIMEOUT,
+        HANDSHAKE_TIMEOUT,
     )
     .await;
     assert!(
@@ -774,7 +852,7 @@ async fn serve_subprocess_e2e() {
 
     // ── Disconnect: serve must exit on its OWN when the manager closes stdin ─
     // This is the regression guard for the process-leak bug: dropping the
-    // child's stdin handle delivers EOF to `bitrouter acp serve` (the manager
+    // child's stdin handle delivers EOF to `bro acp serve` (the manager
     // disconnecting). The server must detect EOF, tear down, drop its
     // `Arc<Session>` (which kills the upstream agent child), and exit — WITHOUT
     // us having to `kill()` it. We assert it exits on its own within a few
@@ -795,7 +873,7 @@ async fn serve_subprocess_e2e() {
             // then fail loudly — this is the bug we are guarding against.
             let _ = child.kill().await;
             panic!(
-                "bitrouter acp serve did NOT exit within 5s after the manager \
+                "bro acp serve did NOT exit within 5s after the manager \
                  closed stdin — it hung (process/agent-child leak regression)"
             );
         }
@@ -836,8 +914,7 @@ async fn prompt_headless_denies_permission_and_completes() {
     cfg.agents.insert("perm-stub".to_string(), agent_cfg);
 
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -860,8 +937,6 @@ async fn prompt_headless_denies_permission_and_completes() {
     )
     .await;
 
-    let _ = std::env::set_current_dir(&orig_dir);
-
     let result = result.expect("headless prompt must not hang on a permission request");
     let tally = result.expect("prompt should complete");
 
@@ -876,11 +951,25 @@ async fn prompt_headless_denies_permission_and_completes() {
     );
     // The stream says what was decided, and the exit status says the agent
     // was refused.
-    assert!(
-        output.contains(
-            r#"{"type":"permission","decision":"denied","title":"write file","kind":null}"#
-        ),
-        "the decision is on the stream:\n{output}"
+    let permission = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|line| line["type"] == "permission");
+    assert_eq!(
+        permission.as_ref().map(|line| &line["decision"]),
+        Some(&serde_json::json!("denied"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["title"]),
+        Some(&serde_json::json!("write file"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["kind"]),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["version"]),
+        Some(&serde_json::json!(1))
     );
     assert_eq!(
         tally.exit_code(),
@@ -920,8 +1009,7 @@ async fn headless(
     options: bitrouter::acp_cli::PromptOptions,
 ) -> (bitrouter::acp_cli::PermissionTally, String) {
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
     };
@@ -941,7 +1029,6 @@ async fn headless(
         bitrouter::acp_cli::prompt(ctx, text, options, &mut buf),
     )
     .await;
-    let _ = std::env::set_current_dir(&orig_dir);
     let tally = result
         .expect("a headless prompt must not hang")
         .expect("prompt should complete");
@@ -965,11 +1052,25 @@ async fn prompt_approve_all_selects_the_allow_option() {
     };
     let (tally, output) = headless(permission_stub("execute"), "run it", options).await;
     assert!(output.contains("chose:allow"), "{output}");
-    assert!(
-        output.contains(
-            r#"{"type":"permission","decision":"approved","title":"Write src/main.rs","kind":"execute"}"#
-        ),
-        "{output}"
+    let permission = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|line| line["type"] == "permission");
+    assert_eq!(
+        permission.as_ref().map(|line| &line["decision"]),
+        Some(&serde_json::json!("approved"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["title"]),
+        Some(&serde_json::json!("Write src/main.rs"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["kind"]),
+        Some(&serde_json::json!("execute"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["version"]),
+        Some(&serde_json::json!(1))
     );
     assert_eq!(tally.exit_code(), 0);
 }
@@ -1056,8 +1157,7 @@ async fn prompt_turn_timeout_fails_the_turn_instead_of_hanging() {
         done
     "#;
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -1079,7 +1179,6 @@ async fn prompt_turn_timeout_fails_the_turn_instead_of_hanging() {
         bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf),
     )
     .await;
-    let _ = std::env::set_current_dir(&orig_dir);
 
     let result = outcome.expect("--turn-timeout must end the turn, not hang the process");
     let error = format!("{:#}", result.expect_err("a stalled turn must fail"));
@@ -1105,8 +1204,7 @@ async fn prompt_fails_fast_when_the_harness_dies_mid_turn() {
         done
     "#;
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -1127,7 +1225,6 @@ async fn prompt_fails_fast_when_the_harness_dies_mid_turn() {
         bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf),
     )
     .await;
-    let _ = std::env::set_current_dir(&orig_dir);
 
     let result = outcome.expect("a dead harness must fail the turn, not hang it");
     assert!(
@@ -1167,7 +1264,7 @@ agents:
             done
 "#;
 
-/// A live `bitrouter acp serve` subprocess, initialized and with a session
+/// A live `bro acp serve` subprocess, initialized and with a session
 /// open — the fixture the four conformance assertions below each drive.
 struct ServeFixture {
     child: tokio::process::Child,
@@ -1202,10 +1299,7 @@ impl ServeFixture {
         } else {
             "release"
         };
-        let binary = workspace_root
-            .join("target")
-            .join(profile)
-            .join("bitrouter");
+        let binary = workspace_root.join("target").join(profile).join("bro");
         if !binary.exists() {
             eprintln!(
                 "conformance: binary not found at {}; skipping",
@@ -1232,7 +1326,7 @@ impl ServeFixture {
             .stderr(stderr_file)
             .kill_on_drop(true)
             .spawn()
-            .expect("spawn bitrouter acp serve");
+            .expect("spawn bro acp serve");
 
         let mut stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
@@ -1244,7 +1338,7 @@ impl ServeFixture {
             serde_json::json!({"jsonrpc":"2.0","id":"1","method":"initialize",
                                "params":{"protocolVersion":1}}),
             "1",
-            CONFORMANCE_TIMEOUT,
+            HANDSHAKE_TIMEOUT,
         )
         .await;
         assert!(init.get("result").is_some(), "initialize failed: {init}");
@@ -1335,7 +1429,7 @@ impl ServeFixture {
                 // than a leak that outlives the run.
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                panic!("bitrouter acp serve did not exit within 5s of stdin close");
+                panic!("bro acp serve did not exit within 5s of stdin close");
             }
         }
     }
@@ -1367,7 +1461,7 @@ async fn conformance_forwarded_update_variants_survive_round_trip() {
 
 // ── Test 5: `chat` on a pipe ─────────────────────────────────────────────────
 
-/// `bitrouter chat` renders for a person; a redirect has none. Spawn it with
+/// `bro chat` renders for a person; a redirect has none. Spawn it with
 /// stdout on a pipe, feed it one prompt, and assert the transcript arrives as
 /// plain text — **no ESC byte anywhere**.
 ///
@@ -1395,10 +1489,7 @@ async fn chat_on_a_pipe_is_plain_text() {
     } else {
         "release"
     };
-    let binary = workspace_root
-        .join("target")
-        .join(profile)
-        .join("bitrouter");
+    let binary = workspace_root.join("target").join(profile).join("bro");
     if !binary.exists() {
         eprintln!(
             "chat_on_a_pipe_is_plain_text: binary not found at {}; skipping",
@@ -1423,7 +1514,7 @@ async fn chat_on_a_pipe_is_plain_text() {
         .stderr(stderr_file)
         .kill_on_drop(true)
         .spawn()
-        .expect("spawn bitrouter chat");
+        .expect("spawn bro chat");
 
     let mut child_stdin = child.stdin.take().expect("child stdin");
     child_stdin
@@ -1454,7 +1545,7 @@ async fn chat_on_a_pipe_is_plain_text() {
 
 // ── `acp serve` emits the ignored-config warnings ─────────────────────────────
 
-/// `bitrouter acp serve` never builds an `App` and never reaches
+/// `bro acp serve` never builds an `App` and never reaches
 /// `build_observability`, so for the whole of PR #851 it was the one telemetry
 /// surface that read `plugins.*` and said nothing about the blocks it ignores.
 /// The guard is emitted first thing in `acp_cli::serve`, which is why this test
@@ -1480,10 +1571,7 @@ async fn serve_warns_about_ignored_plugin_blocks() {
     } else {
         "release"
     };
-    let binary = workspace_root
-        .join("target")
-        .join(profile)
-        .join("bitrouter");
+    let binary = workspace_root.join("target").join(profile).join("bro");
     if !binary.exists() {
         eprintln!(
             "serve_warns_about_ignored_plugin_blocks: binary not found at {}; skipping",

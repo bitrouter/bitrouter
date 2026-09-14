@@ -10,3 +10,16 @@
 # legitimate test while still ending the job cleanly enough to get logs.
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 5 }
+
+# Explicitly ignored acceptance launches hundreds of sequential native sessions
+# through external ACP workers. Its publication and rollback workload exceeds
+# the ordinary suite deadline; each prompt and evaluation is separately bounded.
+[[profile.default.overrides]]
+filter = 'test(acp_cli::evolution_acceptance::publication::)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+# The opt-in terminal campaign retains the product's 10% initial allocation and
+# real worker tool execution. Its per-operation and total workload are bounded.
+[[profile.default.overrides]]
+filter = 'test(tui_coding_publication_and_rollback)'
+slow-timeout = { period = "60s", terminate-after = 41 }

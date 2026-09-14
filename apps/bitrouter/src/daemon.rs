@@ -1,6 +1,6 @@
 //! Daemon control over a local IPC channel.
 //!
-//! A running `bitrouter serve` listens on a control endpoint alongside the
+//! A running `bro serve` listens on a control endpoint alongside the
 //! HTTP API. The CLI's `stop` / `restart` / `reload` / `status` / `route`
 //! subcommands are thin clients that connect, send one newline-delimited JSON
 //! [`DaemonCommand`], and read one [`DaemonResponse`].
@@ -25,7 +25,11 @@ use bitrouter_sdk::language_model::RoutingPrefs;
 use chrono::{DateTime, Utc};
 
 use crate::acp_runtime::AcpRuntime;
+use crate::actions::administration::{
+    Administration, AgentsReport, ObserveReport, PolicyInput, PolicyReport, ProvidersReport,
+};
 use crate::metering::{MeteringStore, TimeWindow};
+use crate::reload::{ReloadAdmissionError, ReloadReport, ReloadReservation, ReloadState};
 
 /// Anything the daemon's `Reload` command (and SIGHUP) should re-read. The
 /// runtime reloader fans out to every reloadable subsystem — routing table,
@@ -36,6 +40,44 @@ use crate::metering::{MeteringStore, TimeWindow};
 pub trait DaemonReloader: Send + Sync {
     /// Reload every reloadable subsystem.
     async fn reload(&self) -> anyhow::Result<()>;
+
+    /// Reload with owner-trusted local environment overrides. Implementations
+    /// that own a coordinator install overrides after reserving exclusive
+    /// reload ownership; a generic reloader cannot truthfully promise that.
+    async fn reload_with_env(&self, env: Vec<(String, String)>) -> anyhow::Result<()> {
+        if env.is_empty() {
+            self.reload().await
+        } else {
+            Err(anyhow::anyhow!(
+                "this daemon reloader does not support coordinated environment overrides"
+            ))
+        }
+    }
+
+    /// Return boot-local reload state when this implementation supports guarded
+    /// reload admission. `None` deliberately means unsupported, rather than a
+    /// fabricated instance identity or generation.
+    fn reload_state(&self) -> Option<ReloadState> {
+        None
+    }
+
+    /// Atomically fence a remote operation against the current boot and
+    /// generation. The reservation must be passed to [`Self::reload_reserved`]
+    /// exactly once or dropped so its coordinator can clear the admission.
+    fn reserve_remote(
+        &self,
+        _expected_instance: &str,
+        _expected_generation: u64,
+    ) -> Result<ReloadReservation, ReloadAdmissionError> {
+        Err(ReloadAdmissionError::Unsupported)
+    }
+
+    /// Execute a previously admitted remote reload. The default is reachable
+    /// only through an invalid implementation because [`Self::reserve_remote`]
+    /// rejects every request, and still returns a truthful unsupported report.
+    async fn reload_reserved(&self, _reservation: ReloadReservation) -> ReloadReport {
+        ReloadReport::unsupported()
+    }
 }
 
 /// A reloader that does nothing — useful for tests / minimal embeddings of the
@@ -57,7 +99,7 @@ pub enum DaemonCommand {
     Stop,
     /// Hot-reload the config / routing table. The CLI piggybacks a
     /// snapshot of API-key-style env vars from its own process so a
-    /// `export OPENAI_API_KEY=…; bitrouter reload` propagates the new
+    /// `export OPENAI_API_KEY=…; bro reload` propagates the new
     /// value into the running daemon without requiring a restart.
     /// `env` is `#[serde(default)]` for wire-compat with the
     /// historical unit variant — older clients sending `{"cmd":"reload"}`
@@ -68,8 +110,19 @@ pub enum DaemonCommand {
         #[serde(default)]
         env: Vec<(String, String)>,
     },
+    /// Read the reload coordinator's boot-local state without mutating it.
+    ReloadState,
     /// Report daemon status.
     Status,
+    /// List every model the live routing table can route, each with the
+    /// providers that can serve it.
+    ///
+    /// Distinct from [`Self::Status`], which reports only the *count* and the
+    /// distinct provider set: this is the catalog itself, and it is what lets
+    /// `bro models` and the MCP `list_models` tool answer with the
+    /// daemon's real view — subscription-backed providers and post-`reload`
+    /// state included — instead of a static config projection.
+    Models,
     /// Resolve a model name through the live routing table.
     Route {
         /// The model name to resolve.
@@ -78,8 +131,24 @@ pub enum DaemonCommand {
     /// Report the OTel exporter's current state — what's wired, current
     /// cardinality usage, in-flight span count. Returned as a JSON
     /// snapshot. The wire format is the same `ObserveStatusPayload` the
-    /// CLI pretty-prints for `bitrouter observe status`.
+    /// CLI pretty-prints for `bro observe status`.
     ObserveStatus,
+    /// Run one safe, typed administration read against the live daemon.
+    ///
+    /// This is intentionally a closed enum rather than a JSON method name or
+    /// a serialized HTTP request.  The local control socket remains a
+    /// host-local transport with its own contract.
+    Inspect { inspection: DaemonInspection },
+    /// Local, owner-scoped checkpoint evolution control.
+    Evolution {
+        operation: crate::evolution::operator::EvolutionOperation,
+    },
+    /// Acknowledge request inventory for a recorder before capture starts.
+    AcpRecordingRegister {
+        connection_id: String,
+        api_principal: String,
+        controller_instance_id: String,
+    },
     /// Remove every route lease in one principal/controller namespace.
     AcpControllerCleanup {
         /// Opaque principal derived from the normal API credential, or local.
@@ -127,6 +196,26 @@ pub enum DaemonCommand {
     },
 }
 
+/// Passive live inspection operations accepted over the local control socket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "inspection", rename_all = "snake_case")]
+pub enum DaemonInspection {
+    Providers,
+    Agents,
+    Observe,
+    Policy { input: PolicyInput },
+}
+
+/// Typed result of a [`DaemonInspection`] request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "report", rename_all = "snake_case")]
+pub enum DaemonInspectionReport {
+    Providers(ProvidersReport),
+    Agents(AgentsReport),
+    Observe(ObserveReport),
+    Policy(PolicyReport),
+}
+
 /// One resolved hop of a route chain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteHop {
@@ -152,6 +241,18 @@ pub enum DaemonResponse {
         listen: String,
         /// Count of routable models.
         models: usize,
+        /// The distinct providers behind those models, sorted.
+        ///
+        /// `#[serde(default)]` for wire-compat: a client talking to a daemon
+        /// from before this field existed reads an empty list rather than
+        /// failing the whole exchange.
+        #[serde(default)]
+        providers: Vec<String>,
+    },
+    /// The live routing table's catalog.
+    Models {
+        /// Every routable model, each with all the providers declaring it.
+        models: Vec<bitrouter_sdk::language_model::routing::ModelInfo>,
     },
     /// A resolved route chain.
     Route {
@@ -162,6 +263,17 @@ pub enum DaemonResponse {
     ObserveStatus {
         /// The serialized exporter state.
         payload: ObserveStatusPayload,
+    },
+    /// Reload coordinator state for the current daemon boot.
+    ReloadState { state: ReloadState },
+    /// A typed administration inspection result.
+    Inspection { report: DaemonInspectionReport },
+    Evolution {
+        report: Box<crate::evolution::operator::EvolutionReport>,
+    },
+    /// This daemon shares the recorder's database and records gateway requests.
+    AcpRecordingRegistered {
+        registration: crate::evolution::inventory::CoverageRegistration,
     },
     /// Daemon-confirmed route state for one native ACP session.
     AcpRouteState {
@@ -348,7 +460,7 @@ pub fn is_not_reachable(err: &anyhow::Error) -> bool {
 /// The daemon's self-reported readiness snapshot, returned by
 /// [`probe_status`]. A successful probe means the control socket is bound
 /// and the app is assembled (the model count is populated), which is exactly
-/// the signal `bitrouter status` reports.
+/// the signal `bro status` reports.
 #[derive(Debug, Clone)]
 pub struct ReadyInfo {
     /// The daemon's process id.
@@ -386,6 +498,7 @@ pub async fn probe_status(socket: &Path) -> Result<Option<ReadyInfo>> {
             pid,
             listen,
             models,
+            ..
         }) => Ok(Some(ReadyInfo {
             pid,
             listen,
@@ -423,6 +536,8 @@ pub async fn run_control_socket(
         AcpControlPlane {
             runtime: Arc::new(AcpRuntime::new()),
             metering,
+            inventory: None,
+            evolution: None,
         },
     )
     .await
@@ -442,6 +557,10 @@ pub struct AcpControlPlane {
     pub runtime: Arc<AcpRuntime>,
     /// Settled-request store behind session-attributed spend.
     pub metering: MeteringStore,
+    /// The inventory installed in this daemon's model request pipeline.
+    pub inventory: Option<crate::evolution::inventory::GatewayInventory>,
+    /// Live route validation and checkpoint worker status, when installed.
+    pub evolution: Option<crate::evolution::runtime::EvolutionRuntime>,
 }
 
 pub async fn run_control_socket_with_acp_runtime(
@@ -452,8 +571,43 @@ pub async fn run_control_socket_with_acp_runtime(
     observe: Arc<dyn ObserveStatusProvider>,
     acp: AcpControlPlane,
 ) -> Result<()> {
+    run_control_socket_with_acp_runtime_and_administration(
+        socket_path,
+        app,
+        listen,
+        reloader,
+        observe,
+        acp,
+        None,
+    )
+    .await
+}
+
+/// Run the local control socket with optional live administration ports.
+///
+/// Existing embeddings retain the historical control-socket surface through
+/// [`run_control_socket_with_acp_runtime`].  The app assembly injects these
+/// ports only after it has constructed the running routing and policy state.
+pub async fn run_control_socket_with_acp_runtime_and_administration(
+    socket_path: PathBuf,
+    app: Arc<App>,
+    listen: String,
+    reloader: Arc<dyn DaemonReloader>,
+    observe: Arc<dyn ObserveStatusProvider>,
+    acp: AcpControlPlane,
+    administration: Option<Administration>,
+) -> Result<()> {
     let mut listener = transport::bind(&socket_path).await?;
-    let result = accept_loop(&mut listener, &app, &listen, &reloader, &observe, &acp).await;
+    let result = accept_loop(
+        &mut listener,
+        &app,
+        &listen,
+        &reloader,
+        &observe,
+        &acp,
+        &administration,
+    )
+    .await;
     listener.cleanup().await;
     result
 }
@@ -465,12 +619,13 @@ async fn accept_loop(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     acp: &AcpControlPlane,
+    administration: &Option<Administration>,
 ) -> Result<()> {
     loop {
         let stream = listener.accept().await?;
         // Handle one command per connection. A `Stop` ends the loop (and thus
         // the whole `serve`); any other command loops for the next client.
-        if handle_connection(stream, app, listen, reloader, observe, acp).await? {
+        if handle_connection(stream, app, listen, reloader, observe, acp, administration).await? {
             tracing::info!("stop command received — shutting down");
             return Ok(());
         }
@@ -489,6 +644,7 @@ async fn handle_connection<S>(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     acp: &AcpControlPlane,
+    administration: &Option<Administration>,
 ) -> Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -513,7 +669,7 @@ where
     };
 
     let is_stop = matches!(command, DaemonCommand::Stop);
-    let response = dispatch(command, app, listen, reloader, observe, acp).await;
+    let response = dispatch(command, app, listen, reloader, observe, acp, administration).await;
     write_response(reader.get_mut(), &response).await?;
     Ok(is_stop)
 }
@@ -525,41 +681,90 @@ async fn dispatch(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     acp: &AcpControlPlane,
+    administration: &Option<Administration>,
 ) -> DaemonResponse {
     match command {
         DaemonCommand::Stop => DaemonResponse::Ok,
-        DaemonCommand::Reload { env } => {
-            // Apply the CLI's env snapshot first so file-mode YAML
-            // `${VAR}` substitution and zero-config's "is this
-            // provider's key set" check see the freshly-exported
-            // values. Empty list = caller didn't ask us to update env;
-            // we keep whatever was already in the override map.
-            if !env.is_empty() {
-                let map: std::collections::HashMap<String, String> = env.into_iter().collect();
-                bitrouter_sdk::config::set_env_overrides(map);
-                tracing::info!("env override map updated by reload");
-            }
-            match reloader.reload().await {
-                Ok(()) => {
-                    tracing::info!("reload succeeded");
-                    DaemonResponse::Ok
-                }
-                Err(e) => DaemonResponse::Error {
-                    message: format!("reload failed: {e}"),
+        DaemonCommand::Evolution { operation } => {
+            let Some(runtime) = &acp.evolution else {
+                return DaemonResponse::Error {
+                    message: "checkpoint evolution is unavailable on this daemon".into(),
+                };
+            };
+            match runtime.operate("local", operation).await {
+                Ok(report) => DaemonResponse::Evolution {
+                    report: Box::new(report),
+                },
+                Err(error) => DaemonResponse::Error {
+                    message: error.to_string(),
                 },
             }
         }
+        DaemonCommand::AcpRecordingRegister {
+            connection_id,
+            api_principal,
+            controller_instance_id,
+        } => {
+            let Some(inventory) = &acp.inventory else {
+                return DaemonResponse::Error {
+                    message: "gateway request inventory is unavailable on this daemon".into(),
+                };
+            };
+            match inventory
+                .register_capture(&connection_id, &api_principal, &controller_instance_id)
+                .await
+            {
+                Ok(registration) => DaemonResponse::AcpRecordingRegistered { registration },
+                Err(error) => DaemonResponse::Error {
+                    message: error.to_string(),
+                },
+            }
+        }
+        DaemonCommand::Reload { env } => match reloader.reload_with_env(env).await {
+            Ok(()) => {
+                tracing::info!("reload succeeded");
+                DaemonResponse::Ok
+            }
+            Err(e) => DaemonResponse::Error {
+                message: format!("reload failed: {e}"),
+            },
+        },
+        DaemonCommand::ReloadState => match reloader.reload_state() {
+            Some(state) => DaemonResponse::ReloadState { state },
+            None => DaemonResponse::Error {
+                message: "reload state is unavailable on this daemon".to_string(),
+            },
+        },
         DaemonCommand::Status => {
-            let models = app
+            let routable = app
                 .language_model()
-                .map(|p| p.routing_table().list_models().len())
-                .unwrap_or(0);
+                .map(|p| p.routing_table().list_models())
+                .unwrap_or_default();
+            // One pass over the table the model count already walks: the
+            // distinct providers behind it, which is what an operator or an
+            // agent actually wants to see next to "42 routable".
+            let providers: Vec<String> = routable
+                .iter()
+                .flat_map(|m| m.providers.iter().cloned())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
             DaemonResponse::Status {
                 pid: std::process::id(),
                 listen: listen.to_string(),
-                models,
+                models: routable.len(),
+                providers,
             }
         }
+        DaemonCommand::Models => DaemonResponse::Models {
+            // The same read `Status` counts, returned whole. A daemon with no
+            // language-model pipeline routes nothing, which is an empty
+            // catalog rather than an error.
+            models: app
+                .language_model()
+                .map(|p| p.routing_table().list_models())
+                .unwrap_or_default(),
+        },
         DaemonCommand::AcpSessionSpend {
             api_principal,
             controller_instance_id,
@@ -738,6 +943,39 @@ async fn dispatch(
         DaemonCommand::ObserveStatus => DaemonResponse::ObserveStatus {
             payload: observe.status(),
         },
+        DaemonCommand::Inspect { inspection } => {
+            inspection_response(inspection, administration).await
+        }
+    }
+}
+
+async fn inspection_response(
+    inspection: DaemonInspection,
+    administration: &Option<Administration>,
+) -> DaemonResponse {
+    let Some(administration) = administration else {
+        return DaemonResponse::Error {
+            message: "live administration reads are unavailable on this daemon".to_string(),
+        };
+    };
+    match inspection {
+        DaemonInspection::Providers => DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Providers(administration.providers()),
+        },
+        DaemonInspection::Agents => DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Agents(administration.agents()),
+        },
+        DaemonInspection::Observe => DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Observe(administration.observe()),
+        },
+        DaemonInspection::Policy { input } => match administration.policy(input).await {
+            Ok(report) => DaemonResponse::Inspection {
+                report: DaemonInspectionReport::Policy(report),
+            },
+            Err(error) => DaemonResponse::Error {
+                message: format!("policy inspection failed: {error}"),
+            },
+        },
     }
 }
 
@@ -865,8 +1103,9 @@ mod transport {
     pub async fn connect(path: &Path) -> Result<UnixStream> {
         UnixStream::connect(path).await.with_context(|| {
             format!(
-                "connecting to {} — is the daemon running? (`bitrouter start`)",
-                path.display()
+                "connecting to {} — is the daemon running? (`{cli} start`)",
+                path.display(),
+                cli = bitrouter_sdk::invocation::name()
             )
         })
     }
@@ -978,7 +1217,10 @@ mod transport {
                 }
                 Err(e) => {
                     return Err(e).with_context(|| {
-                        format!("connecting to {name} — is the daemon running? (`bitrouter start`)")
+                        format!(
+                            "connecting to {name} — is the daemon running? (`{cli} start`)",
+                            cli = bitrouter_sdk::invocation::name()
+                        )
                     });
                 }
             }
@@ -1099,7 +1341,7 @@ pub enum DaemonStartOutcome {
     },
 }
 
-/// Spawn `bitrouter serve` as a detached background process writing to
+/// Spawn `bro serve` as a detached background process writing to
 /// `log_path` (append). Returns the child handle and the log's pre-spawn byte
 /// length so the caller can quote only this run's output on early death.
 ///
@@ -1149,7 +1391,12 @@ fn spawn_detached_serve(
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
-    let child = cmd.spawn().context("spawning detached `bitrouter serve`")?;
+    let child = cmd.spawn().with_context(|| {
+        format!(
+            "spawning detached `{} serve`",
+            bitrouter_sdk::invocation::name()
+        )
+    })?;
     Ok((child, log_size_before))
 }
 
@@ -1187,7 +1434,7 @@ pub fn eprint_failure_log(log_path: &Path, content: &str) {
     eprintln!();
 }
 
-/// Launch a detached `bitrouter serve` and poll the control socket until it
+/// Launch a detached `bro serve` and poll the control socket until it
 /// answers `Status`, the process dies, or `timeout` elapses. The daemon keeps
 /// running regardless of the outcome — this only reports what the launcher
 /// observed. `socket` is the control-socket path to poll; pass `None` when it
@@ -1241,17 +1488,42 @@ mod tests {
         for cmd in [
             DaemonCommand::Stop,
             DaemonCommand::Reload { env: Vec::new() },
+            DaemonCommand::ReloadState,
             DaemonCommand::Status,
             DaemonCommand::Route {
                 model: "gpt-5".to_string(),
             },
             DaemonCommand::ObserveStatus,
+            DaemonCommand::Inspect {
+                inspection: DaemonInspection::Policy {
+                    input: PolicyInput::default(),
+                },
+            },
         ] {
             let json = serde_json::to_string(&cmd).unwrap();
             let back: DaemonCommand = serde_json::from_str(&json).unwrap();
             // tag-based round trip
             assert_eq!(std::mem::discriminant(&cmd), std::mem::discriminant(&back));
         }
+    }
+
+    #[test]
+    fn inspection_response_round_trips_as_json() -> anyhow::Result<()> {
+        let response = DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Providers(ProvidersReport {
+                resolved_via: "live".to_string(),
+                providers: Vec::new(),
+            }),
+        };
+        let json = serde_json::to_string(&response)?;
+        let decoded: DaemonResponse = serde_json::from_str(&json)?;
+        match decoded {
+            DaemonResponse::Inspection {
+                report: DaemonInspectionReport::Providers(report),
+            } => assert_eq!(report.resolved_via, "live"),
+            other => anyhow::bail!("expected provider inspection, got {other:?}"),
+        }
+        Ok(())
     }
 
     #[test]
@@ -1334,13 +1606,20 @@ mod tests {
             pid: 42,
             listen: "0.0.0.0:4356".to_string(),
             models: 3,
+            providers: vec!["openai".to_string()],
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: DaemonResponse = serde_json::from_str(&json).unwrap();
         match back {
-            DaemonResponse::Status { pid, models, .. } => {
+            DaemonResponse::Status {
+                pid,
+                models,
+                providers,
+                ..
+            } => {
                 assert_eq!(pid, 42);
                 assert_eq!(models, 3);
+                assert_eq!(providers, ["openai"]);
             }
             other => panic!("expected Status, got {other:?}"),
         }

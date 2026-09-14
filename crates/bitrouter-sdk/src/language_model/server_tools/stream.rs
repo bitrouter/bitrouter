@@ -17,6 +17,7 @@ use super::loop_controller::{ServerToolLoop, add_usage};
 use super::toolset::ToolContext;
 use crate::error::Result;
 use crate::language_model::executor::StreamPartStream;
+use crate::language_model::stream::UsageAccumulator;
 use crate::language_model::types::{
     Content, FinishReason, Message, Prompt, ProviderMetadata, Role, StreamPart, Usage,
 };
@@ -35,6 +36,7 @@ struct BufferedCall {
     id: String,
     name: String,
     args: String,
+    provider_metadata: ProviderMetadata,
 }
 
 impl ServerToolLoop {
@@ -82,9 +84,14 @@ impl ServerToolLoop {
                 let mut assistant_text = String::new();
                 let mut finish: Option<FinishReason> = None;
                 let mut response_completion = None;
+                let mut turn_usage = UsageAccumulator::default();
 
                 // Forward narration in real time; buffer tool-call deltas;
-                // accumulate usage; capture (but suppress) the terminal.
+                // select one cumulative usage snapshot for this upstream turn;
+                // capture (but suppress) the terminal. Providers may repeat a
+                // cumulative snapshot on every chunk, so summing here would
+                // multiply one request's usage. Cross-turn totals are added
+                // only after this upstream stream ends.
                 while let Some(item) = upstream_stream.next().await {
                     let part = match item {
                         Ok(p) => p,
@@ -95,8 +102,7 @@ impl ServerToolLoop {
                     };
                     match part {
                         StreamPart::Usage { usage } => {
-                            add_usage(&mut total, &usage);
-                            had_usage = true;
+                            turn_usage.observe(&StreamPart::Usage { usage });
                         }
                         StreamPart::Finish { reason } => finish = Some(reason),
                         StreamPart::ResponseCompleted {
@@ -110,8 +116,7 @@ impl ServerToolLoop {
                             // a standalone `Usage` part), so it must be folded in
                             // or the loop under-bills a Responses upstream.
                             if let Some(u) = usage {
-                                add_usage(&mut total, &u);
-                                had_usage = true;
+                                turn_usage.observe(&StreamPart::Usage { usage: u });
                             }
                             if finish.is_none() {
                                 finish = Some(FinishReason::Stop);
@@ -123,17 +128,20 @@ impl ServerToolLoop {
                             id,
                             name,
                             arguments,
+                            provider_metadata,
                         } => match buffered.iter_mut().find(|b| b.id == id) {
                             Some(b) => {
                                 if let Some(n) = name.as_deref().filter(|n| !n.is_empty()) {
                                     b.name = n.to_string();
                                 }
                                 b.args.push_str(&arguments);
+                                b.provider_metadata.extend(provider_metadata);
                             }
                             None => buffered.push(BufferedCall {
                                 id,
                                 name: name.unwrap_or_default(),
                                 args: arguments,
+                                provider_metadata,
                             }),
                         },
                         StreamPart::TextDelta { text } => {
@@ -144,15 +152,20 @@ impl ServerToolLoop {
                     }
                 }
 
+                if let Some(usage) = turn_usage.finalized() {
+                    add_usage(&mut total, &usage);
+                    had_usage = true;
+                }
+
                 // Drop malformed calls whose name never arrived — they are
                 // neither router- nor client-executable, and would otherwise
                 // force a spurious hand-back of an empty-named tool call.
                 buffered.retain(|b| !b.name.is_empty());
 
-                let has_client = buffered.iter().any(|b| !owned.contains(&b.name));
+                let has_client = buffered.iter().any(|b| !owned.contains(&b.name) || !b.provider_metadata.is_empty());
                 let router: Vec<RouterCall> = buffered
                     .iter()
-                    .filter(|b| owned.contains(&b.name))
+                    .filter(|b| owned.contains(&b.name) && b.provider_metadata.is_empty())
                     .map(|b| RouterCall {
                         id: b.id.clone(),
                         name: b.name.clone(),
@@ -169,6 +182,7 @@ impl ServerToolLoop {
                                 id: b.id.clone(),
                                 name: Some(b.name.clone()),
                                 arguments: b.args.clone(),
+                                provider_metadata: b.provider_metadata.clone(),
                             });
                         }
                     }
@@ -365,6 +379,7 @@ mod tests {
                         id: "c1".into(),
                         name: Some("search".into()),
                         arguments: "{}".into(),
+                        provider_metadata: Default::default(),
                     },
                     StreamPart::Finish {
                         reason: FinishReason::ToolCalls,
@@ -409,6 +424,34 @@ mod tests {
             out.push(item.unwrap());
         }
         out
+    }
+
+    #[tokio::test]
+    async fn no_tool_choice_hands_back_streamed_calls_without_a_second_turn() -> Result<()> {
+        let mut prompt = base_prompt();
+        prompt.tool_choice = Some(crate::language_model::types::ToolChoice::None);
+        let upstream = Arc::new(FailingSecondTurnStream {
+            calls: AtomicUsize::new(0),
+        });
+        let mut stream = loop_()
+            .run_stream(&prompt, &tool_ctx(), upstream.clone())
+            .await?;
+        let mut parts = Vec::new();
+        while let Some(part) = stream.next().await {
+            parts.push(part?);
+        }
+        assert_eq!(upstream.calls.load(Ordering::SeqCst), 1);
+        assert!(
+            parts
+                .iter()
+                .any(|part| matches!(part, StreamPart::ToolCallDelta { .. }))
+        );
+        assert!(
+            !parts
+                .iter()
+                .any(|part| matches!(part, StreamPart::ServerToolCall { .. }))
+        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -470,6 +513,7 @@ mod tests {
                     id: "c1".into(),
                     name: Some("search".into()),
                     arguments: "{}".into(),
+                    provider_metadata: Default::default(),
                 },
                 StreamPart::Finish {
                     reason: FinishReason::ToolCalls,
@@ -538,6 +582,7 @@ mod tests {
                 id: "x".into(),
                 name: Some("client_fn".into()),
                 arguments: "{}".into(),
+                provider_metadata: Default::default(),
             },
             StreamPart::Finish {
                 reason: FinishReason::ToolCalls,
@@ -614,5 +659,126 @@ mod tests {
             .expect("a consolidated Usage part is emitted");
         assert_eq!(usage.prompt_tokens, 7);
         assert_eq!(usage.completion_tokens, 3);
+    }
+
+    #[tokio::test]
+    async fn deduplicates_cumulative_usage_within_one_upstream_turn() {
+        // Some OpenAI-compatible providers emit a cumulative usage snapshot
+        // with the finish chunk and then an enriched trailing snapshot. The
+        // server-tool stitcher must select one snapshot for this turn, while
+        // retaining details that exist only on the authoritative final frame.
+        let scripts = vec![vec![
+            StreamPart::Usage {
+                usage: Usage {
+                    prompt_tokens: 5_140,
+                    completion_tokens: 61,
+                    ..Default::default()
+                },
+            },
+            StreamPart::Usage {
+                usage: Usage {
+                    prompt_tokens: 5_140,
+                    completion_tokens: 61,
+                    cache_read_tokens: 4_608,
+                    ..Default::default()
+                },
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ]];
+        let upstream = Arc::new(ScriptedStream {
+            scripts: Mutex::new(scripts.into()),
+        });
+        let parts = collect(
+            loop_()
+                .run_stream(&base_prompt(), &tool_ctx(), upstream)
+                .await
+                .unwrap(),
+        )
+        .await;
+
+        let usage = parts
+            .iter()
+            .find_map(|part| match part {
+                StreamPart::Usage { usage } => Some(usage),
+                _ => None,
+            })
+            .expect("one consolidated usage part is emitted");
+        assert_eq!(usage.prompt_tokens, 5_140);
+        assert_eq!(usage.completion_tokens, 61);
+        assert_eq!(usage.cache_read_tokens, 4_608);
+    }
+
+    #[tokio::test]
+    async fn sums_selected_usage_across_real_tool_rounds() {
+        let scripts = vec![
+            vec![
+                StreamPart::Usage {
+                    usage: Usage {
+                        prompt_tokens: 10,
+                        completion_tokens: 2,
+                        ..Default::default()
+                    },
+                },
+                StreamPart::Usage {
+                    usage: Usage {
+                        prompt_tokens: 10,
+                        completion_tokens: 3,
+                        ..Default::default()
+                    },
+                },
+                StreamPart::ToolCallDelta {
+                    id: "c1".into(),
+                    name: Some("search".into()),
+                    arguments: "{}".into(),
+                    provider_metadata: Default::default(),
+                },
+                StreamPart::Finish {
+                    reason: FinishReason::ToolCalls,
+                },
+            ],
+            vec![
+                StreamPart::Usage {
+                    usage: Usage {
+                        prompt_tokens: 20,
+                        completion_tokens: 4,
+                        ..Default::default()
+                    },
+                },
+                StreamPart::Usage {
+                    usage: Usage {
+                        prompt_tokens: 20,
+                        completion_tokens: 5,
+                        cache_read_tokens: 8,
+                        ..Default::default()
+                    },
+                },
+                StreamPart::Finish {
+                    reason: FinishReason::Stop,
+                },
+            ],
+        ];
+        let upstream = Arc::new(ScriptedStream {
+            scripts: Mutex::new(scripts.into()),
+        });
+        let parts = collect(
+            loop_()
+                .run_stream(&base_prompt(), &tool_ctx(), upstream)
+                .await
+                .unwrap(),
+        )
+        .await;
+
+        let usage = parts
+            .iter()
+            .find_map(|part| match part {
+                StreamPart::Usage { usage } => Some(usage),
+                _ => None,
+            })
+            .expect("one cross-round usage total is emitted");
+        assert_eq!(usage.prompt_tokens, 30);
+        assert_eq!(usage.completion_tokens, 8);
+        assert_eq!(usage.cache_read_tokens, 8);
     }
 }

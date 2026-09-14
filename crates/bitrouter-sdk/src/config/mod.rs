@@ -18,7 +18,7 @@
 //! # let _ = routing; Ok(()) }
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -27,7 +27,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::HttpTimeouts;
 use crate::language_model::routing::SortOrder;
-use crate::language_model::types::{ApiProtocol, ModelCompatibility, ProtocolList};
+use crate::language_model::types::{
+    ApiProtocol, ModelCompatibility, OutboundHeaderRule, ProtocolList,
+};
 
 pub mod pattern;
 pub mod presets;
@@ -40,12 +42,51 @@ pub use pattern::{Pattern, PatternMap};
 pub use presets::{PresetResolution, PromptOverrides, resolve_presets};
 pub use routing_table::ConfigRoutingTable;
 
+/// `bro chat`'s own configuration.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ChatConfig {
+    /// Default ACP harness for bare `bitrouter` (catalog id or configured agent).
+    pub agent: Option<String>,
+    /// Default daemon-routable model for the chat session.
+    pub model: Option<String>,
+    /// Prompt-expansion commands.
+    ///
+    /// `/name args` in `bro chat`, or `bro acp prompt "/name args"`,
+    /// sends `prompt` with `$ARGUMENTS` replaced by everything typed after the
+    /// name.
+    ///
+    /// There is deliberately no key that *runs* anything. A command here
+    /// produces a prompt and nothing else, which is what lets the registry be
+    /// open — user-authored, unreviewed — while the registry of commands that
+    /// reach BitRouter's own ports stays closed and guarded.
+    pub commands: Vec<PromptCommandConfig>,
+}
+
+/// One user-authored command that expands to a prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+pub struct PromptCommandConfig {
+    /// What to type after the slash. May not be a name BitRouter answers —
+    /// that is rejected when the config is loaded, not resolved at runtime.
+    pub name: String,
+    /// One line for `/commands`.
+    #[serde(default)]
+    pub description: String,
+    /// The prompt to send. `$ARGUMENTS` is replaced by whatever was typed
+    /// after the name; a template that uses it twice gets it twice.
+    pub prompt: String,
+}
+
 /// The top-level configuration.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct Config {
     /// HTTP server settings.
     pub server: ServerConfig,
+    /// Opt-in, read-only operator control API settings.
+    pub control: ControlConfig,
+    /// The interactive session's own configuration.
+    pub chat: ChatConfig,
     /// Outbound / upstream HTTP settings (the client that calls providers).
     pub upstream: UpstreamConfig,
     /// Database connection settings.
@@ -54,6 +95,8 @@ pub struct Config {
     pub eval: EvalConfig,
     /// Durable trajectory progress-control and local operations settings.
     pub trajectory: TrajectoryConfig,
+    /// Opt-in local storage of observable ACP conversation content.
+    pub acp_recording: AcpRecordingConfig,
     /// Durable provider continuation mapping lifecycle.
     pub continuation: ContinuationConfig,
     /// Upstream providers, keyed by provider id.
@@ -79,7 +122,7 @@ pub struct Config {
     /// single-shot.
     pub server_tools: crate::language_model::server_tools::config::ServerToolsConfig,
     /// Upstream ACP agents, keyed by agent id. Surfaced by the
-    /// `bitrouter agents` CLI (list / check / install). Empty by default.
+    /// `bro agents` CLI (list / check / install). Empty by default.
     pub agents: HashMap<String, crate::acp::transport::AcpAgentConfig>,
     /// Whether providers inherit workspace defaults.
     pub inherit_defaults: bool,
@@ -104,10 +147,13 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server: ServerConfig::default(),
+            control: ControlConfig::default(),
+            chat: ChatConfig::default(),
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
             eval: EvalConfig::default(),
             trajectory: TrajectoryConfig::default(),
+            acp_recording: AcpRecordingConfig::default(),
             continuation: ContinuationConfig::default(),
             providers: HashMap::new(),
             models: HashMap::new(),
@@ -122,6 +168,59 @@ impl Default for Config {
             registry: RegistryConfig::default(),
             policy: PolicyConfig::default(),
             policy_table: PolicyTableConfig::default(),
+        }
+    }
+}
+
+/// Scoped operator administration API settings.
+///
+/// The control API is deliberately separate from the inference listener and
+/// the local control socket. It is disabled by default, may bind only to a
+/// loopback address, and authenticates named credentials when configured.
+/// Otherwise `BITROUTER_CONTROL_TOKEN` grants read-only access.
+/// [`ServerConfig::skip_auth`] never applies to it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ControlConfig {
+    /// Whether to start the HTTP control listener.
+    pub enabled: bool,
+    /// Loopback `host:port` to listen on.
+    pub listen: String,
+    /// Explicit operator credentials. Empty keeps the legacy read-only token.
+    pub credentials: Vec<ControlCredentialConfig>,
+}
+
+/// Authority granted by a host operator, independently of inference credentials.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+pub enum ControlScope {
+    /// Host-wide operational inspection, including usage and policy metadata.
+    #[serde(rename = "control:read")]
+    Read,
+    /// Reload server-owned configuration; requires the read grant as well.
+    #[serde(rename = "control:reload")]
+    Reload,
+}
+
+/// A token reference only; configuration never stores the bearer value.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ControlCredentialConfig {
+    /// Non-secret operator identifier used for ownership and audit events.
+    pub id: String,
+    /// Host environment variable that contains this credential's bearer token.
+    pub token_env: String,
+    /// Explicit management authority, unrelated to inference authentication.
+    pub scopes: Vec<ControlScope>,
+}
+
+impl Default for ControlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.1:4358".to_string(),
+            credentials: Vec::new(),
         }
     }
 }
@@ -149,6 +248,15 @@ impl Default for ContinuationConfig {
             prune_batch_size: 1_000,
         }
     }
+}
+
+/// Local ACP conversation content recording, independent of routing evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct AcpRecordingConfig {
+    /// Store observable session messages and tool results until explicitly deleted.
+    /// No content is recorded or sent to an evaluator by default.
+    pub enabled: bool,
 }
 
 /// Durable trajectory progress-control settings.
@@ -802,13 +910,13 @@ pub struct ServerConfig {
     ///
     /// `RUST_LOG` overrides this when set, following the Rust convention. The
     /// filter is resolved once at startup, so changing it needs a restart —
-    /// `bitrouter reload` will not pick it up. Applies to `bitrouter serve`
+    /// `bro reload` will not pick it up. Applies to `bro serve`
     /// (and therefore `start`); other subcommands install their subscriber
     /// before any config is read and honour `RUST_LOG` only.
     pub log_level: String,
     /// SDK-level flag: when `true`, credential-less requests are admitted with
     /// a synthesised local caller. Code default is **`false`** — only the
-    /// config file produced by `bitrouter init` writes `true`.
+    /// config file produced by `bro init` writes `true`.
     pub skip_auth: bool,
 }
 
@@ -988,6 +1096,11 @@ pub struct ProviderConfig {
     pub api_base: String,
     /// Upstream API key (often a `${VAR}` reference).
     pub api_key: String,
+    /// Additional headers applied to every inference request for this
+    /// provider. A string is shorthand for a static default. The expanded
+    /// form can opt into forwarding the same inbound header, which overrides
+    /// the default for that request.
+    pub headers: BTreeMap<String, ProviderHeaderConfig>,
     /// Glob-prefix `api_protocol` pattern list — each pattern maps to an
     /// ordered set of supported wire protocols (the head is the preferred
     /// default). Precedence: per-model override > longest matching pattern >
@@ -1014,9 +1127,9 @@ pub struct ProviderConfig {
     /// Free-form tags, used by `RoutingPrefs.require_tags` filtering.
     pub tags: Vec<String>,
     /// Inherit defaults from another provider in this config (acceptance F20 /
-    /// v0 `derives`). The named provider's `api_protocol`, `rate_limits`,
-    /// `models`, `tags` and `auto_discover` flow into *this* provider's empty
-    /// fields; explicit fields here win. Resolved by
+    /// v0 `derives`). The named provider's `headers`, `api_protocol`,
+    /// `rate_limits`, `models`, `tags` and `auto_discover` flow into *this*
+    /// provider's empty fields; explicit fields here win. Resolved by
     /// [`resolve_derivations`] after the config is parsed.
     pub derives: Option<String>,
     /// Multiple credentials for this one provider — e.g. two
@@ -1042,6 +1155,46 @@ pub struct ProviderConfig {
     /// resolved global [`UpstreamConfig::timeouts`]; unset fields inherit it.
     /// Not inherited via [`derives`](Self::derives).
     pub timeouts: TimeoutConfig,
+}
+
+/// One provider header entry in `bitrouter.yaml`.
+///
+/// A scalar string is shorthand for a static default with passthrough
+/// disabled. The mapping form supports an optional `default` and an explicit
+/// inbound `passthrough` switch.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum ProviderHeaderConfig {
+    /// Static value; equivalent to `{ default: value, passthrough: false }`.
+    Static(String),
+    /// Expanded default/passthrough policy.
+    Policy(ProviderHeaderPolicy),
+}
+
+impl ProviderHeaderConfig {
+    fn default_value(&self) -> Option<&str> {
+        match self {
+            Self::Static(value) => Some(value),
+            Self::Policy(policy) => policy.default.as_deref(),
+        }
+    }
+
+    fn passthrough(&self) -> bool {
+        match self {
+            Self::Static(_) => false,
+            Self::Policy(policy) => policy.passthrough,
+        }
+    }
+}
+
+/// Expanded provider header behavior.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProviderHeaderPolicy {
+    /// Static value used when no allowed inbound value is present.
+    pub default: Option<String>,
+    /// Allow the inbound request's value(s) to override the static default.
+    pub passthrough: bool,
 }
 
 /// One credential within a multi-account provider. An account varies
@@ -1108,6 +1261,7 @@ impl std::fmt::Debug for ProviderConfig {
                     "<redacted>"
                 },
             )
+            .field("headers", &self.headers.keys().collect::<Vec<_>>())
             .field("api_protocol", &self.api_protocol)
             .field("protocol_endpoints", &self.protocol_endpoints)
             .field("rate_limits", &self.rate_limits)
@@ -1129,6 +1283,7 @@ impl Default for ProviderConfig {
         Self {
             api_base: String::new(),
             api_key: String::new(),
+            headers: BTreeMap::new(),
             api_protocol: PatternMap::new(),
             protocol_endpoints: HashMap::new(),
             rate_limits: PatternMap::new(),
@@ -1147,6 +1302,22 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
+    fn outbound_headers(&self) -> Result<Vec<OutboundHeaderRule>> {
+        let mut names = HashSet::new();
+        let mut rules = Vec::with_capacity(self.headers.len());
+        for (name, config) in &self.headers {
+            let rule = OutboundHeaderRule::new(name, config.default_value(), config.passthrough())?;
+            if !names.insert(rule.name().clone()) {
+                return Err(BitrouterError::bad_request(format!(
+                    "duplicate provider header '{}'",
+                    rule.name().as_str()
+                )));
+            }
+            rules.push(rule);
+        }
+        Ok(rules)
+    }
+
     /// Resolve either the registry's canonical model id or its provider-native
     /// dispatch id to the same metadata entry. Explicit `provider:model`
     /// routes commonly use the native id, but must retain the registry's
@@ -1393,7 +1564,7 @@ pub struct VariantConfig {
 ///
 /// Substitution is **YAML-comment-aware**: a `${VAR}` that falls inside a `#`
 /// comment is left literal and never looked up — so a commented-out example
-/// (e.g. the `bitrouter init` starter config) that references an unset variable
+/// (e.g. the `bro init` starter config) that references an unset variable
 /// does not break loading. A `#` begins a comment only when it is at the start
 /// of a line or preceded by whitespace and is not inside a quoted scalar
 /// (matching YAML), so URL fragments (`host/p#x`) and quoted `#` stay literal
@@ -1502,7 +1673,7 @@ where
 /// Replace every `${VAR}` occurrence with the value of environment variable
 /// `VAR`. An undefined variable is an error. Used by the config loader.
 /// Reads via [`env_lookup`] so daemon-side overrides (installed by the
-/// CLI's `bitrouter reload`) take precedence over the live process env.
+/// CLI's `bro reload`) take precedence over the live process env.
 pub fn substitute_env(input: &str) -> Result<String> {
     substitute_with(input, env_lookup)
 }
@@ -1573,6 +1744,9 @@ where
     // Validated post-`resolve_derivations` so an inherited `api_base` is
     // checked against the *effective* value.
     for (id, provider) in &config.providers {
+        provider.outbound_headers().map_err(|error| {
+            BitrouterError::bad_request(format!("provider '{id}' has invalid headers: {error}"))
+        })?;
         for model in &provider.models {
             if let Some(reasoning_effort) = &model.reasoning_effort {
                 if !model
@@ -1799,6 +1973,9 @@ fn resolve_one_derivation(
     if child.api_protocol.is_empty() {
         child.api_protocol = parent.api_protocol.clone();
     }
+    if child.headers.is_empty() {
+        child.headers = parent.headers.clone();
+    }
     if child.protocol_endpoints.is_empty() {
         child.protocol_endpoints = parent.protocol_endpoints.clone();
     }
@@ -1839,7 +2016,7 @@ pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
 /// left as-is with a WARN — discovery never aborts startup.
 ///
 /// The HTTP client is built with bounded `connect_timeout` + `timeout` so an
-/// unreachable provider can't stall a `bitrouter reload` for the OS-level
+/// unreachable provider can't stall a `bro reload` for the OS-level
 /// connect window (minutes). Discovery is best-effort; a 5s overall cap is
 /// well above any healthy `/models` round-trip and far below the default.
 pub async fn discover_models(config: &mut Config) {

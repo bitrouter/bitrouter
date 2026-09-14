@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-09T12:43:25.795287+00:00",
+  "status": "controlled_native_publication_passed; broader_goal_incomplete",
+  "git_head": "ad2bab71968e40752fe175433b23fd2098307c81",
+  "learner_version": "checkpoint-normal-inverse-gamma-ts-v2",
+  "scope": "Maintained ACP adapters and real worker executables, isolated local model/judge fixtures, actual gateway and canonical capture, automatic evaluation, production trial publication and quality-monitor rollback. No planted adoption or learner rows in native acceptance.",
+  "checks": [
+    {
+      "name": "nextest",
+      "command": "cargo nextest run --all-features --no-fail-fast",
+      "exit_code": 0,
+      "output_sha256": "417de143b25853f4ad5314a821374bd42efa2626a1ab4f0af06b6e2f639e4cf2",
+      "result": "3359 passed; 16 skipped"
+    },
+    {
+      "name": "clippy",
+      "command": "cargo clippy --all-features --all-targets -- -D warnings",
+      "exit_code": 0,
+      "output_sha256": "68974b3d0f200b8e7d1d9b0108304443dd5f61eabca2c194c286d8d46b9606e0",
+      "result": "all features and targets; warnings denied"
+    },
+    {
+      "name": "doctests",
+      "command": "cargo test --all-features --doc",
+      "exit_code": 0,
+      "output_sha256": "e88fbe36c7ed592d0ab7eebe31b188896434ae4d6ea8974184c2eb6df41c5570",
+      "result": "5 passed; 1 ignored"
+    },
+    {
+      "name": "fmt",
+      "command": "cargo fmt -- --check",
+      "exit_code": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "diff",
+      "command": "git diff --check",
+      "exit_code": 0,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "explicit_native_runs": [
+    {
+      "command": "cargo nextest run --all-features --run-ignored all --no-fail-fast --success-output final -E 'test(evolution_acceptance) | test(evolution::bandit::tests) | test(evolution::service::tests)'",
+      "exit_code": 100,
+      "result": "30 passed; Claude publication reached adoption after 124 trials but timed out at 300 seconds during remaining checks",
+      "output_sha256": "50a9e318aaaa687b3c7e480b024b174a01c3e6b9a29c9209545835a3ead545c9",
+      "runner_timeout_seconds": 300
+    },
+    {
+      "command": "cargo nextest run --all-features --run-ignored only --no-fail-fast --success-output final -E 'test(maintained_claude_publication_and_rollback)'",
+      "exit_code": 0,
+      "result": "Claude publication/rollback passed in 274.073 seconds",
+      "output_sha256": "c2ddbb916cd773e2078bc9b9d55864237800acfafc23f8b4519edfcf761dde92",
+      "runner_timeout_seconds": 600
+    }
+  ],
+  "controlled_profiles": {
+    "initial_exposure_ppm": 500000,
+    "other_bandit_settings": "product defaults",
+    "strong_response_delay_ms": 250,
+    "cheap_response_delay_ms": 5,
+    "strong_token_price_micro_usd": 10,
+    "cheap_and_judge_token_price_micro_usd": 1,
+    "normal_quality_ppm": 950000,
+    "rejected_marker_quality_ppm": 50000,
+    "severe_violation": false,
+    "meaning": "Fixed mechanics labels over recorded ACP evidence, not actual judge calibration or model quality."
+  },
+  "maintained_adapters": [
+    {
+      "package": "@agentclientprotocol/codex-acp",
+      "version": "1.10.0",
+      "worker_package": "@openai/codex",
+      "worker_version": "0.153.4",
+      "trial_sessions": 76,
+      "baseline_trials": 37,
+      "challenger_trials": 39,
+      "good_monitoring_sessions": 1,
+      "low_quality_monitoring_sessions_before_rollback": 7,
+      "restored_baseline_sessions": 1,
+      "gateway_coding_requests": 85,
+      "actual_strong_requests": 38,
+      "actual_cheap_requests": 47,
+      "judge_cost_micro_usd": 2550,
+      "unchanged_retry_added_judge_calls": 0
+    },
+    {
+      "package": "@agentclientprotocol/claude-agent-acp",
+      "version": "0.75.1",
+      "worker_package": "@anthropic-ai/claude-agent-sdk",
+      "worker_version": "0.3.257",
+      "trial_sessions": 112,
+      "baseline_trials": 57,
+      "challenger_trials": 55,
+      "good_monitoring_sessions": 1,
+      "low_quality_monitoring_sessions_before_rollback": 7,
+      "restored_baseline_sessions": 1,
+      "gateway_coding_requests": 363,
+      "actual_strong_requests": 300,
+      "actual_cheap_requests": 63,
+      "judge_cost_micro_usd": 3630,
+      "unchanged_retry_added_judge_calls": 0
+    }
+  ],
+  "regressions": [
+    {
+      "case": "unmeasured challenger starvation",
+      "reproducing_exit_code": 100,
+      "output_sha256": "52f39a9a773d40c885c2166878fec08a1a502c98317837948c53e332efda0a5f",
+      "observed": "One baseline quality .95, cost 300 micro-USD and latency 98 ms observation reduced default 100000 ppm exposure to 20000 ppm.",
+      "fix": "Bounded warm-up preserves previous positive exposure capped at initial until both arms have enough independent metric evidence; existing quality/pending/quota guards still dominate."
+    },
+    {
+      "case": "native prior-scale starvation",
+      "exit_code": 100,
+      "output_sha256": "8ebf2a618c9e16e858e388b701dab93fdf1eb5367856e5f237503122d84d09c3",
+      "observed": "Codex reached 152 baseline sessions and 0 challenger sessions before the 300-second timeout; companion Claude failed an overly strict actual-model assertion because a capability guard retained baseline."
+    },
+    {
+      "case": "promotion recommendation before cohort readiness",
+      "exit_code": 100,
+      "output_sha256": "d7abfda1a6302c1383fabecb0de9c7b7a5111a58b4f2171f0a8f9fa5eb20b8d5",
+      "observed": "Both native workers eventually reached promotion-eligible evidence in an open cohort; repeated reconciliation failed until the evaluation wait expired.",
+      "fix": "Store the validated current plan without adoption, permit the cohort to finish, and enact an already-staged Promote once closed/resolved. Same-evidence different-draw Explore-to-Promote remains deduplicated."
+    }
+  ],
+  "assertions": [
+    "Every challenger/deployed session performs at least one actual cheap dispatch; the only permitted strong fallback carries candidate intent and the explicit request capability guard.",
+    "Closed canonical resource request unions and learner costs equal actual settled native executions, including auxiliary strong calls.",
+    "New adopted monitoring identities are separate and exact; the original trial observation snapshot stays unchanged.",
+    "Quality rollback observes eight independent families and no severe shortcut; the next fresh native session actually dispatches the restored baseline.",
+    "Current learner contracts are required before new trial admission; same-evidence migration refreshes once without restoring reduced exposure, resampling existing sessions or reviving rollback.",
+    "Repeated unchanged scheduling adds no judge requests, charges or publications."
+  ],
+  "historical_data_availability": {
+    "checked_at": "2026-09-09T12:38:01.290620+00:00",
+    "access": "read_only",
+    "database_exists": true,
+    "tables": {
+      "acp_canonical_sessions": "absent",
+      "acp_capture_events": "absent",
+      "trajectory_episodes": 0,
+      "trajectory_events": 0,
+      "trajectory_requests": 0
+    }
+  },
+  "operator_traffic_enrolled": false,
+  "limitations": [
+    "No usable historical ACP dataset, sealed reference review or judge accuracy calibration is available.",
+    "The prior synthetic incorrect-label harmful-adoption result remains unresolved; the large seeded experiment has not been rerun for learner v2.",
+    "Each native result is one controlled campaign with randomized native identities and worker timing, not a seeded quality/cost benchmark.",
+    "Initial native acceptance exposure is 50 percent; default 10 percent warm-up can require substantially more eligible sessions.",
+    "Natural tool workflows, terminal TUI interaction, compaction, forks, reconnects and provider-failure fallback remain separate real-worker acceptance.",
+    "Codex custom aliases that produce assistant-text metadata warnings still prevent first trial enrollment.",
+    "Fixture charges and labels do not establish real model benefit, safe automatic promotion or net savings after judge overhead."
+  ],
+  "source_manifest": {
+    ".config/nextest.toml": "0e6e676d42c5909f372dae36da9082cd6f19eebaa56c7c61578e94fe19851c46",
+    "Cargo.lock": "7a3dada487bda898b19ba4c0f8b76c4795e25e31b4925d9b7854b97f824f0fdb",
+    "apps/bitrouter/Cargo.toml": "9a1e8102154ba9c4b2bab7cebee0664edaf6847464a7e2cd97ab7da18c5d6651",
+    "apps/bitrouter/examples/checkpoint_ts_publication.rs": "758014eaf958d4ca88f6cfd5a51f2ca91dcbe1bb38bac452978358c83c2b49eb",
+    "apps/bitrouter/examples/checkpoint_ts_simulation.rs": "45d32d25e8b83fe5942515baa81d8b69842aaf469aab1d1f7cff03e6fc16985d",
+    "apps/bitrouter/src/acp_cli.rs": "4cbedc7eeb98ada0fccad46f1216d3213c8f2cf50dc1c0cc4d96b42d4f16825d",
+    "apps/bitrouter/src/acp_cli/evolution_acceptance.rs": "5116cc55c263fb8671f5a27d2a068db721b61b0451287d3c63a6eb3ccee389ed",
+    "apps/bitrouter/src/acp_cli/evolution_acceptance/publication.rs": "975c954aed21a752d8884cc3e34495d0bcff1662568420a16ac03cbef51eb501",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/assessment.rs": "da4cbf4a741aac48070ca1ba0d1ac1ef0bd566e5dd909fbb2e84a74befcf031f",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/mod.rs": "4edb9af121cc80e2ee8edc951159b6d3fe5c3a7997cd5751904e400708c00d37",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/resource.rs": "1a222bc64ef26ca607fb619c7e386535ddded623d22a4ad331539c2941358f13",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/resource/coverage.rs": "1be8ae95ba1e9cfd26a890823e3ef19a1e689e4a74913830fb5fee1af0b797df",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/types.rs": "7d6e44f35546361d0fe6240d9be07be6fbce85cb1d7b0d3ae66a2c3daaf86cbe",
+    "apps/bitrouter/src/acp_trajectory/mod.rs": "e99bbfef46f81ba8d6a54fdee72744cc147fde418db43fcfab7ae947090c2e18",
+    "apps/bitrouter/src/actions/code.rs": "2221ddbdcd7647a370239f96a2a2029504d4adbae16173e841067a3d98f6f2b1",
+    "apps/bitrouter/src/actions/code/evolution.rs": "73a770b020a126ed50f6fa38f6ce952a335e67840ce57233c5f0fa1186a522df",
+    "apps/bitrouter/src/actions/code/evolution/candidate.rs": "0f1d7d8a3aba149b9a0b18d34c26f7f4ffe23e90f818696a4b3b855289258db6",
+    "apps/bitrouter/src/actions/code/evolution/manual.rs": "4a27153b2b3e9c81c14aab0a132f10d4ee05dcb68305e0b87682c2f7f5c766d8",
+    "apps/bitrouter/src/actions/code/evolution/tests.rs": "e9742fbcffe12968b4ffaf238d0dc3b208c7877dde1c18106b582a36921a6896",
+    "apps/bitrouter/src/actions/code/evolution/tests/candidates.rs": "8c8eb7885e41781a4fcaf3393904337e125b404b1a870f34c004a386514c981a",
+    "apps/bitrouter/src/assemble.rs": "d295af3385a55f45cd3d0b79c136f759a5904b847e51425e739b8f704c1d1dfc",
+    "apps/bitrouter/src/chat/code.rs": "878eafde1468bc05c1decd4a79189f1193a93959033d14b967bafda5d7059fd3",
+    "apps/bitrouter/src/daemon.rs": "be967aa35ece1c2791efee02c8e1e2897418ad844be1e10bd4c606d29ec6a089",
+    "apps/bitrouter/src/db/migration/m20240101_000020_create_checkpoint_evolution.rs": "d4213d5509356b10fcd2df5aceb3c6162b64e8a794a7f313853482c3761f4747",
+    "apps/bitrouter/src/db/migration/mod.rs": "eb171fbec77d417fd9d7958bc8496d49e2639140b35314ffcbc29b26853457f1",
+    "apps/bitrouter/src/eval/settlement.rs": "49c95c0a771c413a37531420bddc535a36d9887801077fc825d138db101f67aa",
+    "apps/bitrouter/src/evolution/bandit.rs": "537dd9e203d4d04b0219ae3797e7b4b46238f8c8f3ef1b42654aa07bdb0069af",
+    "apps/bitrouter/src/evolution/catalog.rs": "aa3ccc6c929b5fcc2b37452c3e3a2a4385607326032efd011ddd02c03308db25",
+    "apps/bitrouter/src/evolution/control.rs": "8e9a0cf94c9195a1831d5d0b417cd71632ee52b503b93e70876d00dd0a99d9a0",
+    "apps/bitrouter/src/evolution/control/revisions.rs": "cf4cabd23497541acb9bcea793650456c760c9a8ca83af9a21f82f208471af6e",
+    "apps/bitrouter/src/evolution/costs.rs": "2ab3adff9351848b415c3d3c88e045104c34294f42c699d2a1c1ba859893df29",
+    "apps/bitrouter/src/evolution/costs/report.rs": "d408705821039e5faec5413c774f4f3f3544dd4521e27fe97de0aa6f9db3b214",
+    "apps/bitrouter/src/evolution/costs/tests.rs": "1d6e8dd57eecc7bfb3a3cf9a55fcfc5339f2ede054936d566b96a86aabaed461",
+    "apps/bitrouter/src/evolution/evidence.rs": "dbcff57ad7798242a3d2fc80919b5efe14dd124c084aee360b60c28454fcc9af",
+    "apps/bitrouter/src/evolution/inventory.rs": "aa5717006f19ee50f3d92035994fbe196b8627138b1b8d4c334188ecfc5e675e",
+    "apps/bitrouter/src/evolution/jobs.rs": "dc3268cba3de317dd21f431ca3b1a0951248e78b9c5cb24ebeba947c33a3bdcf",
+    "apps/bitrouter/src/evolution/jobs/tests.rs": "ddf529e52ff40a31f0dbaea925a77f4978f68aa174a4a58b77703c3a56865a87",
+    "apps/bitrouter/src/evolution/judge.rs": "471f89496e0202821fa501fff5e0238eb9f9f9b7aee43d5ca5af37aaee7539e2",
+    "apps/bitrouter/src/evolution/learning.rs": "a1e54a148f445f0e29faa79704e8e7229b33f2734a1a87d35c750235fc1145a5",
+    "apps/bitrouter/src/evolution/learning/tests.rs": "a128580a50f3ab493c08ddfeb76ee042d3acd5bebbda632d24aff5d34f639943",
+    "apps/bitrouter/src/evolution/mod.rs": "0705245118a9efe63050509fb141185197c1209c838d3e31bfe0cdd48f17618c",
+    "apps/bitrouter/src/evolution/operator.rs": "bc6b0b36ee51c1b9876bd4e3a29e67d835483422c862f99c8e4e1743d43b916e",
+    "apps/bitrouter/src/evolution/operator/checkpoint.rs": "66b29f854ddbd9b4dc3c13cb22d4ebddd4875525ebb30e9957cf93b71fbd4164",
+    "apps/bitrouter/src/evolution/rubric.rs": "dd276a7a5195cbc85b6a3e391414f7496a1c8c928991c318d379f8ae416bab46",
+    "apps/bitrouter/src/evolution/runtime.rs": "afa03f757fc164378e4a5dd4e3fba56672645f144f4bbb5c9ae21c6884567f8a",
+    "apps/bitrouter/src/evolution/runtime/candidates.rs": "73ff3411fe3bf3fce5a67db371d0e424a3b2ec2cb4d53509053d0a87271fb9c8",
+    "apps/bitrouter/src/evolution/runtime/tests.rs": "eb6d96e17bbfd7625f6c543bc001c36aecb14de8234992cbc9a48873e5ad3ca2",
+    "apps/bitrouter/src/evolution/runtime/tests/execution_guards.rs": "35ecf51d64f4cf2589e090b34ff890be087c477b4462af5b53130a713ee3f3a9",
+    "apps/bitrouter/src/evolution/runtime/tests/judge_costs.rs": "1727671d18ffe6d9ed5ff6a2b4f45e098074a40ef3139dde28da891922400bad",
+    "apps/bitrouter/src/evolution/runtime/tests/resource_coverage.rs": "f56928a3ff5744e9b89667999ea1c71d89c7202d742cb6f6003c8fb9f5631ce9",
+    "apps/bitrouter/src/evolution/runtime/tests/revisions.rs": "1bb1a8722c93475324308574fa26d0c1f9c9f546e6607c196d53b8b3cdf193d5",
+    "apps/bitrouter/src/evolution/scheduler.rs": "2aa5d3dcc170aaffe02e928eeae3bef03d354aad452875915729f56213363ba3",
+    "apps/bitrouter/src/evolution/scheduler/tests.rs": "8a567600445ac2180a2f8ce1fd006c2114442e38f4c3d5b0bffed9686b38131d",
+    "apps/bitrouter/src/evolution/scoring.rs": "7a331a76f36655c572925610e9d0182700c96313ceb6de3e81e2b92be9d8aee5",
+    "apps/bitrouter/src/evolution/service.rs": "b93145863029c98fbffdbd4788940d388fb55681cb97cc13556946a0f4187dad",
+    "apps/bitrouter/src/evolution/service/revisions.rs": "0ff3116f7a17c9c7856938ae1241fd70da9a48a14e48cb490875ab8c4a825a4b",
+    "apps/bitrouter/src/evolution/service/tests.rs": "d28cd5cefe3dabc2304e296f706c79aa62862c8162be641ee1645abb5b180fba",
+    "apps/bitrouter/src/evolution/service/tests/revisions.rs": "f195dc616d3dd952ce010b506f5f4f5ad7d042966e81c331b03abd1f8813ca20",
+    "apps/bitrouter/src/evolution/store.rs": "090b0febb883b6ec0598866187f74b5a98822cea644017964fdc5d3df3cdf922",
+    "apps/bitrouter/src/evolution/tests.rs": "fe53a2beda7779641c3045315c198d958d40f09b4657bf27ad961d56946cd797",
+    "apps/bitrouter/src/lib.rs": "58ca0d42d3f2bd69d29886b72564c425d9dfc9b2d84c0ae36c10adb40d16f692",
+    "apps/bitrouter/src/main.rs": "439d30db37f71f94a34b8de638144d91bc4ce20c96efe7daa0667bf1e1a72f91",
+    "apps/bitrouter/src/metering/recorder.rs": "91e2ca64eabe03e745b2ef135639c3cf980ecb3c160d555ce96fa5938eb9ef26",
+    "apps/bitrouter/src/policy_lock.rs": "82f3dc95970766c0813312dc5c861e37a03316d37eb099fb5ec2540db18e087d",
+    "apps/bitrouter/tests/daemon.rs": "ccbc07b92951af0da6c999211119c374226ea8cb35623dc41c520628b97eef58",
+    "crates/bitrouter-sdk/src/config/routing_table.rs": "93410732f6ea5ecf768ad03b6e4d1cb4dcd9fe317096a324bfa866db2788e257",
+    "crates/bitrouter-sdk/src/language_model/server_tools/loop_controller.rs": "f5aa79106ddcf843af0ebc0e894c23547990ef6870ac51ddf45bdf8492b54488",
+    "crates/bitrouter-sdk/src/language_model/server_tools/stream.rs": "5e02c40e1cfa0c2b9a3ab1f1e687ce2f74b7cf353b9d577e28c9ffc2af2ab473",
+    "crates/bitrouter-tui/src/code.rs": "09731f263196b553b1e2283c9db23a5275d6501357651ad9f8a89dc253dcf71e"
+  },
+  "documentation_manifest": {
+    "docs/ACP_CHECKPOINT_SPEC.md": "143984dbac264eea3390f4f7c2a33aa587df80db5eee58c899a72a12f278fdec",
+    "docs/ACP_EVOLUTION_SPEC.md": "ccda08fb7d09a449b34d3d5aa50db0719706f80bb4f5bb036ab39f21e27f806e",
+    "docs/ACP_EVOLUTION_EXPERIMENTS.md": "ea2f97d698f336e4ad6a3e547f309a4484463cc0645d55f901ce5be2cf869fb2",
+    "docs/CLI.md": "a512750a1918369d43358add2176658d337b77d74cb1024ddd80adac019a424d",
+    "skills/bitrouter/references/sessions.md": "ca3a5a9a7c89789aab1cf9574a0aa4c40759a269d9df8e63b812b3be01c20fdc"
+  }
+}

@@ -11,6 +11,7 @@
 //!   declares is a clean 404.
 
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 
@@ -18,14 +19,53 @@ use crate::caller::CallerContext;
 use crate::config::{Config, presets::resolve_presets};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
+use crate::language_model::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
 use crate::language_model::types::{ApiProtocol, RoutingTarget};
+
+fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
+    let base = UsagePricingBracket {
+        input_micro_usd_per_token: pricing.input_micro_usd_per_token,
+        cache_read_micro_usd_per_token: pricing.cache_read_micro_usd_per_token,
+        cache_write_micro_usd_per_token: pricing.cache_write_micro_usd_per_token,
+        output_micro_usd_per_token: pricing.output_micro_usd_per_token,
+        reasoning_output_micro_usd_per_token: None,
+    };
+    let context_tiers = pricing
+        .context_tiers
+        .iter()
+        .map(|tier| UsagePricingTier {
+            above_input_tokens: tier.above_input_tokens,
+            bracket: UsagePricingBracket {
+                input_micro_usd_per_token: tier
+                    .input_micro_usd_per_token
+                    .or(base.input_micro_usd_per_token),
+                cache_read_micro_usd_per_token: tier
+                    .cache_read_micro_usd_per_token
+                    .or(base.cache_read_micro_usd_per_token),
+                cache_write_micro_usd_per_token: tier
+                    .cache_write_micro_usd_per_token
+                    .or(base.cache_write_micro_usd_per_token),
+                output_micro_usd_per_token: tier
+                    .output_micro_usd_per_token
+                    .or(base.output_micro_usd_per_token),
+                reasoning_output_micro_usd_per_token: None,
+            },
+        })
+        .collect();
+    UsagePricing {
+        base,
+        context_tiers,
+    }
+}
 
 /// A `RoutingTable` over an in-memory `bitrouter.yaml` config. Reloadable.
 pub struct ConfigRoutingTable {
     config: RwLock<Config>,
+    /// Advances under the config write lock, including A -> B -> A reloads.
+    generation: AtomicU64,
     /// The path the config was loaded from, for `reload()`.
     path: Option<std::path::PathBuf>,
-    /// Serialises `reload()` against itself. SIGHUP + `bitrouter reload`
+    /// Serialises `reload()` against itself. SIGHUP + `bro reload`
     /// arriving close together used to race: each call did its own
     /// `load + discover_models` then wrote the result, last writer wins.
     /// Now we hold this mutex for the full reload sequence.
@@ -37,6 +77,7 @@ impl ConfigRoutingTable {
     pub fn from_config(config: Config) -> Self {
         Self {
             config: RwLock::new(config),
+            generation: AtomicU64::new(0),
             path: None,
             reload_lock: tokio::sync::Mutex::new(()),
         }
@@ -49,6 +90,7 @@ impl ConfigRoutingTable {
     pub fn from_config_with_path(config: Config, path: impl Into<std::path::PathBuf>) -> Self {
         Self {
             config: RwLock::new(config),
+            generation: AtomicU64::new(0),
             path: Some(path.into()),
             reload_lock: tokio::sync::Mutex::new(()),
         }
@@ -60,6 +102,7 @@ impl ConfigRoutingTable {
         let config = crate::config::load(&path).await?;
         Ok(Self {
             config: RwLock::new(config),
+            generation: AtomicU64::new(0),
             path: Some(path),
             reload_lock: tokio::sync::Mutex::new(()),
         })
@@ -69,6 +112,28 @@ impl ConfigRoutingTable {
     /// test to assert the table adopted a hot-reloaded config.
     pub fn snapshot_config(&self) -> Config {
         self.config.read().expect("config lock poisoned").clone()
+    }
+
+    /// Capture configuration and its process-local generation together. App
+    /// controllers can validate dependencies before selection, then fence a
+    /// reload before dispatch without serializing credentials into a digest.
+    pub fn versioned_snapshot(&self) -> (u64, Config) {
+        let config = match self.config.read() {
+            Ok(config) => config,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        (self.generation.load(Ordering::Relaxed), config.clone())
+    }
+
+    /// Read the generation at the same synchronization boundary as routing.
+    /// A matching value only fences work through this check; the caller must
+    /// dispatch an already resolved chain after checking it.
+    pub fn generation(&self) -> u64 {
+        let _config = match self.config.read() {
+            Ok(config) => config,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        self.generation.load(Ordering::Relaxed)
     }
 
     /// Swap the table's `Config` for `fresh`, running model discovery
@@ -82,7 +147,34 @@ impl ConfigRoutingTable {
         let _guard = self.reload_lock.lock().await;
         let mut fresh = fresh;
         crate::config::discover_models(&mut fresh).await;
-        *self.config.write().expect("config lock poisoned") = fresh;
+        self.replace_prepared_config_locked(fresh)?;
+        Ok(())
+    }
+
+    /// Swap a configuration whose model discovery has already completed.
+    ///
+    /// The app reload coordinator prepares provider discovery alongside every
+    /// other reload participant before it mutates live state. This entry point
+    /// preserves that prepared-candidate boundary while retaining the routing
+    /// table's own serialization with callers outside that coordinator.
+    pub async fn replace_prepared_config(&self, fresh: Config) -> Result<()> {
+        let _guard = self.reload_lock.lock().await;
+        self.replace_prepared_config_locked(fresh)?;
+        Ok(())
+    }
+
+    fn replace_prepared_config_locked(&self, fresh: Config) -> Result<()> {
+        let mut current = match self.config.write() {
+            Ok(current) => current,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let next = self
+            .generation
+            .load(Ordering::Relaxed)
+            .checked_add(1)
+            .ok_or_else(|| BitrouterError::internal("routing generation overflow"))?;
+        *current = fresh;
+        self.generation.store(next, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -101,7 +193,7 @@ fn build_targets(
     provider: &crate::config::ProviderConfig,
     model_id: &str,
     inbound: Option<&ApiProtocol>,
-) -> Vec<RoutingTarget> {
+) -> Result<Vec<RoutingTarget>> {
     // Protocol-native routing: prefer the inbound protocol when this upstream
     // supports it (a faithful same-protocol round-trip), else the provider's
     // configured default head.
@@ -134,12 +226,13 @@ fn build_targets(
     let reasoning_effort = provider
         .model_config(model_id)
         .and_then(|model| model.reasoning_effort.clone());
+    let headers = provider.outbound_headers()?;
 
     if provider.accounts.is_empty() {
         let api_base = protocol_base
             .map(str::to_string)
             .unwrap_or_else(|| provider.api_base.clone());
-        return vec![RoutingTarget {
+        return Ok(vec![RoutingTarget {
             provider_name: provider_id.to_string(),
             service_id: service_id.to_string(),
             api_base,
@@ -153,7 +246,8 @@ fn build_targets(
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
-        }];
+            headers,
+        }]);
     }
 
     let n = provider.accounts.len();
@@ -161,7 +255,7 @@ fn build_targets(
         crate::config::AccountStrategy::Failover => 0,
         crate::config::AccountStrategy::Balance => balance_offset(provider_id, n),
     };
-    (0..n)
+    Ok((0..n)
         .map(|i| {
             let idx = (i + offset) % n;
             let account = &provider.accounts[idx];
@@ -194,9 +288,10 @@ fn build_targets(
                 api_key_override: None,
                 api_base_override: None,
                 auth_scheme: Default::default(),
+                headers: headers.clone(),
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Pick the wire protocol for a target: the inbound protocol when the upstream
@@ -304,7 +399,7 @@ fn resolve_virtual_model(
                 provider,
                 &endpoint.service_id,
                 prefs.inbound_protocol.as_ref(),
-            ),
+            )?,
         ));
     }
 
@@ -358,12 +453,12 @@ fn resolve_clean_route_chain(
         && let Some(provider) = config.providers.get(provider_id)
         && provider.active
     {
-        return Ok(build_targets(
+        return build_targets(
             provider_id,
             provider,
             model_id,
             prefs.inbound_protocol.as_ref(),
-        ));
+        );
     }
 
     // ---- Strategy 2: explicit virtual model ----
@@ -399,14 +494,7 @@ fn resolve_clean_route_chain(
         // route (including the ingress transform for genuine Claude Code traffic).
         // A bare Claude request therefore reaches the pay-as-you-go provider (or
         // 404), never the subscription.
-        if matches!(
-            provider.class,
-            Some(
-                crate::config::ProviderClass::FirstPartySubscription
-                    | crate::config::ProviderClass::GatewaySubscription
-            )
-        ) && !prefs.only.contains(provider_id)
-        {
+        if provider_requires_pin(provider) && !prefs.only.contains(provider_id) {
             continue;
         }
         if provider.models.iter().any(|m| m.id == clean) {
@@ -418,7 +506,7 @@ fn resolve_clean_route_chain(
                     provider,
                     clean,
                     prefs.inbound_protocol.as_ref(),
-                ),
+                )?,
             ));
         }
     }
@@ -461,6 +549,22 @@ fn resolve_clean_route_chain(
     Ok(chain.into_iter().flat_map(|(_, _, t)| t).collect())
 }
 
+/// Whether a provider may only be selected explicitly.
+///
+/// Subscription-backed providers use the caller's personal plan, so a bare
+/// canonical selector must never choose one implicitly. Keeping this predicate
+/// shared by route resolution and model listing prevents the catalog from
+/// advertising a bare selector that routing will reject.
+fn provider_requires_pin(provider: &crate::config::ProviderConfig) -> bool {
+    matches!(
+        provider.class,
+        Some(
+            crate::config::ProviderClass::FirstPartySubscription
+                | crate::config::ProviderClass::GatewaySubscription
+        )
+    )
+}
+
 /// The auto-cascade priority rank of a provider (lower = preferred). An
 /// explicit [`ProviderConfig::priority`] wins; otherwise the provider's
 /// [`class`](crate::config::ProviderConfig::class) is ranked by its position in
@@ -496,7 +600,10 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
             })
             .collect();
     }
-    // Otherwise: the de-duplicated union of every active provider's models.
+    // Otherwise: the de-duplicated union of every active provider's routable
+    // selectors. Subscription providers are explicit-route-only, so expose a
+    // `provider:canonical-model` selector for them instead of placing them
+    // behind a bare canonical selector that Strategy 3 intentionally skips.
     let mut by_model: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     for (provider_id, provider) in &config.providers {
@@ -504,8 +611,13 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
             continue;
         }
         for model in &provider.models {
+            let selector = if provider_requires_pin(provider) {
+                format!("{provider_id}:{}", model.id)
+            } else {
+                model.id.clone()
+            };
             by_model
-                .entry(model.id.clone())
+                .entry(selector)
                 .or_default()
                 .push(provider_id.clone());
         }
@@ -558,6 +670,34 @@ impl RoutingTable for ConfigRoutingTable {
         resolve_clean_route_chain(&config, model, prefs)
     }
 
+    fn usage_pricing(&self, _model: &str, target: &RoutingTarget) -> Option<UsagePricing> {
+        let config = self.config.read().expect("config lock poisoned");
+        config
+            .providers
+            .get(&target.provider_name)?
+            .model_config(&target.service_id)?
+            .pricing
+            .as_ref()
+            .map(usage_pricing)
+    }
+
+    fn canonical_model_id(&self, model: &str, target: &RoutingTarget) -> Option<String> {
+        let config = self.config.read().expect("config lock poisoned");
+        let provider = config.providers.get(&target.provider_name)?;
+        provider
+            .models
+            .iter()
+            .find(|candidate| {
+                candidate
+                    .provider_model_id
+                    .as_deref()
+                    .unwrap_or(&candidate.id)
+                    == target.service_id
+            })
+            .map(|candidate| candidate.id.clone())
+            .or_else(|| Some(model.to_owned()))
+    }
+
     fn list_models(&self) -> Vec<ModelInfo> {
         let config = self.config.read().expect("config lock poisoned");
         list_models_for(&config)
@@ -581,7 +721,7 @@ impl RoutingTable for ConfigRoutingTable {
         // WARN; they do not abort the reload — same policy as the initial
         // assembly path.
         crate::config::discover_models(&mut fresh).await;
-        *self.config.write().expect("config lock poisoned") = fresh;
+        self.replace_prepared_config_locked(fresh)?;
         Ok(())
     }
 
@@ -823,6 +963,78 @@ providers:
                 .collect::<Vec<_>>(),
             vec!["claude-code"]
         );
+    }
+
+    #[tokio::test]
+    async fn model_catalog_exposes_only_selectors_that_route() -> crate::Result<()> {
+        let t = table(SUBSCRIPTION_CASCADE);
+        let models = t.list_models();
+
+        assert_eq!(
+            models,
+            vec![
+                ModelInfo {
+                    id: "claude-code:shared-model".to_string(),
+                    providers: vec!["claude-code".to_string()],
+                },
+                ModelInfo {
+                    id: "shared-model".to_string(),
+                    providers: vec!["anthropic".to_string()],
+                },
+            ],
+            "the bare selector must not claim an explicit-only provider"
+        );
+
+        for model in models {
+            let chain = t
+                .route_chain(&model.id, &RoutingPrefs::default(), &CallerContext::local())
+                .await?;
+            assert_eq!(
+                chain
+                    .iter()
+                    .map(|target| target.provider_name.as_str())
+                    .collect::<Vec<_>>(),
+                model
+                    .providers
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                "listed selector {} must preview to its advertised chain",
+                model.id
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn subscription_selector_keeps_canonical_id_and_maps_native_id() -> crate::Result<()> {
+        let t = table(
+            r#"
+providers:
+  openai-codex:
+    api_base: https://chatgpt.com/backend-api/codex
+    api_key: subscription
+    class: first-party-subscription
+    models:
+      - id: openai/gpt-5.6-sol
+        provider_model_id: gpt-5.6-sol
+"#,
+        );
+        let models = t.list_models();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "openai-codex:openai/gpt-5.6-sol");
+
+        let chain = t
+            .route_chain(
+                &models[0].id,
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await?;
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].provider_name, "openai-codex");
+        assert_eq!(chain[0].service_id, "gpt-5.6-sol");
+        Ok(())
     }
 
     #[tokio::test]
@@ -1626,6 +1838,11 @@ providers:
         assert_eq!(chain[0].provider_name, "anthropic");
         // Dispatched against the upstream id, not the canonical match key.
         assert_eq!(chain[0].service_id, "claude-sonnet-4-6");
+        assert_eq!(
+            t.canonical_model_id("anthropic/claude-sonnet-4.6", &chain[0])
+                .as_deref(),
+            Some("anthropic/claude-sonnet-4.6")
+        );
     }
 
     #[tokio::test]

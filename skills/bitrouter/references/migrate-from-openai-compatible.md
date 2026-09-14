@@ -12,7 +12,7 @@ The simplest case. If `OPENAI_API_KEY` is in your environment, no config file is
 
 ```bash
 export OPENAI_API_KEY=sk-...
-bitrouter start
+bro start
 ```
 
 ```python
@@ -119,10 +119,10 @@ The Anthropic SDK works too if you happen to call Claude models — point it at 
 ## Verify
 
 ```bash
-bitrouter start
-bitrouter providers list                  # all the providers you added should be active
-bitrouter models                          # routable surface
-bitrouter route azure/gpt-4o              # whatever id you expect
+bro start
+bro providers list                  # all the providers you added should be active
+bro models                          # routable surface
+bro route azure/gpt-4o              # whatever id you expect
 
 curl http://localhost:4356/v1/chat/completions \
   -H "Content-Type: application/json" \

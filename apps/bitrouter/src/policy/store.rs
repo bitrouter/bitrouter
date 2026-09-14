@@ -24,6 +24,13 @@ pub struct PolicyStore {
     path: RwLock<Option<PathBuf>>,
 }
 
+/// Policies read and validated from disk but not yet installed in the live
+/// store. The reload coordinator prepares this before it changes any other
+/// runtime participant.
+pub(crate) struct PreparedPolicyStore {
+    policies: HashMap<String, Policy>,
+}
+
 impl PolicyStore {
     /// An empty store.
     pub fn new() -> Self {
@@ -57,12 +64,38 @@ impl PolicyStore {
     /// no-op for stores not built from a directory. The new set REPLACES the
     /// old set (a deleted yaml file → that policy is gone).
     pub async fn reload(&self) -> Result<()> {
-        let dir = self.path.read().expect("policy lock poisoned").clone();
-        let Some(dir) = dir else {
+        let Some(prepared) = self.prepare_reload().await? else {
             return Ok(());
         };
-        let fresh = scan_policy_dir(&dir).await?;
-        *self.policies.write().expect("policy lock poisoned") = fresh;
+        self.commit_prepared(prepared)
+    }
+
+    /// Read a complete replacement policy set without altering the live store.
+    /// `None` means this in-memory store has no source directory and therefore
+    /// has no reload work.
+    pub(crate) async fn prepare_reload(&self) -> Result<Option<PreparedPolicyStore>> {
+        let dir = match self.path.read() {
+            Ok(path) => path.clone(),
+            Err(_) => {
+                return Err(BitrouterError::internal(
+                    "reading policy reload source failed",
+                ));
+            }
+        };
+        let Some(dir) = dir else {
+            return Ok(None);
+        };
+        let policies = scan_policy_dir(&dir).await?;
+        Ok(Some(PreparedPolicyStore { policies }))
+    }
+
+    /// Install an already prepared replacement policy set.
+    pub(crate) fn commit_prepared(&self, prepared: PreparedPolicyStore) -> Result<()> {
+        let mut policies = self
+            .policies
+            .write()
+            .map_err(|_| BitrouterError::internal("installing reloaded policies failed"))?;
+        *policies = prepared.policies;
         Ok(())
     }
 

@@ -14,6 +14,7 @@ use bitrouter_sdk::config::{
     AdequacyConfig, Config, PolicyKeyStrategy, PolicyModelTarget, PolicyRuntimeMode,
     PolicyTableConfig, TrajectoryConfig, validate_policy_table_config,
 };
+use bitrouter_sdk::invocation;
 #[cfg(test)]
 use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, RouteHook, RoutingTarget};
@@ -988,7 +989,9 @@ pub fn verify_legacy_migration(
         .map(|migration| migration.legacy_adequacy_digest.as_str());
     if migrated != Some(actual.as_str()) {
         anyhow::bail!(
-            "adaptive policy startup found unsealed legacy learned state; run `bitrouter policy compile --output policy-candidate.yaml` and publish the candidate"
+            "adaptive policy startup found unsealed legacy learned state; run `{} policy \
+             compile --output policy-candidate.yaml` and publish the candidate",
+            invocation::name()
         );
     }
     Ok(())
@@ -1976,9 +1979,9 @@ fn embedded_catalog_supports_capability(
     model_id: &str,
     capability: bitrouter_sdk::language_model::types::Capability,
 ) -> bool {
-    let Ok(catalog) = serde_json::from_str::<serde_json::Value>(include_str!(
-        "../../../dist/registry/models.json"
-    )) else {
+    let Ok(catalog) =
+        serde_json::from_str::<serde_json::Value>(include_str!("../registry-dist/models.json"))
+    else {
         return false;
     };
     catalog
@@ -2315,7 +2318,9 @@ pub async fn evolve_files(config_path: &Path, apply: bool) -> Result<PolicyFileU
     if apply {
         if !update.conflicts.is_empty() {
             anyhow::bail!(
-                "compiled policy has unresolved conflicts; inspect `bitrouter policy compile` before applying"
+                "compiled policy has unresolved conflicts; inspect `{} policy compile` before \
+                 applying",
+                invocation::name()
             );
         }
         let loaded = load_for_config(&config, Some(config_path))
@@ -2718,6 +2723,19 @@ struct PolicySnapshot {
     path: Option<PathBuf>,
     digest: Option<String>,
     routers: BTreeMap<String, Arc<PolicyTableRouter>>,
+    administration: Option<crate::actions::administration::PolicyReport>,
+    document: Option<PolicyLock>,
+}
+
+/// Exact live policy input retained while an evolution admission is prepared.
+/// This exposes the in-memory version; reading a newer file from disk would
+/// incorrectly validate a candidate against policy state that is not serving.
+pub(crate) struct PolicyRoutingSnapshot(Arc<PolicySnapshot>);
+
+impl PolicyRoutingSnapshot {
+    pub(crate) fn document(&self) -> Option<&PolicyLock> {
+        self.0.document.as_ref()
+    }
 }
 
 /// Fully built policy candidate that has not yet replaced the live snapshot.
@@ -2868,7 +2886,13 @@ impl PolicyRuntime {
         Ok(PreparedPolicySnapshot(Arc::new(PolicySnapshot {
             path: loaded.as_ref().map(|lock| lock.path.clone()),
             digest: loaded.as_ref().map(|lock| lock.digest.clone()),
+            document: loaded.as_ref().map(|lock| lock.document.clone()),
             routers,
+            administration: Some(crate::actions::administration::PolicyReport::from_loaded(
+                config,
+                loaded.as_ref(),
+                crate::actions::administration::PolicyView::Active,
+            )),
         })))
     }
 
@@ -2877,6 +2901,34 @@ impl PolicyRuntime {
             .snapshot
             .write()
             .unwrap_or_else(PoisonError::into_inner) = prepared.0;
+    }
+
+    pub(crate) fn routing_snapshot(&self) -> PolicyRoutingSnapshot {
+        let snapshot = match self.snapshot.read() {
+            Ok(snapshot) => snapshot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        PolicyRoutingSnapshot(snapshot)
+    }
+
+    pub(crate) fn matches_routing_snapshot(&self, expected: &PolicyRoutingSnapshot) -> bool {
+        let current = self.routing_snapshot();
+        Arc::ptr_eq(&current.0, &expected.0)
+    }
+
+    /// Inspection data captured with the same policy version used for routing.
+    pub fn administration_snapshot(&self) -> crate::actions::administration::PolicyReport {
+        let snapshot = match self.snapshot.read() {
+            Ok(snapshot) => snapshot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        snapshot.administration.clone().unwrap_or_else(|| {
+            crate::actions::administration::PolicyReport::from_loaded(
+                &Config::default(),
+                None,
+                crate::actions::administration::PolicyView::Active,
+            )
+        })
     }
 
     pub fn status(&self, mode: PolicyRuntimeMode) -> PolicyRuntimeStatus {
@@ -3753,7 +3805,7 @@ certificates:
         assert!(
             result
                 .err()
-                .is_some_and(|error| { error.to_string().contains("bitrouter policy compile") })
+                .is_some_and(|error| { error.to_string().contains("bro policy compile") })
         );
     }
 

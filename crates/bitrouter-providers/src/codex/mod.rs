@@ -2,7 +2,7 @@
 //!
 //! Distinct from the `openai` provider: this targets
 //! `chatgpt.com/backend-api/codex` (Responses-only) using an OAuth access
-//! token minted by the `bitrouter providers login openai-codex` flow against
+//! token minted by the `bro providers login openai-codex` flow against
 //! `auth.openai.com`. The ChatGPT subscription credential does **not**
 //! authenticate to `api.openai.com`, so a separate provider id is the
 //! cleanest model.
@@ -158,7 +158,8 @@ impl OpenAiCodexAuthApplier {
                 status: 401,
                 message: format!(
                     "no openai-codex credential for label '{label}' — \
-                     run `bitrouter providers login openai-codex`"
+                     run `{cli} providers login openai-codex`",
+                    cli = bitrouter_sdk::invocation::name()
                 ),
             })?;
         let token = stored
@@ -223,7 +224,8 @@ impl OpenAiCodexAuthApplier {
                 status: 401,
                 message: format!(
                     "no openai-codex credential for label '{label}' — \
-                     run `bitrouter providers login openai-codex`"
+                     run `{cli} providers login openai-codex`",
+                    cli = bitrouter_sdk::invocation::name()
                 ),
             })?;
         let token = stored
@@ -290,8 +292,10 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
         AuthCodeError::OAuthError { error, description } => BitrouterError::Upstream {
             status: 401,
             message: format!(
-                "openai-codex OAuth refresh failed ({error}{}). Re-run `bitrouter providers login openai-codex`.",
-                description.map(|d| format!(": {d}")).unwrap_or_default()
+                "openai-codex OAuth refresh failed ({error}{}). Re-run `{cli} providers login \
+                 openai-codex`.",
+                description.map(|d| format!(": {d}")).unwrap_or_default(),
+                cli = bitrouter_sdk::invocation::name()
             ),
         },
         other => BitrouterError::Upstream {
@@ -663,6 +667,33 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn routed_codex_input_tools_reach_the_subscription_backend() -> Result<()> {
+        use bitrouter_sdk::language_model::protocol::responses::ResponsesAdapter;
+        use bitrouter_sdk::language_model::protocol::{InboundAdapter, OutboundAdapter};
+
+        let declarations = serde_json::json!([{
+            "type": "namespace", "name": "functions", "tools": [{
+                "type": "custom", "name": "exec", "description": "Read workspace files",
+                "format": {"type": "text"}
+            }]
+        }]);
+        let adapter = ResponsesAdapter;
+        let prompt = adapter.parse_request(serde_json::json!({
+            "model": "m",
+            "input": [
+                {"type": "additional_tools", "role": "developer", "tools": declarations},
+                {"role": "user", "content": "Read README.md"}
+            ]
+        }))?;
+        let mut body = adapter.render_request(&prompt)?;
+        shape_codex_responses_body(&mut body);
+        assert_eq!(body["input"][0]["type"], "additional_tools");
+        assert_eq!(body["input"][0]["tools"], declarations);
+        assert_eq!(body["input"][1]["content"][0]["text"], "Read README.md");
+        Ok(())
+    }
+
     fn tmp_store_path() -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -689,6 +720,7 @@ mod tests {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            headers: Vec::new(),
         }
     }
 
@@ -796,7 +828,7 @@ mod tests {
         let err = applier.apply(req, &codex_target(None)).await.unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("bitrouter providers login openai-codex"),
+            msg.contains("bro providers login openai-codex"),
             "expected helpful hint, got: {msg}"
         );
     }

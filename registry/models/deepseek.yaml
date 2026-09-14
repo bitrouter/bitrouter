@@ -13,6 +13,7 @@
   open_weights: true
   family: deepseek
 - id: deepseek/deepseek-v4-flash
+  deprecation_date: 2026-10-14
   name: 'DeepSeek: DeepSeek V4 Flash'
   input_modalities:
   - text
@@ -27,6 +28,7 @@
 # Official release: https://api-docs.deepseek.com/updates/#date-2026-07-31
 # Limits: https://api-docs.deepseek.com/quick_start/pricing
 - id: deepseek/deepseek-v4-flash-0731
+  deprecation_date: 2026-10-14
   name: 'DeepSeek: DeepSeek V4 Flash 0731'
   description: Official DeepSeek V4 Flash release with enhanced agentic capabilities.
   input_modalities:
@@ -40,6 +42,7 @@
   open_weights: true
   family: deepseek-flash
 - id: deepseek/deepseek-v4-pro
+  deprecation_date: 2026-10-14
   name: 'DeepSeek: DeepSeek V4 Pro'
   input_modalities:
   - text
@@ -53,6 +56,7 @@
   family: deepseek-thinking
 # Official model version and limits: https://api-docs.deepseek.com/quick_start/pricing
 - id: deepseek/deepseek-v4-pro-0813
+  deprecation_date: 2026-10-14
   name: 'DeepSeek: DeepSeek V4 Pro 0813'
   description: Generally available DeepSeek V4 Pro release for advanced reasoning, coding, and agentic workloads.
   input_modalities:
@@ -64,3 +68,13 @@
   release_date: 2026-08-13
   open_weights: false
   family: deepseek-thinking
+- id: deepseek/deepseek-v4.1-flash
+  name: 'DeepSeek: DeepSeek V4.1 Flash'
+  input_modalities:
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 384000
+  release_date: 2026-09-10

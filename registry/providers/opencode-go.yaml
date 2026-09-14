@@ -77,6 +77,8 @@ models:
     provider_model_id: grok-4.6
   - id: qwen/qwen3.8-flash
     provider_model_id: qwen3.8-flash
+  - id: deepseek/deepseek-v4.1-flash
+    provider_model_id: deepseek-v4.1-flash
 status: active
 auto_sync:
   feed: models_dev

@@ -1,0 +1,29 @@
+{
+  "env": [
+    [
+      "OPENCODE_CONFIG",
+      "{root}/opencode.json"
+    ]
+  ],
+  "args": [],
+  "file": "opencode.json",
+  "config": {
+    "$schema": "https://opencode.ai/config.json",
+    "provider": {
+      "bitrouter": {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "BitRouter",
+        "options": {
+          "baseURL": "http://127.0.0.1:4356/v1",
+          "apiKey": "brk_test"
+        },
+        "models": {
+          "a/one": {},
+          "b/two": {},
+          "extra/model": {}
+        }
+      }
+    },
+    "model": "bitrouter/extra/model"
+  }
+}

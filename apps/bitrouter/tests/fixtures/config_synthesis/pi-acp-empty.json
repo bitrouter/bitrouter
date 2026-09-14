@@ -1,0 +1,21 @@
+{
+  "env": [
+    [
+      "PI_CODING_AGENT_DIR",
+      "{root}/pi-agent"
+    ]
+  ],
+  "args": [],
+  "file": "models.json",
+  "config": {
+    "providers": {
+      "bitrouter": {
+        "name": "BitRouter",
+        "baseUrl": "http://127.0.0.1:4356/v1",
+        "api": "openai-completions",
+        "apiKey": "brk_test",
+        "models": []
+      }
+    }
+  }
+}

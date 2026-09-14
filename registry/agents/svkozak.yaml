@@ -1,0 +1,40 @@
+# VERIFY BEFORE ACTIVATING — the local runtime pins this adapter at `@latest`
+# (see registry/runtimes/local.yaml).
+- id: pi-acp
+  name: pi-acp
+  description: pi coding agent via `pi-acp` (needs `pi` on PATH)
+  project_url: https://github.com/svkozak/pi-acp
+  package_marker: pi-acp
+  interactive_binary: pi
+  acp:
+    protocol_version: 1
+  # pi has no base-URL env var, so routing synthesizes a `models.json` in a
+  # per-launch dir and points PI_CODING_AGENT_DIR at it, selecting the
+  # provider/model by CLI flag. No MCP mechanism to inject into.
+  routing:
+    kind: config_file
+    dir: pi-agent
+    file: models.json
+    skeleton: |
+      {
+        "providers": {
+          "bitrouter": {
+            "name": "BitRouter",
+            "baseUrl": "{base_url_v1}",
+            "api": "openai-completions",
+            "apiKey": "{auth}",
+            "models": []
+          }
+        }
+      }
+    models:
+      at: /providers/bitrouter/models
+      shape: array_of_id
+      order: catalog_then_model
+    env:
+      - name: PI_CODING_AGENT_DIR
+        value: "{dir}"
+    args:
+      # Select the routed provider only when it has a model to offer;
+      # otherwise pi falls back to its own defaults.
+      with_default_model: ["--provider", "bitrouter", "--model", "{default_model}"]

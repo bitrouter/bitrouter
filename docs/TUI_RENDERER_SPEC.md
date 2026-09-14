@@ -1,5 +1,11 @@
 # Spec: the TUI renderer — a retained journal behind a differential writer
 
+> Code presentation update (2026-09-08):
+> [CODE_TUI_UX_SPEC.md](CODE_TUI_UX_SPEC.md) supersedes permanent dashboard
+> navigation and independent interactive drivers. It preserves public CLI names,
+> native-session ownership, typed action boundaries, and read-only remote scope.
+> [Implementation verification](CODE_TUI_UX_PROGRESS.md) is tracked separately.
+
 Status: **historical design record; final boundary differs in Phase 4** ·
 Author: Claude (with Spikel) · Date: 2026-08-14 · Rev 3
 

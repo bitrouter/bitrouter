@@ -149,7 +149,7 @@ key. Placing daemon-wide spend there behind a private qualifier is
 every other client is not.
 
 `Scope::Wider` is therefore **removed from the ACP surface**. Daemon-wide spend
-remains available through `bitrouter status --requests` — which is already where
+remains available through `bro status --requests` — which is already where
 `bitrouter-tui`'s own charter says that question is answered.
 
 This closes #847 by making the value match the field's definition, rather than

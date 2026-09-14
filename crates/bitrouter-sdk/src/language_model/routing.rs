@@ -14,6 +14,7 @@ use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::hooks::FallbackDecision;
+use crate::language_model::stream::UsagePricing;
 use crate::language_model::types::{ApiProtocol, Capability, RoutingTarget};
 
 /// How a cascade chain should be ordered.
@@ -61,9 +62,18 @@ pub struct RoutingPrefs {
 }
 
 /// Summary of a routable model, for `GET /v1/models`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Also the element type of the shared `list_models` action report
+/// (`bitrouter_mcp::actions::models::ModelsReport`), which is why it derives
+/// `JsonSchema`: the MCP tool advertises an `output_schema` built from it, and
+/// `bro models --json` emits the same shape. It lives here rather than
+/// beside the action because it already rides a wire — `GET /v1/models` and the
+/// daemon control socket both carry it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelInfo {
-    /// The model id.
+    /// A routable model selector. Subscription-backed providers use an
+    /// explicit `provider:canonical-model` selector here because a bare
+    /// canonical request must not opt into a personal subscription.
     pub id: String,
     /// Providers that declare this model.
     pub providers: Vec<String>,
@@ -149,7 +159,22 @@ pub trait RoutingTable: Send + Sync {
         self.route_chain(model, prefs, caller).await
     }
 
-    /// List every routable model (for `GET /v1/models`).
+    /// Immutable pricing for one concrete route, used only to resolve
+    /// conflicting cumulative usage snapshots conservatively. Implementations
+    /// without trustworthy pricing return `None`; stream normalization then
+    /// falls back to the provider's last usage snapshot.
+    fn usage_pricing(&self, _model: &str, _target: &RoutingTarget) -> Option<UsagePricing> {
+        None
+    }
+
+    /// Canonical model id represented by a successful concrete route.
+    /// Deployments with a registry should reverse-resolve provider wire ids;
+    /// the default preserves the resolved request model.
+    fn canonical_model_id(&self, model: &str, _target: &RoutingTarget) -> Option<String> {
+        Some(model.to_owned())
+    }
+
+    /// List every routable model selector (for `GET /v1/models`).
     fn list_models(&self) -> Vec<ModelInfo>;
 
     /// Look up one model's info.

@@ -17,7 +17,7 @@ minimize expected task/episode cost
 subject to the candidate cohort passing its Eval gate
 ```
 
-Calling `bitrouter optimize run` grants one controller step authority to
+Calling `bro optimize run` grants one controller step authority to
 publish its decision. Review is an audit surface, not an approval gate. The
 controller may start exploration, promote a challenger, retreat to the last
 known good route, continue gathering evidence, or report convergence.
@@ -25,7 +25,7 @@ known good route, continue gathering evidence, or report convergence.
 ## CLI contract
 
 ```text
-bitrouter optimize run \
+bro optimize run \
   [--policy auto] \
   [--candidate-tier TIER] \
   [--exploration-ppm 100000] \
@@ -36,7 +36,7 @@ bitrouter optimize run \
   [--config bitrouter.yaml] \
   [--socket PATH]
 
-bitrouter optimize status [--policy auto] [--config bitrouter.yaml]
+bro optimize status [--policy auto] [--config bitrouter.yaml]
 ```
 
 `run` performs one deterministic transition from the active policy and the

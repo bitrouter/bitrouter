@@ -82,10 +82,7 @@ async fn gateway_client_reaches_origin_server_on_latest() {
         .execute(&origin_server_target(), &tools_list())
         .await
         .expect("tools/list over the default lifecycle");
-    assert_eq!(
-        tool_names(&result.result),
-        ["complete", "list_models", "status"]
-    );
+    assert_eq!(tool_names(&result.result), ["list_models", "status"]);
 }
 
 /// The opt-in path. This is the test that would have caught the original
@@ -102,10 +99,7 @@ async fn gateway_client_reaches_origin_server_on_2026_07_28() {
         .execute(&origin_server_target(), &tools_list())
         .await
         .expect("tools/list over the 2026-07-28 lifecycle");
-    assert_eq!(
-        tool_names(&result.result),
-        ["complete", "list_models", "status"]
-    );
+    assert_eq!(tool_names(&result.result), ["list_models", "status"]);
     // The SEP-2549 hints the server attaches for draft peers survive the client
     // round-trip, which is what lets `CachingExecutor` honour them.
     assert_eq!(result.result["ttlMs"], 5 * 60 * 1000);

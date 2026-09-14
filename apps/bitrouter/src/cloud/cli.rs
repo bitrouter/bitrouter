@@ -1,4 +1,4 @@
-//! `bitrouter cloud …` — typed wrappers around the user-facing management
+//! `bro cloud …` — typed wrappers around the user-facing management
 //! endpoints on the application-owned management client.
 //!
 //! The subcommand tree is grouped by resource (`keys`, `usage`,
@@ -14,7 +14,7 @@
 //! All errors flow through one place ([`run`]); 403 responses whose
 //! description matches the server's `missing required scope: <s>` shape
 //! get a tailored re-login hint pointing the user at
-//! `bitrouter cloud login --scope "<existing scopes> <missing>"`.
+//! `bro cloud login --scope "<existing scopes> <missing>"`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -34,7 +34,7 @@ use super::management::{
     ManagementClient, billing, budgets, byok, keys, namespaces, policies, presets, usage,
 };
 
-/// `bitrouter cloud …`. All variants land in [`run`].
+/// `bro cloud …`. All variants land in [`run`].
 #[derive(Subcommand)]
 pub enum CloudAction {
     /// Print the cloud identity stored on this machine alongside the
@@ -129,7 +129,7 @@ pub enum CloudAction {
 pub enum NamespaceAction {
     /// List the namespaces you own. The one this CLI is signed in to is
     /// marked `(active)`. Switching namespaces is a re-login:
-    /// `bitrouter cloud login` and pick a different namespace in the
+    /// `bro cloud login` and pick a different namespace in the
     /// browser.
     List(JsonFlag),
     /// Print the namespace this CLI's credential is bound to. Offline —
@@ -687,7 +687,10 @@ async fn whoami(manager: Arc<CredentialManager>) -> std::result::Result<(), SdkE
             }
             out.push_str(&format!("\ncredentials:    {}", manager.path().display()));
         } else {
-            out.push_str("\n(not signed in — run `bitrouter cloud login`)");
+            out.push_str(&format!(
+                "\n(not signed in — run `{} cloud login`)",
+                bitrouter_sdk::invocation::name()
+            ));
         }
         out
     })
@@ -721,7 +724,10 @@ async fn run_namespace(
             let body = serde_json::json!({ "namespace_id": nsid });
             emit(flag.json, &body, |_| match nsid {
                 Some(id) => id.to_owned(),
-                None => "(no namespace — run `bitrouter cloud login`)".to_owned(),
+                None => format!(
+                    "(no namespace — run `{} cloud login`)",
+                    bitrouter_sdk::invocation::name()
+                ),
             })
         }
     }
@@ -1375,7 +1381,7 @@ fn opt_json_input(
 
 /// `--scope` accepts both repeated flags and a single space-delimited
 /// list per flag — mirroring how the same value is handled by
-/// `bitrouter cloud login --scope`. Empty tokens are dropped.
+/// `bro cloud login --scope`. Empty tokens are dropped.
 fn split_scope_args(scopes: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for raw in scopes {
@@ -1393,7 +1399,7 @@ async fn print_error_hint(err: &SdkError, manager: &CredentialManager) {
         SdkError::NotSignedIn => {
             eprintln!();
             eprintln!("  Sign in first:");
-            eprintln!("    bitrouter cloud login");
+            eprintln!("    {} cloud login", bitrouter_sdk::invocation::name());
         }
         SdkError::Forbidden {
             missing_scope: Some(scope),
@@ -1412,7 +1418,8 @@ fn missing_scope_hint(missing: &str, credential: Option<&StoredCredential>) -> S
     if credential.is_some_and(|credential| credential.kind() == CredentialKind::ApiKey) {
         return format!(
             "Mint or select an API key with the `{missing}` scope, then run \
-             `bitrouter cloud login --api-key \"$BITROUTER_API_KEY\"`."
+             `{cli} cloud login --api-key \"$BITROUTER_API_KEY\"`.",
+            cli = bitrouter_sdk::invocation::name()
         );
     }
 
@@ -1422,7 +1429,10 @@ fn missing_scope_hint(missing: &str, credential: Option<&StoredCredential>) -> S
         Some(scope) => format!("{scope} {missing}"),
         None => format!("<your current scope> {missing}"),
     };
-    format!("Re-run `bitrouter cloud login --scope \"{extended}\"` to add it.")
+    format!(
+        "Re-run `{cli} cloud login --scope \"{extended}\"` to add it.",
+        cli = bitrouter_sdk::invocation::name()
+    )
 }
 
 #[cfg(test)]
@@ -1498,7 +1508,7 @@ mod tests {
 
         assert!(hint.contains("API key"));
         assert!(hint.contains("keys:write"));
-        assert!(hint.contains("bitrouter cloud login --api-key"));
+        assert!(hint.contains("bro cloud login --api-key"));
         assert!(!hint.contains("--scope"));
         assert!(!hint.contains("brk_test.fixture"));
     }

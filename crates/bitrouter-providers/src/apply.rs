@@ -15,7 +15,7 @@ use crate::entry::ProtocolMapping;
 use crate::oauth::credential_store::CredentialStore;
 
 /// Build the in-memory **zero-config** [`Config`] used when the user
-/// runs `bitrouter serve` with no `bitrouter.yaml` anywhere on the
+/// runs `bro serve` with no `bitrouter.yaml` anywhere on the
 /// resolution chain. Every env-var-based built-in provider whose
 /// credential is set in the environment lands in `config.providers` as
 /// an empty entry — [`apply_builtin_defaults`] then fills it from the
@@ -49,7 +49,7 @@ pub fn zero_config() -> Config {
             continue;
         };
         // Go through `bitrouter_sdk::config::env_lookup` so a daemon-
-        // side override map (installed by the CLI's `bitrouter reload`)
+        // side override map (installed by the CLI's `bro reload`)
         // takes precedence over `std::env::var`. This is what
         // lets a newly-exported API key flow into the running daemon's
         // auto-enabled provider list without a full restart.
@@ -69,7 +69,7 @@ pub fn zero_config() -> Config {
 /// env-authenticate: the compiled-in cloud gateway plus every env-keyed,
 /// mergeable provider in the **disk-cached** registry (OAuth / native providers
 /// have no env var and are omitted). Used by the onboarding hint and by
-/// `bitrouter reload`, which snapshots these vars from the CLI's environment and
+/// `bro reload`, which snapshots these vars from the CLI's environment and
 /// hands them to the daemon. On a never-fetched host the cache is absent, so only the
 /// cloud gateway is listed until the first successful fetch populates it.
 pub fn zero_config_env_var_providers() -> Vec<(String, String)> {

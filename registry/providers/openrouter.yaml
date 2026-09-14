@@ -577,6 +577,14 @@ models:
         cache_write: 2.5
       output_tokens:
         text: 6
+  - id: deepseek/deepseek-v4.1-flash
+    provider_model_id: deepseek/deepseek-v4.1-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.003
+      output_tokens:
+        text: 0.6
 status: active
 weight: 1
 community: false

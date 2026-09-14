@@ -1,0 +1,87 @@
+{
+  "env": [
+    [
+      "OPENCLAW_STATE_DIR",
+      "{root}/openclaw"
+    ],
+    [
+      "OPENCLAW_CONFIG_PATH",
+      "{root}/openclaw/openclaw.json"
+    ]
+  ],
+  "args": [
+    "tui",
+    "--local"
+  ],
+  "file": "openclaw.json",
+  "config": {
+    "gateway": {
+      "mode": "local"
+    },
+    "models": {
+      "mode": "merge",
+      "providers": {
+        "bitrouter": {
+          "baseUrl": "http://127.0.0.1:4356/v1",
+          "apiKey": "brk_test",
+          "api": "openai-completions",
+          "models": [
+            {
+              "id": "extra/model",
+              "name": "extra/model",
+              "reasoning": false,
+              "input": [
+                "text"
+              ],
+              "cost": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0
+              },
+              "contextWindow": 200000,
+              "maxTokens": 8192
+            },
+            {
+              "id": "a/one",
+              "name": "a/one",
+              "reasoning": false,
+              "input": [
+                "text"
+              ],
+              "cost": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0
+              },
+              "contextWindow": 200000,
+              "maxTokens": 8192
+            },
+            {
+              "id": "b/two",
+              "name": "b/two",
+              "reasoning": false,
+              "input": [
+                "text"
+              ],
+              "cost": {
+                "input": 0,
+                "output": 0,
+                "cacheRead": 0,
+                "cacheWrite": 0
+              },
+              "contextWindow": 200000,
+              "maxTokens": 8192
+            }
+          ]
+        }
+      }
+    },
+    "agents": {
+      "defaults": {
+        "model": "bitrouter/extra/model"
+      }
+    }
+  }
+}

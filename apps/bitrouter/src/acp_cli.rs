@@ -1,9 +1,9 @@
-//! `bitrouter acp` subcommands — headless ACP session surface.
+//! `bro acp` subcommands — headless ACP session surface.
 //!
 //! Two entry points:
 //!
 //! - [`serve`] — launch a session and expose it as a vanilla ACP Agent over
-//!   **stdio** until the manager disconnects. Used by GUIs and orchestrating
+//!   **stdio** until the ACP client disconnects. Used by GUIs and orchestrating
 //!   agents that speak ACP.
 //!
 //! - [`prompt`] — launch a session, subscribe to updates, send one prompt, and
@@ -13,7 +13,7 @@
 //!
 //! ## Output formats
 //!
-//! `--format json` (the default) is NDJSON. Update lines carry the
+//! `--format ndjson` (the default; `json` remains an alias) is NDJSON. Update lines carry the
 //! [`SessionUpdateKind`] directly — the `type` tag value is the snake_case
 //! variant name (`message_chunk`, `thought_chunk`, `tool_call`,
 //! `tool_call_update`). A permission the headless policy answered is one line:
@@ -37,7 +37,7 @@
 //! {"type":"submitted"}
 //! ```
 //!
-//! `--format text` prints the transcript exactly as `bitrouter chat` prints
+//! `--format text` prints the transcript exactly as piped `bro chat <agent>` prints
 //! it to a pipe; `--format quiet` prints the assistant's text and nothing else.
 //!
 //! ## Permissions
@@ -49,8 +49,9 @@
 //! under and reaches the agent through the same wire as a keystroke would. A
 //! run that denied at least one request and approved none exits 5.
 //!
-//! Both functions load their `Config` via the standard resolution chain (see
-//! `bitrouter::paths`) and launch the agent named under `config.agents`.
+//! Every entry point here — `serve`, `prompt`, `commands`, and piped `chat` —
+//! loads its `Config` via the standard resolution chain (see
+//! `bitrouter::paths`) and launches the agent named under `config.agents`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -59,9 +60,11 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
-use futures::StreamExt;
+use bitrouter_sdk::invocation;
+use futures::{FutureExt, StreamExt};
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio_util::sync::CancellationToken;
 
 use agent_client_protocol::schema::v1::{Cost, LlmProtocol, SessionUpdate};
 use bitrouter_sdk::acp::client::{AcpClient, ClientOptions, PendingPermission};
@@ -79,7 +82,7 @@ use crate::paths::ConfigSource;
 
 /// Per-invocation routing decision for a spawned sub-agent. Routing is on by
 /// default; `direct` opts out. See `docs/SPAWN_SPEC.md` §5.
-#[derive(clap::Args, Debug, Clone, Default)]
+#[derive(clap::Args, Debug, Clone, Default, PartialEq, Eq)]
 pub struct RoutingOptions {
     /// Do NOT route this session's LLM traffic through the daemon — let the
     /// harness use its own provider auth. Routing is attempted by default
@@ -97,6 +100,457 @@ pub struct RoutingOptions {
     pub no_start: bool,
 }
 
+/// Resolve a user-facing ACP agent name. Configured ids are authoritative;
+/// friendly built-in aliases are considered only when no exact config entry
+/// shadows them.
+pub fn resolve_agent_id(config: &Config, requested: &str) -> Result<String> {
+    if config.agents.contains_key(requested) {
+        return Ok(requested.to_string());
+    }
+    let canonical = match requested {
+        "claude" | "claude-code" => "claude-acp",
+        "codex" => "codex-acp",
+        other => other,
+    };
+    if config.agents.contains_key(canonical)
+        || crate::harness::by_id(canonical).is_some_and(|harness| harness.acp_command.is_some())
+    {
+        Ok(canonical.to_string())
+    } else {
+        Err(anyhow::anyhow!(
+            "'{requested}' is neither a configured ACP agent nor an unambiguous catalog alias"
+        ))
+    }
+}
+
+#[cfg(test)]
+mod agent_resolution_tests {
+    use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
+    use bitrouter_sdk::config::Config;
+
+    use super::resolve_agent_id;
+
+    #[test]
+    fn configured_name_wins_over_builtin_alias() -> anyhow::Result<()> {
+        let mut config = Config::default();
+        config.agents.insert(
+            "codex".to_string(),
+            AcpAgentConfig {
+                name: "codex".to_string(),
+                transport: AcpTransport::Stdio {
+                    command: "custom-codex".to_string(),
+                    args: Vec::new(),
+                    env: Default::default(),
+                },
+            },
+        );
+        assert_eq!(resolve_agent_id(&config, "codex")?, "codex");
+        Ok(())
+    }
+
+    #[test]
+    fn friendly_alias_resolves_to_acp_adapter() -> anyhow::Result<()> {
+        assert_eq!(
+            resolve_agent_id(&Config::default(), "claude")?,
+            "claude-acp"
+        );
+        assert_eq!(resolve_agent_id(&Config::default(), "codex")?, "codex-acp");
+        Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod session_host_tests {
+    use std::collections::HashMap;
+    use std::path::Path;
+    use std::time::Duration;
+
+    use futures::StreamExt;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{
+        RoutingOptions, SessionHost, SessionSelection, SpawnContext, is_lifecycle_cancelled,
+        launch_options,
+    };
+    use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
+    use bitrouter_sdk::config::Config;
+
+    const STUB: &str = r#"
+while read line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *initialize*) printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"list":{},"resume":{},"close":{}}}}}\n' "$id";;
+    *session/new*) printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"native-1"}}\n' "$id";;
+    *session/load*) printf '{"jsonrpc":"2.0","id":"%s","error":{"code":-32000,"message":"native load failed"}}\n' "$id";;
+    *session/prompt*) printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"native-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}\n';
+                      printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+  esac
+done
+"#;
+
+    const HANG_INITIALIZE_STUB: &str = r#"
+while read line; do
+  case "$line" in
+    *initialize*) printf 'initialize\n' > "$READY_PATH";;
+  esac
+done
+"#;
+
+    const HANG_NEW_STUB: &str = r#"
+while read line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *initialize*) printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{}}}\n' "$id";;
+    *session/new*) printf 'session-new\n' > "$READY_PATH";;
+  esac
+done
+"#;
+
+    const HANG_LOAD_STUB: &str = r#"
+while read line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *initialize*) printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true}}}\n' "$id";;
+    *session/new*) printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"native-1"}}\n' "$id";;
+    *session/load*) printf 'session-load\n' > "$READY_PATH";;
+    *session/prompt*) printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"native-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}\n';
+                      printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
+  esac
+done
+"#;
+
+    async fn wait_for_ready(path: &Path) -> anyhow::Result<()> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !path.exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("stub did not reach its expected lifecycle phase"))?;
+        Ok(())
+    }
+
+    async fn host_with_stub(
+        source: &crate::paths::ConfigSource,
+        script: &str,
+        ready_path: &Path,
+    ) -> anyhow::Result<SessionHost> {
+        let mut config = Config::default();
+        let mut env = HashMap::new();
+        env.insert(
+            "READY_PATH".to_string(),
+            ready_path.to_string_lossy().into_owned(),
+        );
+        config.agents.insert(
+            "stub".to_string(),
+            AcpAgentConfig {
+                name: "stub".to_string(),
+                transport: AcpTransport::Stdio {
+                    command: "bash".to_string(),
+                    args: vec!["-c".to_string(), script.to_string()],
+                    env,
+                },
+            },
+        );
+        SessionHost::prepare(
+            SpawnContext {
+                source,
+                config,
+                agent_id: "stub",
+                options: launch_options(None),
+                routing: RoutingOptions {
+                    direct: true,
+                    ..RoutingOptions::default()
+                },
+            },
+            false,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn full_screen_host_returns_routing_notes_to_its_presenter() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = crate::paths::ConfigSource::Default {
+            home: directory.path().to_path_buf(),
+        };
+        let mut config = Config::default();
+        config.agents.insert(
+            "stub".to_string(),
+            AcpAgentConfig {
+                name: "stub".to_string(),
+                transport: AcpTransport::Stdio {
+                    command: "bash".to_string(),
+                    args: vec!["-c".to_string(), STUB.to_string()],
+                    env: HashMap::new(),
+                },
+            },
+        );
+        let mut diagnostics = Vec::new();
+        let host = SessionHost::prepare_with_diagnostics(
+            SpawnContext {
+                source: &source,
+                config,
+                agent_id: "stub",
+                options: launch_options(None),
+                routing: RoutingOptions {
+                    direct: true,
+                    model: Some("ignored-model".to_string()),
+                    ..RoutingOptions::default()
+                },
+            },
+            false,
+            &mut |message| diagnostics.push(message),
+        )
+        .await?;
+
+        assert_eq!(
+            diagnostics,
+            ["note: --model 'ignored-model' ignored — running --direct"]
+        );
+        assert_eq!(host.agent_id, "stub");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_host_negotiates_lifecycle_and_drives_one_turn() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = crate::paths::ConfigSource::Default {
+            home: directory.path().to_path_buf(),
+        };
+        let mut config = Config::default();
+        config.agents.insert(
+            "stub".to_string(),
+            AcpAgentConfig {
+                name: "stub".to_string(),
+                transport: AcpTransport::Stdio {
+                    command: "bash".to_string(),
+                    args: vec!["-c".to_string(), STUB.to_string()],
+                    env: HashMap::new(),
+                },
+            },
+        );
+        let host = SessionHost::prepare(
+            SpawnContext {
+                source: &source,
+                config,
+                agent_id: "stub",
+                options: launch_options(None),
+                routing: RoutingOptions {
+                    direct: true,
+                    ..RoutingOptions::default()
+                },
+            },
+            true,
+        )
+        .await?;
+        let mut handle = host
+            .open(&SessionSelection::New, std::env::current_dir()?)
+            .await?;
+        assert_eq!(handle.session_id, "native-1");
+        assert!(handle.capabilities.load);
+        assert!(handle.capabilities.list);
+        assert!(handle.capabilities.resume);
+        assert!(handle.capabilities.close);
+        assert!(!handle.capabilities.delete);
+        let mut updates = handle.take_updates();
+        let response = handle.client.prompt(&handle.session_id, "hi").await?;
+        assert_eq!(format!("{:?}", response.stop_reason), "EndTurn");
+        let update = tokio::time::timeout(std::time::Duration::from_secs(2), updates.next())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("stub emitted no update"))?;
+        assert!(matches!(
+            update,
+            agent_client_protocol::schema::v1::SessionUpdate::AgentMessageChunk(_)
+        ));
+        assert!(handle.shutdown().await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_load_retains_the_active_session_identity_and_stream() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = crate::paths::ConfigSource::Default {
+            home: directory.path().to_path_buf(),
+        };
+        let mut config = Config::default();
+        config.agents.insert(
+            "stub".to_string(),
+            AcpAgentConfig {
+                name: "stub".to_string(),
+                transport: AcpTransport::Stdio {
+                    command: "bash".to_string(),
+                    args: vec!["-c".to_string(), STUB.to_string()],
+                    env: HashMap::new(),
+                },
+            },
+        );
+        let host = SessionHost::prepare(
+            SpawnContext {
+                source: &source,
+                config,
+                agent_id: "stub",
+                options: launch_options(None),
+                routing: RoutingOptions {
+                    direct: true,
+                    ..RoutingOptions::default()
+                },
+            },
+            false,
+        )
+        .await?;
+        let mut handle = host
+            .open(&SessionSelection::New, std::env::current_dir()?)
+            .await?;
+        let active_id = handle.session_id.clone();
+        let active_agent_id = handle.agent_session_id.clone();
+        let mut updates = handle.take_updates();
+
+        let load = handle
+            .select_with_cancel(
+                &SessionSelection::Load("missing".to_string()),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(load.is_err());
+        assert_eq!(handle.session_id, active_id);
+        assert_eq!(handle.agent_session_id, active_agent_id);
+
+        let response = handle.client.prompt(&handle.session_id, "hi").await?;
+        assert_eq!(format!("{:?}", response.stop_reason), "EndTurn");
+        let update = tokio::time::timeout(std::time::Duration::from_secs(2), updates.next())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("active session emitted no update after failed load"))?;
+        assert!(matches!(
+            update,
+            agent_client_protocol::schema::v1::SessionUpdate::AgentMessageChunk(_)
+        ));
+        assert!(handle.shutdown().await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_initialize_reaps_the_owned_controller() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = crate::paths::ConfigSource::Default {
+            home: directory.path().to_path_buf(),
+        };
+        let ready = directory.path().join("initialize-ready");
+        let host = host_with_stub(&source, HANG_INITIALIZE_STUB, &ready).await?;
+        let cancel = CancellationToken::new();
+        let opening =
+            host.open_with_cancel(&SessionSelection::New, std::env::current_dir()?, &cancel);
+        tokio::pin!(opening);
+        tokio::select! {
+            result = &mut opening => {
+                return if result.is_ok() {
+                    Err(anyhow::anyhow!("unresponsive initialize unexpectedly opened a session"))
+                } else {
+                    Err(anyhow::anyhow!("unresponsive initialize failed before cancellation"))
+                };
+            }
+            ready = wait_for_ready(&ready) => ready?,
+        }
+        cancel.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(20), &mut opening)
+            .await
+            .map_err(|_| anyhow::anyhow!("cancelled initialize did not settle"))?;
+        let error = result.err().ok_or_else(|| {
+            anyhow::anyhow!("cancelled initialize unexpectedly returned a session")
+        })?;
+        assert!(is_lifecycle_cancelled(&error));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_new_session_reaps_the_owned_controller() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = crate::paths::ConfigSource::Default {
+            home: directory.path().to_path_buf(),
+        };
+        let ready = directory.path().join("new-ready");
+        let host = host_with_stub(&source, HANG_NEW_STUB, &ready).await?;
+        let cancel = CancellationToken::new();
+        let opening =
+            host.open_with_cancel(&SessionSelection::New, std::env::current_dir()?, &cancel);
+        tokio::pin!(opening);
+        tokio::select! {
+            result = &mut opening => {
+                return if result.is_ok() {
+                    Err(anyhow::anyhow!("unresponsive session/new unexpectedly opened a session"))
+                } else {
+                    Err(anyhow::anyhow!("unresponsive session/new failed before cancellation"))
+                };
+            }
+            ready = wait_for_ready(&ready) => ready?,
+        }
+        cancel.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(20), &mut opening)
+            .await
+            .map_err(|_| anyhow::anyhow!("cancelled session/new did not settle"))?;
+        let error = result.err().ok_or_else(|| {
+            anyhow::anyhow!("cancelled session/new unexpectedly returned a session")
+        })?;
+        assert!(is_lifecycle_cancelled(&error));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_load_keeps_the_active_session_and_stream() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let source = crate::paths::ConfigSource::Default {
+            home: directory.path().to_path_buf(),
+        };
+        let ready = directory.path().join("load-ready");
+        let host = host_with_stub(&source, HANG_LOAD_STUB, &ready).await?;
+        let mut handle = host
+            .open(&SessionSelection::New, std::env::current_dir()?)
+            .await?;
+        let active_id = handle.session_id.clone();
+        let active_agent_id = handle.agent_session_id.clone();
+        let mut updates = handle.take_updates();
+        let cancel = CancellationToken::new();
+
+        {
+            let selection = SessionSelection::Load("native-other".to_string());
+            let loading = handle.select_with_cancel(&selection, &cancel);
+            tokio::pin!(loading);
+            tokio::select! {
+                result = &mut loading => {
+                    return if result.is_ok() {
+                        Err(anyhow::anyhow!("unresponsive session/load unexpectedly completed"))
+                    } else {
+                        Err(anyhow::anyhow!("unresponsive session/load failed before cancellation"))
+                    };
+                }
+                ready = wait_for_ready(&ready) => ready?,
+            }
+            cancel.cancel();
+            let result = tokio::time::timeout(Duration::from_secs(5), &mut loading)
+                .await
+                .map_err(|_| anyhow::anyhow!("cancelled session/load did not settle"))?;
+            let error = result
+                .err()
+                .ok_or_else(|| anyhow::anyhow!("cancelled session/load unexpectedly completed"))?;
+            assert!(is_lifecycle_cancelled(&error));
+        }
+
+        assert_eq!(handle.session_id, active_id);
+        assert_eq!(handle.agent_session_id, active_agent_id);
+        let response = handle.client.prompt(&handle.session_id, "hi").await?;
+        assert_eq!(format!("{:?}", response.stop_reason), "EndTurn");
+        let update = tokio::time::timeout(Duration::from_secs(2), updates.next())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("active session stream ended after cancelled load"))?;
+        assert!(matches!(
+            update,
+            agent_client_protocol::schema::v1::SessionUpdate::AgentMessageChunk(_)
+        ));
+        assert!(handle.shutdown().await);
+        Ok(())
+    }
+}
+
 // ── headless presentation and permissions ────────────────────────────────────
 
 /// What a headless `prompt` prints.
@@ -104,8 +558,9 @@ pub struct RoutingOptions {
 pub enum PromptFormat {
     /// One self-describing JSON object per line.
     #[default]
-    Json,
-    /// The transcript as `bitrouter chat` prints it to a pipe.
+    #[value(alias = "json")]
+    Ndjson,
+    /// The transcript as the piped `bro chat <agent>` compatibility path prints it.
     Text,
     /// The assistant's text and nothing else.
     Quiet,
@@ -132,8 +587,8 @@ pub struct HeadlessOptions {
     /// an unmatched request uses `defaultAction`, else the mode flag.
     #[arg(long, value_name = "JSON|@PATH")]
     pub permission_policy: Option<String>,
-    /// Output: `json` (NDJSON, the default), `text` (the transcript as `chat`
-    /// prints it to a pipe), or `quiet` (assistant text only).
+    /// Output: `ndjson` (the default), `text` (the transcript as
+    /// `code <agent>` prints it to a pipe), or `quiet` (assistant text only).
     #[arg(long, value_enum, default_value_t)]
     pub format: PromptFormat,
 }
@@ -205,6 +660,92 @@ pub struct PromptOptions {
     pub policy: Policy,
     /// What is printed.
     pub format: PromptFormat,
+    /// Create a new session, load one with replay, or resume one without replay.
+    pub session: SessionSelection,
+    /// Working directory supplied to the native session lifecycle request.
+    pub cwd: Option<PathBuf>,
+}
+
+/// Which harness-native session a one-shot driver opens.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SessionSelection {
+    /// Create a new harness-native session.
+    #[default]
+    New,
+    /// Load a session and replay its history.
+    Load(String),
+    /// Resume a session without replaying its history.
+    Resume(String),
+}
+
+/// Negotiated facts shared by every BitRouter-owned ACP client surface.
+///
+/// Drivers render or reject controls from this value; they do not infer
+/// support from an agent name or optimistically send draft methods.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CapabilitySnapshot {
+    pub load: bool,
+    pub resume: bool,
+    pub list: bool,
+    pub close: bool,
+    pub delete: bool,
+    pub fork: bool,
+    pub mcp_stdio: bool,
+    pub mcp_http: bool,
+    pub mcp_sse: bool,
+    pub authentication_methods: Vec<String>,
+    pub terminal_auth: bool,
+    pub route_list: bool,
+    pub route_set: bool,
+    pub route_reset: bool,
+}
+
+impl CapabilitySnapshot {
+    fn from_client(client: &AcpClient, terminal_auth: bool) -> Self {
+        let agent = client.agent_capabilities();
+        let sessions = &agent.session_capabilities;
+        let route = client.route_control();
+        Self {
+            load: agent.load_session,
+            resume: sessions.resume.is_some(),
+            list: sessions.list.is_some(),
+            close: sessions.close.is_some(),
+            delete: sessions.delete.is_some(),
+            fork: sessions.fork.is_some(),
+            // ACP stdio MCP descriptors are the baseline representation. HTTP
+            // and SSE must be explicitly negotiated.
+            mcp_stdio: true,
+            mcp_http: agent.mcp_capabilities.http,
+            mcp_sse: agent.mcp_capabilities.sse,
+            authentication_methods: client
+                .auth_methods()
+                .iter()
+                .map(|method| method.id().0.to_string())
+                .collect(),
+            terminal_auth,
+            route_list: route.allows(bitrouter_sdk::acp::client::RouteMethod::List),
+            route_set: route.allows(bitrouter_sdk::acp::client::RouteMethod::Set),
+            route_reset: route.allows(bitrouter_sdk::acp::client::RouteMethod::Reset),
+        }
+    }
+
+    /// Compact lifecycle explanation used by the Code TUI.
+    pub fn lifecycle_summary(&self) -> String {
+        let mut supported = vec!["new"];
+        for (name, enabled) in [
+            ("list", self.list),
+            ("load", self.load),
+            ("resume", self.resume),
+            ("close", self.close),
+            ("fork*", self.fork),
+            ("delete*", self.delete),
+        ] {
+            if enabled {
+                supported.push(name);
+            }
+        }
+        supported.join(", ")
+    }
 }
 
 /// What the headless policy decided over one run, for the exit status.
@@ -311,14 +852,16 @@ impl RoutingError {
     }
 
     /// One-line remediation hint.
-    fn hint(&self) -> &'static str {
+    fn hint(&self) -> String {
         match self {
-            RoutingError::DaemonUnreachable { .. } => "run `bitrouter start`, or pass --direct",
+            RoutingError::DaemonUnreachable { .. } => {
+                format!("run `{} start`, or pass --direct", invocation::name())
+            }
             RoutingError::AuthRequired { .. } => {
-                "export BITROUTER_API_KEY (or create a key), or pass --direct"
+                "export BITROUTER_API_KEY (or create a key), or pass --direct".to_string()
             }
             RoutingError::EndpointConfiguration { .. } => {
-                "check the pinned ACP adapter configuration, or pass --direct"
+                "check the pinned ACP adapter configuration, or pass --direct".to_string()
             }
         }
     }
@@ -376,7 +919,7 @@ pub struct Routed {
 
 /// Resolve routing and overlay it onto `config`'s entry for `agent_id`,
 /// inserting the bundled-catalog invocation when the id is catalog-known but
-/// unconfigured (so `bitrouter spawn claude-acp` works with no YAML edit).
+/// unconfigured (so `bro spawn claude-acp` works with no YAML edit).
 ///
 /// Returns the "via" base URL when routing is active, or `None` when the
 /// session runs direct (`--direct`, an unknown/custom agent, or an
@@ -400,6 +943,29 @@ async fn apply_routing_with_cloud_credentials(
     opts: &RoutingOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
 ) -> std::result::Result<Routed, RoutingError> {
+    let mut diagnostics = |message| eprintln!("{message}");
+    apply_routing_with_diagnostics(
+        source,
+        config,
+        agent_id,
+        opts,
+        cloud_credentials,
+        &mut diagnostics,
+    )
+    .await
+}
+
+async fn apply_routing_with_diagnostics(
+    source: &ConfigSource,
+    config: &mut Config,
+    agent_id: &str,
+    opts: &RoutingOptions,
+    cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
+    diagnostics: &mut dyn FnMut(String),
+) -> std::result::Result<Routed, RoutingError> {
+    // Every controlled entrypoint shares this preparation. Preserve the config
+    // home's database location even when the coding working directory differs.
+    config.database.url = crate::db::anchor_url(&config.database.url, source.home());
     // A catalog-known id needs no `agents:` entry — synthesize its invocation.
     if !config.agents.contains_key(agent_id)
         && let Some(h) = crate::harness::by_id(agent_id)
@@ -420,16 +986,14 @@ async fn apply_routing_with_cloud_credentials(
         );
     }
 
+    if let Some(agent) = config.agents.get_mut(agent_id) {
+        crate::local_cli::apply(&mut agent.transport).await;
+    }
+
     // `--model` only takes effect when the daemon route is applied; warn
     // rather than silently drop it on any path that launches direct.
-    let warn_model_dropped = |why: &str| {
-        if let Some(m) = &opts.model {
-            eprintln!("note: --model '{m}' ignored — {why}");
-        }
-    };
-
     if opts.direct {
-        warn_model_dropped("running --direct");
+        warn_model_dropped(opts, "running --direct", diagnostics);
         return Ok(Routed::default());
     }
 
@@ -444,20 +1008,24 @@ async fn apply_routing_with_cloud_credentials(
         None => return Ok(Routed::default()),
     };
     let Some(harness) = harness else {
-        eprintln!(
+        diagnostics(format!(
             "note: routing unavailable for '{agent_id}' (not catalog-matched); \
              launching direct — set its `env` to route manually"
-        );
-        warn_model_dropped("the agent is not catalog-matched");
+        ));
+        warn_model_dropped(opts, "the agent is not catalog-matched", diagnostics);
         return Ok(Routed::default());
     };
     if !harness.env_args_routable() {
-        eprintln!(
+        diagnostics(format!(
             "note: '{}' routes via synthesized config, which headless spawn doesn't do yet \
-             (`bitrouter launch` does); launching direct",
+             in this ACP adapter; launching direct",
             harness.id
+        ));
+        warn_model_dropped(
+            opts,
+            "the harness routes only in the interactive facet",
+            diagnostics,
         );
-        warn_model_dropped("the harness routes only in the interactive facet");
         return Ok(Routed::default());
     }
     let uses_maintained_adapter =
@@ -470,11 +1038,15 @@ async fn apply_routing_with_cloud_credentials(
                 }
             });
     if harness.id == "codex-acp" && !uses_maintained_adapter {
-        eprintln!(
+        diagnostics(format!(
             "note: routing unavailable for '{agent_id}': Codex ACP endpoint configuration \
-             requires @agentclientprotocol/codex-acp@1.7.0; launching direct"
+             requires @agentclientprotocol/codex-acp@1.10.0; launching direct"
+        ));
+        warn_model_dropped(
+            opts,
+            "the configured Codex ACP adapter is not the maintained pin",
+            diagnostics,
         );
-        warn_model_dropped("the configured Codex ACP adapter is not the maintained pin");
         return Ok(Routed::default());
     }
 
@@ -498,12 +1070,12 @@ async fn apply_routing_with_cloud_credentials(
     // rejected by the daemon's auth hook under `skip_auth: false` — warn
     // rather than let the session 401 mid-turn (SPAWN_SPEC §6.3).
     if require_key && !harness.auth_is_bearer() {
-        eprintln!(
+        diagnostics(format!(
             "warning: '{}' sends its API key as a non-Bearer header the daemon rejects under \
              auth mode (`skip_auth: false`) — this session will likely 401. Use `skip_auth: \
              true`, a `--direct` session, or a different harness.",
             harness.id
-        );
+        ));
     }
 
     let explicit_key = crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV);
@@ -571,10 +1143,10 @@ async fn apply_routing_with_cloud_credentials(
             if let Some(existing) = env.get(&k)
                 && existing != &v
             {
-                eprintln!(
+                diagnostics(format!(
                     "note: routing overrides your `env.{k}` for '{agent_id}' \
                      (pass --direct to keep your value)"
-                );
+                ));
             }
             env.insert(k, v);
         }
@@ -587,6 +1159,12 @@ async fn apply_routing_with_cloud_credentials(
         api_principal: endpoint_plan.as_ref().map(|_| api_principal),
         endpoint_plan,
     })
+}
+
+fn warn_model_dropped(opts: &RoutingOptions, why: &str, diagnostics: &mut dyn FnMut(String)) {
+    if let Some(model) = &opts.model {
+        diagnostics(format!("note: --model '{model}' ignored — {why}"));
+    }
 }
 
 // ── NDJSON helpers ────────────────────────────────────────────────────────────
@@ -630,7 +1208,7 @@ where
         .context("writing NDJSON line")
 }
 
-/// `bitrouter spawn <agent> --check` — preflight the harness resolution, the
+/// `bro agents check <agent>` — preflight the harness resolution, the
 /// routing decision, and (when routing) daemon reachability, without launching
 /// anything or auto-starting a daemon. Read-only.
 pub async fn spawn_check(
@@ -676,10 +1254,7 @@ pub async fn spawn_check(
                 checks.push(row(
                     "agent",
                     SpawnCheckStatus::Fail,
-                    format!(
-                        "'{agent_id}' is interactive-only (no ACP adapter) — use `bitrouter launch --agent {}`",
-                        h.interactive_binary.unwrap_or(agent_id)
-                    ),
+                    format!("'{agent_id}' has no ACP adapter and cannot be used as an agent"),
                 ));
                 (String::new(), Vec::new())
             }
@@ -793,7 +1368,10 @@ pub async fn spawn_check(
             row(
                 "daemon",
                 SpawnCheckStatus::Fail,
-                format!("{base_url} is unreachable — run `bitrouter start` (or pass --direct)"),
+                format!(
+                    "{base_url} is unreachable — run `{} start` (or pass --direct)",
+                    invocation::name()
+                ),
             )
         });
     }
@@ -973,7 +1551,7 @@ struct DaemonSessionCost {
 
 /// How long one usage update may wait on the daemon before it is forwarded
 /// without a figure. The lookup sits on the controller's forward path, so a
-/// stalled daemon must cost the manager a cost line, never its update stream.
+/// stalled daemon must cost the ACP client a cost line, never its update stream.
 const SESSION_COST_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[async_trait::async_trait]
@@ -1025,7 +1603,7 @@ impl AcpSessionCost for DaemonSessionCost {
 /// the attributed requests carries charge evidence: a session BitRouter routed
 /// but could not price is not a free one, so it is never `$0.00`. When some
 /// rows are priced the figure is their sum — the same floor
-/// `bitrouter status --requests` reports alongside its unpriced count.
+/// `bro status --requests` reports alongside its unpriced count.
 fn attributed_cost(spend_micro_usd: u64, requests: u64, unpriced: u64) -> Option<Cost> {
     (requests > 0 && unpriced < requests)
         .then(|| Cost::new(spend_micro_usd as f64 / 1_000_000.0, "USD"))
@@ -1164,10 +1742,275 @@ impl AcpSessionCost for CachedSessionCost {
 /// §7.3) and the second launch needs the same binding: re-deriving it would
 /// repeat `open`'s `--base-url` note, and the binding is three owned strings.
 #[derive(Clone)]
-struct LocalControllerBinding {
+pub(crate) struct LocalControllerBinding {
     socket_path: PathBuf,
     api_principal: String,
     controller_instance_id: String,
+}
+
+/// Shared ACP launch/initialize owner used by `run` and the Code TUI.
+///
+/// It resolves the user-facing agent once, applies routing once, creates the
+/// controller binding once, and only then lets a presentation driver open a
+/// harness-native session. Nothing in this type depends on clap or a terminal.
+pub(crate) struct SessionHost {
+    config: Config,
+    agent_id: String,
+    options: LaunchOptions,
+    routed: Routed,
+    binding: Option<LocalControllerBinding>,
+}
+
+/// One live harness-native session returned by [`SessionHost`].
+pub(crate) struct SessionHandle {
+    pub(crate) client: AcpClient,
+    pub(crate) session_id: String,
+    pub(crate) agent_session_id: Option<String>,
+    pub(crate) agent_id: String,
+    pub(crate) via: Option<String>,
+    pub(crate) launch_id: Option<String>,
+    pub(crate) capabilities: CapabilitySnapshot,
+    pub(crate) initial_settings: bitrouter_sdk::acp::client::SessionInitialSettings,
+    cwd: PathBuf,
+    mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
+    pub(crate) updates: std::pin::Pin<Box<dyn futures::Stream<Item = SessionUpdate> + Send>>,
+    pub(crate) permissions:
+        std::pin::Pin<Box<dyn futures::Stream<Item = PendingPermission> + Send>>,
+    session: ControlledSession,
+}
+
+impl SessionHandle {
+    /// Open another native session unless `cancel` is signalled first.
+    ///
+    /// Cancellation deliberately leaves this handle unchanged: its current
+    /// session, update stream, and controller remain owned by the caller.
+    /// This lets an interactive driver restore the active session after a
+    /// picker is dismissed while still shutting it down deterministically on
+    /// process exit.
+    pub(crate) async fn select_with_cancel(
+        &mut self,
+        selection: &SessionSelection,
+        cancel: &CancellationToken,
+    ) -> Result<()> {
+        if cancel.is_cancelled() {
+            return Err(lifecycle_cancelled());
+        }
+        let updates = self.client.subscribe_lifecycle_notifications();
+        let ids = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(lifecycle_cancelled()),
+            result = open_session(
+                &self.client,
+                selection,
+                self.cwd.clone(),
+                self.mcp_servers.clone(),
+            ) => result?,
+        };
+        let updates = updates.session_updates(&ids);
+        self.session_id = ids.acp_session_id;
+        self.agent_session_id = ids.agent_session_id;
+        self.initial_settings = ids.initial_settings;
+        self.updates = updates;
+        Ok(())
+    }
+
+    pub(crate) fn take_updates(
+        &mut self,
+    ) -> std::pin::Pin<Box<dyn futures::Stream<Item = SessionUpdate> + Send>> {
+        std::mem::replace(&mut self.updates, Box::pin(futures::stream::empty()))
+    }
+
+    pub(crate) fn take_permissions(
+        &mut self,
+    ) -> std::pin::Pin<Box<dyn futures::Stream<Item = PendingPermission> + Send>> {
+        std::mem::replace(&mut self.permissions, Box::pin(futures::stream::empty()))
+    }
+
+    /// Disconnect the ACP client and deterministically reap the adapter child.
+    pub(crate) async fn shutdown(&mut self) -> bool {
+        self.session.shutdown().await
+    }
+
+    /// Resolve when the adapter process group has exited, whether it was a
+    /// normal teardown or an abrupt harness death. This is independent of the
+    /// controller duplex, which can otherwise remain open after the child has
+    /// gone away.
+    pub(crate) fn closed(&self) -> futures::future::BoxFuture<'static, ()> {
+        self.session.closed()
+    }
+}
+
+impl SessionHost {
+    /// Resolve and prepare a controller without opening a native session.
+    pub(crate) async fn prepare(ctx: SpawnContext<'_>, terminal_auth: bool) -> Result<Self> {
+        let mut diagnostics = |message| eprintln!("{message}");
+        Self::prepare_with_diagnostics(ctx, terminal_auth, &mut diagnostics).await
+    }
+
+    /// Prepare a controller while handing presentation-safe routing notes to
+    /// the caller. Full-screen clients use this so ordinary fallback notices
+    /// become part of their view instead of writing behind the renderer.
+    pub(crate) async fn prepare_with_diagnostics(
+        ctx: SpawnContext<'_>,
+        terminal_auth: bool,
+        diagnostics: &mut dyn FnMut(String),
+    ) -> Result<Self> {
+        let SpawnContext {
+            source,
+            mut config,
+            agent_id,
+            mut options,
+            routing,
+        } = ctx;
+        let agent_id = resolve_agent_id(&config, agent_id)?;
+        let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
+        let routed = apply_routing_with_diagnostics(
+            source,
+            &mut config,
+            &agent_id,
+            &routing,
+            &cloud_credentials,
+            diagnostics,
+        )
+        .await
+        .map_err(anyhow::Error::new)?;
+        config
+            .agents
+            .get(&agent_id)
+            .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?
+            .validate()
+            .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
+        let binding = LocalControllerBinding::open_with_diagnostics(
+            source,
+            &config,
+            &routed,
+            routing.base_url.is_some(),
+            diagnostics,
+        );
+        options.terminal_auth = terminal_auth;
+        Ok(Self {
+            config,
+            agent_id,
+            options,
+            routed,
+            binding,
+        })
+    }
+
+    /// Launch/initialize the adapter and open the requested native session.
+    pub(crate) async fn open(
+        self,
+        selection: &SessionSelection,
+        cwd: PathBuf,
+    ) -> Result<SessionHandle> {
+        self.open_with_cancel(selection, cwd, &CancellationToken::new())
+            .await
+    }
+
+    /// Launch/initialize the adapter and open a native session, stopping and
+    /// reaping a child already allocated if `cancel` wins the lifecycle race.
+    pub(crate) async fn open_with_cancel(
+        self,
+        selection: &SessionSelection,
+        cwd: PathBuf,
+        cancel: &CancellationToken,
+    ) -> Result<SessionHandle> {
+        if cancel.is_cancelled() {
+            return Err(lifecycle_cancelled());
+        }
+        let mcp_servers = self.options.mcp_servers.clone();
+        let terminal_auth = self.options.terminal_auth;
+        let mut session = launch_controlled_with_cancel(
+            &self.config,
+            &self.agent_id,
+            &self.routed,
+            self.options,
+            self.binding,
+            cancel,
+        )
+        .await
+        .with_context(|| format!("launching ACP session for agent '{}'", self.agent_id))?;
+        // Subscribe before load: `session/load` replays history during the
+        // request, and a later subscription would lose it.
+        let updates = session.client.subscribe_lifecycle_notifications();
+        let permissions = session.client.subscribe_permissions();
+        let opened = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => None,
+            result = open_session(&session.client, selection, cwd.clone(), mcp_servers.clone()) => Some(result),
+        };
+        let ids = match opened {
+            None => {
+                return if session.shutdown().await {
+                    Err(lifecycle_cancelled())
+                } else {
+                    Err(lifecycle_teardown_unconfirmed())
+                };
+            }
+            Some(Ok(ids)) => ids,
+            Some(Err(error)) => {
+                return if session.shutdown().await {
+                    Err(error.context("opening the harness session"))
+                } else {
+                    Err(error.context(
+                        "opening the harness session; controller teardown did not confirm",
+                    ))
+                };
+            }
+        };
+        let client = session.client.clone();
+        let capabilities = CapabilitySnapshot::from_client(&client, terminal_auth);
+        let updates = updates.session_updates(&ids);
+        Ok(SessionHandle {
+            client,
+            session_id: ids.acp_session_id,
+            agent_session_id: ids.agent_session_id,
+            agent_id: self.agent_id,
+            via: self.routed.via,
+            launch_id: self.routed.launch_id,
+            capabilities,
+            initial_settings: ids.initial_settings,
+            cwd,
+            mcp_servers,
+            updates,
+            permissions,
+            session,
+        })
+    }
+}
+
+/// The lifecycle owner was interrupted before a session could safely be
+/// handed to its caller. Kept separate from an agent error so the UI can
+/// restore its previous state without presenting an adapter failure.
+#[derive(Debug)]
+struct LifecycleCancelled;
+
+impl std::fmt::Display for LifecycleCancelled {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ACP session lifecycle cancelled")
+    }
+}
+
+impl std::error::Error for LifecycleCancelled {}
+
+pub(crate) fn lifecycle_cancelled() -> anyhow::Error {
+    anyhow::Error::new(LifecycleCancelled)
+}
+
+/// Whether a lifecycle job ended by the driver's explicit cancellation token.
+/// Context layers preserve this cause, so a caller can distinguish a clean
+/// user exit from an adapter failure without matching presentation text.
+pub(crate) fn is_lifecycle_cancelled(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| cause.is::<LifecycleCancelled>())
+}
+
+/// Cancellation only counts as clean after the controller child and its
+/// route binding have both settled. Returning this separately keeps an
+/// unconfirmed child from being silently converted into a normal UI exit.
+fn lifecycle_teardown_unconfirmed() -> anyhow::Error {
+    anyhow::anyhow!(
+        "ACP session lifecycle cancelled, but controller teardown did not confirm; see the session log"
+    )
 }
 
 impl LocalControllerBinding {
@@ -1177,6 +2020,17 @@ impl LocalControllerBinding {
         routed: &Routed,
         explicit_base_url: bool,
     ) -> Option<Self> {
+        let mut diagnostics = |message| eprintln!("{message}");
+        Self::open_with_diagnostics(source, config, routed, explicit_base_url, &mut diagnostics)
+    }
+
+    fn open_with_diagnostics(
+        source: &ConfigSource,
+        config: &Config,
+        routed: &Routed,
+        explicit_base_url: bool,
+        diagnostics: &mut dyn FnMut(String),
+    ) -> Option<Self> {
         let (Some(_endpoint), Some(controller_instance_id), Some(api_principal)) = (
             routed.endpoint_plan.as_ref(),
             routed.controller_instance_id.clone(),
@@ -1185,9 +2039,10 @@ impl LocalControllerBinding {
             return None;
         };
         if explicit_base_url {
-            eprintln!(
+            diagnostics(
                 "note: _bitrouter/route/* is unavailable with an explicit --base-url; \
                  the remote model endpoint remains usable without session route control"
+                    .to_string(),
             );
             return None;
         }
@@ -1241,83 +2096,54 @@ impl LocalControllerBinding {
 }
 
 /// Launch one harness process and expose its connection-level ACP controller
-/// over **stdio** until the manager disconnects.
+/// over **stdio** until the ACP client disconnects.
 ///
 /// Session creation, identifiers, lifecycle, history, and persistence remain
 /// harness-native. `options` contributes only process-isolation settings here;
-/// prompt deadlines belong to the manager on this transparent serve path.
+/// prompt deadlines belong to the ACP client on this transparent serve path.
 pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
-    let SpawnContext {
-        source,
-        mut config,
-        agent_id,
-        options,
-        routing,
-    } = ctx;
     // `serve` never builds an `App` and never reaches `build_observability`,
     // so it gets the ignored-config warnings from neither. Emitted here, on
     // the config as read — before `apply_routing_with_cloud_credentials`
     // rewrites it — and safe to emit at once because `main` installs this
     // path's subscriber before dispatching (`init_session_log_tracing_
-    // subscriber` for `bitrouter acp serve`, `init_basic_tracing_subscriber`
-    // for `bitrouter spawn --serve`). Both write to stderr, so the JSON-RPC
+    // subscriber` for `bro acp serve`, `init_basic_tracing_subscriber`
+    // for `bro spawn --serve`). Both write to stderr, so the JSON-RPC
     // stream on stdout stays pristine.
-    for message in crate::assemble::ignored_config_warnings(&config) {
+    for message in crate::assemble::ignored_config_warnings(&ctx.config) {
         tracing::warn!("{message}");
     }
-    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
-    // Route the sub-agent's LLM traffic through the daemon (default) unless
-    // opted out. Fail fast — before speaking any ACP — so a manager handles
-    // "child failed to start" rather than a mid-session provider error.
-    //
-    // Returned, not `exit(1)`: a caller that never sees a value cannot render
-    // one, and the shutdown path below is skipped either way because nothing
-    // has been launched yet. `run_acp` renders it to stderr.
-    let routed = apply_routing_with_cloud_credentials(
-        source,
-        &mut config,
-        agent_id,
-        &routing,
-        &cloud_credentials,
-    )
-    .await
-    .map_err(anyhow::Error::new)?;
-    config
-        .agents
-        .get(agent_id)
-        .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?
-        .validate()
-        .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
-    // The namespace both bridges address: the principal that keeps one
-    // caller's route leases out of another's is the same one the spend query
-    // is scoped by, and neither bridge exists without it.
-    let binding =
-        LocalControllerBinding::open(source, &config, &routed, routing.base_url.is_some());
-    let agent = config
+    let host = SessionHost::prepare(ctx, false).await?;
+    let agent_id = host.agent_id.as_str();
+    let agent = host
+        .config
         .agents
         .get(agent_id)
         .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?;
     let AcpTransport::Stdio { command, args, env } = &agent.transport;
-    let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
+    let identity = controller_identity(agent_id, command, args, host.routed.endpoint_plan.as_ref());
     let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
-    if let Some(endpoint) = routed.endpoint_plan.as_ref() {
+    if let Some(endpoint) = host.routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
     }
-    if options.turn_timeout.is_some() {
+    if host.options.turn_timeout.is_some() {
         eprintln!(
             "note: --turn-timeout is not enforced by transparent acp serve; \
-             the manager controls prompt deadlines"
+             the ACP client controls prompt deadlines"
         );
     }
     let process =
         bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
-            .strip_inherited_env(options.strip_inherited_env);
+            .strip_inherited_env(host.options.strip_inherited_env);
     let mut controller =
         bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
-    if let Some(binding) = &binding {
+    if let Some(binding) = &host.binding {
         controller = controller
             .route_control(binding.route_control())
             .session_cost(binding.session_cost());
+    }
+    if let Some(capture) = open_capture(&host.config, agent_id, host.binding.as_ref()).await? {
+        controller = controller.capture(capture);
     }
     controller
         .run(agent_client_protocol::Stdio::new())
@@ -1329,26 +2155,26 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
 
 /// Pass a `chat` startup failure through, having shown the session log first.
 ///
-/// Only the two `chat` paths use it, and only before their session exists.
-/// Every other ACP verb logs to stderr as well as the file, so its child's
-/// account of a failed launch is already on screen; `chat` suppresses stderr
-/// because its renderer owns the terminal, which is exactly what leaves a
-/// pre-session failure with nothing to show but a closed transport.
+/// Piped `chat` uses it before its session exists. Every other ACP verb logs
+/// to stderr as well as the file, so its child's account of a failed launch is
+/// already on screen.
 fn show_session_log(error: anyhow::Error) -> anyhow::Error {
     crate::chat::session::report_failed_launch();
     error
 }
 
-/// Launch a session for `agent_id` and hand it to the interactive renderer.
+/// Launch a session for `agent_id` through the canonical Code conversation.
 ///
-/// This half is the composition root: it resolves routing, binds the
-/// route namespace, launches the harness behind an in-process
-/// controller, and attaches observability — all of which need `Config`, the
-/// config source, and the daemon's control socket. What it hands over needs
-/// none of them, which is why the loop itself lives in
-/// [`crate::chat::session`].
+/// The legacy entry remains for compatibility. A terminal delegates before it
+/// constructs a controller, so Code owns one interactive turn and permission
+/// lifecycle. Redirected input or output retains the existing plain renderer.
 pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     use std::io::IsTerminal as _;
+
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        let (services, request) = crate::actions::code::CodeServices::from_spawn_context(ctx)?;
+        return crate::chat::code::run(services, Some(request)).await;
+    }
 
     let SpawnContext {
         source,
@@ -1358,12 +2184,6 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
         routing,
     } = ctx;
     let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
-    // Fail fast, before any agent process exists — a person waiting at a
-    // prompt should learn the route is dead now, not mid-turn.
-    //
-    // Controller-issued: the session's traffic meters under the controller
-    // instance rather than a launch token, which is what makes both a route
-    // lease and an attributable cost figure possible.
     let routed = apply_routing_with_cloud_credentials(
         source,
         &mut config,
@@ -1375,302 +2195,31 @@ pub async fn chat(ctx: SpawnContext<'_>) -> Result<()> {
     .map_err(anyhow::Error::new)?;
 
     match &routed.via {
-        Some(via) => eprintln!("chat: '{agent_id}' routed via bitrouter ({via})"),
-        None => eprintln!("chat: '{agent_id}' running direct (not routed, not metered)"),
+        Some(via) => eprintln!("code: '{agent_id}' routed via bitrouter ({via})"),
+        None => eprintln!("code: '{agent_id}' running direct (not routed, not metered)"),
     }
     let binding =
         LocalControllerBinding::open(source, &config, &routed, routing.base_url.is_some());
+    let ports = crate::actions::session::SessionPorts::open(
+        source.clone(),
+        crate::daemon::socket_path_for(source, &config),
+    );
+    let prompt_commands = crate::actions::session::prompt_commands(&config.chat)?;
 
-    // A pipe cannot be drawn on. Everything the terminal branch does — the
-    // live row, the modals, raw mode — assumes a screen with a cursor on it,
-    // and writing those escapes into a file or a `| grep` would corrupt the
-    // very output the redirect exists to capture. So a redirected stdout gets
-    // the session as plain text instead, which is the one thing a pipe *can*
-    // use.
-    if !std::io::stdout().is_terminal() {
-        return chat_piped(
-            &config,
-            agent_id,
-            &routed,
-            options,
-            &cloud_credentials,
-            binding,
-        )
-        .await;
-    }
-
-    let cwd = std::env::current_dir().context("resolving current directory")?;
-    let mcp_servers = options.mcp_servers.clone();
-    // The one path with a person at a terminal, so the one path that may claim
-    // it can run a `terminal` login.
-    let options = LaunchOptions {
-        terminal_auth: true,
-        ..options
-    };
-    let mut session =
-        launch_controlled(&config, agent_id, &routed, options.clone(), binding.clone())
-            .await
-            .with_context(|| format!("launching acp session for agent '{agent_id}'"))
-            .map_err(show_session_log)?;
-
-    // At most one authentication round. A second `auth_required` after a login
-    // the agent reported as successful is the agent disagreeing with itself,
-    // and retrying it would be a loop with a person in it.
-    let mut authenticated = false;
-    let ids = loop {
-        match session
-            .client
-            .new_session(cwd.clone(), mcp_servers.clone())
-            .await
-        {
-            Ok(ids) => break ids,
-            Err(error) => {
-                // A harness that is merely unauthenticated is not a broken one,
-                // and relaying its JSON-RPC error would leave the reader to
-                // guess which of the two it is. The protocol already said
-                // which; say it — and offer what it advertised.
-                if !bitrouter_sdk::acp::client::is_auth_required(&error) {
-                    session.shutdown().await;
-                    return Err(show_session_log(
-                        error.context("opening the harness session"),
-                    ));
-                }
-                let choice = if authenticated {
-                    AuthChoice::Declined
-                } else {
-                    choose_auth_method(agent_id, session.client.auth_methods())?
-                };
-                match choice {
-                    // No log tail: unlike a launch that died with its reason on
-                    // the child's stderr, this failure is already fully
-                    // explained, and a tail would bury the sentence that
-                    // explains it.
-                    AuthChoice::Declined => {
-                        let context =
-                            unauthenticated_message(agent_id, session.client.auth_methods());
-                        session.shutdown().await;
-                        return Err(error.context(context));
-                    }
-                    AuthChoice::Agent(method_id) => {
-                        if let Err(failed) = session.client.authenticate(method_id).await {
-                            session.shutdown().await;
-                            return Err(show_session_log(
-                                failed
-                                    .context(format!("authenticating '{agent_id}' with the agent")),
-                            ));
-                        }
-                    }
-                    // Out of band: the harness's own program owns the terminal
-                    // for the login, so this connection is torn down first and
-                    // rebuilt after — which is also what reinitializes it.
-                    AuthChoice::Terminal(method) => {
-                        session.shutdown().await;
-                        // Its stdio was inherited, so whatever went wrong was
-                        // on screen as it happened; no tail to add.
-                        run_terminal_login(&config, agent_id, &method).await?;
-                        session = launch_controlled(
-                            &config,
-                            agent_id,
-                            &routed,
-                            options.clone(),
-                            binding.clone(),
-                        )
-                        .await
-                        .with_context(|| format!("relaunching '{agent_id}' after its login"))
-                        .map_err(show_session_log)?;
-                    }
-                }
-                authenticated = true;
-            }
-        }
-    };
-    let observability =
-        build_observability(&config, agent_id, &ids.acp_session_id, &cloud_credentials).await;
-    if let Some(recorder) = observability.recorder.clone() {
-        spawn_tool_spans(recorder, session.client.subscribe_updates());
-    }
-
-    // The picker exists only when the controller advertised route control —
-    // which it does only with a local control binding. Said here, before raw
-    // mode, because a cooked newline in a raw terminal does not return the
-    // carriage.
-    if crate::chat::session::can_reroute(&session.client) {
-        eprintln!("chat: type /route to change the route mid-session.");
-    }
-    eprintln!("chat: type a message and press enter; Ctrl-D to end the session.");
-    let ended = crate::chat::session::run(
-        &mut session,
-        &ids.acp_session_id,
+    chat_piped(
+        &config,
         agent_id,
-        observability.recorder,
-        routed.via.clone(),
+        &routed,
+        options,
+        &cloud_credentials,
+        binding,
+        crate::actions::session::SessionSurface {
+            commands: Vec::new(),
+            prompt_commands,
+            ports: &ports,
+        },
     )
-    .await;
-
-    if let Some(exporter) = observability.exporter {
-        exporter.shutdown();
-    }
-    ended
-}
-
-/// `chat` for a stdout that is not a terminal.
-///
-/// The same stack `acp serve` exposes and `acp prompt` drives: an in-process
-/// controller, the shared client, and harness-native session identity. What
-/// differs from `prompt` is only the consumer — a journal rendered per turn
-/// rather than an NDJSON stream — which is why the loop itself lives beside
-/// the renderers in [`crate::chat::session`].
-/// What a person chose at the authentication prompt.
-enum AuthChoice {
-    /// A method the agent performs itself: `authenticate`, then retry on the
-    /// same connection.
-    Agent(agent_client_protocol::schema::v1::AuthMethodId),
-    /// A method whose login runs out of band: relaunch the harness's own
-    /// program with these additions, then reconnect and retry.
-    Terminal(Box<agent_client_protocol::schema::v1::AuthMethodTerminal>),
-    /// Nobody chose. The session does not start, and that is not consent.
-    Declined,
-}
-
-/// Offer the agent's advertised authentication methods and read one choice.
-///
-/// A cooked-terminal prompt rather than a TUI modal, because this runs *before*
-/// the renderer exists: `session/new` is what reports `auth_required`, and the
-/// view is not opened until a session exists. Numbered like every other choice
-/// this CLI offers.
-///
-/// Declines rather than guesses whenever a person cannot answer — no tty, EOF,
-/// or an empty method list. An unanswered prompt must never resolve to a login
-/// attempt nobody asked for.
-fn choose_auth_method(
-    agent_id: &str,
-    methods: &[agent_client_protocol::schema::v1::AuthMethod],
-) -> Result<AuthChoice> {
-    use std::io::{BufRead, IsTerminal as _};
-
-    if methods.is_empty() || !std::io::stdin().is_terminal() {
-        return Ok(AuthChoice::Declined);
-    }
-    eprintln!();
-    eprintln!("  '{agent_id}' is not authenticated. How would you like to sign in?");
-    for (index, method) in methods.iter().enumerate() {
-        match method.description() {
-            Some(description) => {
-                eprintln!("    {}) {} — {description}", index + 1, method.name())
-            }
-            None => eprintln!("    {}) {}", index + 1, method.name()),
-        }
-    }
-    eprintln!("    0) cancel");
-
-    let stdin = std::io::stdin();
-    let mut handle = stdin.lock();
-    loop {
-        eprint!("  Choose [1]: ");
-        let mut line = String::new();
-        if handle
-            .read_line(&mut line)
-            .context("reading the authentication choice")?
-            == 0
-        {
-            // EOF, not a choice.
-            eprintln!();
-            return Ok(AuthChoice::Declined);
-        }
-        match classify_choice(&line, methods) {
-            Some(choice) => return Ok(choice),
-            // Not a selection: say why, then ask again.
-            None => match line.trim().parse::<usize>() {
-                Ok(n) => eprintln!(
-                    "    choice must be between 0 and {}, got {n}",
-                    methods.len()
-                ),
-                Err(_) => eprintln!("    '{}' is not a number", line.trim()),
-            },
-        }
-    }
-}
-
-/// Classify one typed line against the offered methods.
-///
-/// Pure, so the interesting half of the picker is testable without a terminal:
-/// `choose_auth_method` owns stdin and the menu, this owns what the answer
-/// means. The same split `Editor::apply` and `machine::step` already use.
-///
-/// `0` cancels, an empty line takes the `[1]` default, and `1..=methods.len()`
-/// selects. Anything else is `None` — not a selection, ask again. Out-of-range
-/// never wraps onto a method that was not offered.
-fn classify_choice(
-    input: &str,
-    methods: &[agent_client_protocol::schema::v1::AuthMethod],
-) -> Option<AuthChoice> {
-    use agent_client_protocol::schema::v1::AuthMethod;
-
-    let trimmed = input.trim();
-    let index = if trimmed.is_empty() {
-        1
-    } else {
-        match trimmed.parse::<usize>() {
-            Ok(0) => return Some(AuthChoice::Declined),
-            Ok(n) if (1..=methods.len()).contains(&n) => n,
-            Ok(_) | Err(_) => return None,
-        }
-    };
-    Some(match methods.get(index - 1)? {
-        // ACP is explicit that a terminal method is never passed to
-        // `authenticate`: the interactive process is not the connection.
-        AuthMethod::Terminal(terminal) => AuthChoice::Terminal(Box::new(terminal.clone())),
-        other => AuthChoice::Agent(other.id().clone()),
-    })
-}
-
-/// Run a `terminal` method's login: the harness's **own** program, relaunched
-/// interactively with the descriptor's additions.
-///
-/// The command is never the descriptor's — ACP does not let it name one, which
-/// is what stops an agent pointing the client at an unrelated program. It comes
-/// from the configured transport, and the descriptor may only append `args` and
-/// overlay `env`.
-///
-/// Stdio is inherited: the login owns the terminal for its lifetime, which is
-/// the whole reason this is out of band. Exit status zero is the only success —
-/// a non-zero status, a signal, or a spawn failure all leave the session
-/// unauthenticated.
-async fn run_terminal_login(
-    config: &Config,
-    agent_id: &str,
-    method: &agent_client_protocol::schema::v1::AuthMethodTerminal,
-) -> Result<()> {
-    let agent = config
-        .agents
-        .get(agent_id)
-        .with_context(|| format!("no acp agent configured for '{agent_id}'"))?;
-    let AcpTransport::Stdio { command, args, env } = &agent.transport;
-
-    let mut invocation = args.clone();
-    invocation.extend(method.args.iter().cloned());
-
-    eprintln!();
-    eprintln!("  Running '{}'s login — {}.", agent_id, method.name);
-    eprintln!("  Finish it in the terminal below; this session resumes afterwards.");
-    eprintln!();
-
-    let mut child = tokio::process::Command::new(command);
-    child.args(&invocation).envs(env);
-    // Descriptor values override same-named variables in the base launch
-    // configuration, per the RFD.
-    child.envs(method.env.iter());
-    let status = child
-        .status()
-        .await
-        .with_context(|| format!("running the login for '{agent_id}'"))?;
-    if !status.success() {
-        anyhow::bail!(
-            "the login for '{agent_id}' did not complete ({status}) — \
-             the session is still unauthenticated"
-        );
-    }
-    Ok(())
+    .await
 }
 
 /// What to say when a harness answered `auth_required` and no login ran.
@@ -1717,8 +2266,9 @@ fn unauthenticated_message(
     } else {
         format!(
             "'{agent_id}' is not authenticated. It offers: {offered}. \
-             Run `bitrouter chat {agent_id}` in a terminal to sign in, or use the \
-             harness's own tooling"
+             Run `{cli} code {agent_id}` in a terminal to sign in, or use the \
+             harness's own tooling",
+            cli = invocation::name()
         )
     }
 }
@@ -1730,6 +2280,7 @@ async fn chat_piped(
     options: LaunchOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
     binding: Option<LocalControllerBinding>,
+    mut surface: crate::actions::session::SessionSurface<'_>,
 ) -> Result<()> {
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let mcp_servers = options.mcp_servers.clone();
@@ -1768,11 +2319,14 @@ async fn chat_piped(
         spawn_tool_spans(recorder, session.client.subscribe_updates());
     }
 
+    // Only now can the controller be asked what it advertised.
+    surface.commands = crate::actions::session::offered_commands(&session.client);
     let ended = crate::chat::session::chat_plain(
         &session.client,
         &ids.acp_session_id,
         agent_id,
         observability.recorder,
+        surface,
     )
     .await;
 
@@ -1796,7 +2350,7 @@ async fn chat_piped(
 ///
 /// When `no_wait` is true: shut down the session immediately after emitting
 /// `{"type":"submitted"}`. The agent child is terminated; callers needing a
-/// persistent session should use `bitrouter acp serve` instead.
+/// persistent session should use `bro acp serve` instead.
 ///
 /// `options.contract` is the optional `--result-schema` contract: its
 /// instruction rides the prompt, and the terminal `result` line gains
@@ -1817,62 +2371,60 @@ where
         contract,
         policy,
         format,
+        session: session_selection,
+        cwd,
     } = options;
     let mut presenter = Presenter::new(format, contract.is_some(), out);
-    let SpawnContext {
-        source,
-        mut config,
-        agent_id,
-        options,
-        routing,
-    } = ctx;
     let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
-    // Route by default; fail fast with a single structured NDJSON `error`
-    // line BEFORE any session side effect (no agent process spawned).
-    //
-    // The line goes on `out` because it is part of the NDJSON stream the
-    // orchestrator is parsing — that is the contract, and it is why this
-    // cannot simply propagate. What *is* returned is the same failure as an
-    // error value, so the caller controls the exit rather than this function
-    // ending the process from inside a library.
-    let routed = match apply_routing_with_cloud_credentials(
-        source,
-        &mut config,
-        agent_id,
-        &routing,
-        &cloud_credentials,
-    )
-    .await
-    {
-        Ok(routed) => routed,
-        Err(e) => {
-            presenter.routing_error(&e).await?;
-            return Err(anyhow::Error::new(e));
-        }
-    };
-
-    let cwd = std::env::current_dir().context("resolving current directory")?;
-    let mcp_servers = options.mcp_servers.clone();
-    let mut session = launch_controlled(&config, agent_id, &routed, options, None)
-        .await
-        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
-    let ids = match session.client.new_session(cwd, mcp_servers).await {
-        Ok(ids) => ids,
+    let host = match SessionHost::prepare(ctx, false).await {
+        Ok(host) => host,
         Err(error) => {
-            // A harness that is merely unauthenticated is not a broken one, and
-            // relaying its JSON-RPC error would leave the reader to guess which
-            // of the two it is. The protocol already said which; say it.
-            let context = if bitrouter_sdk::acp::client::is_auth_required(&error) {
-                unauthenticated_message(agent_id, session.client.auth_methods())
+            if let Some(routing) = error.downcast_ref::<RoutingError>() {
+                presenter.routing_error(routing).await?;
             } else {
-                "opening the harness session".to_string()
-            };
-            session.shutdown().await;
-            return Err(error.context(context));
+                presenter
+                    .error("session_prepare_failed", &format!("{error:#}"))
+                    .await?;
+            }
+            return Err(error);
         }
     };
+    let config = host.config.clone();
+    let agent_id = host.agent_id.clone();
+
+    // A config command expands identically here and in the terminal, through
+    // the one resolver. The BitRouter half is deliberately empty: `acp prompt
+    // "/status"` is not a scheduled surface, so a name this process answers
+    // goes to the agent exactly as it does today.
+    let expanded = match bitrouter_tui::machine::resolve(
+        &[],
+        &crate::actions::session::prompt_commands(&config.chat)?,
+        text,
+    ) {
+        bitrouter_tui::machine::Resolution::Expand(prompt) => prompt,
+        _ => text.to_string(),
+    };
+    let text = expanded.as_str();
+
+    let cwd = match cwd {
+        Some(cwd) => cwd
+            .canonicalize()
+            .with_context(|| format!("resolving working directory {}", cwd.display()))?,
+        None => std::env::current_dir().context("resolving current directory")?,
+    };
+    let mut session = match host.open(&session_selection, cwd).await {
+        Ok(session) => session,
+        Err(error) => {
+            presenter
+                .error("agent_not_ready", &format!("{error:#}"))
+                .await?;
+            return Err(error);
+        }
+    };
+    let mut updates = session.take_updates();
+    let permissions = session.take_permissions();
     let observability =
-        build_observability(&config, agent_id, &ids.acp_session_id, &cloud_credentials).await;
+        build_observability(&config, &agent_id, &session.session_id, &cloud_credentials).await;
     if let Some(recorder) = observability.recorder.clone() {
         spawn_tool_spans(recorder, session.client.subscribe_updates());
     }
@@ -1898,21 +2450,21 @@ where
     presenter
         .session(&serde_json::json!({
             "type": "session",
-            "session_id": ids.acp_session_id,
-            "agent_session_id": ids.agent_session_id,
+            "session_id": session.session_id,
+            "agent_session_id": session.agent_session_id,
             "agent": agent_id,
-            "via": routed.via,
+            "via": session.via,
             // The token this session's requests carry, so an orchestrator can
             // group its spend. Null when the caller supplied their own
             // credential and the traffic is therefore not separable.
-            "launch_id": routed.launch_id,
+            "launch_id": session.launch_id,
         }))
         .await?;
 
     if no_wait {
         // v1 no-wait: emit ack, then shut down immediately. The agent child is
         // killed on shutdown. Callers needing a persistent background session
-        // should use `bitrouter acp serve` instead. Whatever the harness asks
+        // should use `bro acp serve` instead. Whatever the harness asks
         // between ack and teardown is denied by the client's own ledger.
         presenter.submitted().await?;
         let clean = session.shutdown().await;
@@ -1930,15 +2482,15 @@ where
     // it will never get ends now.
     let mut turn = Turn {
         client: &session.client,
-        session_id: &ids.acp_session_id,
-        agent_id,
+        session_id: &session.session_id,
+        agent_id: &agent_id,
         recorder: observability.recorder.clone(),
-        wire: Wire::new(&session.client, &ids.acp_session_id),
-        permissions: session.client.subscribe_permissions(),
+        wire: Wire::new(&session.client, &session.session_id),
+        permissions,
         policy,
         tally: PermissionTally::default(),
     };
-    let outcome = prompt_wait(&mut turn, text, contract, &mut presenter).await;
+    let outcome = prompt_wait(&mut turn, &mut updates, text, contract, &mut presenter).await;
     let tally = turn.tally;
     let clean = session.shutdown().await;
     if let Some(exporter) = observability.exporter {
@@ -1947,8 +2499,30 @@ where
     }
     // The turn's own failure is the more specific thing that went wrong, so it
     // outranks a teardown that did not confirm.
-    outcome?;
+    if let Err(error) = outcome {
+        presenter
+            .error("turn_failed", &format!("{error:#}"))
+            .await?;
+        return Err(error);
+    }
     teardown_result(clean).map(|()| tally)
+}
+
+async fn open_session(
+    client: &AcpClient,
+    selection: &SessionSelection,
+    cwd: PathBuf,
+    mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
+) -> Result<bitrouter_sdk::acp::client::SessionIds> {
+    match selection {
+        SessionSelection::New => client.new_session(cwd, mcp_servers).await,
+        SessionSelection::Load(session_id) => {
+            client.load_session(session_id, cwd, mcp_servers).await
+        }
+        SessionSelection::Resume(session_id) => {
+            client.resume_session(session_id, cwd, mcp_servers).await
+        }
+    }
 }
 
 /// What a `prompt` exits with when the turn itself was fine.
@@ -1956,7 +2530,7 @@ where
 /// A teardown that did not confirm **fails the command**. Before `prompt`
 /// moved onto the shared client it did this by `?`-ing on `shutdown()`; the
 /// controlled session logs and returns a flag instead, and the flag went
-/// unread — so an orchestrator scripting `bitrouter acp prompt` saw exit 0
+/// unread — so an orchestrator scripting `bro acp prompt` saw exit 0
 /// for a run whose harness child may still be alive. That was an undeclared
 /// change, and this is it declared: the NDJSON on stdout is already complete
 /// and correct, and the status code is what says the process did not end
@@ -1975,12 +2549,22 @@ fn teardown_result(clean: bool) -> Result<()> {
 /// shared ACP client connected to that controller as its manager.
 ///
 /// This is exactly the stack `acp serve` exposes over stdio; the only
-/// difference is that the manager on the other end of the duplex is this
+/// difference is that the ACP client on the other end of the duplex is this
 /// process. Session identity, lifecycle, and history therefore stay
 /// harness-native, and there is no second scheduler: the controller, the
 /// harness child's I/O, and the client all run on this runtime.
 pub(crate) struct ControlledSession {
     pub(crate) client: AcpClient,
+    cleanup: ControlledCleanup,
+}
+
+/// Resources created before an [`AcpClient`] has completed initialize.
+///
+/// A cancelled initialize has no client through which to close the duplex, so
+/// it must abort the controller first and still wait for the reaper/binding
+/// cleanup. Keeping these resources together prevents a dropped lifecycle
+/// future from orphaning a harness process.
+struct ControlledCleanup {
     /// The route namespace this session's leases live in, when it has one.
     /// Cleaned up by [`ControlledSession::shutdown`] on every exit.
     binding: Option<LocalControllerBinding>,
@@ -1988,8 +2572,8 @@ pub(crate) struct ControlledSession {
     /// Awaited in [`ControlledSession::shutdown`], because tearing the
     /// connection down is not the same as the child being gone — the SDK drops
     /// the transport task rather than letting it confirm the kill.
-    reaped: futures::channel::oneshot::Receiver<()>,
-    /// The controller's own `run`. It ends when the manager side of the duplex
+    reaped: futures::future::Shared<futures::channel::oneshot::Receiver<()>>,
+    /// The controller's own `run`. It ends when the client side of the duplex
     /// closes, and awaiting it is what proves the harness child was reaped.
     controller: tokio::task::JoinHandle<std::result::Result<(), anyhow::Error>>,
 }
@@ -2012,10 +2596,37 @@ impl ControlledSession {
             tracing::warn!(%error, "acp teardown unconfirmed; the harness may not have terminated");
             clean = false;
         }
+        self.cleanup.finish(false).await && clean
+    }
+
+    /// Return an owned watcher so an interactive client can observe an
+    /// adapter death without relying on the controller's connection close.
+    fn closed(&self) -> futures::future::BoxFuture<'static, ()> {
+        let reaped = self.cleanup.reaped.clone();
+        Box::pin(async move {
+            let _ = reaped.await;
+        })
+    }
+}
+
+impl ControlledCleanup {
+    /// Stop a controller whose client initialization never completed, then
+    /// wait through the same bounded cleanup sequence as a normal shutdown.
+    async fn abort(&mut self) -> bool {
+        self.controller.abort();
+        self.finish(true).await
+    }
+
+    /// Confirm the child group, controller task, and route binding have all
+    /// settled. `controller_aborted` accepts the expected cancelled join error
+    /// from the initialize-cancellation path while preserving every other
+    /// controller failure as diagnostic evidence.
+    async fn finish(&mut self, controller_aborted: bool) -> bool {
+        let mut clean = true;
         // The connection is down; the child may not be. `kill_on_drop` reaches
         // the wrapper (`npx`) and not the `node` it spawned, so the group kill
         // has to be confirmed rather than assumed.
-        if tokio::time::timeout(bitrouter_sdk::acp::up::REAP_CONFIRM, &mut self.reaped)
+        if tokio::time::timeout(bitrouter_sdk::acp::up::REAP_CONFIRM, self.reaped.clone())
             .await
             .is_err()
         {
@@ -2026,8 +2637,12 @@ impl ControlledSession {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(error))) => tracing::debug!(%error, "acp controller ended with an error"),
             Ok(Err(error)) => {
-                tracing::warn!(%error, "acp controller task failed");
-                clean = false;
+                if controller_aborted && error.is_cancelled() {
+                    tracing::debug!("acp controller aborted during lifecycle cancellation");
+                } else {
+                    tracing::warn!(%error, "acp controller task failed");
+                    clean = false;
+                }
             }
             Err(_) => {
                 tracing::warn!("acp controller did not exit within {CONTROLLER_EXIT_TIMEOUT:?}");
@@ -2044,6 +2659,52 @@ impl ControlledSession {
     }
 }
 
+async fn open_capture(
+    config: &Config,
+    agent_id: &str,
+    binding: Option<&LocalControllerBinding>,
+) -> Result<Option<Arc<dyn bitrouter_sdk::acp::capture::CapturePort>>> {
+    if !config.acp_recording.enabled {
+        return Ok(None);
+    }
+    let db = crate::db::connect(&config.database.url)
+        .await
+        .context("opening the opt-in ACP content store")?;
+    crate::db::run_migrations(&db).await?;
+    let store = crate::acp_trajectory::CanonicalStore::new(db);
+    let recorder = store
+        .recorder(crate::acp_trajectory::RecordingScope {
+            owner: "local".into(),
+            source: agent_id.to_owned(),
+            controller_instance_id: binding.map(|value| value.controller_instance_id.clone()),
+            route_scope_id: binding.map(|value| value.api_principal.clone()),
+        })
+        .await?;
+    if let Some(binding) = binding {
+        let command = crate::daemon::DaemonCommand::AcpRecordingRegister {
+            connection_id: recorder.connection_id().to_owned(),
+            api_principal: binding.api_principal.clone(),
+            controller_instance_id: binding.controller_instance_id.clone(),
+        };
+        let acknowledged = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            crate::daemon::send_command(&binding.socket_path, &command),
+        )
+        .await;
+        match acknowledged {
+            Ok(Ok(crate::daemon::DaemonResponse::AcpRecordingRegistered { registration }))
+                if registration.connection_id == recorder.connection_id()
+                    && registration.version == crate::evolution::inventory::INVENTORY_VERSION
+                    && registration.invalid_reason.is_none() => {}
+            response => tracing::warn!(
+                ?response,
+                "ACP capture has no acknowledged gateway cost coverage"
+            ),
+        }
+    }
+    Ok(Some(recorder))
+}
+
 /// Launch `agent_id` behind an in-process controller and connect the shared
 /// client to it. The controller carries the same identity and endpoint plan
 /// `acp serve` gives it, so a routed session configures the harness's
@@ -2056,6 +2717,30 @@ async fn launch_controlled(
     options: LaunchOptions,
     binding: Option<LocalControllerBinding>,
 ) -> Result<ControlledSession> {
+    launch_controlled_with_cancel(
+        config,
+        agent_id,
+        routed,
+        options,
+        binding,
+        &CancellationToken::new(),
+    )
+    .await
+}
+
+/// Launch the controller and run its initialize handshake while retaining
+/// cleanup ownership if the caller cancels mid-handshake.
+async fn launch_controlled_with_cancel(
+    config: &Config,
+    agent_id: &str,
+    routed: &Routed,
+    options: LaunchOptions,
+    binding: Option<LocalControllerBinding>,
+    cancel: &CancellationToken,
+) -> Result<ControlledSession> {
+    if cancel.is_cancelled() {
+        return Err(lifecycle_cancelled());
+    }
     let agent = config
         .agents
         .get(agent_id)
@@ -2073,13 +2758,17 @@ async fn launch_controlled(
     let mut process =
         bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
             .strip_inherited_env(options.strip_inherited_env);
-    let reaped = process.reaped();
+    let reaped = process.reaped().shared();
     let mut controller =
         bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
     if let Some(binding) = &binding {
         controller = controller
             .route_control(binding.route_control())
             .session_cost(binding.session_cost());
+    }
+
+    if let Some(capture) = open_capture(config, agent_id, binding.as_ref()).await? {
+        controller = controller.capture(capture);
     }
 
     // In-process duplex: no bytes, no pipe, no second process between the
@@ -2091,37 +2780,46 @@ async fn launch_controlled(
             .await
             .map_err(|error| anyhow::anyhow!("acp controller: {error}"))
     });
-    let client = match AcpClient::connect(
-        manager_side,
-        ClientOptions {
-            turn_timeout: options.turn_timeout,
-            // §6.2's first condition always holds here — the harness is a local
-            // child of this process, `AcpTransport::Stdio` being the only
-            // transport, so its invocation is always reproducible. The second
-            // is the caller's to answer, because only an interactive caller can
-            // hand a person the terminal the login needs.
-            terminal_auth: options.terminal_auth,
-        },
-    )
-    .await
-    {
-        Ok(client) => client,
-        Err(error) => {
-            // Aborted, not awaited: the controller's own disconnect revoke may
-            // never run, so the credential is revoked here.
-            controller.abort();
-            if let Some(binding) = &binding {
-                binding.revoke().await;
-            }
-            return Err(error);
-        }
-    };
-    Ok(ControlledSession {
-        client,
+    let mut cleanup = ControlledCleanup {
         binding,
         reaped,
         controller,
-    })
+    };
+    let connected = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => None,
+        result = AcpClient::connect(
+            manager_side,
+            ClientOptions {
+                turn_timeout: options.turn_timeout,
+                // §6.2's first condition always holds here — the harness is a local
+                // child of this process, `AcpTransport::Stdio` being the only
+                // transport, so its invocation is always reproducible. The second
+                // is the caller's to answer, because only an interactive caller can
+                // hand a person the terminal the login needs.
+                terminal_auth: options.terminal_auth,
+            },
+        ) => Some(result),
+    };
+    match connected {
+        Some(Ok(client)) => Ok(ControlledSession { client, cleanup }),
+        Some(Err(error)) => {
+            let clean = cleanup.abort().await;
+            if !clean {
+                tracing::warn!("acp lifecycle failure left teardown unconfirmed");
+            }
+            Err(error)
+        }
+        None => {
+            let clean = cleanup.abort().await;
+            if clean {
+                Err(lifecycle_cancelled())
+            } else {
+                tracing::warn!("acp lifecycle cancellation left teardown unconfirmed");
+                Err(lifecycle_teardown_unconfirmed())
+            }
+        }
+    }
 }
 
 /// Everything one prompt turn needs beyond its text: the client to drive, the
@@ -2146,6 +2844,7 @@ struct Turn<'a> {
 /// Inner implementation for the wait (non-`--no-wait`) path.
 async fn prompt_wait<W>(
     turn: &mut Turn<'_>,
+    updates: &mut (impl futures::Stream<Item = SessionUpdate> + Unpin),
     text: &str,
     contract: Option<crate::result_contract::ResultContract>,
     presenter: &mut Presenter<'_, W>,
@@ -2156,14 +2855,12 @@ where
     // Subscribe to updates BEFORE prompting so no streamed update is missed.
     // The **raw** stream: the text presentation is a journal, which is a
     // protocol client, and the NDJSON one translates for itself.
-    let mut updates = turn.client.subscribe_raw_updates();
     let task = match &contract {
         // The contract clause rides the subagent's task prompt.
         Some(c) => format!("{text}{}", c.instruction()),
         None => text.to_string(),
     };
-    let (response, reply) =
-        run_turn(turn, &mut updates, &task, contract.is_some(), presenter).await?;
+    let (response, reply) = run_turn(turn, updates, &task, contract.is_some(), presenter).await?;
 
     // Extract + validate the machine-consumable result. On failure: ONE
     // repair re-prompt, then `schema_ok:false` + raw text — the orchestrator
@@ -2173,14 +2870,8 @@ where
         Some(c) => match c.check(&reply) {
             Ok(value) => (response, Some(value), Some(true), None),
             Err(problem) => {
-                let (response, reply) = run_turn(
-                    turn,
-                    &mut updates,
-                    &c.repair_prompt(&problem),
-                    true,
-                    presenter,
-                )
-                .await?;
+                let (response, reply) =
+                    run_turn(turn, updates, &c.repair_prompt(&problem), true, presenter).await?;
                 match c.check(&reply) {
                     Ok(value) => (response, Some(value), Some(true), None),
                     Err(_) => (
@@ -2323,7 +3014,7 @@ pub(crate) fn report_turn(
 enum Presenter<'a, W> {
     /// NDJSON: every update as the [`SessionUpdateKind`] it translates to,
     /// plus `session`, `permission`, `result`, `submitted`, and `error` lines.
-    Json(&'a mut W),
+    Ndjson { out: &'a mut W, seq: u64 },
     /// The assistant's text as it streams, and a trailing newline. Under a
     /// result contract, only the extracted result instead — the text was the
     /// working, not the answer.
@@ -2342,7 +3033,7 @@ where
 {
     fn new(format: PromptFormat, contracted: bool, out: &'a mut W) -> Self {
         match format {
-            PromptFormat::Json => Presenter::Json(out),
+            PromptFormat::Ndjson => Presenter::Ndjson { out, seq: 0 },
             PromptFormat::Quiet => Presenter::Quiet { out, contracted },
             PromptFormat::Text => Presenter::Text {
                 out,
@@ -2355,17 +3046,50 @@ where
     /// `main` already prints the reason on stderr, and the other two formats
     /// promise stdout carries the session and nothing else.
     async fn routing_error(&mut self, error: &RoutingError) -> Result<()> {
-        if let Presenter::Json(out) = self {
-            write_ndjson_line(out, &error.ndjson()).await?;
+        if matches!(self, Presenter::Ndjson { .. }) {
+            self.ndjson(error.ndjson()).await?;
+            let Presenter::Ndjson { out, .. } = self else {
+                return Ok(());
+            };
             out.flush().await.ok();
         }
         Ok(())
     }
 
+    /// A terminal error in the versioned stream. Text/quiet reserve stdout for
+    /// user content, so their diagnostics continue to use stderr via `main`.
+    async fn error(&mut self, code: &str, message: &str) -> Result<()> {
+        if matches!(self, Presenter::Ndjson { .. }) {
+            self.ndjson(serde_json::json!({
+                "type": "error",
+                "code": code,
+                "message": message,
+            }))
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Add the BitRouter event version and monotonically increasing sequence
+    /// number to one translated event before writing it.
+    async fn ndjson(&mut self, value: serde_json::Value) -> Result<()> {
+        let Presenter::Ndjson { out, seq } = self else {
+            return Ok(());
+        };
+        let mut object = value
+            .as_object()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("NDJSON event must serialize as an object"))?;
+        object.insert("version".to_string(), serde_json::json!(1));
+        object.insert("seq".to_string(), serde_json::json!(*seq));
+        *seq = seq.saturating_add(1);
+        write_ndjson_line(out, &object).await
+    }
+
     /// The `session` correlation line.
     async fn session(&mut self, line: &serde_json::Value) -> Result<()> {
         match self {
-            Presenter::Json(out) => write_ndjson_line(out, line).await,
+            Presenter::Ndjson { .. } => self.ndjson(line.clone()).await,
             Presenter::Quiet { .. } => Ok(()),
             Presenter::Text { out, .. } => {
                 let field = |name: &str| {
@@ -2413,7 +3137,7 @@ where
                 transcript.apply(update);
                 Ok(())
             }
-            Presenter::Json(out) => {
+            Presenter::Ndjson { .. } => {
                 let Some(kind) = translate(update) else {
                     return Ok(());
                 };
@@ -2422,7 +3146,8 @@ where
                 }
                 // The `SessionUpdateKind`'s own `type` tag (e.g.
                 // `message_chunk`) makes the line self-describing.
-                write_ndjson_line(out, &kind).await
+                self.ndjson(serde_json::to_value(kind).context("serialising NDJSON event")?)
+                    .await
             }
             Presenter::Quiet { out, contracted } => {
                 let Some(SessionUpdateKind::MessageChunk { text, .. }) = translate(update) else {
@@ -2444,16 +3169,13 @@ where
     /// A permission request the policy answered.
     async fn permission(&mut self, prompt: &PermissionPrompt, decision: Decision) -> Result<()> {
         match self {
-            Presenter::Json(out) => {
-                write_ndjson_line(
-                    out,
-                    &serde_json::json!({
-                        "type": "permission",
-                        "decision": decision.to_string(),
-                        "title": prompt.title(),
-                        "kind": prompt.kind(),
-                    }),
-                )
+            Presenter::Ndjson { .. } => {
+                self.ndjson(serde_json::json!({
+                    "type": "permission",
+                    "decision": decision.to_string(),
+                    "title": prompt.title(),
+                    "kind": prompt.kind(),
+                }))
                 .await
             }
             Presenter::Quiet { .. } => Ok(()),
@@ -2480,7 +3202,10 @@ where
     /// The terminal result.
     async fn result<S: Serialize>(&mut self, line: &ResultLine<S>) -> Result<()> {
         match self {
-            Presenter::Json(out) => write_ndjson_line(out, line).await,
+            Presenter::Ndjson { .. } => {
+                self.ndjson(serde_json::to_value(line).context("serialising NDJSON result")?)
+                    .await
+            }
             Presenter::Quiet { out, contracted } => {
                 let text = match (&line.result, &line.raw) {
                     (Some(result), None) => {
@@ -2520,12 +3245,39 @@ where
     /// The `--no-wait` acknowledgement.
     async fn submitted(&mut self) -> Result<()> {
         match self {
-            Presenter::Json(out) => {
-                write_ndjson_line(out, &serde_json::json!({ "type": "submitted" })).await
+            Presenter::Ndjson { .. } => {
+                self.ndjson(serde_json::json!({ "type": "submitted" }))
+                    .await
             }
             Presenter::Quiet { .. } => Ok(()),
             Presenter::Text { out, .. } => write_line(out, "[submitted]").await,
         }
+    }
+}
+
+#[cfg(test)]
+mod ndjson_presenter_tests {
+    use super::{Presenter, PromptFormat};
+
+    #[tokio::test]
+    async fn every_event_is_versioned_and_sequenced() -> anyhow::Result<()> {
+        let mut output = Vec::new();
+        let mut presenter = Presenter::new(PromptFormat::Ndjson, false, &mut output);
+        presenter.submitted().await?;
+        presenter.error("failed", "broken").await?;
+        drop(presenter);
+
+        let lines: Vec<serde_json::Value> = String::from_utf8(output)?
+            .lines()
+            .map(serde_json::from_str)
+            .collect::<Result<_, _>>()?;
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["version"], 1);
+        assert_eq!(lines[0]["seq"], 0);
+        assert_eq!(lines[1]["version"], 1);
+        assert_eq!(lines[1]["seq"], 1);
+        assert_eq!(lines[1]["type"], "error");
+        Ok(())
     }
 }
 
@@ -2538,6 +3290,101 @@ where
         .await
         .context("writing to stdout")?;
     out.write_all(b"\n").await.context("writing to stdout")
+}
+
+/// List what a session with this agent offers, and tear it down.
+///
+/// A fresh session, deliberately: nothing can name a `bro chat` running
+/// in another terminal, so this reports what a session with this agent *would*
+/// offer rather than what one already open is offering. That is the same
+/// limitation the row's `SessionBound` reach records.
+///
+/// No prompt is sent. The only thing waited on is the agent's own
+/// `available_commands_update`, and `wait_ms` bounds that wait — an agent that
+/// says nothing in time is reported as not having answered, which is a
+/// different answer from an empty list.
+pub async fn commands(
+    ctx: SpawnContext<'_>,
+    wait_ms: u64,
+) -> Result<bitrouter_mcp::actions::commands::CommandsReport> {
+    let SpawnContext {
+        source,
+        mut config,
+        agent_id,
+        options,
+        routing,
+    } = ctx;
+    let cloud_credentials = crate::cloud::StandaloneCloudCredentials::new();
+    let routed = apply_routing_with_cloud_credentials(
+        source,
+        &mut config,
+        agent_id,
+        &routing,
+        &cloud_credentials,
+    )
+    .await
+    .map_err(anyhow::Error::new)?;
+
+    // Before anything is launched. `ControlledSession` has no `Drop`, so a `?`
+    // between the launch and `shutdown()` would leave the harness child
+    // unreaped — and a `chat.commands` collision is exactly the error this
+    // call exists to raise.
+    let configured = crate::actions::session::prompt_commands(&config.chat)?;
+    // The same binding `chat` opens. Without it the controller advertises no
+    // route control, and this leaf would report `/route` as unavailable for
+    // every agent while `chat` offers it — the drift the shared report exists
+    // to prevent. `shutdown()` revokes it.
+    let binding =
+        LocalControllerBinding::open(source, &config, &routed, routing.base_url.is_some());
+
+    let cwd = std::env::current_dir().context("resolving current directory")?;
+    let mcp_servers = options.mcp_servers.clone();
+    let mut session = launch_controlled(&config, agent_id, &routed, options, binding)
+        .await
+        .with_context(|| format!("launching acp session for agent '{agent_id}'"))?;
+    // Subscribed before the session opens, so an agent that advertises its
+    // commands immediately is not raced.
+    let mut updates = session.client.subscribe_raw_updates();
+    if let Err(error) = session.client.new_session(cwd, mcp_servers).await {
+        let context = if bitrouter_sdk::acp::client::is_auth_required(&error) {
+            unauthenticated_message(agent_id, session.client.auth_methods())
+        } else {
+            "opening the harness session".to_string()
+        };
+        session.shutdown().await;
+        return Err(error.context(context));
+    }
+
+    let mut advertised = Vec::new();
+    let mut received = false;
+    let deadline = tokio::time::sleep(std::time::Duration::from_millis(wait_ms));
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            // The last update wins: the list is a replacement, not a delta.
+            update = updates.next() => match update {
+                Some(agent_client_protocol::schema::v1::SessionUpdate::AvailableCommandsUpdate(
+                    update,
+                )) => {
+                    advertised = update.available_commands;
+                    received = true;
+                }
+                Some(_) => continue,
+                // The stream ended; nothing more will arrive, so stop waiting.
+                None => break,
+            },
+            () = &mut deadline => break,
+        }
+    }
+
+    let report = crate::actions::commands::commands_report(
+        &crate::actions::session::offered_commands(&session.client),
+        &configured,
+        &advertised,
+        received,
+    );
+    session.shutdown().await;
+    Ok(report)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -2562,7 +3409,7 @@ async fn build_observability(
     // ignored-config warnings for free — and they read the same telemetry
     // config, which is exactly what the skill documents. Without this, a stale
     // `plugins.bitrouter-observe` block is silent on `chat` and `acp prompt`
-    // while being loud on `bitrouter serve`. `acp_cli::serve` emits the same
+    // while being loud on `bro serve`. `acp_cli::serve` emits the same
     // set itself, since it never reaches this function. The subscriber is
     // already installed on all of these paths, so unlike the daemon these can
     // be emitted in place.
@@ -2745,12 +3592,10 @@ pub struct LaunchOptions {
     /// Whether this caller can run a `terminal` authentication method's login
     /// (ACP_AUTH_SPEC §6.2, §7.3).
     ///
-    /// **False by default, and only interactive `chat` sets it.** The login
-    /// takes over the terminal and waits for a person, so the paths with
-    /// nobody at one — `serve`, `prompt`, a piped `chat` — must not advertise
-    /// it: an agent may offer a `terminal` method only when the client claimed
-    /// support, and offering one into a pipe would hang a program nobody is
-    /// watching.
+    /// **False by default.** The canonical Code surface does not hand its
+    /// terminal to an adapter, and headless or piped callers have no person to
+    /// complete the login. Only a caller that implements a supported terminal
+    /// handoff may set this true.
     pub terminal_auth: bool,
 }
 
@@ -2785,28 +3630,19 @@ pub fn launch_options(turn_timeout_secs: Option<u64>) -> LaunchOptions {
     }
 }
 
+#[cfg(all(test, unix))]
+mod evolution_acceptance;
+
 #[cfg(test)]
 mod auth_report_tests {
-    use agent_client_protocol::schema::v1::{AuthMethod, AuthMethodAgent, AuthMethodTerminal};
+    use agent_client_protocol::schema::v1::{AuthMethod, AuthMethodAgent};
 
-    use super::{
-        AuthChoice, LaunchOptions, choose_auth_method, classify_choice, unauthenticated_message,
-    };
+    use super::{LaunchOptions, unauthenticated_message};
 
-    /// Two `agent` methods, in the order the picker numbers them.
-    fn two_methods() -> Vec<AuthMethod> {
-        vec![
-            AuthMethod::Agent(AuthMethodAgent::new("oauth", "Sign in with Anthropic")),
-            AuthMethod::Agent(AuthMethodAgent::new("api-key", "Paste an API key")),
-        ]
-    }
-
-    /// **A control that cannot act is absent** (ACP_AUTH_SPEC §6.2). Only the
-    /// interactive caller may claim it can run a terminal login; every other
-    /// path — `serve`, `prompt`, a piped `chat` — leaves it false, so an agent
-    /// never offers a login into a pipe.
+    /// **A control that cannot act is absent** (ACP_AUTH_SPEC §6.2). Standard
+    /// callers leave terminal authentication disabled.
     #[test]
-    fn terminal_auth_is_off_unless_a_caller_opts_in() {
+    fn terminal_auth_is_off_for_standard_launches() {
         assert!(
             !LaunchOptions::default().terminal_auth,
             "the default must not claim a terminal this caller may not have"
@@ -2814,98 +3650,6 @@ mod auth_report_tests {
         assert!(
             !super::launch_options(None).terminal_auth,
             "the shared serve/prompt constructor must not claim it either"
-        );
-    }
-
-    /// **Nobody answering is never a login** (ACP_AUTH_SPEC §6.3). With no
-    /// advertised method there is nothing to offer, and the prompt declines
-    /// rather than inventing one.
-    #[test]
-    fn nothing_advertised_declines_without_prompting() {
-        let choice = choose_auth_method("pi-acp", &[]).expect("declining is not an error");
-        assert!(
-            matches!(choice, AuthChoice::Declined),
-            "an empty method list must decline"
-        );
-    }
-
-    /// **Cancelling never authenticates** (ACP_AUTH_SPEC §6.3). The typed
-    /// decline is its own branch, distinct from the EOF one that returns the
-    /// same answer — this is the branch a live terminal was needed to reach.
-    #[test]
-    fn a_typed_zero_declines() {
-        assert!(
-            matches!(
-                classify_choice("0", &two_methods()),
-                Some(AuthChoice::Declined)
-            ),
-            "'0' is the cancel entry the menu prints"
-        );
-    }
-
-    /// A bare enter takes the `[1]` the prompt shows as the default — the
-    /// offer on screen and the answer must not disagree.
-    #[test]
-    fn a_bare_enter_takes_the_advertised_default() {
-        let Some(AuthChoice::Agent(id)) = classify_choice("\n", &two_methods()) else {
-            panic!("an empty line selects the first method")
-        };
-        assert_eq!(
-            id.to_string(),
-            "oauth",
-            "the default is the '[1]' on screen"
-        );
-    }
-
-    /// The numbering is the menu's, one-based.
-    #[test]
-    fn a_digit_selects_that_numbered_method() {
-        let Some(AuthChoice::Agent(id)) = classify_choice("2", &two_methods()) else {
-            panic!("'2' selects the second method")
-        };
-        assert_eq!(id.to_string(), "api-key", "numbering starts at one");
-    }
-
-    /// Out of range is not a selection. Nothing wraps onto an index the
-    /// harness never offered — the alternative is authenticating with a method
-    /// nobody was shown.
-    #[test]
-    fn an_unoffered_index_is_not_a_selection() {
-        assert!(
-            classify_choice("9", &two_methods()).is_none(),
-            "'9' against two methods must re-prompt, not wrap"
-        );
-    }
-
-    /// Anything that is not a number re-prompts rather than resolving.
-    #[test]
-    fn a_non_number_is_not_a_selection() {
-        assert!(
-            classify_choice("x", &two_methods()).is_none(),
-            "'x' must re-prompt"
-        );
-    }
-
-    /// A `terminal` method is routed to the out-of-band flow, never to
-    /// `authenticate` — ACP forbids passing it there because the interactive
-    /// process is not the ACP connection.
-    #[test]
-    fn a_terminal_method_never_becomes_an_authenticate_call() {
-        let methods = vec![AuthMethod::Terminal(
-            AuthMethodTerminal::new("login", "Log in from the terminal")
-                .args(vec!["--login".to_string()]),
-        )];
-        let Some(AuthChoice::Terminal(descriptor)) = classify_choice("1", &methods) else {
-            panic!("a terminal method classifies to the out-of-band branch")
-        };
-        assert_eq!(
-            descriptor.args,
-            vec!["--login".to_string()],
-            "the descriptor's args are what the login appends"
-        );
-        assert!(
-            descriptor.env.is_empty(),
-            "an unset env overlays nothing onto the base configuration"
         );
     }
 
@@ -3099,13 +3843,13 @@ mod controller_tests {
             "npx",
             &[
                 "-y".to_string(),
-                "@agentclientprotocol/codex-acp@1.7.0".to_string(),
+                "@agentclientprotocol/codex-acp@1.10.0".to_string(),
             ],
             None,
         );
         assert_eq!(identity.harness_id, "codex-acp");
         assert_eq!(identity.adapter_package, "@agentclientprotocol/codex-acp");
-        assert_eq!(identity.adapter_version, "1.7.0");
+        assert_eq!(identity.adapter_version, "1.10.0");
     }
 
     #[test]

@@ -151,6 +151,11 @@ fn route_scope(ctx: &SettlementContext) -> String {
 #[async_trait]
 impl SettlementRecorder for MeteringRecorder {
     async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+        if ctx.has_event::<crate::evolution::runtime::CanonicalRequestReplayRejected>()
+            || ctx.has_event::<crate::evolution::costs::JudgeAttemptReplayRejected>()
+        {
+            return Ok(());
+        }
         tracing::debug!(
             request_id = %ctx.request_id,
             provider = %ctx.provider_id,

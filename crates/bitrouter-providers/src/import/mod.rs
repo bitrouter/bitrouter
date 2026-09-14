@@ -1,6 +1,6 @@
 //! Importers that adopt another coding CLI's OAuth session into bitrouter's
-//! credential store, so `bitrouter providers login claude-code` /
-//! `bitrouter providers login openai-codex` can reuse an existing Claude Code /
+//! credential store, so `bro providers login claude-code` /
+//! `bro providers login openai-codex` can reuse an existing Claude Code /
 //! Codex login instead of a fresh browser sign-in.
 //!
 //! Each importer reads the vendor CLI's own on-disk / Keychain credential,

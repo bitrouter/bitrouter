@@ -760,6 +760,7 @@ impl InboundAdapter for ChatCompletionsAdapter {
             model: model.to_string(),
             role_sent: false,
             tool_calls: Vec::new(),
+            pending_usage: None,
         })
     }
 }
@@ -1462,12 +1463,17 @@ fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
         .and_then(|d| d.get("cached_tokens"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    let cache_write = value
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cache_write_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     Some(Usage {
         prompt_tokens,
         completion_tokens,
         reasoning_tokens,
         cache_read_tokens: cache_read,
-        cache_write_tokens: 0,
+        cache_write_tokens: cache_write,
         web_search_count: 0,
         origin: UsageOrigin::ProviderReported,
         raw: Some(Box::new(value.clone())),
@@ -1501,9 +1507,18 @@ fn render_usage(usage: &Usage) -> serde_json::Value {
         obj["completion_tokens_details"] =
             serde_json::json!({ "reasoning_tokens": usage.reasoning_tokens });
     }
-    if usage.cache_read_tokens > 0 {
-        obj["prompt_tokens_details"] =
-            serde_json::json!({ "cached_tokens": usage.cache_read_tokens });
+    if usage.cache_read_tokens > 0 || usage.cache_write_tokens > 0 {
+        let mut details = serde_json::Map::new();
+        if usage.cache_read_tokens > 0 {
+            details.insert("cached_tokens".to_string(), usage.cache_read_tokens.into());
+        }
+        if usage.cache_write_tokens > 0 {
+            details.insert(
+                "cache_write_tokens".to_string(),
+                usage.cache_write_tokens.into(),
+            );
+        }
+        obj["prompt_tokens_details"] = serde_json::Value::Object(details);
     }
     obj
 }
@@ -1519,6 +1534,10 @@ struct ChatStreamDecoder {
     /// continuation chunks.
     tool_ids: Vec<String>,
     done: bool,
+    /// Chat providers commonly emit `finish_reason`, then a usage-only chunk,
+    /// then `[DONE]`. Hold the terminal until the sentinel/EOF so the trailing
+    /// authoritative usage remains reachable by the pipeline.
+    pending_finish: Option<FinishReason>,
     /// Whether the one-shot [`StreamPart::ResponseStarted`] has been emitted.
     /// Every chunk repeats the top-level `id`; we surface it only once.
     response_started_emitted: bool,
@@ -1532,7 +1551,11 @@ impl StreamDecoder for ChatStreamDecoder {
         }
         if data == "[DONE]" {
             self.done = true;
-            return Ok(Vec::new());
+            return Ok(self
+                .pending_finish
+                .take()
+                .map(|reason| vec![StreamPart::Finish { reason }])
+                .unwrap_or_default());
         }
         let chunk: serde_json::Value = match serde_json::from_str(data) {
             Ok(v) => v,
@@ -1608,6 +1631,7 @@ impl StreamDecoder for ChatStreamDecoder {
                             id: self.tool_ids[idx].clone(),
                             name: name.map(|n| n.to_string()),
                             arguments: args.to_string(),
+                            provider_metadata: Default::default(),
                         });
                     }
                 }
@@ -1630,13 +1654,25 @@ impl StreamDecoder for ChatStreamDecoder {
                 if let Some(usage) = chunk.get("usage").and_then(parse_usage) {
                     parts.push(StreamPart::Usage { usage });
                 }
-                parts.push(StreamPart::Finish { reason });
+                self.pending_finish = Some(reason);
             }
         } else if let Some(usage) = chunk.get("usage").and_then(parse_usage) {
             // Some providers send a trailing usage-only chunk.
             parts.push(StreamPart::Usage { usage });
         }
         Ok(parts)
+    }
+
+    fn finish(&mut self) -> Result<Vec<StreamPart>> {
+        if self.done {
+            return Ok(Vec::new());
+        }
+        self.done = true;
+        Ok(self
+            .pending_finish
+            .take()
+            .map(|reason| vec![StreamPart::Finish { reason }])
+            .unwrap_or_default())
     }
 }
 
@@ -1660,6 +1696,7 @@ struct ChatStreamEncoder {
     role_sent: bool,
     /// Per tool-call state, keyed by id and ordered by first sight.
     tool_calls: Vec<ChatToolCallState>,
+    pending_usage: Option<Usage>,
 }
 
 impl ChatStreamEncoder {
@@ -1694,6 +1731,20 @@ impl ChatStreamEncoder {
         SseFrame::Event {
             event: None,
             data: data.to_string(),
+        }
+    }
+
+    fn usage_chunk(&self, usage: &Usage) -> SseFrame {
+        SseFrame::Event {
+            event: None,
+            data: serde_json::json!({
+                "id": self.request_id,
+                "object": "chat.completion.chunk",
+                "model": self.model,
+                "choices": [],
+                "usage": render_usage(usage),
+            })
+            .to_string(),
         }
     }
 }
@@ -1731,6 +1782,7 @@ impl StreamEncoder for ChatStreamEncoder {
                 id,
                 name,
                 arguments,
+                ..
             } => {
                 let index = self.tool_call_index(id);
                 let name = name.as_deref().filter(|n| !n.is_empty());
@@ -1784,8 +1836,8 @@ impl StreamEncoder for ChatStreamEncoder {
                     frames.push(self.chunk(serde_json::Value::Object(delta), None));
                 }
             }
-            StreamPart::Usage { .. } => {
-                // usage is attached to the Finish chunk below; nothing here.
+            StreamPart::Usage { usage } => {
+                self.pending_usage = Some(usage.clone());
             }
             StreamPart::File { .. } => {
                 // Chat Completions streaming has no native file-output frame
@@ -1841,8 +1893,11 @@ impl StreamEncoder for ChatStreamEncoder {
                 let delta = self.open_delta();
                 let reason_str = finish_reason_str(reason);
                 frames.push(self.chunk(serde_json::Value::Object(delta), Some(&reason_str)));
+                if let Some(usage) = self.pending_usage.take() {
+                    frames.push(self.usage_chunk(&usage));
+                }
             }
-            StreamPart::ResponseCompleted { status, .. } => {
+            StreamPart::ResponseCompleted { status, usage, .. } => {
                 // Inbound was Responses; Chat has no response-completed
                 // concept — terminate with a finish chunk derived from status.
                 let reason = if status == "incomplete" {
@@ -1853,6 +1908,10 @@ impl StreamEncoder for ChatStreamEncoder {
                 let delta = self.open_delta();
                 let reason_str = finish_reason_str(&reason);
                 frames.push(self.chunk(serde_json::Value::Object(delta), Some(&reason_str)));
+                let usage = usage.clone().or_else(|| self.pending_usage.take());
+                if let Some(usage) = usage {
+                    frames.push(self.usage_chunk(&usage));
+                }
             }
         }
         Ok(frames)
@@ -1902,5 +1961,55 @@ impl StreamEncoder for ChatStreamEncoder {
             event: None,
             data: "[DONE]".to_string(),
         }])
+    }
+}
+
+#[cfg(test)]
+mod trailing_usage_tests {
+    use super::*;
+
+    #[test]
+    fn decoder_keeps_trailing_usage_reachable_before_finish() -> Result<()> {
+        let mut decoder = ChatStreamDecoder::default();
+        let finish = decoder.decode(&SseEvent {
+            event: None,
+            data: serde_json::json!({
+                "id": "chatcmpl-audit",
+                "choices": [{"delta": {}, "finish_reason": "stop"}]
+            })
+            .to_string(),
+        })?;
+        assert!(
+            finish
+                .iter()
+                .all(|part| !matches!(part, StreamPart::Finish { .. }))
+        );
+
+        let usage = decoder.decode(&SseEvent {
+            event: None,
+            data: serde_json::json!({
+                "id": "chatcmpl-audit",
+                "choices": [],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 7}
+            })
+            .to_string(),
+        })?;
+        assert!(matches!(
+            usage.as_slice(),
+            [StreamPart::Usage { usage }]
+                if usage.prompt_tokens == 12 && usage.completion_tokens == 7
+        ));
+
+        let terminal = decoder.decode(&SseEvent {
+            event: None,
+            data: "[DONE]".to_owned(),
+        })?;
+        assert!(matches!(
+            terminal.as_slice(),
+            [StreamPart::Finish {
+                reason: FinishReason::Stop
+            }]
+        ));
+        Ok(())
     }
 }

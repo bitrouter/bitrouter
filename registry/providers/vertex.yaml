@@ -85,6 +85,22 @@ models:
         cache_read: 0.075
       output_tokens:
         text: 3.75
+  - id: x-ai/grok-4.3
+    provider_model_id: xai/grok-4.3
+    pricing:
+      input_tokens:
+        no_cache: 1.25
+        cache_read: 0.2
+      output_tokens:
+        text: 2.5
+  - id: x-ai/grok-4.6
+    provider_model_id: xai/grok-4.6
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.5
+      output_tokens:
+        text: 6
 auto_sync:
   feed: models_dev
   key: google-vertex

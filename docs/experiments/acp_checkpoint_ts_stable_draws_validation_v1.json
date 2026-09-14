@@ -1,0 +1,275 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-09T17:02:25.099425+00:00",
+  "status": "source_fix_and_smoke_acceptance_validated; full_campaign_and_simulation_pending; broader_goal_incomplete",
+  "git_head": "ad2bab71968e40752fe175433b23fd2098307c81",
+  "scope": "Fix numerical posterior resampling caused by provenance-only revisions. Controlled coding fixtures do execute tools through maintained workers; judges read recorded evidence only. No real model-quality, historical calibration or live net routing benefit claim.",
+  "change": {
+    "learner_version": "checkpoint-normal-inverse-gamma-ts-v3",
+    "seed": "digest of learner version and experiment identity; independent of evidence revision",
+    "preserved": [
+      "full revision evidence and publication fences",
+      "real numerical correction updates",
+      "native-session assignment randomness",
+      "default priors, exposure, pending, sample minimum and promotion/rollback gates"
+    ],
+    "regression": "metadata_revisions_keep_sampling_stable_and_invalidate_publication_snapshot",
+    "legacy_compatibility": "v1 and v2 plans require revalidation before new trial admission"
+  },
+  "regression_before": {
+    "exit_code": 100,
+    "log": "/tmp/bitrouter-ts-stable-draws-regression-before.log",
+    "sha256": "e6798e914eeaef50552ccd911048b63474936841aa04c2cbcf00414ab4a2fe5c",
+    "failure": "equal-score assessment revision changed the numerical seed, despite equal posterior summaries"
+  },
+  "observed_jitter": {
+    "source": "/tmp/bitrouter-native-coding-campaign-v5-claude-transitions.jsonl",
+    "source_sha256": "a226856b659017ed97d4c5ae5d12db81c7620b2881231d68b5bcbc0e8ca82459",
+    "observed_unchanged_posterior_resampling": [
+      {
+        "before_status": "adopted",
+        "after_status": "adopted",
+        "before_seed": 16126192547194811581,
+        "after_seed": 7392655242714481972,
+        "before_probability_ppm": 971069,
+        "after_probability_ppm": 970947,
+        "before_lower_ppm": 954304,
+        "after_lower_ppm": 954182,
+        "posterior_summaries_equal": true
+      }
+    ],
+    "limits": "Claude v5 remained adopted after resampling and later passed its quality rollback. Codex v5 failed the recent-family guard assertion; its exact publication action was not captured, so causality of that failure is not established."
+  },
+  "checks": [
+    {
+      "name": "nextest",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--all-features",
+        "--no-fail-fast"
+      ],
+      "exit_code": 0,
+      "seconds": 96.571,
+      "output_sha256": "621657c06aef96d684520edca3c308a9d7c12e314a893e2417e82e4bcf462cde",
+      "log": "/tmp/bitrouter-ts-stable-draws-nextest-v1.log"
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--all-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 25.603,
+      "output_sha256": "689904a9a2f76a5c2ab669dd4122685f3fc968ded99ad82711678374e259b3e1",
+      "log": "/tmp/bitrouter-ts-stable-draws-clippy-v1.log"
+    },
+    {
+      "name": "doctests",
+      "command": [
+        "cargo",
+        "test",
+        "--all-features",
+        "--doc"
+      ],
+      "exit_code": 0,
+      "seconds": 4.986,
+      "output_sha256": "315316399dd76d994160b12b988e48e397e30fc023fc4145f6a2575ab97a509a",
+      "log": "/tmp/bitrouter-ts-stable-draws-doctests-v1.log"
+    },
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 1.401,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "log": "/tmp/bitrouter-ts-stable-draws-fmt-v1.log"
+    },
+    {
+      "name": "diff",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.05,
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "log": "/tmp/bitrouter-ts-stable-draws-diff-v1.log"
+    }
+  ],
+  "native_smokes": {
+    "command": [
+      "cargo",
+      "nextest",
+      "run",
+      "--all-features",
+      "--no-fail-fast",
+      "-E",
+      "test(evolution::native::) & !test(tui_coding_publication_and_rollback)",
+      "--run-ignored",
+      "all",
+      "--success-output",
+      "immediate"
+    ],
+    "exit_code": 0,
+    "seconds": 36.091,
+    "output_sha256": "3fa1d09a5c73d78c6b2ab0b28f52333480f4993785f93ba5e9a155e9f8980371",
+    "log": "/tmp/bitrouter-native-coding-stable-draws-smokes-v2.log"
+  },
+  "prior_campaign_v5": {
+    "receipt": {
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--all-features",
+        "--no-fail-fast",
+        "-E",
+        "test(tui_coding_publication_and_rollback)",
+        "--run-ignored",
+        "all",
+        "--success-output",
+        "immediate"
+      ],
+      "exit_code": 100,
+      "seconds": 1046.486,
+      "output_sha256": "a5042d6e18c4c9466f99f8b7f667d6ef0a4fa11775126e4913de54d64199b4f8",
+      "log": "/tmp/bitrouter-native-coding-campaign-v5.log"
+    },
+    "claude": {
+      "passed": true,
+      "trials": 228,
+      "baseline": 192,
+      "candidate": 36,
+      "monitor_sessions": 8,
+      "recorded_initial_trial_and_monitor_requests": 948,
+      "default_parameters": true,
+      "automatic_adoption_quality_rollback_and_baseline_restore": true
+    },
+    "codex": {
+      "passed": false,
+      "adopted_at_trials": 153,
+      "baseline": 125,
+      "candidate": 28,
+      "failure": "recent-family rollback assertion; exact publication action unavailable; relation to seed instability unconfirmed"
+    }
+  },
+  "pending": [
+    "native coding campaign v6: both maintained workers, default parameters, actual tool execution, automatic adoption and quality rollback",
+    "576-run v3 enacted-publication simulation and verification under recorded protocol"
+  ],
+  "historical_data_availability": {
+    "recorded_at": "2026-09-09T17:00:07.771638+00:00",
+    "path": "/Users/archer/.bitrouter/bitrouter.db",
+    "read_mode": "ro",
+    "exists": true,
+    "canonical_tables": [],
+    "legacy_counts": {
+      "trajectory_episodes": 0,
+      "trajectory_events": 0,
+      "trajectory_requests": 0
+    }
+  },
+  "source_manifest": {
+    ".config/nextest.toml": "0f576e617e9c30c6b4e765d645b3735186320e2662b79c149e06df5f470cb5c8",
+    "Cargo.lock": "7a3dada487bda898b19ba4c0f8b76c4795e25e31b4925d9b7854b97f824f0fdb",
+    "apps/bitrouter/Cargo.toml": "9a1e8102154ba9c4b2bab7cebee0664edaf6847464a7e2cd97ab7da18c5d6651",
+    "apps/bitrouter/examples/checkpoint_ts_publication.rs": "7f2cb1c4b48f00f3ef113a8ca537a9d8641cad58f92213b49abbb06feab9f646",
+    "apps/bitrouter/examples/checkpoint_ts_simulation.rs": "45d32d25e8b83fe5942515baa81d8b69842aaf469aab1d1f7cff03e6fc16985d",
+    "apps/bitrouter/src/acp_cli.rs": "4cbedc7eeb98ada0fccad46f1216d3213c8f2cf50dc1c0cc4d96b42d4f16825d",
+    "apps/bitrouter/src/acp_cli/evolution_acceptance.rs": "5116cc55c263fb8671f5a27d2a068db721b61b0451287d3c63a6eb3ccee389ed",
+    "apps/bitrouter/src/acp_cli/evolution_acceptance/publication.rs": "975c954aed21a752d8884cc3e34495d0bcff1662568420a16ac03cbef51eb501",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/assessment.rs": "da4cbf4a741aac48070ca1ba0d1ac1ef0bd566e5dd909fbb2e84a74befcf031f",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/mod.rs": "4edb9af121cc80e2ee8edc951159b6d3fe5c3a7997cd5751904e400708c00d37",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/resource.rs": "1a222bc64ef26ca607fb619c7e386535ddded623d22a4ad331539c2941358f13",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/resource/coverage.rs": "1be8ae95ba1e9cfd26a890823e3ef19a1e689e4a74913830fb5fee1af0b797df",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/types.rs": "7d6e44f35546361d0fe6240d9be07be6fbce85cb1d7b0d3ae66a2c3daaf86cbe",
+    "apps/bitrouter/src/acp_trajectory/mod.rs": "e99bbfef46f81ba8d6a54fdee72744cc147fde418db43fcfab7ae947090c2e18",
+    "apps/bitrouter/src/actions/code.rs": "2221ddbdcd7647a370239f96a2a2029504d4adbae16173e841067a3d98f6f2b1",
+    "apps/bitrouter/src/actions/code/evolution.rs": "053fb358ce0ad04f8e1dddad46153a7a83b7b90f709e1d6adc55a6adf8f02dd4",
+    "apps/bitrouter/src/actions/code/evolution/candidate.rs": "0f1d7d8a3aba149b9a0b18d34c26f7f4ffe23e90f818696a4b3b855289258db6",
+    "apps/bitrouter/src/actions/code/evolution/manual.rs": "ceffe204c76c64046b8eb00a4bd6ad29317ecb0190b2f031b17521fb669c2c55",
+    "apps/bitrouter/src/actions/code/evolution/tests.rs": "9b380522512ee5c78a88b2edf67a99c6a90a8190d904369b0a36d7336fc9a780",
+    "apps/bitrouter/src/actions/code/evolution/tests/candidates.rs": "6edafa93c1170dfeab484532bb6012ac44c18442e4baf6bb2c5d4967af3e6e1b",
+    "apps/bitrouter/src/actions/code/evolution/tests/history.rs": "4316842fbfb0ece694463e7cd4b66d922a42fc9256b7bd56ae9eac1a44e7e94b",
+    "apps/bitrouter/src/assemble.rs": "d295af3385a55f45cd3d0b79c136f759a5904b847e51425e739b8f704c1d1dfc",
+    "apps/bitrouter/src/chat/code.rs": "6cec90ff59fc8333c2a48f7cc9c2796daabbc032e7e03c1aeff2490d0a326e54",
+    "apps/bitrouter/src/daemon.rs": "be967aa35ece1c2791efee02c8e1e2897418ad844be1e10bd4c606d29ec6a089",
+    "apps/bitrouter/src/dashboard.rs": "9a678c498f593e3c06a81c662a7af97d6de693000566d8f9673999b63a04fb63",
+    "apps/bitrouter/src/db/migration/m20240101_000020_create_checkpoint_evolution.rs": "d4213d5509356b10fcd2df5aceb3c6162b64e8a794a7f313853482c3761f4747",
+    "apps/bitrouter/src/db/migration/mod.rs": "eb171fbec77d417fd9d7958bc8496d49e2639140b35314ffcbc29b26853457f1",
+    "apps/bitrouter/src/eval/settlement.rs": "49c95c0a771c413a37531420bddc535a36d9887801077fc825d138db101f67aa",
+    "apps/bitrouter/src/evolution/bandit.rs": "13136c16561305902a1edfdb1e40592b327ff2651b143e843967b0d9a8b394ea",
+    "apps/bitrouter/src/evolution/catalog.rs": "aa3ccc6c929b5fcc2b37452c3e3a2a4385607326032efd011ddd02c03308db25",
+    "apps/bitrouter/src/evolution/control.rs": "9d09442d61d8f1247a26b36e3d3b1119fff440dd890d313e89a6846167b5ddc6",
+    "apps/bitrouter/src/evolution/control/restoration.rs": "4872644fd5784953bb5933cd2d3b6200d22dd11ad661ddf82f1b0dc3f625052c",
+    "apps/bitrouter/src/evolution/control/revisions.rs": "9d3c1c9e7c9b8bbf5da1cb019473d38107b55d32907e2c9e4725090dabdce534",
+    "apps/bitrouter/src/evolution/costs.rs": "2ab3adff9351848b415c3d3c88e045104c34294f42c699d2a1c1ba859893df29",
+    "apps/bitrouter/src/evolution/costs/report.rs": "d408705821039e5faec5413c774f4f3f3544dd4521e27fe97de0aa6f9db3b214",
+    "apps/bitrouter/src/evolution/costs/tests.rs": "1d6e8dd57eecc7bfb3a3cf9a55fcfc5339f2ede054936d566b96a86aabaed461",
+    "apps/bitrouter/src/evolution/evidence.rs": "dbcff57ad7798242a3d2fc80919b5efe14dd124c084aee360b60c28454fcc9af",
+    "apps/bitrouter/src/evolution/inventory.rs": "aa5717006f19ee50f3d92035994fbe196b8627138b1b8d4c334188ecfc5e675e",
+    "apps/bitrouter/src/evolution/jobs.rs": "dc3268cba3de317dd21f431ca3b1a0951248e78b9c5cb24ebeba947c33a3bdcf",
+    "apps/bitrouter/src/evolution/jobs/tests.rs": "ddf529e52ff40a31f0dbaea925a77f4978f68aa174a4a58b77703c3a56865a87",
+    "apps/bitrouter/src/evolution/judge.rs": "471f89496e0202821fa501fff5e0238eb9f9f9b7aee43d5ca5af37aaee7539e2",
+    "apps/bitrouter/src/evolution/learning.rs": "9d0743dfd796ed7676b7a5bb5c5f689efb7ccfbb1af3b4a52bff5254419eb33a",
+    "apps/bitrouter/src/evolution/learning/tests.rs": "1fb2af49c6b9ca4b0cdb162313a26c4329daa32aad382f33643536eaf7a4aac0",
+    "apps/bitrouter/src/evolution/mod.rs": "0705245118a9efe63050509fb141185197c1209c838d3e31bfe0cdd48f17618c",
+    "apps/bitrouter/src/evolution/operator.rs": "3ad192bbc5aa8196cc50ff36e090146408686b072d1148ed6bae164339cb3b55",
+    "apps/bitrouter/src/evolution/operator/checkpoint.rs": "26c98521c0e74c132d8e2fca7e8e95c011cd6d39fa9d543774351558f584bec4",
+    "apps/bitrouter/src/evolution/rubric.rs": "dd276a7a5195cbc85b6a3e391414f7496a1c8c928991c318d379f8ae416bab46",
+    "apps/bitrouter/src/evolution/runtime.rs": "afa03f757fc164378e4a5dd4e3fba56672645f144f4bbb5c9ae21c6884567f8a",
+    "apps/bitrouter/src/evolution/runtime/candidates.rs": "73ff3411fe3bf3fce5a67db371d0e424a3b2ec2cb4d53509053d0a87271fb9c8",
+    "apps/bitrouter/src/evolution/runtime/tests.rs": "5e40a9b7831d1bb568c01cfd16fc5f831dfff8b648b0275898428a15cf9bd10c",
+    "apps/bitrouter/src/evolution/runtime/tests/execution_guards.rs": "35ecf51d64f4cf2589e090b34ff890be087c477b4462af5b53130a713ee3f3a9",
+    "apps/bitrouter/src/evolution/runtime/tests/judge_costs.rs": "1727671d18ffe6d9ed5ff6a2b4f45e098074a40ef3139dde28da891922400bad",
+    "apps/bitrouter/src/evolution/runtime/tests/resource_coverage.rs": "f56928a3ff5744e9b89667999ea1c71d89c7202d742cb6f6003c8fb9f5631ce9",
+    "apps/bitrouter/src/evolution/runtime/tests/revisions.rs": "1bb1a8722c93475324308574fa26d0c1f9c9f546e6607c196d53b8b3cdf193d5",
+    "apps/bitrouter/src/evolution/scheduler.rs": "2aa5d3dcc170aaffe02e928eeae3bef03d354aad452875915729f56213363ba3",
+    "apps/bitrouter/src/evolution/scheduler/tests.rs": "93e504cf6089cb485001185df2b6837d865b664e7595894695e03b38235d46c4",
+    "apps/bitrouter/src/evolution/scoring.rs": "7a331a76f36655c572925610e9d0182700c96313ceb6de3e81e2b92be9d8aee5",
+    "apps/bitrouter/src/evolution/service.rs": "8533734650d2d49015d94f42d014f69db2496951c9b2d1597af1185440ace2e8",
+    "apps/bitrouter/src/evolution/service/revisions.rs": "0ff3116f7a17c9c7856938ae1241fd70da9a48a14e48cb490875ab8c4a825a4b",
+    "apps/bitrouter/src/evolution/service/tests.rs": "6449b8ddf5e8709e58f07966e600f9aaa2cf1a50baa51452ac63005ca8d27388",
+    "apps/bitrouter/src/evolution/service/tests/revisions.rs": "457b712077d624f6ecfe0c6ea9a492a23db158281c2b498fe42c6470c998ec51",
+    "apps/bitrouter/src/evolution/store.rs": "090b0febb883b6ec0598866187f74b5a98822cea644017964fdc5d3df3cdf922",
+    "apps/bitrouter/src/evolution/tests.rs": "fe53a2beda7779641c3045315c198d958d40f09b4657bf27ad961d56946cd797",
+    "apps/bitrouter/src/lib.rs": "58ca0d42d3f2bd69d29886b72564c425d9dfc9b2d84c0ae36c10adb40d16f692",
+    "apps/bitrouter/src/main.rs": "439d30db37f71f94a34b8de638144d91bc4ce20c96efe7daa0667bf1e1a72f91",
+    "apps/bitrouter/src/metering/recorder.rs": "91e2ca64eabe03e745b2ef135639c3cf980ecb3c160d555ce96fa5938eb9ef26",
+    "apps/bitrouter/src/policy_lock.rs": "82f3dc95970766c0813312dc5c861e37a03316d37eb099fb5ec2540db18e087d",
+    "apps/bitrouter/tests/code_tui_pty.rs": "9484aa4b518ff032c1ea5bde607c5c2135b7d59179bd07f120adce38f3202efb",
+    "apps/bitrouter/tests/code_tui_pty/evolution.rs": "9325e7345d4c434129454cffd4ee1f2f5087c0dbdc55e90a61a031a2edbbf0aa",
+    "apps/bitrouter/tests/code_tui_pty/evolution/native.rs": "7ea707622a13b6bd9e6b3bba06270fec087190a148e5d8a9826fedbe1aa1d6c2",
+    "apps/bitrouter/tests/daemon.rs": "ccbc07b92951af0da6c999211119c374226ea8cb35623dc41c520628b97eef58",
+    "crates/bitrouter-sdk/src/config/routing_table.rs": "93410732f6ea5ecf768ad03b6e4d1cb4dcd9fe317096a324bfa866db2788e257",
+    "crates/bitrouter-sdk/src/language_model/server_tools/loop_controller.rs": "f5aa79106ddcf843af0ebc0e894c23547990ef6870ac51ddf45bdf8492b54488",
+    "crates/bitrouter-sdk/src/language_model/server_tools/stream.rs": "5e02c40e1cfa0c2b9a3ab1f1e687ce2f74b7cf353b9d577e28c9ffc2af2ab473",
+    "crates/bitrouter-tui/src/code.rs": "d013d6efdfc91bd98829f415f3ea85f0fa5f413d645476db0e1935103363044b",
+    "apps/bitrouter/tests/code_tui_pty/evolution/native/coding.rs": "286463719eda71a903144d826b92685f654c1ef286b1069a775073178874cdd8",
+    "apps/bitrouter/tests/code_tui_pty/evolution/native/coding/publication.rs": "5dd648d06c6531bc73ba31cfb03ff3a927bcd4377e7b779b2f485acf826caaff"
+  },
+  "documentation_manifest": {
+    "docs/ACP_EVOLUTION_SPEC.md": "1255b6d2341635cb9e5e539c5cddea97e91e7cfe80b0ad79c3a64ad4ef3d2f49",
+    "docs/ACP_EVOLUTION_EXPERIMENTS.md": "19efa86c9a7f6774325270f7522abbd887e0b14354493535fd6ff67b801ba14c",
+    "docs/ACP_RECORDED_EVIDENCE_REVIEW_PROTOCOL.md": "47d1a9373e6b0dec8ffdd78454c99b093c4087d22c6ee120e8e72ab2a22c0937"
+  },
+  "remaining": [
+    "Historical eligible ACP canonical trajectories unavailable; no blinded model reference or comparator outputs.",
+    "Complete and inspect pending native and simulation acceptance.",
+    "Net real routing benefit including judge overhead remains unmeasured."
+  ]
+}

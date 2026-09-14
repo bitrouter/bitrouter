@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/*", "helpers/*"]
 
 [workspace.package]
-version = "1.0.0-alpha.27"
+version = "1.0.0-alpha.30"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -30,23 +30,23 @@ keyring = { version = "3", default-features = false, features = [
 ] }
 
 # internal crates
-bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.27", default-features = false }
-bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.27" }
-bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.27" }
+bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.30", default-features = false }
+bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.30" }
+bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.30" }
 # Optional telemetry egress. `default-features = false` keeps a consumer that
 # only wants the observability contract off the OpenTelemetry stack entirely.
-bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-alpha.27", default-features = false }
+bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-alpha.30", default-features = false }
 
 # Safe syscall wrappers. Used by the SDK's `acp` runtime for `killpg(2)`;
 # `libc` would need an `unsafe` block, and `bitrouter-sdk` forbids unsafe code.
 rustix = { version = "1", default-features = false }
 
-# ACP SDK crates. The published 2.0.0 runtime pins schema 1.5.0 exactly, while
-# the official SDK revision below consumes schema 1.7.0. Pinning one reviewed
-# revision keeps the runtime and the schema on one ACP v1 type universe.
-agent-client-protocol = { git = "https://github.com/agentclientprotocol/rust-sdk.git", rev = "c63610fc38a642f7a73ba2719f403f17d771c345", features = ["unstable_session_fork"] }
-agent-client-protocol-conductor = { git = "https://github.com/agentclientprotocol/rust-sdk.git", rev = "c63610fc38a642f7a73ba2719f403f17d771c345" }
-# Shared by `bitrouter status --watch` (in the app) and `bitrouter-tui` (the
+# ACP SDK crates. Development pins one reviewed Git revision, whose manifests
+# consume schema 1.7.0. The compatible major-version requirement is retained
+# because Cargo strips `git` when packaging and must resolve published crates.
+agent-client-protocol = { version = "2", git = "https://github.com/agentclientprotocol/rust-sdk.git", rev = "c63610fc38a642f7a73ba2719f403f17d771c345", features = ["unstable_session_fork"] }
+agent-client-protocol-conductor = { version = "2", git = "https://github.com/agentclientprotocol/rust-sdk.git", rev = "c63610fc38a642f7a73ba2719f403f17d771c345" }
+# Shared by `bro status --watch` (in the app) and `bitrouter-tui` (the
 # ACP session renderer), so the version lives here rather than in either.
 ratatui = { version = "0.29", features = [
     # Paragraph::line_count — wrap-aware tail-follow needs the rendered
@@ -54,16 +54,22 @@ ratatui = { version = "0.29", features = [
     "unstable-rendered-line-info",
 ] }
 crossterm = { version = "0.28", features = ["event-stream"] }
+# Transcript Markdown only; do not bring a second scroll/viewer implementation.
+ratatui-markdown = { version = "0.3.6", default-features = false, features = ["markdown"] }
 # The line diff behind `bitrouter-tui`'s hunked diff rendering. A dependency
 # rather than a hand-rolled diff because subtly wrong diff output is worse than
 # a dependency, and hunk grouping with context is exactly where the subtle
 # wrongness would live — see TUI_RENDERER_PLAN §C.1 (§19.2).
 similar = "3.1"
+shell-words = "1"
 # The display width of a grapheme cluster, for `bitrouter-tui`'s own wrap.
 # Ratatui's `reflow` is private, so the wrap is ours — but the widths must be
 # the same ones ratatui measures with, which is why this tracks the version
 # ratatui itself depends on. Adds no crate to the build graph.
 unicode-width = "0.2"
+# Cursor movement and deletion in the composer must operate on user-perceived
+# characters rather than UTF-8 bytes or scalar values.
+unicode-segmentation = "1.13"
 # `unstable_llm_providers` gives the draft `providers/*` schema types used only
 # for controller-to-harness endpoint setup. `unstable_session_fork` lets tests
 # exercise the advertised lifecycle method. We deliberately do not enable

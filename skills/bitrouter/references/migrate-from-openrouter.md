@@ -66,10 +66,10 @@ If you used OpenRouter's stat-tracking headers (`HTTP-Referer`, `X-Title`), they
 ## Verify
 
 ```bash
-bitrouter start
-bitrouter providers list                  # openrouter should show active: yes
-bitrouter route openrouter/meta-llama/llama-3.1-70b-instruct
-bitrouter route openai/gpt-4o             # direct, not via openrouter
+bro start
+bro providers list                  # openrouter should show active: yes
+bro route openrouter/meta-llama/llama-3.1-70b-instruct
+bro route openai/gpt-4o             # direct, not via openrouter
 
 curl http://localhost:4356/v1/chat/completions \
   -H "Content-Type: application/json" \
