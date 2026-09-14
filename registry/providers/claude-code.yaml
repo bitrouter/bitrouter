@@ -70,6 +70,8 @@ models:
     provider_model_id: claude-opus-5
     reasoning_effort: *claude_full_effort
     capabilities: [reasoning]
+  - id: anthropic/claude-fable-5.1
+    provider_model_id: claude-fable-5-1
 status: active
 weight: 1
 community: false

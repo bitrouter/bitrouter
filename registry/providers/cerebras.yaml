@@ -33,6 +33,13 @@ models:
         cache_write: 0
       output_tokens:
         text: 2.75
+  - id: qwen/qwen3.8-27b
+    provider_model_id: qwen-3.8-27b
+    pricing:
+      input_tokens:
+        no_cache: 0.99
+      output_tokens:
+        text: 1.49
 status: active
 weight: 1
 submitted_at: 2026-06-16

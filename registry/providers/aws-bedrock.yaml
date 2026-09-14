@@ -165,6 +165,24 @@ models:
         cache_read: 0.55
       output_tokens:
         text: 6.6
+  - id: anthropic/claude-fable-5.1
+    provider_model_id: anthropic.claude-fable-5-1
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 0.25
+        cache_write: 12.5
+      output_tokens:
+        text: 50
+  - id: openai/gpt-6-astra
+    provider_model_id: openai.gpt-6-astra
+    pricing:
+      input_tokens:
+        no_cache: 11
+        cache_read: 1.1
+        cache_write: 13.75
+      output_tokens:
+        text: 55
 auto_sync:
   feed: models_dev
   key: amazon-bedrock

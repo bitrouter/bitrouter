@@ -58,6 +58,14 @@ models:
         cache_read: 0.125
       output_tokens:
         text: 1.9
+  - id: z-ai/glm-5.3-flash
+    provider_model_id: glm-5-3-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.4
+        cache_read: 0.1
+      output_tokens:
+        text: 1.25
 status: active
 weight: 1
 submitted_at: 2026-05-12

@@ -1662,7 +1662,9 @@ version = "1.0.0-alpha.30"
 dependencies = [
  "anyhow",
  "bitrouter-sdk",
+ "chrono",
  "clap",
+ "regex",
  "reqwest",
  "schemars 1.2.1",
  "serde",

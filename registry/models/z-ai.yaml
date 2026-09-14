@@ -25,6 +25,7 @@
   open_weights: true
   family: glm
 - id: z-ai/glm-5.1
+  deprecation_date: 2026-10-05
   name: 'Zhipu: GLM-5.1'
   input_modalities:
   - text
@@ -48,6 +49,7 @@
   open_weights: true
   family: glm
 - id: z-ai/glm-4.7
+  deprecation_date: 2026-10-05
   name: 'Zhipu: GLM-4.7'
   input_modalities:
   - text

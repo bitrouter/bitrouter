@@ -278,6 +278,56 @@ models:
         cache_read: 0.5
       output_tokens:
         text: 6
+  - id: anthropic/claude-fable-5.1
+    provider_model_id: claude-fable-5-1
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 0.25
+        cache_write: 12.5
+      output_tokens:
+        text: 50
+  - id: google/gemini-3.7-flash
+    provider_model_id: gemini-3.7-flash
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+        cache_read: 0.15
+      output_tokens:
+        text: 7.5
+  - id: google/gemini-3.8-flash
+    provider_model_id: gemini-3.8-flash
+    pricing:
+      input_tokens:
+        no_cache: 1.5
+        cache_read: 0.15
+      output_tokens:
+        text: 7.5
+  - id: z-ai/glm-5.3
+    provider_model_id: glm-5.3
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.26
+      output_tokens:
+        text: 4.4
+  - id: z-ai/glm-5.3-flash
+    provider_model_id: glm-5.3-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.03
+      output_tokens:
+        text: 0.5
+  - id: openai/gpt-6-astra
+    provider_model_id: gpt-6-astra
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 1
+        cache_write: 12.5
+      output_tokens:
+        text: 50
 status: active
 weight: 1
 community: false

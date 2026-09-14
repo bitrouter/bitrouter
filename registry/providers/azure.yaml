@@ -194,6 +194,24 @@ models:
         cache_write: 6.25
       output_tokens:
         text: 25
+  - id: anthropic/claude-fable-5.1
+    provider_model_id: claude-fable-5-1
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 0.25
+        cache_write: 12.5
+      output_tokens:
+        text: 50
+  - id: openai/gpt-6-astra
+    provider_model_id: gpt-6-astra
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 1
+        cache_write: 12.5
+      output_tokens:
+        text: 50
 auto_sync:
   feed: models_dev
   key: azure
