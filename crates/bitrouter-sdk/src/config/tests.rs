@@ -1669,19 +1669,24 @@ upstream:
 }
 
 #[test]
-fn mcp_upstream_protocol_defaults_to_latest() {
+fn mcp_upstream_protocol_defaults_to_auto() {
     // Absent `mcp:` and present-but-silent `mcp:` must agree, and both must
-    // leave upstream dialing on the pre-upgrade version.
+    // prefer modern discovery with the compatibility fallback.
     assert_eq!(
         Config::default().mcp.upstream_protocol,
-        McpUpstreamProtocol::Latest
+        McpUpstreamProtocol::Auto
     );
     let cfg = parse("mcp:\n  cache:\n    enabled: true\n").expect("parse");
-    assert_eq!(cfg.mcp.upstream_protocol, McpUpstreamProtocol::Latest);
+    assert_eq!(cfg.mcp.upstream_protocol, McpUpstreamProtocol::Auto);
 }
 
 #[test]
 fn mcp_upstream_protocol_opts_in_by_version_string() {
+    let auto = parse("mcp:\n  upstream_protocol: auto\n").expect("parse auto");
+    assert_eq!(auto.mcp.upstream_protocol, McpUpstreamProtocol::Auto);
+    let legacy = parse("mcp:\n  upstream_protocol: latest\n").expect("parse latest");
+    assert_eq!(legacy.mcp.upstream_protocol, McpUpstreamProtocol::Latest);
+
     let cfg = parse("mcp:\n  upstream_protocol: \"2026-07-28\"\n").expect("parse");
     assert_eq!(cfg.mcp.upstream_protocol, McpUpstreamProtocol::V2026_07_28);
 

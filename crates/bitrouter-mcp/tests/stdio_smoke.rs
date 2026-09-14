@@ -39,7 +39,15 @@ struct Server {
 
 impl Server {
     fn spawn() -> Self {
-        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-stdio-local"))
+        Self::spawn_scenario(None)
+    }
+
+    fn spawn_scenario(scenario: Option<&str>) -> Self {
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-stdio-local"));
+        if let Some(scenario) = scenario {
+            command.arg(scenario);
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -80,6 +88,12 @@ impl Drop for Server {
 /// One-shot: spawn, send a single request, return its envelope.
 async fn oneshot(request: serde_json::Value) -> serde_json::Value {
     Server::spawn().request(request).await
+}
+
+async fn skills_oneshot(request: serde_json::Value) -> serde_json::Value {
+    Server::spawn_scenario(Some("skills"))
+        .request(request)
+        .await
 }
 
 /// `initialize` → `notifications/initialized` → `tools/list`, the pre-2026-07-28
@@ -133,14 +147,16 @@ async fn stable_peer_gets_no_cache_hints_on_tools_list() {
     assert!(list.get("cacheScope").is_none(), "got: {list}");
 }
 
-/// The legacy handshake still reaches `2026-07-28` if a client asks for it that
-/// way — rmcp negotiates any version in `KNOWN_VERSIONS`.
+/// The modern version has no legacy `initialize` lifecycle. rmcp 3.3 therefore
+/// negotiates that incoherent request down to the stable fallback; a modern
+/// client must use `server/discover` or self-contained request metadata.
 #[tokio::test]
-async fn draft_peer_via_legacy_handshake_gets_cache_hints() {
+async fn draft_version_via_legacy_handshake_uses_stable_fallback() {
     let (init, list) = legacy_handshake_and_list("2026-07-28").await;
-    assert_eq!(init["protocolVersion"], "2026-07-28");
-    assert_eq!(list["ttlMs"], 5 * 60 * 1000);
-    assert_eq!(list["cacheScope"], "public");
+    assert_eq!(init["protocolVersion"], "2025-11-25");
+    assert!(list.get("resultType").is_none(), "got: {list}");
+    assert!(list.get("ttlMs").is_none(), "got: {list}");
+    assert!(list.get("cacheScope").is_none(), "got: {list}");
 }
 
 /// An unsupported legacy version is negotiated down to the server fallback,
@@ -354,4 +370,129 @@ async fn stateless_request_accepts_missing_optional_client_info() {
     assert_eq!(result["resultType"], "complete");
     assert_eq!(result["ttlMs"], 5 * 60 * 1000);
     assert_eq!(result["cacheScope"], "public");
+}
+
+#[tokio::test]
+async fn stateless_skills_methods_emit_the_stable_extension_envelope() {
+    let list = skills_oneshot(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "skills/list",
+        "params": { "_meta": draft_meta() },
+    }))
+    .await;
+    let result = &list["result"];
+    assert_eq!(result["resultType"], "complete");
+    assert_eq!(result["ttlMs"], 60_000);
+    assert_eq!(result["cacheScope"], "public");
+
+    let get = skills_oneshot(serde_json::json!({
+        "jsonrpc": "2.0", "id": 2, "method": "skills/get",
+        "params": {
+            "uri": "skill://git-workflow/SKILL.md",
+            "_meta": draft_meta(),
+        },
+    }))
+    .await;
+    let result = &get["result"];
+    assert_eq!(result["resultType"], "complete");
+    assert_eq!(result["ttlMs"], 0);
+    assert_eq!(result["cacheScope"], "public");
+
+    // These are extension fields, not base-protocol additions. A partial
+    // Skills client that used a legacy handshake still receives the complete
+    // stable extension shape and may ignore additive fields it does not know.
+    let mut legacy = Server::spawn_scenario(Some("skills"));
+    legacy
+        .request(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "t", "version": "0" },
+            },
+        }))
+        .await;
+    legacy
+        .notify(serde_json::json!({
+            "jsonrpc": "2.0", "method": "notifications/initialized"
+        }))
+        .await;
+    let list = legacy
+        .request(serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "skills/list", "params": {}
+        }))
+        .await;
+    assert_eq!(list["result"]["resultType"], "complete");
+    assert_eq!(list["result"]["ttlMs"], 60_000);
+    assert_eq!(list["result"]["cacheScope"], "public");
+}
+
+#[tokio::test]
+async fn skill_resources_use_frontmatter_metadata_and_versioned_cache_hints() {
+    let modern = skills_oneshot(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "resources/list",
+        "params": { "_meta": draft_meta() },
+    }))
+    .await;
+    let result = &modern["result"];
+    assert_eq!(result["resultType"], "complete");
+    assert_eq!(result["ttlMs"], 60_000);
+    assert_eq!(result["cacheScope"], "public");
+    let entrypoint = result["resources"]
+        .as_array()
+        .and_then(|resources| {
+            resources
+                .iter()
+                .find(|resource| resource["uri"] == "skill://git-workflow/SKILL.md")
+        })
+        .expect("SKILL.md resource");
+    assert_eq!(entrypoint["name"], "git-workflow");
+    assert_eq!(
+        entrypoint["description"],
+        "Follow the team's Git conventions"
+    );
+    assert_eq!(entrypoint["mimeType"], "text/markdown");
+
+    let mut legacy = Server::spawn_scenario(Some("skills"));
+    let init = legacy
+        .request(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "t", "version": "0" },
+            },
+        }))
+        .await;
+    assert_eq!(init["result"]["protocolVersion"], "2025-11-25");
+    legacy
+        .notify(serde_json::json!({
+            "jsonrpc": "2.0", "method": "notifications/initialized"
+        }))
+        .await;
+    let list = legacy
+        .request(serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}
+        }))
+        .await;
+    let result = &list["result"];
+    assert!(result.get("resultType").is_none(), "got: {result}");
+    assert!(result.get("ttlMs").is_none(), "got: {result}");
+    assert!(result.get("cacheScope").is_none(), "got: {result}");
+}
+
+#[tokio::test]
+async fn stateless_skill_resource_read_is_complete_and_immediately_stale() {
+    let response = skills_oneshot(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "resources/read",
+        "params": {
+            "uri": "skill://git-workflow/SKILL.md",
+            "_meta": draft_meta(),
+        },
+    }))
+    .await;
+    let result = &response["result"];
+    assert_eq!(result["resultType"], "complete");
+    assert_eq!(result["ttlMs"], 0);
+    assert_eq!(result["cacheScope"], "public");
+    assert_eq!(result["contents"][0]["text"], "# Git workflow");
 }

@@ -789,6 +789,7 @@ pub async fn build_app_with_path(
     let eval_store_for_recorder = eval_service.store().clone();
     let pricing_for_eval = pricing.clone();
     let db_for_hooks = db.clone();
+    let db_for_mcp_auth = db.clone();
     let acp_runtime_for_session = Arc::clone(&acp_runtime);
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -925,7 +926,9 @@ pub async fn build_app_with_path(
     let app = match (mcp_routing, mcp_executor) {
         (Some(table), Some(exec)) => {
             let app = app.mcp(move |m| {
-                m.routing_table(table).executor(exec);
+                m.routing_table(table)
+                    .executor(exec)
+                    .pre_request_hook(AuthHook::new(db_for_mcp_auth));
             });
             if let Some(route) = mcp_aggregate_route {
                 app.mcp_aggregate_route(route)

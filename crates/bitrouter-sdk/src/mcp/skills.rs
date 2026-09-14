@@ -108,6 +108,29 @@ pub const MAX_SKILL_RESOURCES: usize = 512;
 /// SEP-2640's per-skill cap on the sum of `resources[].size`: 16 MiB.
 pub const MAX_SKILL_TOTAL_BYTES: u64 = 16_777_216;
 
+/// The only result discriminator valid for the synchronous Skills methods.
+///
+/// MCP `2026-07-28` permits other result kinds for methods that support MRTR
+/// or Tasks. The Skills extension explicitly requires `"complete"` for both
+/// `skills/list` and `skills/get`, so representing any other value here would
+/// let an origin server construct an invalid result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillsResultType {
+    /// The operation completed synchronously.
+    Complete,
+}
+
+/// Cache visibility for a Skills result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillsCacheScope {
+    /// The result is identical for every caller of this server instance.
+    Public,
+    /// The result may only be reused for the caller that requested it.
+    Private,
+}
+
 /// One file of a skill, paired with the digest **and byte length** of its
 /// bytes.
 ///
@@ -223,11 +246,30 @@ pub struct SkillEntry {
 
 /// The `skills/list` result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListSkillsResult {
+    /// Skills list operations always complete synchronously.
+    pub result_type: SkillsResultType,
     /// The skills this server serves. MAY be empty; per the SEP a host "MUST
     /// NOT treat an empty or partial listing as proof that a server has no
     /// skills".
     pub skills: Vec<SkillEntry>,
+    /// Freshness hint for the listing, in milliseconds.
+    pub ttl_ms: u64,
+    /// Whether the listing may be reused across callers.
+    pub cache_scope: SkillsCacheScope,
+}
+
+impl ListSkillsResult {
+    /// Build a conformant, synchronously complete listing.
+    pub fn complete(skills: Vec<SkillEntry>, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self {
+        Self {
+            result_type: SkillsResultType::Complete,
+            skills,
+            ttl_ms,
+            cache_scope,
+        }
+    }
 }
 
 /// The `skills/get` params.
@@ -239,9 +281,28 @@ pub struct GetSkillParams {
 
 /// The `skills/get` result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GetSkillResult {
+    /// Skill lookups always complete synchronously.
+    pub result_type: SkillsResultType,
     /// The requested entry.
     pub skill: SkillEntry,
+    /// Freshness hint for the entry, in milliseconds.
+    pub ttl_ms: u64,
+    /// Whether the entry may be reused across callers.
+    pub cache_scope: SkillsCacheScope,
+}
+
+impl GetSkillResult {
+    /// Build a conformant, synchronously complete skill lookup.
+    pub fn complete(skill: SkillEntry, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self {
+        Self {
+            result_type: SkillsResultType::Complete,
+            skill,
+            ttl_ms,
+            cache_scope,
+        }
+    }
 }
 
 /// Whether a configured server name is safe as one URI authority segment.
@@ -452,6 +513,7 @@ mod tests {
     #[test]
     fn sep_example_round_trips() {
         let wire = serde_json::json!({
+            "resultType": "complete",
             "skills": [
                 {
                     "uri": "skill://git-workflow/SKILL.md",
@@ -482,7 +544,9 @@ mod tests {
                         }
                     ]
                 }
-            ]
+            ],
+            "ttlMs": 300000,
+            "cacheScope": "public"
         });
         let parsed: ListSkillsResult = serde_json::from_value(wire.clone()).expect("parses");
         assert_eq!(serde_json::to_value(&parsed).expect("serializes"), wire);
@@ -603,11 +667,16 @@ mod tests {
                 .expect("parses");
         assert_eq!(params.uri, "skill://pdf/SKILL.md");
 
-        let result = GetSkillResult {
-            skill: entry("skill://pdf/SKILL.md", "pdf"),
-        };
+        let result = GetSkillResult::complete(
+            entry("skill://pdf/SKILL.md", "pdf"),
+            0,
+            SkillsCacheScope::Public,
+        );
         let wire = serde_json::to_value(&result).expect("ser");
+        assert_eq!(wire["resultType"], "complete");
         assert_eq!(wire["skill"]["uri"], "skill://pdf/SKILL.md");
+        assert_eq!(wire["ttlMs"], 0);
+        assert_eq!(wire["cacheScope"], "public");
     }
 
     /// The method names the relay allowlist and the origin server's dispatch

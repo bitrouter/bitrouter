@@ -5,8 +5,27 @@ Adopting [SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol
 proxies skills held by upstream MCP servers — over stdio and Streamable HTTP
 alike.
 
-Status: **complete — Phases 0–4 implemented, Phase 5 decided against** ·
-Author: Claude (with Spikel) · Date: 2026-08-03
+Status: **native-conformance implementation complete; external host acceptance
+pending** · Author: Claude (with Spikel) · Updated: 2026-09-14
+
+**2026-09-14 conformance update.** The follow-up
+[`2026-09-13-skills-mcp-native-conformance-plan.md`](2026-09-13-skills-mcp-native-conformance-plan.md)
+upgraded rmcp to 3.3, completed the stable Skills result/cache envelopes,
+preserved those envelopes through direct and aggregate gateway routes, and
+implemented the stateless MCP `2026-07-28` downstream HTTP lifecycle. The
+default upstream setting is now `auto` (modern discovery with classified
+legacy fallback); `latest` explicitly forces rmcp's legacy `2025-11-25`
+lifecycle. This document remains the architectural record; the follow-up plan
+is the dated acceptance ledger. BitRouter remains a server/gateway, never the
+host that approves or activates a skill.
+
+**2026-09-14 reviewer hardening.** The daemon now applies its virtual-key auth
+hook to MCP as well as model inference; aggregate resource and template lists
+namespace member-originated `skill://` values before publishing them; modern
+`Mcp-Param-*` headers are validated against reachable primitive
+`x-mcp-header` annotations before tool dispatch; and cache policy now fails
+closed page-by-page while TTLs are aged across pagination, fan-out, and cache
+hits. These are gateway correctness properties, not host-side activation.
 
 All open decisions are resolved (§11). Phase 5 is closed as a set of decisions,
 not deferred work: registry fronting (D8), per-caller credentials (D7), and
@@ -232,39 +251,51 @@ free of distribution concerns while avoiding a dead standalone crate.
 New module `crates/bitrouter-sdk/src/mcp/skills.rs`. Serde types only — no I/O.
 
 ```rust
-/// One `{uri, digest}` pair from a skill entry's `resources` array.
-pub struct SkillResource { pub uri: String, pub digest: String }
+/// One `{uri, digest, size}` entry from a skill's resource manifest.
+pub struct SkillResource { pub uri: String, pub digest: String, pub size: u64 }
 
 /// A skill entry — identical in `skills/list` and `skills/get`.
 pub struct SkillEntry {
     pub uri: String,
     /// Verbatim SKILL.md frontmatter as JSON. Not a curated subset.
     pub frontmatter: serde_json::Map<String, serde_json::Value>,
-    /// Complete file enumeration. `None` only for dynamically generated skills.
-    pub resources: Option<Vec<SkillResource>>,
+    /// Complete file enumeration or the explicit `"dynamic"` marker.
+    pub resources: SkillResources,
     /// Unmodelled *top-level* entry fields, preserved verbatim.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-pub struct ListSkillsResult { pub skills: Vec<SkillEntry> }
+pub struct ListSkillsResult {
+    pub result_type: SkillsResultType,
+    pub skills: Vec<SkillEntry>,
+    pub ttl_ms: u64,
+    pub cache_scope: SkillsCacheScope,
+}
 pub struct GetSkillParams { pub uri: String }
-pub struct GetSkillResult { pub skill: SkillEntry }
+pub struct GetSkillResult {
+    pub result_type: SkillsResultType,
+    pub skill: SkillEntry,
+    pub ttl_ms: u64,
+    pub cache_scope: SkillsCacheScope,
+}
 ```
 
-As-built, `ListSkillsResult` carries no `next_cursor` and no SEP-2549
-`ttl_ms` / `cache_scope`: the origin server returns one page, and cache hints
-are read off the raw upstream result by `extract_cache_hint` in the caching
-layer, which is the only place that consumes them. Fields nothing produces
-would be dead surface.
+As built after the 2026-09-14 conformance pass, both Skills results carry the
+stable extension's required synchronous and cacheable envelope. The local
+listing is public for 60 seconds; point reads are public with zero freshness.
+Direct relay normalizes missing upstream hints to zero/private, while aggregate
+results take the shortest TTL and most restrictive scope. `ListSkillsResult`
+still carries no producerless `nextCursor`; the gateway exhausts member pages
+before returning its consolidated result.
 
 Four constraints the types must not lose:
 
 - `frontmatter` is **verbatim**, not a struct with `name`/`description` fields.
   A curated subset forces a spec amendment every time Agent Skills grows a
   field. Keep it a map.
-- `resources: Option<…>` — `None` is meaningful (dynamically generated skill),
-  distinct from an empty vector (a skill with no files, which is invalid).
+- `resources` is either a complete non-empty manifest or the explicit
+  `"dynamic"` marker. Omitting the field is invalid.
 - `extra` is flattened, not dropped. A gateway that silently discards fields it
   does not model degrades what an upstream published; the SEP is a draft over a
   spec that evolves separately, so unmodelled fields are expected.
@@ -315,17 +346,20 @@ pool, exactly as `InstalledSkills` does today.
   startup, so it declares honestly. `directoryRead` remains false: the entry's
   complete `resources` manifest already supports scoped navigation.
 - **`resources/read`.** Serves any file under a skill directory, rejecting
-  traversal outside it.
+  traversal outside it. On `2026-07-28`, resource listings carry the verified
+  skill name/description and a public 60-second cache hint; reads are public
+  with zero freshness. Legacy base-protocol peers receive neither draft cache
+  fields nor `resultType`.
 
 **`skills_search` / `skills_get` stay.** They are not superseded. The SEP
 methods require the *host* to implement registry merging, progressive
-disclosure, and content-bound approval; the tool form works with every client
-today because it is a tool call. As of the PR discussion, Claude Code
-> loads skills from the filesystem/plugins only and treats MCP resources as
-> user-mention attachments rather than model-driven reads
-
-so the SEP surface currently has no shipping consumer. Removing the working
-surface to add a spec-correct one with no consumers is a net loss. See D4.
+disclosure, and content-bound approval; the tool form remains the broad
+compatibility path because it is an ordinary tool call. Native activation is
+client- and version-specific, so the official
+[Skills client-support matrix](https://modelcontextprotocol.io/extensions/skills/overview#client-support)
+is the current evidence rather than a hard-coded host claim here. Removing the
+working surface in favor of a native-only one would still be a compatibility
+loss. See D4.
 
 ## 8. Gateway — remote skills
 
@@ -417,18 +451,19 @@ implying the gateway adds integrity it does not add.
 
 No transport work is needed (§3). Two properties do need attention.
 
-**Cache hints are mandatory, not optional.** `skills/list` carries SEP-2549
-`ttlMs` / `cacheScope` on 2026-07-28+. The response cache is keyed by
+**Cache hints are mandatory, not optional.** Stable `skills/list` and
+`skills/get` results carry SEP-2549 `ttlMs` / `cacheScope`; base resource/list
+results carry them on `2026-07-28`. The response cache is keyed by
 `{server_name, method, params_hash}` with **no caller identity**, and the code
 already documents the consequence:
 
 > a cached entry is visible to *every* downstream caller — which is exactly
 > what `private` forbids. We therefore decline to cache those results
 
-That safety net only fires if `skills/list` results are routed through
-`extract_cache_hint`. A passthrough that treats `skills/list` as an opaque
-unknown method **bypasses the check and can leak a private catalog across
-tenants.** This is a v1 correctness requirement, not a nicety.
+Direct relay fills absent cache policy as zero/private. Aggregation preserves
+the shortest TTL, makes private/unknown dominant, and makes any partial member
+failure zero/private. `CachingExecutor` therefore never shares a private or
+unknown catalog across callers.
 
 **Per-caller upstream credentials are a real gap.** `McpTransport::Http {
 headers }` is static `bitrouter.yaml` config and the connection pool is keyed
@@ -564,13 +599,30 @@ the reason it was closed.
 
 | Risk | Assessment |
 |---|---|
-| SEP-2640 changes before acceptance | Real. Draft since 2026-04-23; sponsor said "2-3 weeks" on 2026-05-11 and it has been quiet since. Mitigated by building only against the settled core (`uri`, `frontmatter`, `resources[]`), which has survived every revision. |
-| Contested areas move | Archive distribution was added then removed. Single-skill-multiple-representations is unresolved (moved to Discord 2026-05-27). `_meta` namespace unspecified. All are avoided by §12 and D6. |
-| No shipping host consumer | Claude Code cannot consume MCP-served skills end-to-end as of the PR discussion. Mitigated by D4 (`skills_search` / `skills_get`) and ecosystem filesystem installers. |
+| Skills extension evolves | The stable extension now defines the implemented core (`uri`, verbatim `frontmatter`, manifest/dynamic resources, result/cache envelope). Future additions remain passthrough where the schema permits. |
+| Contested areas move | Archive distribution and directory reads remain deliberately excluded. Unknown frontmatter and entry fields survive relay; unknown cache scope fails closed. |
+| Host support differs | Server conformance does not imply discovery, consent, verification, or activation by a given host. Keep `skills_search` / `skills_get` as the compatibility tools and report named-client results separately. |
 | FastMCP `SkillsProvider` divergence | Reconciliation is an unresolved WG priority. If we aggregate a FastMCP upstream before that lands, its URI structure will not match §8's assumptions. Detect and skip rather than mis-rewrite. |
 | Phase 0 is a behaviour change | Advertising `resources` makes clients probe upstreams that may not implement them — the original reason for not advertising. Empty lists are the correct answer; verify against a non-resource upstream. |
 
 ## 14. Acceptance
+
+The 2026-09-14 implementation is green for every BitRouter-owned row below.
+Host behavior remains client/version-specific and is not implied by server
+conformance.
+
+| Requirement | Local stdio origin | Direct gateway | Aggregate gateway | Host/client |
+|---|---:|---:|---:|---:|
+| Resources + Skills declaration | implemented | upstream-owned | implemented | client-dependent |
+| Stable list/get result envelopes | implemented | normalized | merged | client-dependent |
+| Manifest digest and size | generated | preserved | preserved | host verifies |
+| Origin identity and URI separation | one origin | configured origin | reversible namespace | host preserves |
+| MCP `2026-07-28` lifecycle | implemented | configurable upstream | implemented downstream | client-dependent |
+| Consent and activation | not owned | not owned | not owned | host-owned |
+
+Inspector 2.6.0 verified 3 skills and 29 files; the date-versioned MCP core
+suite and a named host's discovery/consent/activation result remain tracked in
+the follow-up plan and remain the external claim gate.
 
 - [x] `resources` advertised; a spec-compliant client completes `initialize` →
       `resources/list` → `resources/read` through `POST /mcp`.

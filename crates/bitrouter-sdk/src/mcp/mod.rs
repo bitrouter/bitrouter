@@ -10,15 +10,15 @@
 //! `language_model::Pipeline` (compile-time protocol isolation). Reuse of
 //! cross-cutting logic is via shared crate-root library code, not shared traits.
 //!
-//! Spec refs (latest accepted: `2025-11-25`; earlier `2025-06-18`,
-//! `2025-03-26`, `2024-11-05` still negotiable):
+//! Spec refs (modern stateless lifecycle: `2026-07-28`; stable
+//! `2025-11-25` and earlier revisions remain negotiable):
 //! - JSON-RPC envelope (Request / Response / Notification / Error):
 //!   <https://modelcontextprotocol.io/specification/2025-11-25/basic>
 //! - Streamable HTTP transport (`Origin`, `MCP-Session-Id`,
 //!   `MCP-Protocol-Version`, SSE response variant):
 //!   <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
-//! - Method catalogue (`tools/list`, `tools/call`, etc.):
-//!   <https://modelcontextprotocol.io/specification/2025-11-25>
+//! - Skills extension (`skills/list`, `skills/get`, Resources-backed files):
+//!   <https://modelcontextprotocol.io/extensions/skills/overview>
 //!
 //! The HTTP server (`crates/bitrouter-sdk/src/server.rs::mcp_invoke`) handles
 //! the wire-format concerns — `id` round-trip, error envelope, Origin
@@ -36,6 +36,7 @@
 //! [`config_routing::ConfigMcpRoutingTable`].
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream, StreamExt};
@@ -67,6 +68,7 @@ pub fn upstream_protocol_version(
     setting: crate::config::McpUpstreamProtocol,
 ) -> rmcp::model::ProtocolVersion {
     match setting {
+        crate::config::McpUpstreamProtocol::Auto => rmcp::model::ProtocolVersion::V_2026_07_28,
         crate::config::McpUpstreamProtocol::Latest => rmcp::model::ProtocolVersion::LATEST,
         crate::config::McpUpstreamProtocol::V2026_07_28 => {
             rmcp::model::ProtocolVersion::V_2026_07_28
@@ -86,6 +88,29 @@ pub fn upstream_protocol_version(
 // (`AggregateMember`, `McpTarget`), so a private `use` brings it into local
 // scope without re-exporting it.
 use transport::McpTransport;
+
+/// Reduce a cacheable result's advertised freshness by time already spent in
+/// a gateway cache or multi-page/member merge.
+///
+/// Rounding happens after subtracting durations, so a fractional millisecond
+/// is rounded down from the remaining allowance rather than accidentally
+/// extending it. Malformed or absent hints are left for the normal fail-closed
+/// envelope validation path.
+pub(crate) fn age_cacheable_result(result: &mut serde_json::Value, elapsed: Duration) {
+    let Some(ttl_ms) = result.get("ttlMs").and_then(serde_json::Value::as_u64) else {
+        return;
+    };
+    let remaining = Duration::from_millis(ttl_ms).saturating_sub(elapsed);
+    let remaining_ms = u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX);
+    result["ttlMs"] = remaining_ms.into();
+}
+
+pub(crate) fn age_optional_ttl_ms(ttl_ms: &mut Option<u64>, elapsed: Duration) {
+    if let Some(current) = ttl_ms.as_mut() {
+        let remaining = Duration::from_millis(*current).saturating_sub(elapsed);
+        *current = u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX);
+    }
+}
 
 /// Which upstream(s) an inbound MCP request targets.
 ///
@@ -118,6 +143,22 @@ pub struct McpRequest {
     /// Inbound HTTP headers. Populated by the HTTP adapter; defaults to empty
     /// for programmatic / internal callers.
     pub headers: http::HeaderMap,
+    /// Downstream MCP client context from the stateless 2026 lifecycle. Hooks
+    /// may inspect it for policy/telemetry; executors must not replay it as the
+    /// client identity of BitRouter's separate upstream hop.
+    pub client_context: Option<McpClientContext>,
+}
+
+/// Self-contained identity and capability context supplied by a downstream
+/// MCP `2026-07-28` client.
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpClientContext {
+    /// Protocol revision declared by the downstream request.
+    pub protocol_version: String,
+    /// Optional downstream implementation identity.
+    pub client_info: Option<serde_json::Value>,
+    /// Downstream capabilities, retained as open JSON for extension fields.
+    pub client_capabilities: serde_json::Value,
 }
 
 impl McpRequest {
@@ -135,6 +176,7 @@ impl McpRequest {
             params,
             caller,
             headers: http::HeaderMap::new(),
+            client_context: None,
         }
     }
 
@@ -151,6 +193,7 @@ impl McpRequest {
             params,
             caller,
             headers: http::HeaderMap::new(),
+            client_context: None,
         }
     }
 
@@ -159,6 +202,12 @@ impl McpRequest {
     /// [`PreRequestHook`]s via [`McpContext::headers`].
     pub fn with_headers(mut self, headers: http::HeaderMap) -> Self {
         self.headers = headers;
+        self
+    }
+
+    /// Attach the downstream stateless lifecycle context for hook inspection.
+    pub fn with_client_context(mut self, context: McpClientContext) -> Self {
+        self.client_context = Some(context);
         self
     }
 }
@@ -350,6 +399,12 @@ impl McpContext {
     /// [`set_caller`](Self::set_caller).
     pub fn headers(&self) -> &http::HeaderMap {
         &self.request.headers
+    }
+
+    /// Downstream MCP identity/capabilities, when the request uses the
+    /// self-contained `2026-07-28` lifecycle.
+    pub fn client_context(&self) -> Option<&McpClientContext> {
+        self.request.client_context.as_ref()
     }
 
     /// Emit a typed pipeline event.
@@ -717,4 +772,16 @@ mod tests {
             McpStreamPart::Notification { .. } => panic!("expected Final, got Notification"),
         }
     }
+}
+#[cfg(feature = "config_file")]
+#[test]
+fn default_config_prefers_modern_upstream_discovery() {
+    assert_eq!(
+        upstream_protocol_version(crate::config::Config::default().mcp.upstream_protocol),
+        rmcp::model::ProtocolVersion::V_2026_07_28,
+    );
+    assert_eq!(
+        upstream_protocol_version(crate::config::McpUpstreamProtocol::Latest),
+        rmcp::model::ProtocolVersion::LATEST,
+    );
 }

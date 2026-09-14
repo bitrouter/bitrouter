@@ -38,7 +38,7 @@ use bitrouter_mcp::capabilities::skill_catalog::{SkillCatalog, SkillFile, SkillF
 use bitrouter_mcp::error::ToolError;
 use bitrouter_sdk::mcp::skills::{
     GetSkillResult, ListSkillsResult, MAX_SKILL_RESOURCES, MAX_SKILL_TOTAL_BYTES, SKILL_SCHEME,
-    SkillEntry, SkillResource, SkillResources,
+    SkillEntry, SkillResource, SkillResources, SkillsCacheScope,
 };
 use sha2::{Digest, Sha256};
 
@@ -162,21 +162,22 @@ impl InstalledSkillCatalog {
 #[async_trait::async_trait]
 impl SkillCatalog for InstalledSkillCatalog {
     async fn list(&self) -> Result<ListSkillsResult, ToolError> {
-        Ok(ListSkillsResult {
-            skills: self
-                .collect_off_thread()
+        Ok(ListSkillsResult::complete(
+            self.collect_off_thread()
                 .await?
                 .into_values()
                 .map(|found| found.entry)
                 .collect(),
-        })
+            60_000,
+            SkillsCacheScope::Public,
+        ))
     }
 
     async fn get(&self, uri: &str) -> Result<GetSkillResult, ToolError> {
         self.collect_off_thread()
             .await?
             .remove(uri)
-            .map(|found| GetSkillResult { skill: found.entry })
+            .map(|found| GetSkillResult::complete(found.entry, 0, SkillsCacheScope::Public))
             .ok_or_else(|| ToolError::new(format!("no installed skill at '{uri}'")))
     }
 

@@ -222,6 +222,59 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() {
 }
 
 #[tokio::test]
+async fn e2e_assembled_mcp_route_enforces_virtual_key_auth() {
+    use bitrouter_sdk::mcp::transport::{McpServerConfig, McpTransport};
+    use http::Request;
+    use std::collections::HashMap;
+    use tower::ServiceExt;
+
+    let upstream = mock_chat_completions_upstream().await;
+    let mut cfg = config_for(&upstream.uri());
+    cfg.server.skip_auth = false;
+    cfg.mcp_servers.insert(
+        "blocked".into(),
+        McpServerConfig::with_defaults(
+            "blocked",
+            McpTransport::Stdio {
+                command: "/bin/false".into(),
+                args: Vec::new(),
+                env: HashMap::new(),
+            },
+        ),
+    );
+    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let state = AppState {
+        language_model: assembled.app.language_model().unwrap().clone(),
+        mcp: assembled.app.mcp().cloned(),
+        skip_auth: assembled.app.skip_auth(),
+        metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+    };
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 71,
+        "method": "tools/list",
+        "params": {}
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/blocked")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+
+    let response = build_router(state).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 401);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(error["id"], 71);
+    assert_eq!(error["error"]["code"], -32000);
+    assert_eq!(error["error"]["message"], "unauthorized: missing API key");
+}
+
+#[tokio::test]
 async fn e2e_http_server_chat_completions_end_to_end() {
     use axum_test::TestServer;
 
@@ -901,9 +954,11 @@ plugins:
 async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     use async_trait::async_trait;
     use bitrouter_sdk::App;
+    use bitrouter_sdk::language_model::HookDecision;
     use bitrouter_sdk::mcp::transport::McpTransport;
     use bitrouter_sdk::mcp::{
-        Executor, McpRequest, McpResponse, McpTarget, RoutingTable, ServerSelector,
+        Executor, McpContext, McpRequest, McpResponse, McpTarget, PreRequestHook, RoutingTable,
+        ServerSelector,
     };
     use http::Request;
     use std::sync::Arc;
@@ -947,14 +1002,57 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
                 McpTarget::Direct { server_name, .. } => server_name.clone(),
                 McpTarget::Aggregate { .. } => "<aggregate>".to_string(),
             };
+            let mut result = serde_json::json!({
+                "method": request.method,
+                "server": server,
+                "params_seen": request.params,
+            });
+            if request.method == "tools/list" {
+                result["tools"] = serde_json::json!([{
+                    "name": "deploy",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "tenant": {"type": "string", "x-mcp-header": "Tenant"}
+                        }
+                    }
+                }]);
+            }
             Ok(McpResponse {
                 request_id: request.request_id.clone(),
-                result: serde_json::json!({
-                    "method": request.method,
-                    "server": server,
-                    "params_seen": request.params,
-                }),
+                result,
             })
+        }
+    }
+
+    struct VerifyModernClientContext;
+    #[async_trait]
+    impl PreRequestHook for VerifyModernClientContext {
+        async fn check(&self, context: &mut McpContext) -> bitrouter_sdk::Result<HookDecision> {
+            if context
+                .headers()
+                .get("mcp-protocol-version")
+                .and_then(|value| value.to_str().ok())
+                == Some("2026-07-28")
+            {
+                let client = context.client_context().ok_or_else(|| {
+                    bitrouter_sdk::BitrouterError::internal(
+                        "modern downstream context did not reach the hook boundary",
+                    )
+                })?;
+                if client.protocol_version != "2026-07-28"
+                    || client
+                        .client_info
+                        .as_ref()
+                        .and_then(|info| info.get("name"))
+                        != Some(&serde_json::json!("downstream-only"))
+                {
+                    return Err(bitrouter_sdk::BitrouterError::internal(
+                        "hook observed the wrong downstream client context",
+                    ));
+                }
+            }
+            Ok(HookDecision::Allow)
         }
     }
 
@@ -996,7 +1094,8 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
         })
         .mcp(|m| {
             m.routing_table(Arc::new(StaticTable))
-                .executor(Arc::new(EchoExecutor));
+                .executor(Arc::new(EchoExecutor))
+                .pre_request_hook(VerifyModernClientContext);
         })
         .skip_auth(true)
         .build()
@@ -1152,7 +1251,8 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
         "bitrouter-mcp-gateway"
     );
 
-    // An unsupported requested version falls back to the gateway's latest.
+    // An unsupported initialize-era version falls back to the latest version
+    // that actually supports the initialize handshake, not the modern era.
     let init_old = serde_json::json!({
         "jsonrpc": "2.0", "id": 2, "method": "initialize",
         "params": { "protocolVersion": "1999-01-01" }
@@ -1169,6 +1269,204 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["result"]["protocolVersion"], "2025-11-25");
+
+    // MCP 2026-07-28 is stateless: discovery and every request carry their
+    // protocol/client context rather than relying on an initialized session.
+    let modern_meta = serde_json::json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": { "name": "e2e-client", "version": "1" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+    });
+    let discover = serde_json::json!({
+        "jsonrpc": "2.0", "id": 3, "method": "server/discover",
+        "params": { "_meta": modern_meta.clone() }
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "server/discover")
+        .body(axum::body::Body::from(discover.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["result"]["resultType"], "complete");
+    assert_eq!(json["result"]["supportedVersions"][0], "2026-07-28");
+    assert_eq!(json["result"]["ttlMs"], 0);
+    assert_eq!(json["result"]["cacheScope"], "private");
+    assert_eq!(
+        json["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+        "bitrouter-mcp-gateway"
+    );
+
+    let modern_list = serde_json::json!({
+        "jsonrpc": "2.0", "id": 4, "method": "tools/list",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "downstream-only", "version": "1"
+                },
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "traceparent": "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
+            }
+        }
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/list")
+        .body(axum::body::Body::from(modern_list.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["result"]["resultType"], "complete");
+    assert_eq!(json["result"]["ttlMs"], 0);
+    assert_eq!(json["result"]["cacheScope"], "private");
+    assert_eq!(
+        json["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+        "bitrouter-mcp-gateway"
+    );
+    assert_eq!(
+        json["result"]["params_seen"]["_meta"]["traceparent"],
+        "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
+    );
+    assert!(
+        json["result"]["params_seen"]["_meta"]
+            .get("io.modelcontextprotocol/clientInfo")
+            .is_none(),
+        "downstream hop identity must not be forwarded upstream: {json}"
+    );
+
+    // SEP-2243 custom tool-parameter headers are checked against the schema
+    // published by this same route before the tool is dispatched.
+    let modern_call = serde_json::json!({
+        "jsonrpc": "2.0", "id": 40, "method": "tools/call",
+        "params": {
+            "name": "deploy",
+            "arguments": {"tenant": "alpha"},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "downstream-only", "version": "1"
+                },
+                "io.modelcontextprotocol/clientCapabilities": {}
+            }
+        }
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "deploy")
+        .header("mcp-param-tenant", "beta")
+        .body(axum::body::Body::from(modern_call.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 400);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"]["code"], -32020);
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Mcp-Param-Tenant"))
+    );
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "deploy")
+        .header("mcp-param-tenant", "alpha")
+        .body(axum::body::Body::from(modern_call.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+
+    let unsupported = serde_json::json!({
+        "jsonrpc": "2.0", "id": 41, "method": "tools/list",
+        "params": { "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2099-01-01",
+            "io.modelcontextprotocol/clientCapabilities": {}
+        }}
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2099-01-01")
+        .header("mcp-method", "tools/list")
+        .body(axum::body::Body::from(unsupported.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 400);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"]["code"], -32022);
+    assert_eq!(json["error"]["data"]["requested"], "2099-01-01");
+    assert_eq!(json["error"]["data"]["supported"][0], "2026-07-28");
+
+    let malformed_discover = serde_json::json!({
+        "jsonrpc": "2.0", "id": 5, "method": "server/discover",
+        "params": { "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+        }}
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "server/discover")
+        .body(axum::body::Body::from(malformed_discover.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 400);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"]["code"], -32602);
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp/known")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .body(axum::body::Body::from(modern_list.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 400);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["error"]["code"], -32020);
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Mcp-Method"))
+    );
 
     // `notifications/initialized` is a notification — acked with 202, no body.
     let note = serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });

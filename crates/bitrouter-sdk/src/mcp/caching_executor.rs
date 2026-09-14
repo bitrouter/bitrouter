@@ -151,10 +151,11 @@ impl ServerCache {
     }
 
     fn get(&self, key: &CacheKey, now: Instant) -> Option<serde_json::Value> {
-        self.entries
-            .get(key)
-            .filter(|e| e.is_fresh(now))
-            .map(|e| e.value.clone())
+        self.entries.get(key).filter(|e| e.is_fresh(now)).map(|e| {
+            let mut value = e.value.clone();
+            super::age_cacheable_result(&mut value, now.duration_since(e.inserted_at));
+            value
+        })
     }
 
     fn insert(&mut self, key: CacheKey, entry: CacheEntry) {
@@ -573,6 +574,87 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn server_cache_returns_remaining_not_original_ttl() {
+        let key = CacheKey {
+            server_name: "a".into(),
+            method: "tools/list",
+            params_hash: 0,
+        };
+        let observed_at = Instant::now();
+        let mut cache = ServerCache::new(4);
+        cache.insert(
+            key.clone(),
+            CacheEntry {
+                value: serde_json::json!({
+                    "tools": [],
+                    "ttlMs": 100,
+                    "cacheScope": "public"
+                }),
+                inserted_at: observed_at - Duration::from_millis(40),
+                ttl: Duration::from_millis(100),
+            },
+        );
+
+        let hit = cache.get(&key, observed_at).expect("entry remains fresh");
+        assert_eq!(hit["ttlMs"], 60);
+    }
+
+    #[tokio::test]
+    async fn buffered_and_streaming_hits_do_not_restart_freshness() {
+        let inner = Arc::new(CountingExecutor {
+            calls: AtomicUsize::new(0),
+            value: serde_json::json!({"tools": []}),
+        });
+        let exec = CachingExecutor::new(inner.clone(), CacheTtls::default());
+        let request = list_req("a", "tools/list");
+        let key = CacheKey {
+            server_name: "a".into(),
+            method: "tools/list",
+            params_hash: params_hash(&request.params),
+        };
+        exec.cache_insert(
+            key.clone(),
+            serde_json::json!({
+                "tools": [],
+                "ttlMs": 100,
+                "cacheScope": "public"
+            }),
+            Duration::from_millis(100),
+        );
+        {
+            let mut caches = exec.caches.lock().expect("cache lock");
+            let entry = caches
+                .get_mut("a")
+                .and_then(|cache| cache.entries.get_mut(&key))
+                .expect("inserted cache entry");
+            entry.inserted_at = Instant::now() - Duration::from_millis(40);
+        }
+
+        let buffered = exec
+            .execute(&target("a"), &request)
+            .await
+            .expect("buffered cache hit");
+        let buffered_ttl = buffered.result["ttlMs"].as_u64().expect("ttlMs");
+        assert!(buffered_ttl <= 60, "aged ttl was {buffered_ttl}");
+
+        let mut stream = exec
+            .execute_streaming(&target("a"), &request)
+            .await
+            .expect("streaming cache hit");
+        let streamed = stream
+            .next()
+            .await
+            .expect("one terminal item")
+            .expect("terminal item succeeds");
+        let McpStreamPart::Final(streamed) = streamed else {
+            panic!("cache hit must be a terminal response");
+        };
+        let streamed_ttl = streamed.result["ttlMs"].as_u64().expect("ttlMs");
+        assert!(streamed_ttl <= buffered_ttl);
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

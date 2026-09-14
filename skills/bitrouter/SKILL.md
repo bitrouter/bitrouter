@@ -167,6 +167,13 @@ boundaries. Remote errors never fall back to this machine's configuration.
 
 ## Gotchas
 
+- MCP upstreams default to modern `server/discover` with rmcp's classified
+  legacy fallback. Set `mcp.upstream_protocol: latest` only when an upstream
+  must use the legacy `initialize` lifecycle.
+- `server.skip_auth: false` protects both model and MCP routes with the same
+  `brvk_` virtual-key validation. Static credentials under `mcp_servers` are
+  for BitRouter's upstream hop; they do not authenticate a downstream caller.
+
 - **Local port is `127.0.0.1:4356`** — old docs saying 8787 are stale. Hosted:
   `https://api.bitrouter.ai/v1` for the OpenAI shape, `https://api.bitrouter.ai`
   (no `/v1`) for the Anthropic SDK — same asymmetry locally.
