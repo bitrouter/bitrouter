@@ -36,6 +36,7 @@
 //! [`config_routing::ConfigMcpRoutingTable`].
 
 use std::sync::Arc;
+#[cfg(feature = "mcp")]
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -96,6 +97,7 @@ use transport::McpTransport;
 /// is rounded down from the remaining allowance rather than accidentally
 /// extending it. Malformed or absent hints are left for the normal fail-closed
 /// envelope validation path.
+#[cfg(feature = "mcp")]
 pub(crate) fn age_cacheable_result(result: &mut serde_json::Value, elapsed: Duration) {
     let Some(ttl_ms) = result.get("ttlMs").and_then(serde_json::Value::as_u64) else {
         return;
@@ -105,6 +107,7 @@ pub(crate) fn age_cacheable_result(result: &mut serde_json::Value, elapsed: Dura
     result["ttlMs"] = remaining_ms.into();
 }
 
+#[cfg(feature = "mcp")]
 pub(crate) fn age_optional_ttl_ms(ttl_ms: &mut Option<u64>, elapsed: Duration) {
     if let Some(current) = ttl_ms.as_mut() {
         let remaining = Duration::from_millis(*current).saturating_sub(elapsed);
