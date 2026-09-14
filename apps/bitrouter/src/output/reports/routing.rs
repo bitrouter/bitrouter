@@ -1,6 +1,6 @@
 //! Reports for `models` and `providers list`.
 
-use bitrouter_mcp::actions::models::{ModelsReport, ModelsSource};
+use crate::actions::models::{ModelsReport, ModelsSource};
 use bitrouter_sdk::invocation;
 use serde::Serialize;
 
@@ -10,7 +10,7 @@ use crate::output::human::{Human, Table};
 /// The human view of `bro models`.
 ///
 /// The report type itself is
-/// [`bitrouter_mcp::actions::models::ModelsReport`]: the
+/// [`crate::actions::models::ModelsReport`]: the
 /// `list_models` tool returns the same type, so `bro models --json` and
 /// the tool's structured content are the same bytes. Rendering stays here — a
 /// local trait on a foreign type is legal, and it keeps [`Human`] out of the

@@ -665,7 +665,6 @@ dependencies = [
  "axum-test",
  "base64 0.22.1",
  "bitrouter-guardrails",
- "bitrouter-mcp",
  "bitrouter-providers",
  "bitrouter-sdk",
  "bitrouter-telemetry",
@@ -686,7 +685,6 @@ dependencies = [
  "rand_distr",
  "reqwest",
  "ring",
- "rmcp",
  "rustix 1.1.4",
  "schemars 1.2.1",
  "sea-orm",
@@ -722,26 +720,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "bitrouter-mcp"
-version = "1.0.0-alpha.30"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "bitrouter-sdk",
- "http",
- "reqwest",
- "rmcp",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "wiremock",
 ]
 
 [[package]]
@@ -3458,12 +3436,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
-name = "pastey"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
-
-[[package]]
 name = "pem-rfc7468"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4134,22 +4106,15 @@ version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b88db56b8ae316560e9e868b6b978ea940f27cb883323fc90e07435e44158f5c"
 dependencies = [
- "async-trait",
  "base64 0.23.0",
  "bytes",
  "chrono",
  "futures",
  "http",
- "http-body",
- "http-body-util",
  "indexmap 2.14.0",
- "pastey",
  "pin-project-lite",
  "process-wrap",
- "rand 0.10.2",
  "reqwest",
- "rmcp-macros",
- "schemars 1.2.1",
  "serde",
  "serde_json",
  "sse-stream",
@@ -4157,22 +4122,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
- "tower-service",
  "tracing",
- "uuid",
-]
-
-[[package]]
-name = "rmcp-macros"
-version = "3.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "873b730df6f0a9b74b13eb514e0dca4c2db0d8b68b74af98a2e9bf3f9d436585"
-dependencies = [
- "darling 0.24.0",
- "proc-macro2",
- "quote",
- "serde_json",
- "syn 3.0.3",
 ]
 
 [[package]]
@@ -4376,7 +4326,6 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
- "chrono",
  "dyn-clone",
  "ref-cast",
  "schemars_derive",

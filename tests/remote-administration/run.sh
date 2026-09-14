@@ -221,11 +221,6 @@ run_client() {
     if [[ "$phase" == reload || "$phase" == cli-reload || "$phase" == boot-change || "$phase" == legacy || "$phase" == partial ]]; then
         env_args+=(--env "CLIENT_ADMIN_TOKEN=$admin_token")
     fi
-    # The default acceptance path always invokes MCP. This is a diagnostic
-    # selector for completing independent live journeys after an MCP failure.
-    if [[ "${BITROUTER_REMOTE_ADMIN_SKIP_MCP:-0}" == "1" ]]; then
-        env_args+=(--env BITROUTER_REMOTE_ADMIN_SKIP_MCP=1)
-    fi
     docker run \
         --rm \
         --network "$network_name" \
@@ -352,11 +347,7 @@ main() {
     run_client partial
     run_pty_check partially_applied
 
-    if [[ "${BITROUTER_REMOTE_ADMIN_SKIP_MCP:-0}" == "1" ]]; then
-        printf '%s\n' 'remote-administration selected CLI/Code acceptance passed (MCP skipped)'
-    else
-        printf '%s\n' 'remote-administration Docker acceptance passed'
-    fi
+    printf '%s\n' 'remote-administration Docker acceptance passed'
 }
 
 fail() {

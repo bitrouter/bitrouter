@@ -15,6 +15,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::actions::models::ModelsReport;
+use crate::actions::route::{RouteInput, RouteReport};
+use crate::actions::status::StatusReport;
 use anyhow::{Context, Result};
 use axum::extract::{
     DefaultBodyLimit, MatchedPath, Path, Query, Request, State,
@@ -25,9 +28,6 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use bitrouter_mcp::actions::models::ModelsReport;
-use bitrouter_mcp::actions::route::{RouteInput, RouteReport};
-use bitrouter_mcp::actions::status::StatusReport;
 use bitrouter_sdk::config::{ControlConfig, ControlScope};
 use bitrouter_sdk::error::BitrouterError;
 use futures::StreamExt;
@@ -314,14 +314,6 @@ fn control_router(source: ConfigSource, socket: PathBuf, token: Vec<u8>) -> Resu
 }
 
 fn control_router_with(state: ControlState, expected: ControlAuth) -> Router {
-    let ports = Arc::new(state.reads());
-    let mcp = bitrouter_mcp::server::BitrouterMcp::builder()
-        .models(ports.clone())
-        .status(ports.clone())
-        .routing(ports)
-        .request_authorizer(Arc::new(reads::McpAuthorization))
-        .build();
-    let mcp_router = bitrouter_mcp::server::local_http_router(mcp).with_state::<ControlState>(());
     let mut router = Router::new()
         .route("/control/v1/capabilities", get(capabilities))
         .route("/control/v1/state", get(control_state))
@@ -344,7 +336,6 @@ fn control_router_with(state: ControlState, expected: ControlAuth) -> Router {
         router = router.route(row.path, handler);
     }
     router
-        .merge(mcp_router)
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .layer(axum::middleware::from_fn_with_state(
@@ -1542,90 +1533,6 @@ providers:
                 Some("no-store")
             );
         }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn mcp_endpoint_shares_control_authentication() -> anyhow::Result<()> {
-        let (_directory, source) = default_source()?;
-        let response = test_router(source, PathBuf::from("missing.sock"))?
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/mcp-control")
-                    .body(Body::empty())?,
-            )
-            .await?;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn mcp_endpoint_accepts_an_authenticated_initialize() -> anyhow::Result<()> {
-        let (_directory, source) = default_source()?;
-        let response = test_router(source, PathBuf::from("missing.sock"))?
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/mcp-control")
-                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
-                    .header(header::HOST, "127.0.0.1:4358")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .header(header::ACCEPT, "application/json, text/event-stream")
-                    .body(Body::from(
-                        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}"#,
-                    ))?,
-            )
-            .await?;
-        let status = response.status();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
-        assert_eq!(
-            status,
-            StatusCode::OK,
-            "MCP initialize failed: {}",
-            String::from_utf8_lossy(&body)
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn authenticated_mcp_tool_uses_validated_caller_and_redacted_report() -> anyhow::Result<()>
-    {
-        use rmcp::ServiceExt;
-        use rmcp::transport::StreamableHttpClientTransport;
-        use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-
-        let (_directory, source) = default_source()?;
-        let router = test_router(source, PathBuf::from("/private/secret/control.sock"))?;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let address = listener.local_addr()?;
-        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-        let task = tokio::spawn(async move {
-            axum::serve(listener, router)
-                .with_graceful_shutdown(async move {
-                    let _ = stop_rx.await;
-                })
-                .await
-        });
-        let transport = StreamableHttpClientTransport::with_client(
-            reqwest::Client::new(),
-            StreamableHttpClientTransportConfig::with_uri(format!("http://{address}/mcp-control"))
-                .auth_header(TOKEN),
-        );
-        let client =
-            tokio::time::timeout(std::time::Duration::from_secs(10), ().serve(transport)).await??;
-        let reply = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            client.call_tool(rmcp::model::CallToolRequestParams::new("status")),
-        )
-        .await??;
-        let value = serde_json::to_value(&reply)?;
-        assert_eq!(value["structuredContent"]["running"], false);
-        assert!(value["structuredContent"]["socket"].is_null());
-        assert!(!serde_json::to_string(&value)?.contains("/private/secret"));
-        client.cancel().await?;
-        let _ = stop_tx.send(());
-        task.await??;
         Ok(())
     }
 

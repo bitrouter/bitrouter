@@ -1,5 +1,11 @@
 # Spec: one actions table — stopping CLI, MCP, and TUI from drifting apart
 
+> **Superseded in part (2026-09-14):**
+> [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) removes the OSS origin
+> MCP surface and moves the retained shared action contracts into
+> `apps/bitrouter/src/actions/`. Historical origin-server analysis below is
+> preserved as context, not current product behavior.
+
 Status: **phases 0–4 implemented; 5 proposed; `complete` removed, not
 deferred** · Author: Claude (with Spikel)
 · Date: 2026-09-04

@@ -27,7 +27,7 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-reporting commands are exempt: `serve` and `mcp serve` are long-running servers; `acp serve` is a stdio JSON-RPC bridge; `run` streams NDJSON by default; `code` and `launch` own the terminal; and `cloud api` streams the remote response body.
+> Non-reporting commands are exempt: `serve` is a long-running server; `acp serve` is a stdio JSON-RPC bridge; `run` streams NDJSON by default; `code` and `launch` own the terminal; and `cloud api` streams the remote response body.
 
 Per-provider credential commands are under `bro providers (login|logout)`; BitRouter Cloud sign-in is `bro cloud (login|logout|whoami)`.
 
@@ -188,10 +188,9 @@ scope alongside it.
 
 This listener is disabled by default, accepts loopback addresses only, and is
 never affected by inference `server.skip_auth`. Its typed HTTP actions live
-under `/control/v1`, and the BitRouter origin MCP service is mounted at
-`/mcp-control` with the same bearer and browser-Origin checks. Remote ACP
-sessions are not exposed. Changes under `control:` are restart-only because
-they govern listener creation and binding.
+under `/control/v1`; it exposes neither an MCP origin nor remote ACP sessions.
+Changes under `control:` are restart-only because they govern listener creation
+and binding.
 
 ### `bro start`
 
@@ -246,7 +245,8 @@ bro requests --human           # the same, as a table
 
 Prints pid, listen address, number of routable models, the distinct providers behind them, the control socket path, and the **spend position**. Exits cleanly with "stopped" when no daemon is reachable.
 
-The same report the origin MCP server's `status` tool returns — one shared type, so `bro status --json` and that tool's structured content are the same bytes.
+The same app-owned report used by Code sessions and typed remote control, so
+each retained surface preserves one JSON shape.
 
 **`spend` — what has gone, and what is left.** Two independent facts, each present only where the deployment can answer it:
 
@@ -421,8 +421,8 @@ The config fallback probes each `auto_discover: true` provider's `/models`
 endpoint (bounded: 2s connect, 5s per request; failures leave that provider with
 no models rather than failing the command). The daemon path does no such probing.
 
-Same report type as the origin MCP server's `list_models` tool, so
-`bro models --json` and the tool's structured content are the same bytes.
+Uses the same app-owned report as Code sessions and typed remote control, so
+each retained surface preserves one JSON shape.
 
 ### `bro providers list`
 
@@ -480,92 +480,13 @@ Connects to one MCP server and prints a YAML stub suitable for pasting into the 
 
 ---
 
-## Origin MCP server
+## MCP gateway inspection
 
-`bro mcp serve` runs BitRouter itself as an **origin** MCP server, so an
-MCP-capable client (Claude Code, Claude Desktop, Cursor, …) can call BitRouter's
-own capabilities as tools. This is the inverse of `bro mcp check` and the
-`mcp_servers:` config block, where BitRouter is the MCP *client* proxying
-upstream servers.
-
-### `bro mcp serve`
-
-```
-bro mcp serve
-```
-
-Long-running: its stdout is the JSON-RPC wire, not a result envelope. Stdio is
-the canonical transport for hosts, native launchers, and plugin manifests.
-Network-capable hosts connect directly to the running daemon's authenticated
-Streamable HTTP `/mcp-control` endpoint. Standalone `--transport http` is
-retired and returns an error rather than starting a second listener.
-
-**Transport**
-
-| Mode | Wire | Listener |
-|---|---|---|
-| `stdio` (default) | newline-delimited JSON-RPC over stdin/stdout — what an MCP client launches as a subprocess | — |
-| Streamable HTTP | served only by the daemon at `/mcp-control`; the hidden standalone `--transport http` compatibility input returns an error | `control.listen` |
-
-**Backends**
-
-| `--backend` | Routes to | Notes |
-|---|---|---|
-| `local` (stdio default) | the local BYOK daemon at `--local-url` (default `http://127.0.0.1:4356`) | canonical local origin profile |
-| `cloud` | BitRouter Cloud at `--cloud-url` (default `https://api.bitrouter.ai`) | hidden compatibility profile over stdio using `--token` / `BITROUTER_TOKEN`; network hosts should connect directly |
-| `skills` | the installed-skills tree under the current directory | stdio only — it serves the launching process's own skill library |
-
-**Tools**
-
-Control and introspection only. There is **no inference tool**: to run a
-completion, call the daemon's HTTP API (`/v1/messages`,
-`/v1/chat/completions`) — the transport built for it, with streaming, the full
-parameter surface, and the metering path. `bro mcp serve` tells you which
-models to send there (`list_models`), where they would go (`route_preview`),
-and what it has cost (`status`).
-
-| Tool | Wired on | What it answers |
-|---|---|---|
-| `list_models` | every profile | Every routable model with **all** the providers that can serve it, not just the first. Optional `provider` argument filters, exactly as `bro models --provider` does. Returns the same report type as `bro models`, advertised as the tool's `output_schema`. On stdio + local it reads the daemon's live routing table over the control socket and falls back to a static config parse, so **it answers with no daemon running**; `resolved_via` says which view it is. Other profiles answer with the backend's own `GET /v1/models`, which does need the daemon (or the metered account) up |
-| `status` | stdio + local, and any cloud profile | Daemon liveness (pid, listen address, model count, providers, control socket) plus the spend position — `spend.spent` on any deployment, `spend.limit` on a metered one. Returns the same report type as `bro status`, advertised as the tool's `output_schema`. A stopped daemon is `running: false`, not a tool error. Not wired on HTTP + local: only a process on the daemon's own machine can read its control socket |
-| `route_preview` | stdio + local | How a model/prompt *would* route — the effective model the policy table selects, the provider chain, the decision behind it, and the first hop's rate card — without sending anything upstream. Returns the same report type as `bro route`, advertised as the tool's `output_schema`. Config is read **per call**, so an edited `bitrouter.yaml` is visible to a long-running server |
-| `skills_search` | every **stdio** profile | Every skill on this machine, optionally narrowed by `query`. Returns the same report type as `bro skills list`, advertised as the tool's `output_schema`. Reads the project *and* user-global roots, and marks any skill it found but cannot serve with `valid: false` plus a `problem` |
-| `skills_get` | every **stdio** profile | One skill's frontmatter metadata and `SKILL.md` body |
-
-Only wired capabilities register their tools, so the profiles stay disjoint by
-construction: an HTTP client never sees `route_preview` or the skills tools
-(both read the serving machine's own routing table and skill library, which has
-no meaning on a multi-tenant transport).
-
-The skills tools ride the **transport**, not the backend: a stdio server is a
-subprocess of the caller whose machine it is, which is the same argument that
-makes `--backend skills` stdio-only. So a `bro mcp install`-ed client —
-which launches `bro mcp serve` — sees skills too; before, only
-`--backend skills` did, and an installed client never saw one.
-`--backend skills` survives as the narrow gateway-subprocess profile that
-carries *nothing else*.
-
-Every stdio profile also serves SEP-2640's `skills/list` / `skills/get` JSON-RPC
-methods plus `resources/list` / `resources/read` over the skill files, for hosts
-that consume the extension rather than the tool pair. `skills/list` publishes
-only the skills that are actually loadable; `skills_search` and
-`bro skills list` show the rest, marked, so an author can see why a skill
-on disk is unusable. Each published entry carries a complete `resources`
-manifest with a `digest` and a byte `size` per file.
-
-Spend reaches an MCP client as **typed structured content** under `status`'s
-`spend`, read from the local metering database — the same ledger
-`bro status` and `bro requests` report from, so the surfaces cannot
-disagree about what has been spent.
-
-### Hidden compatibility: `bro mcp install`
-
-```
-bro mcp install --client claude|cursor [--config PATH]
-```
-
-Renders the client config block that launches `bro mcp serve` over stdio.
-With `--config`, merges it into that file; without, prints it to stdout.
+`bro mcp check [server] [--config PATH]` connects to one configured upstream
+MCP server, or all of them, and reports transport, reachability, latency,
+negotiated tools capability, and advertised tool names. BitRouter OSS is the
+MCP client/gateway on this path; it does not expose a first-party origin MCP
+server.
 
 ---
 
@@ -923,7 +844,7 @@ The positional agent takes any catalog harness with an interactive binary. `clau
 
 The synthesized files are throwaway, written under the working tree's self-ignoring `.bitrouter/launch/`; the user's own `~/.config` is never touched. Their model lists come from the daemon's `/v1/models` (best-effort — an unreachable daemon just yields an empty list and the harness keeps its own defaults).
 
-**Gateway MCP servers.** `launch` also injects BitRouter's two MCP-shaped gateways into the harness: `bitrouter_tools` (the daemon's aggregate endpoint at `mcp.aggregate.route`, fanning out to every configured `mcp_servers` upstream — omitted when `mcp.aggregate.enabled: false`) and `bitrouter_skills` (this binary as `mcp serve --backend skills`, over the installed-skills root). Injection reaches the harnesses that have a mechanism for it — `claude` (`--mcp-config`), `codex` (`-c mcp_servers.*`), and `opencode` and `hermes` (their synthesized config files). `pi`, `openclaw`, `grok`, and `agy` expose no injectable MCP surface and launch without the gateways.
+**Gateway MCP server.** `launch` injects `bitrouter_tools`, the daemon's aggregate endpoint at `mcp.aggregate.route`, so configured upstream MCP servers reach the harness; it is omitted when `mcp.aggregate.enabled: false`. Injection reaches harnesses with an MCP mechanism — `claude` (`--mcp-config`), `codex` (`-c mcp_servers.*`), and `opencode` and `hermes` (their synthesized config files). `pi`, `openclaw`, `grok`, and `agy` expose no injectable MCP surface. Installed local skills are supplied by the agent host's normal skill/plugin rails, not by a BitRouter origin server.
 
 `--model <id>` pins the harness's model through whatever mechanism it has. Following `cargo run`'s convention, everything after `--` is forwarded verbatim, e.g. `bro launch claude -- -p "summarize" --dangerously-skip-permissions`.
 
@@ -1501,12 +1422,13 @@ bro cloud byok delete <PROVIDER> [--json]
 
 BitRouter **reads** the installed-skills directory; it does not install into it.
 Getting a skill onto disk is the ecosystem's job — `npx skills add`, or the
-Claude Code / Codex plugin marketplaces. BitRouter is a skills *server* and
-*gateway*, not an installer: see `docs/SKILLS_MCP_SPEC.md` §2.
+Claude Code / Codex plugin marketplaces. The local CLI is a skill reader, not
+an installer or origin server; the MCP gateway independently relays skills
+advertised by configured upstream servers.
 
 The `add`, `remove`, `find`, and `update` verbs were removed for that reason.
-To serve installed skills over MCP, see `bro mcp serve` (every stdio
-profile carries them) or the narrower `--backend skills`.
+The agent host loads local installed skills directly. BitRouter does not serve
+the host's filesystem-backed skill collection over MCP.
 
 ### `bro skills list`
 

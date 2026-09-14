@@ -1,22 +1,206 @@
-//! The `status` action, implemented over the daemon's control socket plus the
-//! local metering database.
+//! The `status` action: *is BitRouter up, and am I OK to spend?*
 //!
-//! One implementation, two surfaces: `bro status` calls
-//! [`DaemonStatus::report`] directly, and the origin MCP server's `status` tool
-//! calls it through the [`StatusQuery`] port. Both get the same
-//! [`StatusReport`], so the CLI's `--json` and the tool's structured content
-//! cannot drift.
-//!
-//! Two independent reads make one report. Liveness comes off the control
-//! socket; the spend position comes off the metering database, which is
-//! readable whether or not anything is listening. Either can be absent without
-//! failing the other.
+//! One report type is shared by `bro status`, Code sessions, and typed remote
+//! control so all retained surfaces preserve the same JSON shape. The app owns
+//! the type, port, and implementation over the daemon control socket and local
+//! metering database.
+
+use super::ToolError;
+
+/// Where BitRouter stands on money: what has been spent, and what is left.
+///
+/// The two halves are **independent facts**, not two views of one, which is
+/// why each is separately optional:
+///
+/// - [`Self::spent`] is money already gone. Every deployment can answer it —
+///   BitRouter meters its own requests — so a BYOK install gets a real answer
+///   to "am I OK to spend?" instead of nothing.
+/// - [`Self::limit`] is money still available before a cap. Only a deployment
+///   that *has* a cap can answer it; a BYOK install bills the upstream
+///   provider directly and has none.
+///
+/// A metered cloud account fills `limit` and leaves `spent` empty — the
+/// balance endpoint is a ledger of what remains and knows nothing of
+/// spend-to-date. A local daemon fills `spent` and leaves `limit` empty.
+/// Neither has to lie about the half it cannot see, and an agent reads the
+/// fields that are there instead of guessing which deployment it is talking
+/// to.
+///
+/// Named `spend`, not `cost`: `cost` is the prospective per-token rate of a
+/// request not yet made (`route_preview`'s `estimated_cost`). This is money
+/// already gone, and it matches the vocabulary of the metering store it is
+/// read from.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct Spend {
+    /// Currency both halves are denominated in (today: `"USD"`). The amounts
+    /// are named `*_micro_usd` because that is the unit BitRouter meters and
+    /// bills in; a metered account that declares another currency reports it
+    /// here rather than having it silently dropped.
+    pub currency: String,
+    /// What has been spent, where a spend record is readable. `None` means no
+    /// metering database was reachable — **not** that nothing was spent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent: Option<Spent>,
+    /// What is left before a cap, on deployments that impose one. `None` means
+    /// the deployment caps nothing — **not** that the balance is zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<SpendLimit>,
+}
+
+/// Money already spent within a window, as BitRouter's own metering priced it.
+///
+/// **This is an estimate, and it is a floor.** The figure is priced from
+/// BitRouter's registry at settle time, not from a provider invoice, and
+/// [`Self::unpriced`] counts the requests inside the same window that carried
+/// no charge evidence at all. Those rows are *excluded* rather than summed as
+/// zero, because adding them would report a floor as a price. An agent
+/// comparing this against a [`SpendLimit`] — which is an authoritative ledger
+/// — must read `unpriced` to know how much of the window the figure does not
+/// cover.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct Spent {
+    /// The window the figure covers, e.g. `"today"` (since 00:00 UTC).
+    pub window: String,
+    /// Estimated spend over `window`, counting only requests that carry charge
+    /// evidence.
+    pub estimated_micro_usd: u64,
+    /// Requests observed in `window`, successes and failures alike.
+    pub requests: u64,
+    /// How many of `requests` had no charge evidence and are therefore absent
+    /// from `estimated_micro_usd`. Non-zero means the figure understates by an
+    /// unknown amount.
+    pub unpriced: u64,
+}
+
+/// What a capped deployment will still let the caller spend.
+///
+/// An authoritative ledger, unlike [`Spent`]: these are the numbers the
+/// account is actually settled against, not an estimate priced locally.
+///
+/// Today the only reachable cap is a metered account's prepaid credit balance
+/// (`GET /v1/billing/balance`). Locally issued API keys carry a
+/// `spend_limit_micro_usd` of their own, which would be a second kind of cap —
+/// but `status` reads no per-key state today (see [`StatusQuery`] on
+/// attribution), so modelling it here would be a shape nothing fills. That is
+/// the extension point when per-caller status arrives.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct SpendLimit {
+    /// Raw balance on the credit account, before pending debits.
+    pub balance_micro_usd: i64,
+    /// Debits recorded but not yet drained from `balance_micro_usd`.
+    pub pending_micro_usd: i64,
+    /// `max(balance - pending, 0)` — what the next call may actually spend.
+    pub remaining_micro_usd: i64,
+}
+
+/// What BitRouter reports about itself.
+///
+/// Every field beyond `running` is optional because the two deployments answer
+/// different halves of the question: a local daemon has a pid, a listen address
+/// and a control socket; a metered cloud account has a credit balance.
+/// `running: false` is an **answer**, never an error — an agent polling for
+/// health has to be able to tell "down" from "broken", and the CLI has always
+/// exited 0 on a stopped daemon.
+///
+/// [`Self::spend`] is the exception to that split: both deployments can say
+/// something about money, so both fill it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct StatusReport {
+    /// Whether BitRouter answered.
+    pub running: bool,
+    /// The daemon's process id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// The daemon's HTTP listen address, as the daemon itself reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listen: Option<String>,
+    /// Count of routable models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<usize>,
+    /// The distinct providers behind those models, sorted. Empty when nothing
+    /// is running, or when the daemon is too old to report them.
+    #[serde(default)]
+    pub providers: Vec<String>,
+    /// The control socket the report was read from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket: Option<String>,
+    /// The spend position — what has gone, and what is left where a cap
+    /// exists. `None` only when neither half could be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spend: Option<Spend>,
+}
+
+impl StatusReport {
+    /// Nothing is listening. Not a failure: adapters return a report with
+    /// `running: false`, not an error.
+    ///
+    /// `spend` is still carried, because it is not a liveness fact: the
+    /// metering database records what a *past* daemon spent and reads fine
+    /// with nothing running.
+    pub fn stopped(socket: String, spend: Option<Spend>) -> Self {
+        Self {
+            running: false,
+            pid: None,
+            listen: None,
+            models: None,
+            providers: Vec::new(),
+            socket: Some(socket),
+            spend,
+        }
+    }
+
+    /// A daemon answered its control socket.
+    pub fn running(
+        pid: u32,
+        listen: String,
+        models: usize,
+        providers: Vec<String>,
+        socket: String,
+        spend: Option<Spend>,
+    ) -> Self {
+        Self {
+            running: true,
+            pid: Some(pid),
+            listen: Some(listen),
+            models: Some(models),
+            providers,
+            socket: Some(socket),
+            spend,
+        }
+    }
+
+    /// A metered account answered. There is no process to report — the
+    /// deployment is somebody else's — so the question collapses to
+    /// "reachable, and this much room left to spend".
+    pub fn metered(spend: Spend) -> Self {
+        Self {
+            running: true,
+            pid: None,
+            listen: None,
+            models: None,
+            providers: Vec::new(),
+            socket: None,
+            spend: Some(spend),
+        }
+    }
+}
+
+/// The `status` port shared by local consumers.
+#[async_trait::async_trait]
+pub trait StatusQuery: Send + Sync {
+    /// Report BitRouter's state, or a `ToolError` when the probe itself failed
+    /// (a permission-denied socket, a malformed response). A stopped daemon is
+    /// `Ok` with `running: false`.
+    async fn status(&self) -> Result<StatusReport, ToolError>;
+}
 
 use std::path::{Path, PathBuf};
-
-use bitrouter_mcp::actions::status::{Spend, Spent, StatusQuery, StatusReport};
-use bitrouter_mcp::backend::CallerAuth;
-use bitrouter_mcp::error::ToolError;
 
 use crate::daemon::{self, DaemonCommand, DaemonResponse};
 use crate::metering::store::TimeWindow;
@@ -102,7 +286,7 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
 ///
 /// Only the `spent` half is filled. A BYOK deployment pays its providers
 /// directly and imposes no cap of its own, so there is no
-/// [`SpendLimit`](bitrouter_mcp::actions::status::SpendLimit) to report; the
+/// [`SpendLimit`](crate::actions::status::SpendLimit) to report; the
 /// cloud backend fills that half instead.
 ///
 /// The figure is deliberately reported even when the window is empty: `0` over
@@ -113,13 +297,9 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
 /// **Machine-wide, not per-caller.** [`MeteringStore::spend_summary`] rolls up
 /// every caller of this daemon, so on a shared machine this reports other
 /// callers' spend to whoever asks. That is tolerable today because the only
-/// surfaces reaching this code are single-tenant by construction — the CLI, and
-/// `mcp serve` over stdio — but it is why the port still takes a
-/// [`CallerAuth`]. Closing it means resolving the caller's bearer to an API key
-/// id and calling a scoped query instead; the store already has them
-/// (`get_spend` per key, `spend_summary_for_launch`, and
-/// `spend_summary_for_acp_session`), so this is attribution plumbing, not a new
-/// measurement.
+/// retained surfaces reaching this code are single-tenant by construction.
+/// Any future multi-tenant adapter must resolve the caller to an API-key id and
+/// call a scoped query instead; the store already has the required primitives.
 ///
 /// [`MeteringStore::spend_summary`]: crate::metering::MeteringStore::spend_summary
 async fn local_spend(source: Option<&ConfigSource>) -> Option<Spend> {
@@ -145,7 +325,7 @@ impl StatusQuery for DaemonStatus {
     /// `local_spend`). The parameter stays on the port because the cloud
     /// implementation of the same action does forward it, and because per-
     /// caller local attribution is where this implementation goes next.
-    async fn status(&self, _caller: &CallerAuth) -> Result<StatusReport, ToolError> {
+    async fn status(&self) -> Result<StatusReport, ToolError> {
         self.report()
             .await
             .map_err(|e| ToolError::new(e.to_string()))
@@ -187,9 +367,8 @@ providers:
         (dir, source)
     }
 
-    /// The change's whole point: on a local deployment **both** surfaces fill
-    /// `spend`. `bro status` goes through `report()`; the MCP `status`
-    /// tool goes through the `StatusQuery` port. Same struct, same numbers.
+    /// Direct calls and the injected port both fill `spend` from the same
+    /// action. Same struct, same numbers.
     #[tokio::test]
     async fn both_surfaces_report_spend_on_a_local_deployment() {
         let (dir, source) = metered_home().await;
@@ -197,11 +376,9 @@ providers:
         let probe = DaemonStatus::new(&socket, Some(source));
 
         let cli = probe.report().await.expect("cli surface");
-        let tool = StatusQuery::status(&probe, &CallerAuth::default())
-            .await
-            .expect("mcp surface");
+        let port = StatusQuery::status(&probe).await.expect("port surface");
 
-        for (surface, report) in [("cli", &cli), ("mcp", &tool)] {
+        for (surface, report) in [("cli", &cli), ("port", &port)] {
             let spend = report
                 .spend
                 .as_ref()
@@ -222,7 +399,7 @@ providers:
         }
         assert_eq!(
             serde_json::to_value(&cli).expect("cli json"),
-            serde_json::to_value(&tool).expect("mcp json"),
+            serde_json::to_value(&port).expect("port json"),
             "the two surfaces of one action must be the same bytes"
         );
         // …and none of that depended on a daemon being up.

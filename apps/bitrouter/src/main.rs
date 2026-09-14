@@ -22,6 +22,7 @@ use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 
 use bitrouter::actions::administration::{PolicyInput, PolicyView};
 use bitrouter::actions::requests::RequestFilters;
+use bitrouter::actions::route::RouteInput;
 use bitrouter::administration_target::{InspectionTarget, ReloadSubmission};
 use bitrouter::commands;
 use bitrouter::daemon::{self, DaemonCommand, DaemonResponse};
@@ -54,7 +55,6 @@ use bitrouter::output::reports::trajectory::{
 };
 use bitrouter::output::{CliReport, Output};
 use bitrouter::remote_control::operations::{OperationReport, OperationStatus};
-use bitrouter_mcp::actions::route::RouteInput;
 use bitrouter_sdk::config;
 
 async fn supervise_http_shutdown<Http, Control, Hup, Term>(
@@ -640,7 +640,7 @@ enum Command {
         #[command(subcommand)]
         action: bitrouter::skills::cli::SkillsAction,
     },
-    /// Serve BitRouter's local MCP origin or check configured upstream servers.
+    /// Check configured upstream MCP servers.
     Mcp {
         #[command(subcommand)]
         action: McpAction,
@@ -933,43 +933,12 @@ enum WorkflowStateAction {
 
 #[derive(Subcommand)]
 enum McpAction {
-    /// Serve the MCP server (stdio by default).
-    Serve {
-        /// `stdio` (local daemon) or `http` (cloud).
-        #[arg(long, value_enum, default_value_t = McpTransport::Stdio, hide = true)]
-        transport: McpTransport,
-        /// `local`, `cloud`, or `skills`. Defaults: stdio→local, http→cloud.
-        #[arg(long, value_enum, hide = true)]
-        backend: Option<McpBackend>,
-        /// Local daemon root.
-        #[arg(long, default_value = "http://127.0.0.1:4356", hide = true)]
-        local_url: String,
-        /// Cloud root.
-        #[arg(long, default_value = "https://api.bitrouter.ai", hide = true)]
-        cloud_url: String,
-        /// Cloud bearer token (else `BITROUTER_TOKEN`).
-        #[arg(long, hide = true)]
-        token: Option<String>,
-        /// HTTP bind address.
-        #[arg(long, default_value = "127.0.0.1:4357", hide = true)]
-        bind: String,
-    },
     /// Connect, negotiate MCP capabilities, and list advertised tools.
     Check {
         /// Check only this configured server; omit to check all of them.
         server: Option<String>,
         /// Path to `bitrouter.yaml`.
         #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Write/print the client config block.
-    #[command(hide = true)]
-    Install {
-        /// `claude` or `cursor`.
-        #[arg(long, value_enum, default_value_t = McpClient::Claude)]
-        client: McpClient,
-        /// Config file to merge into; omit to print to stdout.
-        #[arg(long)]
         config: Option<PathBuf>,
     },
     /// Search the official MCP registry (registry.modelcontextprotocol.io)
@@ -1005,53 +974,6 @@ enum McpAction {
         /// `bro mcp search` / `bro mcp list`).
         name: String,
     },
-}
-
-/// Wire transport for `bro mcp serve`.
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum McpTransport {
-    /// Newline-delimited JSON-RPC over stdio (local clients launch this).
-    Stdio,
-    /// Streamable HTTP, mounted at `/mcp-control`.
-    Http,
-}
-
-/// Backend the MCP tools route to.
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
-enum McpBackend {
-    /// The local BYOK daemon at `127.0.0.1:4356`.
-    Local,
-    /// BitRouter Cloud at `api.bitrouter.ai`.
-    Cloud,
-    /// The origin AgentSkills server: `skills_search`/`skills_get` over the
-    /// installed-skills root (the `bitrouter_skills` gateway server every
-    /// launched harness gets). Stdio only.
-    Skills,
-}
-
-/// MCP client targeted by `bro mcp install`.
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum McpClient {
-    Claude,
-    Cursor,
-}
-
-impl From<McpTransport> for bitrouter_mcp::Transport {
-    fn from(t: McpTransport) -> Self {
-        match t {
-            McpTransport::Stdio => bitrouter_mcp::Transport::Stdio,
-            McpTransport::Http => bitrouter_mcp::Transport::Http,
-        }
-    }
-}
-
-impl From<McpClient> for bitrouter_mcp::install::Client {
-    fn from(c: McpClient) -> Self {
-        match c {
-            McpClient::Claude => bitrouter_mcp::install::Client::Claude,
-            McpClient::Cursor => bitrouter_mcp::install::Client::Cursor,
-        }
-    }
 }
 
 #[derive(Subcommand)]
@@ -1728,10 +1650,8 @@ enum AcpCmd {
 
 /// `--source` as clap spells it.
 ///
-/// A separate enum from [`bitrouter_mcp::actions::commands::CommandSource`]
-/// so that the wire type owes clap nothing: the report is a schema shared with
-/// the MCP surface, and a `ValueEnum` derive on it would make a CLI concern
-/// part of it.
+/// A separate enum from [`bitrouter::actions::commands::CommandSource`] so the
+/// shared report type owes clap nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum CommandSourceArg {
     /// BitRouter's own commands.
@@ -1742,7 +1662,7 @@ enum CommandSourceArg {
     Agent,
 }
 
-impl From<CommandSourceArg> for bitrouter_mcp::actions::commands::CommandSource {
+impl From<CommandSourceArg> for bitrouter::actions::commands::CommandSource {
     fn from(arg: CommandSourceArg) -> Self {
         match arg {
             CommandSourceArg::Bitrouter => Self::Bitrouter,
@@ -1846,9 +1766,6 @@ async fn async_main() {
         Some(Command::Run { .. })
             | Some(Command::Acp {
                 cmd: AcpCmd::Prompt { .. } | AcpCmd::Serve { .. },
-            })
-            | Some(Command::Mcp {
-                action: McpAction::Serve { .. },
             })
             | Some(Command::Spawn {
                 prompt: Some(_),
@@ -2962,189 +2879,10 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
     }
 }
 
-// ===== `bro mcp …` (origin MCP server: serve / install) =====
-
-/// The two skills ports, over the shared root resolution.
-///
-/// `SkillsRoot::mcp_scope` is what makes an MCP client see the user-global
-/// skills the CLI reaches with `-g`; both surfaces used to be built over
-/// `current_dir()` alone. Building them together is deliberate — they read the
-/// same roots, and a caller that wired one and not the other is how the two
-/// skills surfaces would disagree again.
-fn skills_ports() -> Result<(
-    std::sync::Arc<dyn bitrouter_mcp::actions::skills::SkillsQuery>,
-    std::sync::Arc<dyn bitrouter_mcp::capabilities::skill_catalog::SkillCatalog>,
-)> {
-    let base_repo = std::env::current_dir().context("resolving current directory")?;
-    let roots = bitrouter::skills::root::SkillsRoot::mcp_scope(base_repo);
-    Ok((
-        std::sync::Arc::new(bitrouter::actions::skills::InstalledSkills::new(
-            roots.clone(),
-        )),
-        std::sync::Arc::new(bitrouter::skills_catalog::InstalledSkillCatalog::new(roots)),
-    ))
-}
+// ===== `bro mcp …` (upstream gateway inspection) =====
 
 async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
     match action {
-        McpAction::Serve {
-            transport,
-            backend,
-            local_url,
-            cloud_url,
-            token,
-            bind,
-        } => {
-            // The skills backend is the origin AgentSkills server over the
-            // installed-skills root — the `bitrouter_skills` gateway server
-            // harnesses launch as a subprocess. Stdio-only: it serves the
-            // caller's own installed-skills tree, so it must inherit the
-            // launching process's identity rather than ride an
-            // unauthenticated HTTP listener.
-            //
-            // Two surfaces over the same root, deliberately: the
-            // `skills_search` / `skills_get` *tools*, which any MCP client can
-            // call today, and SEP-2640's `skills/list` / `skills/get`
-            // *methods* plus `resources/*`, which is what SEP-aware hosts will
-            // consume. Neither supersedes the other.
-            if backend == Some(McpBackend::Skills) {
-                if matches!(transport, McpTransport::Http) {
-                    anyhow::bail!(
-                        "the skills backend is stdio-only (harnesses launch it as a subprocess)"
-                    );
-                }
-                let server = bitrouter_mcp::server::BitrouterMcp::builder();
-                let (skills, catalog) = skills_ports()?;
-                return bitrouter_mcp::server::serve_stdio(
-                    server.skills(skills).skill_catalog(catalog).build(),
-                )
-                .await;
-            }
-            if matches!(transport, McpTransport::Http) {
-                anyhow::bail!(
-                    "standalone HTTP MCP serving is retired; enable the daemon control listener \
-                     and connect the client directly to its authenticated /mcp-control endpoint"
-                );
-            }
-            let transport = bitrouter_mcp::Transport::from(transport);
-            // Skills was handled and returned above. Local/Cloud map straight
-            // across; an unset backend takes the transport default
-            // (stdio→local, http→cloud).
-            let backend = match backend {
-                Some(McpBackend::Local) => bitrouter_mcp::BackendKind::Local,
-                Some(McpBackend::Cloud) => bitrouter_mcp::BackendKind::Cloud,
-                Some(McpBackend::Skills) | None => match transport {
-                    bitrouter_mcp::Transport::Stdio => bitrouter_mcp::BackendKind::Local,
-                    bitrouter_mcp::Transport::Http => bitrouter_mcp::BackendKind::Cloud,
-                },
-            };
-            let cloud_token = token.or_else(|| std::env::var("BITROUTER_TOKEN").ok());
-            if matches!(transport, bitrouter_mcp::Transport::Http) && cloud_token.is_some() {
-                eprintln!(
-                    "note: --token/BITROUTER_TOKEN is ignored for --transport http (multi-tenant; each client sends its own Authorization)"
-                );
-            }
-            // The socket-backed action ports below only make sense where this
-            // process can read the daemon's control socket and the local
-            // metering database: stdio → local daemon.
-            let local_stdio = matches!(
-                (transport, backend),
-                (
-                    bitrouter_mcp::Transport::Stdio,
-                    bitrouter_mcp::BackendKind::Local
-                )
-            );
-            let source = local_stdio
-                .then(|| bitrouter::paths::resolve_config(None).ok())
-                .flatten();
-            // All three read the same control socket, resolved once here. Lenient on
-            // purpose (`resolve_client_socket`, not `_from`): a config file
-            // that fails to parse still yields the default socket path, so a
-            // daemon that is up keeps answering while the file on disk is
-            // broken. On any other profile every port stays unset and the
-            // backend's own `status_port` / `models_port` answer.
-            let socket = match local_stdio {
-                true => resolve_client_socket(None, None).await.ok(),
-                false => None,
-            };
-            // `route_preview` prefers the live daemon's view (subscription
-            // providers, reloads) and falls back to static config when the
-            // control socket is unreachable — the same order, and now the same
-            // code, as `bro route`.
-            //
-            // The *source* is wired, not a parsed config: the action loads the
-            // file on every call, so a long-lived server answers from whatever
-            // `bitrouter.yaml` says now. Snapshotting it here is what used to
-            // make the tool and the CLI disagree after an edit.
-            let routing = source.as_ref().map(|source| {
-                std::sync::Arc::new(bitrouter::actions::route::RouteAction::new(
-                    source.clone(),
-                    socket.clone(),
-                )) as std::sync::Arc<dyn bitrouter_mcp::actions::route::RouteQuery>
-            });
-            // `list_models`, for a sharper reason than the others: the
-            // backend's own answer is a `GET /v1/models` that *needs the daemon
-            // up*, so an agent on a machine with a stopped daemon could not so
-            // much as ask what was routable. This port reads the daemon's live
-            // routing table over the control socket when one is there and
-            // projects the config when it is not, so the tool always answers —
-            // and the report says which view it is.
-            let models = source.as_ref().map(|source| {
-                std::sync::Arc::new(bitrouter::actions::models::RoutableModels::new(
-                    source.clone(),
-                    socket.clone(),
-                ))
-                    as std::sync::Arc<dyn bitrouter_mcp::actions::models::ModelsQuery>
-            });
-            // `status` over the control socket: only this process can read
-            // it, and only it knows the pid, the models count and the provider
-            // set. The config source resolves the local metering database, so
-            // the tool's `spend` block is the same ledger `bro status`
-            // and `bro requests` read.
-            let status = socket.map(|socket| {
-                std::sync::Arc::new(bitrouter::actions::status::DaemonStatus::new(
-                    socket, source,
-                ))
-                    as std::sync::Arc<dyn bitrouter_mcp::actions::status::StatusQuery>
-            });
-            // Skills on **stdio**, whichever backend is in use.
-            //
-            // The two `mcp serve` profiles used to be disjoint: only
-            // `--backend skills` wired them, and `mcp install` writes
-            // `["mcp", "serve"]`, so an installed client never saw a skill. The
-            // identity argument that makes `--backend skills` stdio-only holds
-            // here identically — a stdio server is a subprocess of its caller,
-            // so its installed-skills tree *is* that caller's — and it is what
-            // keeps this off the HTTP profile, which is multi-tenant and whose
-            // callers have no claim on this machine's skills. `--backend skills`
-            // survives as the narrow gateway-subprocess profile.
-            //
-            // The transport, not the backend, is the gate: skills have nothing
-            // to do with the daemon, so `local_stdio` (which is about the
-            // control socket) is the wrong condition for them.
-            let stdio = matches!(transport, bitrouter_mcp::Transport::Stdio);
-            let (skills, skill_catalog) = match stdio {
-                true => {
-                    let (skills, catalog) = skills_ports()?;
-                    (Some(skills), Some(catalog))
-                }
-                false => (None, None),
-            };
-            bitrouter_mcp::serve(bitrouter_mcp::ServeOptions {
-                transport,
-                backend,
-                local_url,
-                cloud_url,
-                cloud_token,
-                bind,
-                routing,
-                status,
-                models,
-                skills,
-                skill_catalog,
-            })
-            .await
-        }
         McpAction::Check { server, config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let config = bitrouter::paths::load_config(&source).await?;
@@ -3177,16 +2915,6 @@ async fn mcp_cmd(action: McpAction, output: &Output) -> Result<()> {
             let ok = report.servers.iter().all(|server| server.ok);
             output.emit(&report)?;
             if ok { Ok(()) } else { exit_with(1) }
-        }
-        McpAction::Install { client, config } => {
-            eprintln!(
-                "note: `{cli} mcp install` is deprecated; configure your MCP client directly.",
-                cli = bitrouter_sdk::invocation::name()
-            );
-            bitrouter_mcp::install(bitrouter_mcp::InstallOptions {
-                client: client.into(),
-                config_path: config,
-            })
         }
         McpAction::Search { query, limit } => {
             eprintln!(
@@ -7628,94 +7356,24 @@ mod tests {
 
     // ===== the actions table's guard =====
     //
-    // `bitrouter_mcp::actions::ACTIONS` is the inventory of the questions
-    // BitRouter answers on more than one surface. These tests are what make it
-    // load-bearing rather than documentary. Direction matters: every MCP tool
-    // must have a row, but **not** every CLI leaf — mirroring clap's ~100
-    // leaves would be maintenance with no consumer, and `bro policy
-    // verify` needs no MCP tool in order to exist.
+    // `bitrouter::actions::ACTIONS` inventories behavior shared by retained
+    // OSS surfaces. These tests keep its CLI and TUI names load-bearing rather
+    // than documentary; it intentionally does not mirror every CLI leaf.
     //
     // They live here, in the binary's own test module, because this is the only
     // place that can name both `Cli` (defined in this file) and the crate's
     // `ACTIONS`; an integration test sees only the library.
 
-    /// A fully-wired server: every port filled by a stub, so `tools()` returns
-    /// the *whole* tool surface. `CAPABILITIES` registers a capability's router
-    /// only when its port is `Some`, so a server built from any real wiring
-    /// would hide exactly the tools a missing row would hide.
-    fn every_tool() -> bitrouter_mcp::server::BitrouterMcp {
-        use bitrouter_mcp::actions::models::{ModelsQuery, ModelsReport};
-        use bitrouter_mcp::actions::route::{ResolvedVia, RouteQuery, RouteReport};
-        use bitrouter_mcp::actions::skills::{SkillDetail, SkillsQuery, SkillsReport};
-        use bitrouter_mcp::actions::status::{StatusQuery, StatusReport};
-        use bitrouter_mcp::backend::CallerAuth;
-        use bitrouter_mcp::error::ToolError;
-
-        struct Stub;
-
-        #[async_trait::async_trait]
-        impl ModelsQuery for Stub {
-            async fn list_models(
-                &self,
-                _: &CallerAuth,
-            ) -> std::result::Result<ModelsReport, ToolError> {
-                Ok(ModelsReport::live(Vec::new()))
-            }
-        }
-
-        #[async_trait::async_trait]
-        impl StatusQuery for Stub {
-            async fn status(&self, _: &CallerAuth) -> std::result::Result<StatusReport, ToolError> {
-                Ok(StatusReport::stopped("/stub.sock".into(), None))
-            }
-        }
-
-        #[async_trait::async_trait]
-        impl RouteQuery for Stub {
-            async fn route(
-                &self,
-                input: RouteInput,
-            ) -> std::result::Result<RouteReport, ToolError> {
-                Ok(RouteReport {
-                    requested_model: input.model.clone(),
-                    effective_model: input.model,
-                    effective_effort: None,
-                    resolved_via: ResolvedVia::Config,
-                    policy_decision: None,
-                    provider_chain: Vec::new(),
-                    estimated_cost: None,
-                })
-            }
-        }
-
-        #[async_trait::async_trait]
-        impl SkillsQuery for Stub {
-            async fn list(&self) -> std::result::Result<SkillsReport, ToolError> {
-                Ok(SkillsReport { skills: Vec::new() })
-            }
-            async fn get(&self, name: &str) -> std::result::Result<SkillDetail, ToolError> {
-                Err(ToolError::new(format!("no installed skill named '{name}'")))
-            }
-        }
-
-        bitrouter_mcp::server::BitrouterMcp::builder()
-            .models(Arc::new(Stub))
-            .status(Arc::new(Stub))
-            .routing(Arc::new(Stub))
-            .skills(Arc::new(Stub))
-            .build()
-    }
-
     /// Every command a session can offer is a row, and every row it names is
     /// reachable.
     ///
     /// Lives here rather than beside the table because it is the only place
-    /// that can see `bitrouter_tui::machine` and `bitrouter_mcp::actions`
+    /// that can see `bitrouter_tui::machine` and `bitrouter::actions`
     /// together: the TUI crate depends on nothing of BitRouter's, so the two
     /// halves of this agreement meet only in the app that wires them.
     #[test]
     fn every_tui_command_has_an_actions_row() {
-        use bitrouter_mcp::actions::ACTIONS;
+        use bitrouter::actions::ACTIONS;
         use bitrouter_tui::machine::{ALIASES, REDUCER_OWNED};
 
         let named: Vec<&str> = ACTIONS.iter().filter_map(|row| row.tui_command).collect();
@@ -7771,32 +7429,13 @@ mod tests {
         }
     }
 
-    /// Every remotable action must be inventoried. A tool added to the origin
-    /// server without an `ACTIONS` row fails here.
-    #[test]
-    fn every_mcp_tool_has_an_actions_row() {
-        let rows: Vec<&str> = bitrouter_mcp::actions::ACTIONS
-            .iter()
-            .filter_map(|a| a.mcp_tool)
-            .collect();
-        for tool in every_tool().tools() {
-            assert!(
-                rows.contains(&tool.name.as_ref()),
-                "MCP tool `{}` has no row in `bitrouter_mcp::actions::ACTIONS`. Add one \
-                 (id, cli_leaf, mcp_tool, output_schema) so the CLI and the tool cannot \
-                 answer this question differently. Known rows: {rows:?}",
-                tool.name
-            );
-        }
-    }
-
     /// A row naming a leaf clap does not have is a stale row: renaming
     /// `bro status` without updating the table fails here.
     #[test]
     fn every_actions_row_resolves_to_a_cli_leaf() {
         use clap::CommandFactory;
         let root = Cli::command();
-        for action in bitrouter_mcp::actions::ACTIONS {
+        for action in bitrouter::actions::ACTIONS {
             let Some(leaf) = action.cli_leaf else {
                 continue;
             };
@@ -7976,50 +7615,53 @@ mod tests {
         }));
     }
 
-    /// The agreement itself: the tool advertises the row's schema, so a client
-    /// reading `output_schema` and a `--json` consumer see one type. Rows with
-    /// no schema yet (the unmigrated actions) have no agreement to check —
-    /// but the test says how many it did check, so a table that had silently
-    /// lost every schema could not pass by skipping everything.
-    ///
-    /// The migration backlog is empty today: every row carries a schema, so
-    /// every row is checked. `output_schema` stays `Option` because a *new*
-    /// tool needs a row from the moment it is registered, which is generally
-    /// before its report type is shared — and this test's `continue` is what
-    /// lets that row exist without a fabricated agreement.
-    #[test]
-    fn every_actions_row_matches_its_tools_output_schema() {
-        let tools = every_tool().tools();
-        let mut checked = Vec::new();
-        for action in bitrouter_mcp::actions::ACTIONS {
-            let Some(name) = action.mcp_tool else {
-                continue;
-            };
-            let tool = tools
-                .iter()
-                .find(|t| t.name == name)
-                .unwrap_or_else(|| panic!("action `{}` names missing tool `{name}`", action.id));
-            let Some(schema) = action.output_schema else {
-                continue;
-            };
-            assert_eq!(
-                tool.output_schema.as_deref(),
-                Some(&schema()),
-                "tool `{name}` does not advertise the schema its `ACTIONS` row claims"
-            );
-            checked.push(name);
-        }
-        assert!(
-            !checked.is_empty(),
-            "no `ACTIONS` row carries an output_schema, so this guard checked nothing"
-        );
-    }
-
     #[test]
     fn cli_definition_is_valid() {
         use clap::CommandFactory;
         // Panics if clap detects a conflict (e.g. `--tag` vs global `--version`).
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn mcp_cli_exposes_check_but_not_the_removed_origin_commands() {
+        use clap::Parser;
+
+        assert!(matches!(
+            Cli::try_parse_from(["bro", "mcp", "check"]),
+            Ok(Cli {
+                command: Some(Command::Mcp {
+                    action: McpAction::Check { .. }
+                }),
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["bro", "mcp", "serve"]).is_err());
+        assert!(Cli::try_parse_from(["bro", "mcp", "install"]).is_err());
+    }
+
+    #[test]
+    fn first_party_plugins_are_skill_only() {
+        for (name, manifest) in [
+            (
+                "claude",
+                include_str!("../../../.claude-plugin/plugin.json"),
+            ),
+            ("codex", include_str!("../../../.codex-plugin/plugin.json")),
+        ] {
+            let parsed = serde_json::from_str::<serde_json::Value>(manifest);
+            assert!(parsed.is_ok(), "{name} plugin manifest is not valid JSON");
+            let Ok(parsed) = parsed else {
+                continue;
+            };
+            assert!(
+                parsed.get("mcpServers").is_none(),
+                "{name} plugin must not register an OSS origin MCP server"
+            );
+            assert!(
+                !manifest.contains("mcp serve"),
+                "{name} plugin references the removed origin command"
+            );
+        }
     }
 
     #[test]
@@ -8261,31 +7903,6 @@ mod tests {
             "sealing must not initialize a ledger"
         );
         Ok(())
-    }
-
-    #[test]
-    fn mcp_serve_backends_are_local_cloud_and_skills() {
-        use clap::Parser;
-        for (flag, expected) in [
-            ("local", McpBackend::Local),
-            ("cloud", McpBackend::Cloud),
-            ("skills", McpBackend::Skills),
-        ] {
-            let cli = Cli::try_parse_from(["bitrouter", "mcp", "serve", "--backend", flag])
-                .expect("parse");
-            match cli.command {
-                Some(Command::Mcp {
-                    action: McpAction::Serve { backend, .. },
-                }) => assert_eq!(backend, Some(expected)),
-                _ => panic!("expected `mcp serve --backend {flag}` to parse"),
-            }
-        }
-        // The orchestrator's fleet bridge is gone; its backend name no longer
-        // parses.
-        assert!(
-            Cli::try_parse_from(["bitrouter", "mcp", "serve", "--backend", "fleet"]).is_err(),
-            "the fleet backend must no longer be accepted"
-        );
     }
 
     /// The headless permission flags are mutually exclusive, parse on both

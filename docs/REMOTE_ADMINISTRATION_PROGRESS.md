@@ -111,7 +111,7 @@ evidence; the updated Docker PTY journey still requires a fresh CI run.
   earlier specified acceptance scope; the expanded external-host MCP result
   below supersedes its former blanket Docker-acceptance status.
 - Expanded live-interface verification added a standard-library MCP client that
-  initializes the TLS `/mcp-control` endpoint, obtains runtime `tools/list`,
+  exercises the TLS typed-control endpoint,
   requires the exact discovered control set, and semantically calls each tool.
   The default `tests/remote-administration/run.sh` now reaches that client after
   all CLI reads, then fails at `initialize` with `MCP HTTP 403: Forbidden: Host

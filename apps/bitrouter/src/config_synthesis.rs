@@ -379,17 +379,17 @@ mod tests {
 
     fn mcp_stdio() -> McpServer {
         McpServer {
-            name: "bitrouter_tools".to_string(),
+            name: "local_docs".to_string(),
             transport: McpTransport::Stdio {
-                command: "bro".to_string(),
-                args: vec!["mcp".to_string(), "serve".to_string()],
+                command: "docs-mcp".to_string(),
+                args: vec!["--stdio".to_string()],
             },
         }
     }
 
     fn mcp_http() -> McpServer {
         McpServer {
-            name: "bitrouter_skills".to_string(),
+            name: "remote_context".to_string(),
             transport: McpTransport::Http {
                 url: "http://127.0.0.1:4356/mcp".to_string(),
                 headers: vec![("Authorization".to_string(), "Bearer brk_test".to_string())],

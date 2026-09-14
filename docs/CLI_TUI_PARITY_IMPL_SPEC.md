@@ -1,5 +1,9 @@
 # Implementation spec: CLI ↔ TUI parity, track 1
 
+> **Superseded in part (2026-09-14):**
+> [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) moves the action
+> contracts app-side and removes the OSS MCP-origin fields and guards.
+
 Status: **proposed — nothing built** · Date: 2026-09-05 · Branch: `claude/cli-tui-parity-spec`
 · Rationale of record: [`CLI_TUI_PARITY_SPEC.md`](CLI_TUI_PARITY_SPEC.md) (the
 *research spec*). This document does not repeat its argument; every "why" below

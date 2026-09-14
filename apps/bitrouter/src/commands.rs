@@ -10,10 +10,10 @@ use bitrouter_sdk::invocation;
 use bitrouter_sdk::language_model::routing::ModelInfo;
 use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
 
+use crate::actions::skills::SkillsReport;
 use crate::auth::{NewApiKey, db as auth_db, generate};
 use crate::daemon::RouteHop;
 use crate::output::reports::skills::SkillInitReport;
-use bitrouter_mcp::actions::skills::SkillsReport;
 
 /// The starter `bitrouter.yaml` written by `bro init`. Mirrors
 /// the zero-config in-memory default so a user who runs `init` and
@@ -1026,9 +1026,9 @@ pub async fn logout_provider(provider_id: &str) -> Result<usize> {
 
 /// `bro skills list` — the skills under the chosen root.
 ///
-/// One [action](crate::actions::skills), so this leaf and the origin MCP
-/// server's `skills_search` tool return the same report from the same walk. It
-/// gains two things the old single `read_dir` could not do: the `./skills/foo`
+/// One [action](crate::actions::skills), shared by the CLI report and local
+/// session consumers. It gains two things the old single `read_dir` could not
+/// do: the `./skills/foo`
 /// and root-level layouts, and a `problem` on any skill that cannot actually be
 /// loaded.
 pub fn skills_list(global: bool) -> Result<SkillsReport> {

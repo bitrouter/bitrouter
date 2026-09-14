@@ -494,7 +494,7 @@ impl Harness {
     }
 
     /// Whether [`Self::launch_overlay`] can inject MCP servers (the
-    /// `bitrouter_tools` / `bitrouter_skills` gateways) into this harness.
+    /// `bitrouter_tools` gateway) into this harness.
     ///
     /// This is a *ceiling of the harness*, not of BitRouter: `pi` and
     /// `openclaw` expose no MCP mechanism to inject into, and the own-auth
@@ -657,7 +657,7 @@ impl Harness {
 }
 
 /// An MCP server to inject into a launched harness — the gateway servers
-/// (`bitrouter_tools` / `bitrouter_skills`, see `crate::gateways`).
+/// (`bitrouter_tools`, see `crate::gateways`).
 #[derive(Debug, Clone)]
 pub struct McpServer {
     /// Server name as the harness will list it (e.g. `bitrouter_tools`).

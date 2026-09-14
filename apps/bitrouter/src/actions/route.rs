@@ -1,38 +1,256 @@
-//! The `route` action, implemented over the live daemon with a config
-//! fallback.
+//! The `route` action: *how would BitRouter route this, and what would it
+//! cost?*
 //!
-//! One implementation, two surfaces: `bro route <model>` calls
-//! [`RouteAction::report`] directly, and the origin MCP server's
-//! `route_preview` tool calls it through the [`RouteQuery`] port. Both get the
-//! same [`RouteReport`], so the CLI's `--json` and the tool's structured
-//! content cannot drift — and, more to the point, they cannot *disagree*: the
-//! config fallback runs the policy table on both, so neither surface names a
-//! model the daemon would never pick where the other would not.
+//! One report type is shared by `bro route`, Code sessions, and typed remote
+//! control so all retained surfaces preserve the same JSON shape. Read-only by
+//! construction: it replays routing without sending
+//! anything upstream, and the resolved targets' secrets (api keys) never enter
+//! the report.
 //!
-//! The live-daemon path is the honest exception, on both surfaces alike: the
-//! daemon's `route` verb resolves the requested model as given, because its
-//! policy table runs on real requests rather than on this preview. That path
-//! reports `effective_model == requested_model` and no `policy_decision`, and
-//! says so through `resolved_via`.
-//!
-//! Read-only throughout. Routing is replayed, never performed: nothing is sent
-//! upstream, and the resolved targets' secrets (api keys) never enter the
-//! report — only the provider id, the upstream service id, and the wire
-//! protocol do.
-//!
-//! **Config is resolved per call, not snapshotted.** A long-lived `mcp serve`
-//! answers from whatever `bitrouter.yaml` says *now*; the CLI, which loads the
-//! file on every invocation, always did. Snapshotting at server start was the
-//! stale-preview bug this action closes.
+//! The app owns the types, port, and implementation beside the policy table,
+//! routing table, and pricing registry.
+
+use bitrouter_sdk::language_model::types::ReasoningEffort;
+
+use super::ToolError;
+
+/// Arguments to the `route` action.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct RouteInput {
+    /// The model selector to resolve (as you'd send to the daemon's
+    /// `/v1/chat/completions`).
+    pub model: String,
+    /// Optional prompt text. Used to derive the agent-loop step the policy
+    /// table keys on; omit for a bare model resolution.
+    ///
+    /// Consulted on the config paths only. The daemon's control-socket `route`
+    /// verb takes no prompt and resolves the model as given (see
+    /// [`ResolvedVia::Live`]), so a [`ResolvedVia::Live`] answer
+    /// is the same with or without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+/// Which path produced the chain.
+///
+/// This is not a provenance footnote: it says whether the policy half of the
+/// report — [`RouteReport::effective_model`] differing from
+/// [`RouteReport::requested_model`], and [`RouteReport::policy_decision`] —
+/// can be populated at all. Only the config paths replay the policy table; a
+/// live-daemon answer resolves the requested model as-is, because the daemon's
+/// policy table runs on real requests, not on its control-socket `route` verb.
+///
+/// Wire values are `snake_case` — `live` / `config` / `zero_config` — the same
+/// vocabulary as the `list_models` report's `resolved_via`
+/// ([`ModelsSource`](crate::actions::models::ModelsSource)), so an agent reads
+/// one word for "a running router answered" across both actions.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolvedVia {
+    /// The running daemon resolved it, so the chain reflects `reload`s and
+    /// subscription-backed providers that static config alone cannot resolve.
+    /// Serialized as `live`.
+    ///
+    /// **No policy replay here.** The daemon's `route` verb resolves the
+    /// requested model exactly as given: its policy table (pins, locks and
+    /// trials included) is applied to real requests, not to this preview. So
+    /// on this path `effective_model == requested_model`,
+    /// [`RouteReport::policy_decision`] is absent, and a `prompt` changes
+    /// nothing. Closing that means teaching the daemon's verb to take the
+    /// prompt and run its own live policy router — the only place the runtime
+    /// state that makes a decision *live* is known.
+    Live,
+    /// Resolved from a `bitrouter.yaml` on disk, policy table included.
+    Config,
+    /// Resolved from the built-in zero-config defaults — no config file was
+    /// found. Serialized as `zero_config`.
+    ZeroConfig,
+}
+
+/// One hop of the resolved fallback chain: which provider, under which upstream
+/// id, over which wire protocol.
+///
+/// Deliberately three fields and no more. The resolved routing target also
+/// carries the provider's credential; naming only the routable identity is what
+/// keeps this report safe to hand to an agent.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ProviderHop {
+    /// The configured provider id, e.g. `"openai"`.
+    pub provider: String,
+    /// The id the provider itself knows the model by.
+    pub service_id: String,
+    /// The wire protocol BitRouter speaks to it, e.g. `"openai"`,
+    /// `"anthropic"`.
+    pub api_protocol: String,
+}
+
+/// What the static policy table decided, and why.
+///
+/// Present only on the config paths ([`ResolvedVia::Config`] /
+/// [`ResolvedVia::ZeroConfig`]) and only when a policy table is configured. The
+/// `static_*` fields are what the table declares for the request key; the
+/// `selected_*` fields are what it actually chose, which can differ when a
+/// route is pinned, locked, or under trial.
+///
+/// The informative, secret-free subset of the router's own decision: enough for
+/// a reader to see *why* the effective model differs from the requested one,
+/// without the snapshot internals that carry no meaning outside the router.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct PolicySelection {
+    /// The key the policy table matched the request on.
+    pub request_key: String,
+    /// Human-readable reason the decision came out this way.
+    pub reason: String,
+    /// The tier the table statically declares for `request_key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_tier: Option<String>,
+    /// The model the table statically declares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_model: Option<String>,
+    /// The reasoning effort the table statically declares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_effort: Option<ReasoningEffort>,
+    /// The tier actually selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_tier: Option<String>,
+    /// The model actually selected — this is what got routed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_model: Option<String>,
+    /// The reasoning effort actually selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_effort: Option<ReasoningEffort>,
+    /// Whether the route is pinned to its current selection.
+    pub pinned: bool,
+    /// Whether the selection is locked against further movement.
+    pub locked: bool,
+    /// Whether this request is part of an exploratory trial.
+    pub trialed: bool,
+}
+
+/// A per-token rate bracket. The base rates live on [`EstimatedCost`]; this is
+/// one of the steeper long-context brackets above it.
+///
+/// A step function, not graduated margins: once a request's input token count
+/// exceeds [`Self::above_input_tokens`], this bracket's rates apply to the
+/// **whole** request.
+#[derive(
+    Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ContextTierRates {
+    /// Exclusive lower bound on input tokens. A request strictly above this
+    /// enters the bracket.
+    pub above_input_tokens: u64,
+    /// Micro-USD per input token inside this bracket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per output token inside this bracket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_micro_usd_per_token: Option<f64>,
+}
+
+/// The registry's per-token rates for the chain's first hop.
+///
+/// A *rate card*, not a total: nothing has been sent, so there are no token
+/// counts to multiply by. [`Self::context_tiers`] is what keeps the card
+/// honest for tiered models — reporting only the base bracket understates a
+/// long-context request, which is why the tiers ride along and the note says
+/// how they apply.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct EstimatedCost {
+    /// Micro-USD per input token, base bracket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per output token, base bracket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_micro_usd_per_token: Option<f64>,
+    /// Steeper long-context brackets above the base rates, lowest bound first.
+    /// Empty (and omitted) for flat pricing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_tiers: Vec<ContextTierRates>,
+    /// How to read the rates above. Derived from whether tiers are present, so
+    /// the two cannot describe each other wrongly.
+    pub note: String,
+}
+
+impl EstimatedCost {
+    /// The base rates plus any higher brackets, with the note that matches
+    /// them. A constructor rather than three literals because the note is part
+    /// of the contract: a tiered card whose note only mentions base rates is
+    /// the misleading shape this type exists to avoid.
+    pub fn new(
+        input_micro_usd_per_token: Option<f64>,
+        output_micro_usd_per_token: Option<f64>,
+        context_tiers: Vec<ContextTierRates>,
+    ) -> Self {
+        let note = if context_tiers.is_empty() {
+            "base-bracket per-token rates from the registry; multiply by expected token counts"
+        } else {
+            "base-bracket per-token rates from the registry; context_tiers lists steeper \
+             long-context brackets — each applies to the whole request once its input tokens \
+             exceed above_input_tokens. Multiply by expected token counts."
+        };
+        Self {
+            input_micro_usd_per_token,
+            output_micro_usd_per_token,
+            context_tiers,
+            note: note.to_string(),
+        }
+    }
+}
+
+/// How BitRouter would route a request, without sending one.
+///
+/// The requested model and the *effective* one are separate fields because they
+/// genuinely differ: the policy table can select a different model for the same
+/// request key, and a report that carried only one of them would either hide
+/// what the caller asked for or hide what would actually run.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct RouteReport {
+    /// The model the caller asked about.
+    pub requested_model: String,
+    /// The model that would actually be routed to — equal to
+    /// [`Self::requested_model`] unless the policy table selected another.
+    pub effective_model: String,
+    /// The reasoning effort the policy table selected, when it selected one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_effort: Option<ReasoningEffort>,
+    /// Which path resolved the chain.
+    pub resolved_via: ResolvedVia,
+    /// The static policy decision behind [`Self::effective_model`]. `None` on
+    /// [`ResolvedVia::Live`] (the daemon's `route` verb does not replay
+    /// policy, so there is no decision to show) and wherever no policy table
+    /// is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_decision: Option<PolicySelection>,
+    /// The resolved fallback chain, preferred hop first. Empty means no
+    /// provider declares the effective model.
+    #[serde(default)]
+    pub provider_chain: Vec<ProviderHop>,
+    /// The first hop's rate card, when the registry prices it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cost: Option<EstimatedCost>,
+}
+
+/// The `route` port.
+///
+/// This reaches no upstream and reads no per-caller state: it resolves this
+/// machine's routing table.
+#[async_trait::async_trait]
+pub trait RouteQuery: Send + Sync {
+    /// Resolve `input` against the live daemon, else this machine's config, or
+    /// a `ToolError` when the model does not resolve at all.
+    async fn route(&self, input: RouteInput) -> Result<RouteReport, ToolError>;
+}
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use bitrouter_mcp::actions::route::{
-    ContextTierRates, EstimatedCost, PolicySelection, ProviderHop, ResolvedVia, RouteInput,
-    RouteQuery, RouteReport,
-};
-use bitrouter_mcp::error::ToolError;
 use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
@@ -350,9 +568,7 @@ policy_table:
   default_tier: big
 "#;
 
-    /// The whole point of the phase: both surfaces answer with the same bytes.
-    /// `bro route` goes through `report()`; the MCP `route_preview` tool
-    /// goes through the `RouteQuery` port.
+    /// The direct path and injected port answer with the same bytes.
     #[tokio::test]
     async fn both_surfaces_produce_the_same_report() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -363,13 +579,13 @@ policy_table:
         };
 
         let cli = action.report(input.clone()).await.expect("cli surface");
-        let tool = RouteQuery::route(&action, input)
+        let port = RouteQuery::route(&action, input)
             .await
-            .expect("mcp surface");
+            .expect("port surface");
 
         assert_eq!(
             serde_json::to_value(&cli).expect("cli json"),
-            serde_json::to_value(&tool).expect("mcp json"),
+            serde_json::to_value(&port).expect("port json"),
             "the two surfaces of one action must be the same bytes"
         );
         assert_eq!(cli.requested_model, "demo-model");
@@ -392,11 +608,11 @@ policy_table:
         };
 
         let cli = action.report(input.clone()).await.expect("cli surface");
-        let tool = RouteQuery::route(&action, input)
+        let port = RouteQuery::route(&action, input)
             .await
-            .expect("mcp surface");
+            .expect("port surface");
 
-        for (surface, report) in [("cli", &cli), ("mcp", &tool)] {
+        for (surface, report) in [("cli", &cli), ("port", &port)] {
             assert_eq!(report.requested_model, "demo-model", "{surface}");
             assert_eq!(
                 report.effective_model, "demo-model-big",
@@ -415,20 +631,20 @@ policy_table:
         }
         assert_eq!(
             serde_json::to_value(&cli).expect("cli json"),
-            serde_json::to_value(&tool).expect("mcp json"),
+            serde_json::to_value(&port).expect("port json"),
         );
     }
 
-    /// The staleness bug: one long-lived action (as `mcp serve` holds) must see
+    /// The staleness bug: one long-lived action must see
     /// a `bitrouter.yaml` edited between two calls, exactly as a fresh CLI
     /// invocation would. Snapshotting config at construction is what made the
-    /// MCP tool answer from a startup-time view of the world.
+    /// consumer answer from a startup-time view of the world.
     #[tokio::test]
     async fn an_edited_config_is_visible_to_the_next_call() {
         let dir = tempfile::tempdir().expect("tempdir");
         let source = config_source(dir.path(), ONE_MODEL);
-        // Built once and kept behind the port, exactly as `mcp serve` holds it
-        // for the life of the process — not rebuilt per call.
+        // Built once and kept behind the port for the life of the process —
+        // not rebuilt per call.
         let served: std::sync::Arc<dyn RouteQuery> =
             std::sync::Arc::new(RouteAction::new(source, None));
         let ask = || RouteInput {
@@ -449,8 +665,8 @@ policy_table:
             .expect("resolves against the edited config");
         assert_eq!(
             after.effective_model, "demo-model-big",
-            "the same long-lived server must see the edited config, not a \
-             snapshot taken at `mcp serve` start"
+            "the same long-lived action must see the edited config, not a \
+             snapshot taken at construction"
         );
     }
 

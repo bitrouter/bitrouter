@@ -51,12 +51,13 @@ fn input_schema<T: JsonSchema>() -> serde_json::Value {
     schemars::schema_for!(T).to_value()
 }
 
-fn output_schema<T: JsonSchema + 'static>() -> serde_json::Value {
-    serde_json::Value::Object(
-        rmcp::handler::server::tool::schema_for_output::<T>()
-            .as_ref()
-            .clone(),
-    )
+fn output_schema<T: JsonSchema>() -> serde_json::Value {
+    let mut schema = schemars::schema_for!(T).to_value();
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("title");
+        object.remove("description");
+    }
+    schema
 }
 
 macro_rules! action {
@@ -108,7 +109,7 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "overview",
         false,
         EmptyInput,
-        bitrouter_mcp::actions::status::StatusReport
+        crate::actions::status::StatusReport
     ),
     action!(
         Models,
@@ -121,7 +122,7 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "models",
         false,
         ModelsInput,
-        bitrouter_mcp::actions::models::ModelsReport
+        crate::actions::models::ModelsReport
     ),
     action!(
         Route,
@@ -133,8 +134,8 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         "route",
         "preview",
         false,
-        bitrouter_mcp::actions::route::RouteInput,
-        bitrouter_mcp::actions::route::RouteReport
+        crate::actions::route::RouteInput,
+        crate::actions::route::RouteReport
     ),
     action!(
         Requests,
@@ -262,7 +263,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn exposure_reuses_shared_identity_and_report_schema() -> anyhow::Result<()> {
+    fn exposure_reuses_shared_identity() -> anyhow::Result<()> {
         let mut paths = BTreeSet::new();
         let mut ids = BTreeSet::new();
         for row in ACTIONS {
@@ -271,15 +272,11 @@ mod tests {
             assert!((row.input_schema)().is_object());
             assert!((row.output_schema)().is_object());
             if let Some(shared_id) = row.shared_id {
-                let shared = bitrouter_mcp::actions::ACTIONS
+                let shared = crate::actions::ACTIONS
                     .iter()
                     .find(|shared| shared.id == shared_id)
                     .ok_or_else(|| anyhow::anyhow!("missing shared action"))?;
                 assert_eq!(row.id, shared.id);
-                let schema = shared
-                    .output_schema
-                    .ok_or_else(|| anyhow::anyhow!("missing shared schema"))?;
-                assert_eq!((row.output_schema)(), serde_json::Value::Object(schema()));
             }
         }
         Ok(())

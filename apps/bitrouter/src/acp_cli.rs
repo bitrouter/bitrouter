@@ -3306,7 +3306,7 @@ where
 pub async fn commands(
     ctx: SpawnContext<'_>,
     wait_ms: u64,
-) -> Result<bitrouter_mcp::actions::commands::CommandsReport> {
+) -> Result<crate::actions::commands::CommandsReport> {
     let SpawnContext {
         source,
         mut config,

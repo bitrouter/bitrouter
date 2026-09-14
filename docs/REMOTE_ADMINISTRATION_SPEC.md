@@ -1,5 +1,10 @@
 # Spec: remote router administration
 
+> **Superseded in part (2026-09-14):**
+> [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) removes the
+> `/mcp-control` companion endpoint. The scoped typed HTTP control API,
+> loopback/TLS boundary, and named-context behavior remain current.
+
 Status: **implemented; expanded live verification found a remote MCP issue.**
 The original acceptance run completed on 2026-09-08 in the maintainer-approved
 Docker environment. A subsequent live MCP test found that the transport rejects

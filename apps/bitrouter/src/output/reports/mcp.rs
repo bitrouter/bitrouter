@@ -1,5 +1,5 @@
 //! Reports for the `mcp search` / `mcp list` / `mcp add` commands (MCP
-//! registry discovery — distinct from the origin-server `mcp serve/install`
+//! registry discovery — distinct from the runtime upstream MCP gateway
 //! verbs, which emit no report envelope).
 
 use serde::Serialize;

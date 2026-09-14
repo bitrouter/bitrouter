@@ -1,34 +1,96 @@
-//! The `list_models` action, implemented over the daemon's live routing table
-//! with a static-config fallback.
+//! The `list_models` action: *what can BitRouter route, and who can serve it?*
 //!
-//! One implementation, two surfaces: `bro models` calls
-//! [`RoutableModels::report`] directly, and the origin MCP server's
-//! `list_models` tool calls it through the [`ModelsQuery`] port. Both get the
-//! same [`ModelsReport`], so the CLI's `--json` and the tool's structured
-//! content cannot drift.
+//! One report type is shared by `bro models`, Code sessions, and typed remote
+//! control so all retained surfaces preserve the same JSON shape.
 //!
-//! **Daemon-first, config as the fallback** — the order `route_preview` and
-//! `bro route` already use, and for the same reason. The live routing
-//! table is what a request will actually be routed against: it reflects
-//! `reload`s, the daemon's own start-up resolution, and a config that has not
-//! been edited since — a static projection is what the file says *now*. (The
-//! projection does re-activate providers whose credential lives in the OAuth
-//! store rather than the config — the `claude-code` and `google-ai`
-//! subscription providers — the way the daemon does at start-up; see
-//! `commands::resolve_static`.)
-//! It matters more here than for `route_preview`, because that daemon is what
-//! serves the request an agent makes after reading this list (over its HTTP
-//! inference API): a catalog that disagreed with it would be telling an agent
-//! it can route something the next call refuses.
-//!
-//! The fallback is what buys the phase its headline: with no daemon running at
-//! all, `list_models` still answers — from config, and it says so.
+//! The element type is [`ModelInfo`] itself — `bitrouter-sdk`'s, not a copy.
+//! The copy this crate used to keep held a single `provider: String` and was
+//! filled with `providers.first()`, so every model served by more than one
+//! provider lost its fallback chain on the way to an agent: it asked what could
+//! serve a model and was told one answer where there were three. The wire has
+//! always carried the whole list.
+
+use bitrouter_sdk::language_model::routing::ModelInfo;
+
+use super::ToolError;
+
+/// Which view of the catalog answered.
+///
+/// The two are not interchangeable, and an agent deciding whether it may route
+/// a model needs to know which it is holding: [`Self::Live`] is what a running
+/// router *will* accept right now, [`Self::Config`] is what a configuration
+/// *would* accept if one were started.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelsSource {
+    /// A running router answered: the local daemon's live routing table, or a
+    /// metered account's catalog. Reflects `reload`s and the state the router
+    /// actually resolved at start-up.
+    Live,
+    /// No router was reachable, so the catalog was projected from static
+    /// configuration, resolved the way a daemon would resolve it at start-up
+    /// (built-in defaults, stored credentials). Honest but weaker: it is what
+    /// the config says *now*, so a file edited since a daemon started would be
+    /// listed even though that daemon would refuse it, and nothing a running
+    /// daemon learned after start-up is reflected.
+    Config,
+}
+
+/// Every model BitRouter can route, each with the providers that can serve it.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct ModelsReport {
+    /// The routable models. Each carries **every** provider that declares it,
+    /// in fallback order — not just the first.
+    pub models: Vec<ModelInfo>,
+    /// Which view produced [`Self::models`].
+    pub resolved_via: ModelsSource,
+}
+
+impl ModelsReport {
+    /// A running router's own catalog.
+    pub fn live(models: Vec<ModelInfo>) -> Self {
+        Self {
+            models,
+            resolved_via: ModelsSource::Live,
+        }
+    }
+
+    /// A static configuration's projection, used when no router answered.
+    pub fn from_config(models: Vec<ModelInfo>) -> Self {
+        Self {
+            models,
+            resolved_via: ModelsSource::Config,
+        }
+    }
+
+    /// Keep only the models `provider` can serve; `None` keeps everything.
+    ///
+    /// The filter lives on the report rather than in the port so every adapter
+    /// narrows the same list with the same rule.
+    pub fn filtered(mut self, provider: Option<&str>) -> Self {
+        if let Some(provider) = provider {
+            self.models
+                .retain(|m| m.providers.iter().any(|p| p == provider));
+        }
+        self
+    }
+}
+
+/// The `list_models` port shared by local consumers.
+///
+/// Filtering is deliberately absent: an implementation returns the whole
+/// catalog and adapters narrow it with [`ModelsReport::filtered`].
+#[async_trait::async_trait]
+pub trait ModelsQuery: Send + Sync {
+    /// Every routable model, or a `ToolError` when the lookup itself failed.
+    async fn list_models(&self) -> Result<ModelsReport, ToolError>;
+}
 
 use std::path::{Path, PathBuf};
-
-use bitrouter_mcp::actions::models::{ModelsQuery, ModelsReport};
-use bitrouter_mcp::backend::CallerAuth;
-use bitrouter_mcp::error::ToolError;
 
 use crate::daemon::{self, DaemonCommand, DaemonResponse};
 use crate::paths::ConfigSource;
@@ -60,9 +122,9 @@ impl RoutableModels {
         if let Some(models) = self.live_models().await {
             return Ok(ModelsReport::live(models));
         }
-        // Resolved per call, not snapshotted at construction: a long-lived
-        // `mcp serve` must not answer from the config the machine had when it
-        // started (the staleness `route_preview` still has).
+        // Resolved per call, not snapshotted at construction: any long-lived
+        // session must not answer from the config the machine had when it
+        // started.
         let config = crate::paths::load_config(&self.source).await?;
         Ok(ModelsReport::from_config(
             crate::commands::list_models(&config).await?,
@@ -106,7 +168,7 @@ impl ModelsQuery for RoutableModels {
     /// the config is this machine's, so there is only one catalog to report.
     /// The parameter stays on the port because the cloud implementation of the
     /// same action does forward it, listing each caller's own catalog.
-    async fn list_models(&self, _caller: &CallerAuth) -> Result<ModelsReport, ToolError> {
+    async fn list_models(&self) -> Result<ModelsReport, ToolError> {
         self.report()
             .await
             .map_err(|e| ToolError::new(e.to_string()))
@@ -144,13 +206,8 @@ providers:
         (dir, ConfigSource::File(config))
     }
 
-    /// The drift phase 2 removes, asserted across **both** surfaces of the one
-    /// action: a model two providers can serve must list both on the CLI path
-    /// and through the MCP port, and the two must be the same bytes.
-    ///
-    /// The MCP surface used to answer this over `GET /v1/models` and keep
-    /// `providers.first()`, so an agent asking what could serve `gpt-5` was
-    /// told `openai` and never learned `azure` was behind it.
+    /// A model two providers can serve must list both on the direct path and
+    /// through the injected port, and the two must be the same bytes.
     #[tokio::test]
     async fn both_surfaces_keep_every_provider_of_a_model() {
         let (dir, source) = two_provider_config();
@@ -159,11 +216,11 @@ providers:
         let models = RoutableModels::new(source, Some(dir.path().join("nothing.sock")));
 
         let cli = models.report().await.expect("cli surface");
-        let tool = ModelsQuery::list_models(&models, &CallerAuth::default())
+        let port = ModelsQuery::list_models(&models)
             .await
-            .expect("mcp surface");
+            .expect("port surface");
 
-        for (surface, report) in [("cli", &cli), ("mcp", &tool)] {
+        for (surface, report) in [("cli", &cli), ("port", &port)] {
             let gpt5 = report
                 .models
                 .iter()
@@ -185,26 +242,25 @@ providers:
         }
         assert_eq!(
             serde_json::to_value(&cli).expect("cli json"),
-            serde_json::to_value(&tool).expect("mcp json"),
+            serde_json::to_value(&port).expect("port json"),
             "the two surfaces of one action must be the same bytes"
         );
     }
 
-    /// The headline of the phase: the MCP surface answers with **no daemon
-    /// running**, where it used to be a `GET /v1/models` that failed outright.
-    /// The report says which view it is, so an agent is not left guessing.
+    /// The injected port answers with no daemon running and reports which view
+    /// it used, so an agent is not left guessing.
     #[tokio::test]
-    async fn the_mcp_surface_answers_with_no_daemon_running() {
+    async fn the_port_answers_with_no_daemon_running() {
         let (dir, source) = two_provider_config();
-        let report = ModelsQuery::list_models(
-            &RoutableModels::new(source, Some(dir.path().join("nothing.sock"))),
-            &CallerAuth::default(),
-        )
+        let report = ModelsQuery::list_models(&RoutableModels::new(
+            source,
+            Some(dir.path().join("nothing.sock")),
+        ))
         .await
         .expect("a stopped daemon must not fail list_models");
         assert_eq!(
             report.resolved_via,
-            bitrouter_mcp::actions::models::ModelsSource::Config
+            crate::actions::models::ModelsSource::Config
         );
         assert!(!report.models.is_empty());
     }
@@ -220,9 +276,7 @@ providers:
         assert!(report.models.iter().any(|m| m.id == "gpt-5"));
     }
 
-    /// The filter both surfaces share, over the shared report: `--provider
-    /// azure` and the tool's `provider: "azure"` are the same narrowing of the
-    /// same list.
+    /// Every adapter uses the same provider filter over the shared report.
     #[tokio::test]
     async fn the_provider_filter_narrows_the_shared_report() {
         let (_dir, source) = two_provider_config();
@@ -272,7 +326,7 @@ providers:
         assert_eq!(selector.id, "openai-codex:openai/gpt-5.6-sol");
 
         let route = crate::actions::route::RouteAction::new(source, None)
-            .report(bitrouter_mcp::actions::route::RouteInput {
+            .report(crate::actions::route::RouteInput {
                 model: selector.id.clone(),
                 prompt: None,
             })

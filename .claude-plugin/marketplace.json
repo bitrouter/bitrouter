@@ -6,7 +6,7 @@
     {
       "name": "bitrouter",
       "source": "./",
-      "description": "Cost-optimize your agentic loops: the bitrouter setup skill plus the origin MCP server, so a session can see what is routable, how it would route, and what it has cost."
+      "description": "Cost-optimize your agentic loops with the BitRouter setup and operations skill."
     }
   ]
 }

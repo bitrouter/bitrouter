@@ -188,19 +188,14 @@ npx skills add bitrouter/bitrouter    # via the generic skills CLI
 
 ### MCP
 
-Use BitRouter from any MCP host — it exposes `list_models`, `status`,
-`route_preview` and the skills pair as MCP tools (the *origin* server, distinct
-from the MCP gateway that proxies configured upstream servers). Control and
-introspection only: completions go to the HTTP API below.
+BitRouter OSS is an MCP client and gateway: it proxies configured upstream MCP
+servers, aggregates their capabilities at `/mcp`, and can execute selected
+upstream tools inside an LLM request loop. Local agents operate BitRouter itself
+through the shipped Agent Skill and structured `bro` commands.
 
 ```bash
-bro mcp serve                    # stdio → local daemon at 127.0.0.1:4356
 bro mcp check                    # check configured upstream MCP servers
 ```
-
-Network-capable hosts connect directly to `/mcp-control` on the daemon's
-opt-in authenticated control listener; standalone `mcp serve --transport http`
-is retired.
 
 ### API
 

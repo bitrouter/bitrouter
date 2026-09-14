@@ -3,10 +3,9 @@
 //!
 //! Moved here from the former `bitrouter-skills` crate when the skills
 //! *package manager* (`add` / `remove` / `find` / `update`) was cut. What
-//! remains is format support, and its only consumers are in this binary: the
-//! SEP-2640 catalog ([`crate::skills_catalog`]), the `skills_search` /
-//! `skills_get` tools ([`crate::actions::skills`]), and the `skills list` /
-//! `skills init` CLI verbs.
+//! remains is format support, and its consumers are the app-owned skills
+//! report ([`crate::actions::skills`]) and the `skills list` / `skills init`
+//! CLI verbs.
 //!
 //! A `SKILL.md` opens with a YAML frontmatter block fenced by `---` lines:
 //!
@@ -38,7 +37,7 @@ pub struct SkillFrontmatter {
     pub metadata: BTreeMap<String, serde_json::Value>,
     /// The complete YAML mapping rendered as JSON, including fields this
     /// version of BitRouter does not model. The SEP catalog publishes this
-    /// verbatim; typed fields above remain available to the CLI/tool surfaces.
+    /// verbatim; typed fields above remain available to CLI/report consumers.
     #[serde(skip)]
     pub raw: serde_json::Map<String, serde_json::Value>,
 }

@@ -484,15 +484,10 @@ pub(crate) fn capability_summary(
 ) -> String {
     let named = |name: &str| gateways.iter().any(|s| s.name == name);
     if harness.injects_mcp() {
-        format!(
-            "tools {} skills {}",
-            mark(named(crate::gateways::TOOLS_SERVER), p),
-            mark(named(crate::gateways::SKILLS_SERVER), p),
-        )
+        format!("tools {}", mark(named(crate::gateways::TOOLS_SERVER), p))
     } else {
         format!(
-            "tools {} skills {} ({} has no MCP mechanism)",
-            mark(false, p),
+            "tools {} ({} has no MCP mechanism)",
             mark(false, p),
             harness_id(harness),
         )
@@ -622,8 +617,9 @@ async fn print_exit_summary(
 }
 
 /// The gateway MCP servers a launched harness gets: the daemon's aggregate MCP
-/// endpoint (`bitrouter_tools`, only when `mcp.aggregate` is enabled) and the
-/// origin AgentSkills server (`bitrouter_skills`). See [`crate::gateways`].
+/// endpoint (`bitrouter_tools`, only when `mcp.aggregate` is enabled). See
+/// [`crate::gateways`]. Installed local skills reach agents through the
+/// shippable Agent Skill/plugin rails, not through an origin MCP server.
 ///
 /// Injection reaches only the harnesses that have a mechanism for it — claude
 /// (`--mcp-config`), codex (`-c mcp_servers.*`), opencode and hermes (their
@@ -1512,16 +1508,16 @@ mod tests {
             )
         };
 
-        // Fully-capable harness: routed, both gateways land.
+        // Fully-capable harness: routed, and the upstream-tools gateway lands.
         let claude = line("claude-acp");
         assert!(claude.contains("routed via bitrouter"), "{claude}");
-        assert!(claude.contains("tools ✓ skills ✓"), "{claude}");
+        assert!(claude.contains("tools ✓"), "{claude}");
 
         // Routed, but the harness has nowhere to put MCP servers. The reason
         // is stated — a bare ✗ would read as a BitRouter failure.
         let pi = line("pi-acp");
         assert!(pi.contains("routed via bitrouter"), "{pi}");
-        assert!(pi.contains("tools ✗ skills ✗"), "{pi}");
+        assert!(pi.contains("tools ✗"), "{pi}");
         assert!(pi.contains("no MCP mechanism"), "{pi}");
 
         // Own-auth: degrade honestly rather than showing blanks.
@@ -1532,32 +1528,21 @@ mod tests {
         // `mcp.aggregate` off means `bitrouter_tools` is never injected. The
         // line must say so rather than claiming tools the harness never got.
         let p = Palette::none();
-        let skills_only = vec![crate::harness::McpServer {
-            name: crate::gateways::SKILLS_SERVER.to_string(),
-            transport: crate::harness::McpTransport::Stdio {
-                command: "bitrouter".into(),
-                args: vec![],
-            },
-        }];
         let line = startup_line(
             crate::harness::by_id("claude-acp").expect("catalog"),
             "http://127.0.0.1:4356",
-            &skills_only,
+            &[],
             &p,
         );
-        assert!(line.contains("tools ✗ skills ✓"), "{line}");
+        assert!(line.contains("tools ✗"), "{line}");
     }
 
     #[test]
-    fn launch_wires_the_tools_and_skills_gateways_into_the_overlay() {
+    fn launch_wires_the_tools_gateway_into_the_overlay() {
         let cfg = bitrouter_sdk::config::Config::default();
         let servers = launch_gateways(&cfg, "http://127.0.0.1:4356");
         let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["bitrouter_tools", "bitrouter_skills"],
-            "the aggregate endpoint is on by default, so both gateways ride"
-        );
+        assert_eq!(names, ["bitrouter_tools"]);
         // The fleet bridge is gone: `launch` must never inject it.
         assert!(!names.contains(&"bitrouter_fleet"));
 
@@ -1594,12 +1579,11 @@ mod tests {
                     rendered.push_str(&std::fs::read_to_string(candidate).unwrap_or_default());
                 }
             }
-            for name in ["bitrouter_tools", "bitrouter_skills"] {
-                assert!(
-                    rendered.contains(name),
-                    "{id}: gateway `{name}` never reached the harness"
-                );
-            }
+            assert!(
+                rendered.contains("bitrouter_tools"),
+                "{id}: gateway `bitrouter_tools` never reached the harness"
+            );
+            assert!(!rendered.contains("bitrouter_skills"));
         }
     }
 
@@ -1609,7 +1593,7 @@ mod tests {
         cfg.mcp.aggregate.enabled = false;
         let servers = launch_gateways(&cfg, "http://127.0.0.1:4356");
         let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["bitrouter_skills"]);
+        assert!(names.is_empty());
     }
 
     #[test]
