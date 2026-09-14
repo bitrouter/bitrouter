@@ -3,7 +3,7 @@
 //! Only `list` and `init` remain. The `add` / `remove` / `find` / `update`
 //! reports were removed with the skills package manager — see `crate::skills`.
 
-use bitrouter_mcp::actions::skills::SkillsReport;
+use crate::actions::skills::SkillsReport;
 use serde::Serialize;
 
 use crate::output::CliReport;
@@ -52,7 +52,7 @@ impl CliReport for SkillInitReport {
 mod tests {
     use super::*;
 
-    use bitrouter_mcp::actions::skills::SkillRow;
+    use crate::actions::skills::SkillRow;
 
     fn rendered(report: &SkillsReport) -> String {
         let mut buf = Vec::new();

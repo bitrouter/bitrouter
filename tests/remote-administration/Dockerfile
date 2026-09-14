@@ -43,7 +43,6 @@ COPY tests/remote-administration/client-entrypoint.sh /usr/local/bin/remote-admi
 COPY tests/remote-administration/pty-entrypoint.sh /usr/local/bin/remote-admin-pty
 COPY tests/remote-administration/client-checks.sh /usr/local/bin/remote-admin-checks
 COPY tests/remote-administration/disconnect-submit.py /usr/local/libexec/disconnect-submit.py
-COPY tests/remote-administration/mcp-check.py /usr/local/libexec/mcp-check.py
 COPY tests/remote-administration/target-isolation.py /usr/local/libexec/target-isolation.py
 COPY tests/remote-administration/pty-check.py /usr/local/libexec/pty-check.py
 

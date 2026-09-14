@@ -38,6 +38,12 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   `acp serve` bridge; retires visible `spawn`, keeps sessions harness-owned,
   and reduces MCP CLI to stdio serving plus one diagnostic while direct remote
   MCP moves into the daemon.
+- [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) — **proposed for
+  review; nothing implemented.** Replaces the OSS first-party origin MCP with
+  the `/bitrouter` Skill plus structured CLI for shell-capable local agents,
+  while retaining the MCP gateway, aggregate `/mcp` endpoint, server-side tool
+  loop, and Skills-over-MCP relay. Places any multi-tenant BitRouter control
+  origin in Cloud rather than this repository.
 - [`CODE_TUI_UX_SPEC.md`](CODE_TUI_UX_SPEC.md) — **implemented.** Builds on
   merged #900/#901 with a scrollback-native Code surface: no dashboard tabs,
   one docked transient footer, explicit Enter-to-queue **Next turn** composition

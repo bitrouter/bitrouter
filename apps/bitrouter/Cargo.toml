@@ -27,7 +27,6 @@ bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", 
 bitrouter-telemetry = { workspace = true, features = ["otel-http", "server"] }
 bitrouter-providers = { workspace = true, features = ["hosted", "pkce"] }
 bitrouter-guardrails.workspace = true
-bitrouter-mcp = { path = "../../crates/bitrouter-mcp", version = "1.0.0-alpha.30" }
 chrono.workspace = true
 sha2.workspace = true
 hmac.workspace = true
@@ -71,7 +70,6 @@ bitrouter-tui = { path = "../../crates/bitrouter-tui", version = "=1.0.0-alpha.3
 # reading key events for `bro chat`. Not drawing — see above.
 crossterm.workspace = true
 jsonschema = { version = "0.47.0", default-features = false }
-rmcp = { workspace = true, features = ["server", "macros", "transport-io"] }
 schemars.workspace = true
 
 [target.'cfg(windows)'.dependencies]

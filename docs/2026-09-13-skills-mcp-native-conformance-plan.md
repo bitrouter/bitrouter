@@ -1,5 +1,10 @@
 # Skills over MCP native-conformance implementation plan
 
+> **Superseded in part (2026-09-14):**
+> [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) removes the local
+> origin implementation covered here. The gateway conformance work remains in
+> force and is retained in `bitrouter-sdk`.
+
 > **Status: implementation complete; external interoperability gate pending.**
 > The baseline was commit `9b5e581dbb95f0cd3b888303433d722b87f0bc01`
 > (2026-09-13). Phases 0–5 are implemented in this worktree; Phase 6 records

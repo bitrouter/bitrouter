@@ -1,5 +1,9 @@
 # Build spec: CLI ↔ TUI parity, track 1 — agent execution plan
 
+> **Superseded in part (2026-09-14):**
+> [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) replaces origin-server
+> tasks with the app-owned action contract and retained CLI/TUI/HTTP consumers.
+
 Status: **ready to execute** · Date: 2026-09-06
 · Design of record: [`CLI_TUI_PARITY_IMPL_SPEC.md`](CLI_TUI_PARITY_IMPL_SPEC.md) (the *impl spec*)
 · Rationale of record: [`CLI_TUI_PARITY_SPEC.md`](CLI_TUI_PARITY_SPEC.md) (the *research spec*)

@@ -25,10 +25,9 @@
 //! to re-derive these shapes downstream. Keeping them beside the hook traits is
 //! what stops that drift.
 //!
-//! The *port* a server implements to serve skills is a different concern and
-//! lives with its siblings in `bitrouter-mcp::capabilities::skill_catalog`.
-//! Filesystem format parsing stays in the embedding app; fetching and
-//! installing skills are deliberately outside BitRouter's runtime surface.
+//! An origin server's storage port is deployment-specific and does not live in
+//! this SDK. Filesystem format parsing, fetching, and installing local skills
+//! are outside the gateway runtime surface.
 //!
 //! [SEP-2640]: https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640
 //! [Agent Skills specification]: https://agentskills.io/specification

@@ -298,7 +298,7 @@ server_tools:
   max_iterations: 10         # optional; max tool rounds per request (default 10)
 ```
 
-Tool names are prefixed (`<name>__<tool>`, or the server's `tool_prefix`) so they can't collide with the caller's own tools. Empty/unset leaves the pipeline single-shot. This is the inverse of `bro mcp serve` (which makes BitRouter an MCP *server*): here BitRouter is an MCP *client* consuming those tools inside the request loop.
+Tool names are prefixed (`<name>__<tool>`, or the server's `tool_prefix`) so they can't collide with the caller's own tools. Empty/unset leaves the pipeline single-shot. Here BitRouter is an MCP *client* consuming upstream tools inside the request loop; this is independent of whether any deployment also exposes its own origin MCP server.
 
 ### Model-backed server tools (advisor / sub-agent / fusion)
 

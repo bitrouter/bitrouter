@@ -1,31 +1,84 @@
-//! The `skills_search` action, implemented over the shared skills roots.
+//! Installed Agent Skills inspection for `bro skills list`.
 //!
-//! One implementation, two surfaces: `bro skills list` calls
-//! [`InstalledSkills::report`] directly, and the origin MCP server's
-//! `skills_search` tool calls it through the [`SkillsQuery`] port. Both get the
-//! same [`SkillsReport`], so the CLI's `--json` and the tool's structured
-//! content cannot drift.
+//! ## Why the row carries `valid` / `problem`
 //!
-//! It replaces three discovery rules over two roots:
+//! Three discovery rules over two roots used to answer this question, and they
+//! disagreed in both directions: a skill with malformed frontmatter was listed
+//! by the CLI (which never parsed one) and invisible to the agent, while a
+//! `./skills/foo` skill was the reverse. Unifying them forces a single answer to
+//! "is this skill usable?", and the honest one is *say so*, rather than making
+//! the surfaces agree by subtraction.
 //!
-//! - `skills::format::discover_all_skills` — kept, and now the only one.
-//! - `skills::root::list_installed` — a second `read_dir` of
-//!   `<root>/.claude/skills` that never parsed frontmatter, so it listed skills
-//!   the agent could not load and missed the `./skills/foo` layout entirely.
-//!   Deleted; this module is the filter that replaced it.
-//!   `skills_catalog`'s dir-name/format validation — a third rule, now
-//!   `DiscoveredSkill::problem`, applied identically here and there.
+//! A [`SkillRow`] is emitted for every `SKILL.md` on disk, and one that cannot
+//! be loaded carries `valid: false` plus the `problem` that stops it. Native
+//! agent hosts own installation and activation; BitRouter only inspects and
+//! validates the conventional local layouts.
 //!
-//! Which roots are read is [`SkillsRoot`]'s decision, not this module's, so the
-//! CLI's `-g` and the MCP surfaces' project-plus-global scope come from one
-//! place.
+//! ## Why `dir` *and* `skill_md`
+//!
+//! The row carries both the skill directory and its `SKILL.md`, avoiding an
+//! ambiguous `path` field.
+
+/// One skill found on disk.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct SkillRow {
+    /// The skill's name: `frontmatter.name` when it parsed, and the directory
+    /// name when it did not — so an unusable skill is still nameable in the
+    /// message that explains why.
+    pub name: String,
+    /// `frontmatter.description`, or empty when the frontmatter did not parse.
+    pub description: String,
+    /// The skill's **directory**.
+    pub dir: String,
+    /// The skill's **`SKILL.md`** file, inside [`Self::dir`].
+    pub skill_md: String,
+    /// Whether this skill can actually be served and loaded.
+    pub valid: bool,
+    /// What stops it, when [`Self::valid`] is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
+}
+
+/// Every skill found under the resolved roots.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+pub struct SkillsReport {
+    /// The skills, ordered by name then directory.
+    pub skills: Vec<SkillRow>,
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+
+    fn row(name: &str, description: &str) -> SkillRow {
+        SkillRow {
+            name: name.into(),
+            description: description.into(),
+            dir: format!("/p/{name}"),
+            skill_md: format!("/p/{name}/SKILL.md"),
+            valid: true,
+            problem: None,
+        }
+    }
+
+    /// `problem` is omitted rather than `null` for a healthy skill, so the
+    /// common row stays the shape it was before invalid skills became visible.
+    #[test]
+    fn a_valid_row_carries_no_problem_key() {
+        let wire = serde_json::to_value(row("alpha", "d")).expect("ser");
+        assert!(wire.get("problem").is_none(), "{wire}");
+        assert_eq!(wire["dir"], "/p/alpha");
+        assert_eq!(wire["skill_md"], "/p/alpha/SKILL.md");
+    }
+}
 
 use std::collections::BTreeSet;
 
-use bitrouter_mcp::actions::skills::{SkillDetail, SkillRow, SkillsQuery, SkillsReport};
-use bitrouter_mcp::error::ToolError;
-
-use crate::skills::format::{DiscoveredSkill, discover_all_skills, skill_body};
+use crate::skills::format::{DiscoveredSkill, discover_all_skills};
 use crate::skills::root::SkillsRoot;
 
 /// Lists the skills installed under a set of roots.
@@ -34,17 +87,14 @@ pub struct InstalledSkills {
 }
 
 impl InstalledSkills {
-    /// Read the given roots, in order. Use [`SkillsRoot::cli_scope`] or
-    /// [`SkillsRoot::mcp_scope`] to build the set rather than assembling one
-    /// here — that is the shared root resolution.
+    /// Read roots already resolved by [`SkillsRoot::cli_scope`].
     pub fn new(roots: Vec<SkillsRoot>) -> Self {
         Self { roots }
     }
 
     /// Every skill under the configured roots, valid or not.
     ///
-    /// Blocking filesystem work — call it from a blocking context, or through
-    /// `report_off_thread`.
+    /// Blocking filesystem work; CLI callers run it as a bounded inspection.
     pub fn report(&self) -> SkillsReport {
         let mut skills = Vec::new();
         let mut seen: BTreeSet<std::path::PathBuf> = BTreeSet::new();
@@ -58,21 +108,10 @@ impl InstalledSkills {
                 skills.push(row(&found));
             }
         }
-        // One order for both surfaces, and stable across filesystem iteration
-        // order. `dir` breaks a name tie, which is what a project-local and a
-        // user-global skill of the same name produce.
+        // Stable across filesystem iteration order. `dir` breaks a name tie,
+        // which is what project-local and user-global skills can produce.
         skills.sort_by(|a, b| (&a.name, &a.dir).cmp(&(&b.name, &b.dir)));
         SkillsReport { skills }
-    }
-
-    /// [`Self::report`] off the async runtime — discovery and frontmatter
-    /// parsing are blocking filesystem work, and a large skills tree must not
-    /// stall the reactor.
-    async fn report_off_thread(&self) -> Result<SkillsReport, ToolError> {
-        let roots = self.roots.clone();
-        tokio::task::spawn_blocking(move || InstalledSkills { roots }.report())
-            .await
-            .map_err(|e| ToolError::new(format!("skills discovery task failed: {e}")))
     }
 }
 
@@ -89,50 +128,9 @@ fn row(found: &DiscoveredSkill) -> SkillRow {
     }
 }
 
-#[async_trait::async_trait]
-impl SkillsQuery for InstalledSkills {
-    async fn list(&self) -> Result<SkillsReport, ToolError> {
-        self.report_off_thread().await
-    }
-
-    async fn get(&self, name: &str) -> Result<SkillDetail, ToolError> {
-        let report = self.report_off_thread().await?;
-        // Resolution is by *name over the listing*, never by path arithmetic on
-        // caller input, so `get` can only ever reach a file discovery already
-        // vouched for under one of the configured roots.
-        let skill = report
-            .skills
-            .into_iter()
-            .find(|s| s.name == name)
-            .ok_or_else(|| ToolError::new(format!("no installed skill named '{name}'")))?;
-        let path = std::path::PathBuf::from(&skill.skill_md);
-        let content = tokio::task::spawn_blocking(move || std::fs::read_to_string(&path))
-            .await
-            .map_err(|e| ToolError::new(format!("skills fetch task failed: {e}")))?
-            .map_err(|e| ToolError::new(format!("reading {}: {e}", skill.skill_md)))?;
-        // `metadata` comes from the same parse the row's validity did, so a
-        // skill whose frontmatter is broken yields an empty map rather than a
-        // second, more forgiving reader's guess.
-        let metadata = crate::skills::format::parse_frontmatter(&content)
-            .ok()
-            .map(|fm| {
-                fm.metadata
-                    .into_iter()
-                    .collect::<serde_json::Map<String, serde_json::Value>>()
-            })
-            .unwrap_or_default();
-        Ok(SkillDetail {
-            body: skill_body(&content).to_string(),
-            skill,
-            metadata,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_mcp::capabilities::skill_catalog::SkillCatalog as _;
 
     /// `rel` is written with `/` separators for readability, so push its
     /// segments one at a time rather than joining the whole string: on Windows
@@ -217,170 +215,6 @@ mod tests {
             row.skill_md,
             installed.join("SKILL.md").display().to_string()
         );
-    }
-
-    #[tokio::test]
-    async fn get_returns_the_body_without_the_frontmatter() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        install(
-            dir.path(),
-            ".claude/skills",
-            "alpha",
-            &valid("alpha", "Does alpha"),
-        );
-
-        let detail = project(dir.path()).get("alpha").await.expect("get");
-        assert_eq!(detail.skill.name, "alpha");
-        assert_eq!(detail.skill.description, "Does alpha");
-        assert!(detail.body.starts_with("# alpha"), "{:?}", detail.body);
-        assert!(!detail.body.contains("description:"), "{:?}", detail.body);
-    }
-
-    #[tokio::test]
-    async fn get_names_the_missing_skill() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let err = project(dir.path()).get("nope").await.expect_err("absent");
-        assert!(err.0.contains("nope"), "{}", err.0);
-    }
-
-    /// **The phase, asserted end to end.** One disk, three surfaces, run
-    /// together:
-    ///
-    /// - `bro skills list` (the CLI's own path, via `report`),
-    /// - `skills_search` (the MCP tool's path, via the port),
-    /// - `skills/list` (the SEP-2640 catalog),
-    ///
-    /// over the three cases that used to disagree: a skill with malformed
-    /// frontmatter (listed by the CLI, invisible to the agent), a `./skills/foo`
-    /// skill (the reverse), and a user-global skill (CLI-only).
-    ///
-    /// The valid skills must appear identically everywhere; the invalid one must
-    /// appear *marked* on the two tool/CLI surfaces and be absent from the SEP
-    /// catalog, which is D3 as implemented.
-    #[tokio::test]
-    async fn one_disk_three_surfaces() {
-        let project_dir = tempfile::tempdir().expect("project");
-        let home_dir = tempfile::tempdir().expect("home");
-        let project = project_dir.path();
-
-        // (1) malformed frontmatter, under the project's `.claude/skills`.
-        install(
-            project,
-            ".claude/skills",
-            "broken",
-            "---\nname: broken\n---\n",
-        );
-        // (2) the `./skills/foo` layout the CLI's old `read_dir` never saw.
-        install(
-            project,
-            "skills",
-            "bundled",
-            &valid("bundled", "From ./skills"),
-        );
-        // (3) a user-global skill, under `<home>/.claude/skills`.
-        install(
-            home_dir.path(),
-            ".claude/skills",
-            "worldwide",
-            &valid("worldwide", "From the global root"),
-        );
-
-        let global = SkillsRoot::Global {
-            home: home_dir.path().to_path_buf(),
-        };
-        let project_root = SkillsRoot::Project {
-            project_root: project.to_path_buf(),
-        };
-
-        // The CLI, as `bro skills list` and `bro skills list -g`
-        // call it.
-        let cli_project = InstalledSkills::new(vec![project_root.clone()]).report();
-        let cli_global = InstalledSkills::new(vec![global.clone()]).report();
-
-        // The MCP tool, through the port, over the scope MCP is wired with.
-        let mcp_roots = vec![project_root, global];
-        let tool = SkillsQuery::list(&InstalledSkills::new(mcp_roots.clone()))
-            .await
-            .expect("skills_search");
-
-        // Every CLI row appears byte-identically in the tool's answer — which
-        // is the unification, and covers the global skill by construction.
-        for row in cli_project.skills.iter().chain(cli_global.skills.iter()) {
-            assert!(
-                tool.skills.contains(row),
-                "`{}` differs between the CLI and skills_search:\n cli: {:?}\n mcp: {:?}",
-                row.name,
-                row,
-                tool.skills.iter().find(|s| s.name == row.name),
-            );
-        }
-        assert_eq!(
-            tool.skills.len(),
-            cli_project.skills.len() + cli_global.skills.len(),
-            "the tool's scope is exactly the CLI's two scopes together"
-        );
-
-        // Invariant 6, stated positively: a project-scoped caller is handed
-        // only the project root, so the global root is not merely filtered out
-        // of its answer — it is never walked, and cannot be a path it reaches.
-        assert!(
-            cli_project
-                .skills
-                .iter()
-                .all(|s| s.dir.starts_with(&project.display().to_string())),
-            "a project-scoped listing must not reach outside the project root: {:?}",
-            cli_project.skills
-        );
-        assert!(cli_project.skills.iter().all(|s| s.name != "worldwide"));
-
-        let by_name = |name: &str| {
-            tool.skills
-                .iter()
-                .find(|s| s.name == name)
-                .unwrap_or_else(|| panic!("`{name}` missing from skills_search: {:?}", tool.skills))
-                .clone()
-        };
-
-        // (2) and (3) are valid and visible to the agent, which neither was.
-        assert!(by_name("bundled").valid);
-        assert!(by_name("worldwide").valid);
-        // (1) is visible *and* explained, rather than silently absent.
-        let broken = by_name("broken");
-        assert!(!broken.valid);
-        assert!(broken.problem.is_some(), "an invalid skill says why");
-
-        // The SEP catalog: the same roots, the valid two, and not the broken
-        // one — the SEP requires the entry's frontmatter to match the fetched
-        // SKILL.md, which a skill with no parseable frontmatter cannot satisfy.
-        let published = crate::skills_catalog::InstalledSkillCatalog::new(mcp_roots)
-            .list()
-            .await
-            .expect("skills/list");
-        // Ordered by URI rather than name — the catalog is keyed by URI, which
-        // is what identifies a skill in the SEP.
-        let mut names: Vec<&str> = published
-            .skills
-            .iter()
-            .filter_map(|s| s.frontmatter.get("name").and_then(|n| n.as_str()))
-            .collect();
-        names.sort_unstable();
-        assert_eq!(names, vec!["bundled", "worldwide"], "{published:?}");
-        assert!(
-            published
-                .skills
-                .iter()
-                .any(|s| s.uri.starts_with("skill://global/")),
-            "the global root gets its own organizational prefix: {published:?}"
-        );
-        // Every published entry carries a complete, sized manifest.
-        for entry in &published.skills {
-            let resources = entry
-                .resources
-                .entries()
-                .expect("a filesystem skill is never dynamic");
-            assert!(resources.iter().any(|r| r.uri == entry.uri));
-            assert!(resources.iter().all(|r| r.size > 0));
-        }
     }
 
     /// Containment survives the unification: a `SKILL.md` reached only through

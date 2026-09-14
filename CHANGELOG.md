@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Breaking (MCP): remove the OSS first-party origin server.** The
+  `bitrouter-mcp` crate, `bro mcp serve`, `bro mcp install`, daemon
+  `/mcp-control` endpoint, and automatic `bitrouter_skills` injection are
+  removed. Local agents operate BitRouter through the shipped Agent Skill and
+  structured `bro` CLI. The upstream MCP client/gateway, aggregate `/mcp`,
+  Skills-over-MCP relay/cache, server-side tool loop, and `bro mcp check`
+  remain.
+
 - **Breaking (CLI): the invocation is now `bro`.** `bitrouter <cmd>` becomes
   `bro <cmd>`. Only the invocation changed — the product, crate, npm package,
   Homebrew tap, `bitrouter.yaml`, `~/.bitrouter`, `BITROUTER_*` environment

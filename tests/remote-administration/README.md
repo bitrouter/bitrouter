@@ -6,23 +6,9 @@ Run this from the repository root on a Linux/ARM64-capable Docker daemon:
 tests/remote-administration/run.sh
 ```
 
-The default command is the complete acceptance gate. It includes a TLS MCP
-client that initializes `/mcp-control`, obtains the runtime `tools/list`
-inventory, and calls every discovered control tool with semantic assertions.
-At the current workspace state, that default command correctly fails at MCP
-initialization: the server rejects the sidecar's `Host: server:8443` header
-with HTTP 403 before JSON-RPC begins. This is a live deployment finding, so the
-MCP inventory and calls are not claimed as passed.
-
-For diagnostics after that known MCP failure, the following selector runs the
-independent CLI, HTTP, reload, and Code operations journeys:
-
-```console
-BITROUTER_REMOTE_ADMIN_SKIP_MCP=1 tests/remote-administration/run.sh
-```
-
-It prints `selected CLI/Code acceptance passed (MCP skipped)` on success.
-It is not a substitute for the default acceptance gate.
+The default command is the complete acceptance gate for the typed HTTP control,
+CLI, reload, and Code operations journeys. The control listener does not expose
+an MCP origin endpoint.
 
 The script builds `bitrouter-remote-administration:local` from the current
 workspace unless `BITROUTER_REMOTE_ADMIN_SKIP_BUILD=1` is set. It removes every

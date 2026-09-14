@@ -1,5 +1,11 @@
 # Skills over MCP — server and gateway spec
 
+> **Superseded in part (2026-09-14):**
+> [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) removes the local
+> filesystem-backed origin server and `bitrouter_skills` injection. The
+> upstream Skills-over-MCP relay, aggregation, namespacing, cache, and lifecycle
+> requirements remain current.
+
 Adopting [SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640)
 (`io.modelcontextprotocol/skills`) so BitRouter serves skills it holds and
 proxies skills held by upstream MCP servers — over stdio and Streamable HTTP

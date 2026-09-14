@@ -6,8 +6,8 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use crate::actions::route::RouteInput;
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_mcp::actions::route::RouteInput;
 use bitrouter_tui::machine::PromptCommand;
 use tokio_util::sync::CancellationToken;
 
@@ -75,16 +75,15 @@ impl CodeServices {
         if let Some(client) = client {
             return super::session::offered_commands(client);
         }
-        bitrouter_mcp::actions::ACTIONS
+        crate::actions::ACTIONS
             .iter()
             .filter_map(|action| {
                 if self.operations_only && !operation_command_supported(action.id) {
                     return None;
                 }
                 let name = action.tui_command?;
-                let unavailable =
-                    (!matches!(action.requires, bitrouter_mcp::actions::Requires::Nothing))
-                        .then_some("Connect a routable ACP session to use this action");
+                let unavailable = (!matches!(action.requires, crate::actions::Requires::Nothing))
+                    .then_some("Connect a routable ACP session to use this action");
                 Some(bitrouter_tui::machine::Command {
                     name,
                     action: action.id,

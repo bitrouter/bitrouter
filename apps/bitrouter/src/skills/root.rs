@@ -6,13 +6,8 @@
 //! named for what it now is (a root to read) rather than what it used to be (a
 //! target to install into).
 //!
-//! **The one root resolution.** Both the CLI (`bro skills list`, with
-//! `-g`) and both MCP surfaces resolve their roots through [`SkillsRoot`]. The
-//! MCP surfaces used to be constructed over `current_dir()` alone, which is why
-//! a user-global skill was reachable from the CLI and invisible to an agent;
-//! they are now built over [`SkillsRoot::mcp_scope`], so they gain the global
-//! root *by construction* rather than through a second constructor that could
-//! drift again.
+//! The CLI (`bro skills list`, with `-g`) resolves every read through
+//! [`SkillsRoot`], keeping project and user-global scopes explicit.
 //!
 //! ## Containment
 //!
@@ -72,21 +67,6 @@ impl SkillsRoot {
         }
     }
 
-    /// The organizational prefix this root contributes to a published
-    /// `skill://` URI, per SEP-2640 ("Preceding segments, if any, are a
-    /// server-chosen organizational prefix").
-    ///
-    /// A project root contributes nothing, so project skills keep the URIs they
-    /// already had. The global root contributes `global/`, which is what keeps
-    /// a user-global `foo` and a project-local `foo` separately addressable now
-    /// that one server serves both.
-    pub fn uri_prefix(&self) -> &'static str {
-        match self {
-            SkillsRoot::Global { .. } => "global/",
-            SkillsRoot::Project { .. } => "",
-        }
-    }
-
     /// The roots the CLI reads for `bro skills list [-g]`.
     ///
     /// `-g` selects the global root *instead of* the project one, which is what
@@ -99,21 +79,6 @@ impl SkillsRoot {
         } else {
             Ok(vec![SkillsRoot::Project { project_root }])
         }
-    }
-
-    /// The roots the MCP surfaces read: the project *and* the user-global root.
-    ///
-    /// An agent has no flag to pass and no reason to care which directory a
-    /// skill was installed into, so it sees both. This is the "MCP gains
-    /// user-global skills by construction" half of the unification.
-    ///
-    /// Unlike `-g`, an unresolvable home is not an error here: nobody asked for
-    /// the global root specifically, and a server that refused to start over it
-    /// would deny an agent the project skills it *can* read.
-    pub fn mcp_scope(project_root: PathBuf) -> Vec<SkillsRoot> {
-        let mut roots = vec![SkillsRoot::Project { project_root }];
-        roots.extend(SkillsRoot::global());
-        roots
     }
 }
 
@@ -137,7 +102,6 @@ mod tests {
             project_root: PathBuf::from("/tmp/proj"),
         };
         assert_eq!(root.discovery_root(), PathBuf::from("/tmp/proj"));
-        assert_eq!(root.uri_prefix(), "");
     }
 
     /// The global anchor must be `<home>/.claude`, so discovery's
@@ -153,12 +117,9 @@ mod tests {
             root.discovery_root().join("skills"),
             PathBuf::from("/home/u/.claude/skills")
         );
-        assert_eq!(root.uri_prefix(), "global/");
     }
 
-    /// The scopes are the shared root resolution: `-g` swaps the project root
-    /// for the global one, and MCP takes both — which is the only reason an
-    /// agent can now see a user-global skill.
+    /// `-g` swaps the project root for the global one.
     #[test]
     fn scopes_are_what_each_surface_reads() {
         let project = PathBuf::from("/tmp/proj");
@@ -172,16 +133,6 @@ mod tests {
         assert_eq!(
             SkillsRoot::cli_scope(true, project.clone()).expect("global scope"),
             vec![global.clone()]
-        );
-        assert_eq!(
-            SkillsRoot::mcp_scope(project.clone()),
-            vec![
-                SkillsRoot::Project {
-                    project_root: project
-                },
-                global
-            ],
-            "the MCP scope is the CLI's two scopes together, not a third rule"
         );
     }
 }

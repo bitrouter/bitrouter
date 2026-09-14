@@ -1,5 +1,10 @@
 # Spec: unified agent interfaces — native shortcuts, Code TUI, headless run, and one ACP bridge
 
+> **Superseded in part (2026-09-14):**
+> [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) removes `mcp serve`,
+> `mcp install`, and `/mcp-control` from OSS. The native Skill + CLI, Code,
+> launch, run, ACP, and upstream MCP gateway decisions remain.
+
 > Code presentation update (2026-09-08):
 > [CODE_TUI_UX_SPEC.md](CODE_TUI_UX_SPEC.md) supersedes permanent dashboard
 > navigation and independent interactive drivers. It preserves public CLI names,

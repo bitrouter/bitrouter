@@ -9,12 +9,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use bitrouter_mcp::actions::models::ModelsQuery;
-use bitrouter_mcp::actions::route::{RouteInput, RouteQuery};
-use bitrouter_mcp::actions::status::StatusQuery;
-use bitrouter_mcp::actions::{ACTIONS, Requires};
-use bitrouter_mcp::backend::CallerAuth;
-use bitrouter_mcp::error::ToolError;
+use crate::actions::ToolError;
+use crate::actions::models::ModelsQuery;
+use crate::actions::route::{RouteInput, RouteQuery};
+use crate::actions::status::StatusQuery;
+use crate::actions::{ACTIONS, Requires};
 use bitrouter_sdk::acp::client::{AcpClient, RouteMethod};
 use bitrouter_tui::machine::Command;
 
@@ -146,9 +145,6 @@ impl SessionPorts {
         action: &str,
         args: &[String],
     ) -> Result<Box<dyn CliReport>, ToolError> {
-        // Local and single-tenant, exactly as the stdio MCP profile: the local
-        // implementations document that they ignore the caller.
-        let caller = CallerAuth::default();
         match action {
             "status" => {
                 // Nothing to take, so what was typed is refused rather than
@@ -156,14 +152,14 @@ impl SessionPorts {
                 if !args.is_empty() {
                     return Err(ToolError::new("usage: /status"));
                 }
-                Ok(Box::new(self.status.status(&caller).await?))
+                Ok(Box::new(self.status.status().await?))
             }
             // The filter is applied to the report, not asked of the port —
             // the same `filtered` the CLI leaf calls, so both surfaces mean
             // the same thing by "declared by this provider".
             "list_models" => Ok(Box::new(
                 self.models
-                    .list_models(&caller)
+                    .list_models()
                     .await?
                     .filtered(args.first().map(String::as_str)),
             )),
@@ -193,8 +189,7 @@ impl SessionPorts {
 /// overlap — so the overlap is refused here, once, when the config loads,
 /// rather than resolved by a precedence rule at every keystroke.
 ///
-/// It cannot live in the SDK: the check needs `ACTIONS`, and `bitrouter-mcp`
-/// depends on `bitrouter-sdk`, not the reverse.
+/// It cannot live in the SDK: the check needs the app-owned `ACTIONS` table.
 pub fn prompt_commands(
     config: &bitrouter_sdk::config::ChatConfig,
 ) -> anyhow::Result<Vec<bitrouter_tui::machine::PromptCommand>> {

@@ -732,7 +732,7 @@ impl CodeServices {
                 // Validate the selector without invoking a model or altering routes.
                 let route = self
                     .target
-                    .route(bitrouter_mcp::actions::route::RouteInput {
+                    .route(crate::actions::route::RouteInput {
                         model: choice.to_owned(),
                         prompt: None,
                     })

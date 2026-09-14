@@ -1,3 +1,0 @@
-{
-  "bitrouter": { "command": "bro", "args": ["mcp", "serve"] }
-}

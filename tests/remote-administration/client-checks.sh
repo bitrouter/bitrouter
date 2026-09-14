@@ -193,18 +193,6 @@ assert_cli_read_actions() {
         || fail 'remote agents CLI did not return an agents report'
 }
 
-assert_mcp_control_tools() {
-    local report
-    report=$(python3 /usr/local/libexec/mcp-check.py \
-        --endpoint 'https://server:8443/mcp-control' \
-        --ca "$ca_file" \
-        --token-env CLIENT_READ_TOKEN)
-    assert_json "$report" '
-        .mcp == "passed"
-        and .tools == ["list_models", "route_preview", "status"]
-    '
-}
-
 assert_remote_target_isolation() {
     local report
     report=$(python3 /usr/local/libexec/target-isolation.py \
@@ -671,12 +659,6 @@ main() {
             wait_for_metering
             assert_read_actions
             assert_cli_read_actions
-            # This remains mandatory in the normal acceptance run. The opt-out
-            # only lets an MCP transport failure be diagnosed without hiding
-            # the independent CLI and dashboard journeys.
-            if [[ "${BITROUTER_REMOTE_ADMIN_SKIP_MCP:-0}" != "1" ]]; then
-                assert_mcp_control_tools
-            fi
             assert_remote_target_isolation
             assert_request_filters
             assert_request_filter_validation

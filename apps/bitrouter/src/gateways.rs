@@ -1,35 +1,19 @@
 //! The gateway MCP servers injected into launched harnesses.
 //!
-//! Two of BitRouter's gateways reach a launched harness as injected MCP
-//! servers (the models gateway instead rides the routing overlay):
+//! BitRouter's upstream-tool gateway reaches a launched harness as an injected
+//! MCP server (the models gateway instead rides the routing overlay):
 //!
 //! - **`bitrouter_tools`** — the MCP gateway: the daemon's aggregate endpoint
 //!   (`mcp.aggregate.route`, default `POST /mcp`), which fans out to every
 //!   configured `mcp_servers` upstream with `{server}__` tool prefixes.
 //!   Injected as a streamable-HTTP server so the harness's own MCP client
 //!   dials the daemon directly.
-//! - **`bitrouter_skills`** — the AgentSkills gateway: this binary running
-//!   `mcp serve --backend skills` (stdio), serving both the `skills_search` /
-//!   `skills_get` tools and SEP-2640's `skills/list` / `skills/get` methods
-//!   (plus `resources/*` over skill files) against the installed-skills root.
 //!
 //! [`gateway_servers`] is the one spec; [`to_acp`] renders it as the ACP
 //! `session/new` `mcpServers` descriptor for a headless sub-agent, while
 //! [`crate::harness::Harness::launch_overlay`] renders it into whatever config
 //! surface an interactive harness offers. Two renderers, one source, so the
 //! two paths can't drift.
-//!
-//! ## Do not retire the `bitrouter_skills` injection yet
-//!
-//! `docs/2026-08-03-skills-over-mcp-plan.md` originally scheduled this stdio
-//! injection for removal. The step is withdrawn: there is **no HTTP path to
-//! the daemon's own installed skills**. The aggregate `/mcp` proxies
-//! configured `mcp_servers` upstreams; it does not serve origin content.
-//! Removing this injection removes skills from harnesses outright.
-//!
-//! The precondition for retiring it is "the daemon serves its own skills over
-//! HTTP", which needs an in-process executor seam (`McpTarget::Direct` assumes
-//! a dialable transport, and a daemon serving itself has none).
 
 use agent_client_protocol::schema::v1 as acp;
 
@@ -37,9 +21,6 @@ use crate::harness::{McpServer, McpTransport};
 
 /// Name of the aggregate tool-gateway MCP server injected into a harness.
 pub const TOOLS_SERVER: &str = "bitrouter_tools";
-/// Name of the origin AgentSkills MCP server injected into a harness.
-pub const SKILLS_SERVER: &str = "bitrouter_skills";
-
 /// The gateway servers for a daemon at `base_url`, authenticating with
 /// `auth`. `aggregate_route` is the daemon's aggregate MCP path
 /// (`mcp.aggregate.route`); `None` (aggregate disabled) omits the
@@ -49,9 +30,8 @@ pub fn gateway_servers(
     auth: &str,
     aggregate_route: Option<&str>,
 ) -> Vec<McpServer> {
-    let mut servers = Vec::new();
-    if let Some(route) = aggregate_route {
-        servers.push(McpServer {
+    aggregate_route
+        .map(|route| McpServer {
             name: TOOLS_SERVER.to_string(),
             transport: McpTransport::Http {
                 url: join_route(base_url, route),
@@ -60,20 +40,9 @@ pub fn gateway_servers(
                 // true` (the local default), validated when auth is on.
                 headers: vec![("Authorization".to_string(), format!("Bearer {auth}"))],
             },
-        });
-    }
-    servers.push(McpServer {
-        name: SKILLS_SERVER.to_string(),
-        transport: McpTransport::Stdio {
-            command: std::env::current_exe()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| bitrouter_sdk::invocation::name().to_string()),
-            args: ["mcp", "serve", "--backend", "skills"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-    });
-    servers
+        })
+        .into_iter()
+        .collect()
 }
 
 /// Render a harness-facing server spec as the ACP `session/new` `mcpServers`
@@ -114,7 +83,7 @@ mod tests {
     #[test]
     fn tools_rides_the_aggregate_route_with_bearer_auth() {
         let servers = gateway_servers("http://127.0.0.1:4356/", "tok", Some("/mcp"));
-        assert_eq!(servers.len(), 2);
+        assert_eq!(servers.len(), 1);
         // Serialize the ACP rendering to lock the wire shape: tagged http
         // variant, headers as a {name, value} array.
         let wire = serde_json::to_value(to_acp(&servers[0])).expect("serialize");
@@ -126,16 +95,9 @@ mod tests {
     }
 
     #[test]
-    fn skills_is_stdio_and_survives_a_disabled_aggregate() {
+    fn disabled_aggregate_injects_no_gateway() {
         let servers = gateway_servers("http://127.0.0.1:4356", "tok", None);
-        assert_eq!(servers.len(), 1, "aggregate off drops bitrouter_tools");
-        let wire = serde_json::to_value(to_acp(&servers[0])).expect("serialize");
-        assert_eq!(wire["name"], "bitrouter_skills");
-        assert!(wire.get("type").is_none(), "stdio is the untagged variant");
-        assert_eq!(
-            wire["args"],
-            serde_json::json!(["mcp", "serve", "--backend", "skills"])
-        );
+        assert!(servers.is_empty());
     }
 
     #[test]

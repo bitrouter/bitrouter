@@ -18,14 +18,13 @@
       "default": "a/one"
     },
     "mcp_servers": {
-      "bitrouter_tools": {
-        "command": "bro",
+      "local_docs": {
+        "command": "docs-mcp",
         "args": [
-          "mcp",
-          "serve"
+          "--stdio"
         ]
       },
-      "bitrouter_skills": {
+      "remote_context": {
         "url": "http://127.0.0.1:4356/mcp",
         "headers": {
           "Authorization": "Bearer brk_test"

@@ -9,8 +9,7 @@
 //!
 //! [`toolset::RouterToolset`] is the provider-agnostic executor seam; the MCP
 //! implementation bridges the [`crate::mcp`] routing module (an MCP *client*
-//! consuming upstream MCP servers) into the LLM request loop — the inverse of
-//! the standalone `bitrouter-mcp` server crate.
+//! consuming upstream MCP servers) into the LLM request loop.
 //!
 //! Per crate guideline 2, this module does not `pub use` from its submodules;
 //! downstream reaches types directly (e.g. `server_tools::toolset::RouterToolset`).

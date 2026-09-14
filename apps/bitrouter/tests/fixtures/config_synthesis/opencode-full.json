@@ -25,16 +25,15 @@
     },
     "model": "bitrouter/a/one",
     "mcp": {
-      "bitrouter_tools": {
+      "local_docs": {
         "type": "local",
         "command": [
-          "bro",
-          "mcp",
-          "serve"
+          "docs-mcp",
+          "--stdio"
         ],
         "enabled": true
       },
-      "bitrouter_skills": {
+      "remote_context": {
         "type": "remote",
         "url": "http://127.0.0.1:4356/mcp",
         "enabled": true,

@@ -167,6 +167,9 @@ boundaries. Remote errors never fall back to this machine's configuration.
 
 ## Gotchas
 
+- **A Skill does not grant command execution.** If the host cannot run local
+  processes, explain that this local integration is unavailable; do not suggest
+  the removed OSS origin MCP server as a fallback.
 - MCP upstreams default to modern `server/discover` with rmcp's classified
   legacy fallback. Set `mcp.upstream_protocol: latest` only when an upstream
   must use the legacy `initialize` lifecycle.

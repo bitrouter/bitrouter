@@ -1,5 +1,10 @@
 # Spec: CLI ↔ TUI parity — what "the same command" can and cannot mean
 
+> **Superseded in part (2026-09-14):**
+> [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) removes the OSS origin
+> MCP transport and its action mapping. The retained CLI/TUI parity reasoning
+> now uses the app-owned action table.
+
 Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-09-05
 · Branch: `claude/cli-tui-parity-spec`
 · Measured at `43ae57d8` (`claude/actions-table-phase04`)

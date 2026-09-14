@@ -2,14 +2,11 @@
   "name": "bitrouter",
   "displayName": "BitRouter",
   "version": "0.1.0",
-  "description": "Cost-optimize your agentic loops: route every model call through the cheapest viable path. Bundles the bitrouter setup skill and the origin MCP server, which reports what is routable, how it would route, and what it has cost.",
+  "description": "Cost-optimize your agentic loops: route every model call through the cheapest viable path. Bundles the BitRouter setup and operations skill.",
   "author": { "name": "BitRouterAI" },
   "homepage": "https://bitrouter.ai",
   "repository": "https://github.com/bitrouter/bitrouter",
   "license": "Apache-2.0",
   "keywords": ["llm", "router", "gateway", "cost", "openai", "anthropic", "mcp"],
-  "skills": ["./skills/bitrouter"],
-  "mcpServers": {
-    "bitrouter": { "command": "bro", "args": ["mcp", "serve"] }
-  }
+  "skills": ["./skills/bitrouter"]
 }

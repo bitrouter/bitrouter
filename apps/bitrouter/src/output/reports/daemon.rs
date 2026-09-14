@@ -1,8 +1,8 @@
 //! Reports for the daemon-lifecycle (`start` / `stop` / `restart` / `reload` /
 //! `status`) and `route` commands.
 
-use bitrouter_mcp::actions::route::{ResolvedVia, RouteReport};
-use bitrouter_mcp::actions::status::StatusReport;
+use crate::actions::route::{ResolvedVia, RouteReport};
+use crate::actions::status::StatusReport;
 use bitrouter_sdk::invocation;
 use serde::Serialize;
 
@@ -105,7 +105,7 @@ impl CliReport for DaemonActionReport {
 /// stopped — "stopped" is an answer, not a failure.
 ///
 /// The report type itself is
-/// [`bitrouter_mcp::actions::status::StatusReport`]: the `status`
+/// [`crate::actions::status::StatusReport`]: the `status`
 /// tool returns the same type, so `bro status --json` and the tool's
 /// structured content are the same bytes. Rendering stays here — a local trait
 /// on a foreign type is legal, and it keeps [`Human`] out of the crate.
@@ -155,7 +155,7 @@ impl CliReport for StatusReport {
 /// count is shown, because the one place being wrong about this costs the
 /// reader money is exactly here.
 fn render_spend(
-    spend: Option<&bitrouter_mcp::actions::status::Spend>,
+    spend: Option<&crate::actions::status::Spend>,
     h: &mut Human<'_>,
 ) -> std::io::Result<()> {
     let Some(spend) = spend else {
@@ -190,9 +190,8 @@ fn render_spend(
 
 /// Human rendering for the shared `route` report.
 ///
-/// The type itself lives in `bitrouter-mcp` so the MCP tool can return it;
-/// `Human` stays here, app-side, which is what keeps the CLI's presentation
-/// vocabulary out of the crate.
+/// The type and `Human` rendering both live app-side; typed HTTP and CLI
+/// adapters reuse the report without duplicating business logic.
 impl CliReport for RouteReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         // The wire words, so the human view and `--json` name the path the
@@ -262,7 +261,7 @@ mod tests {
         serde_json::from_slice(&Output::new(Format::Json).render_to_vec(r)).unwrap()
     }
 
-    use bitrouter_mcp::actions::status::{Spend, SpendLimit, Spent};
+    use crate::actions::status::{Spend, SpendLimit, Spent};
 
     /// What the local path builds: the `spent` half only.
     fn local_spend(estimated_micro_usd: u64, requests: u64, unpriced: u64) -> Spend {
@@ -419,7 +418,7 @@ mod tests {
     /// a model the daemon would never pick.
     #[test]
     fn route_human_names_the_effective_model_when_policy_moved_it() {
-        use bitrouter_mcp::actions::route::ProviderHop;
+        use crate::actions::route::ProviderHop;
         let r = RouteReport {
             requested_model: "small".into(),
             effective_model: "big".into(),
@@ -448,7 +447,7 @@ mod tests {
     /// and `live daemon` from the other.
     #[test]
     fn route_json_round_trips_through_the_shared_type() {
-        use bitrouter_mcp::actions::route::{ContextTierRates, EstimatedCost, ProviderHop};
+        use crate::actions::route::{ContextTierRates, EstimatedCost, ProviderHop};
         use bitrouter_sdk::language_model::types::ReasoningEffort;
         for (via, wire) in [
             (ResolvedVia::Live, "live"),

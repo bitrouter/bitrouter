@@ -63,12 +63,10 @@ pub struct RoutingPrefs {
 
 /// Summary of a routable model, for `GET /v1/models`.
 ///
-/// Also the element type of the shared `list_models` action report
-/// (`bitrouter_mcp::actions::models::ModelsReport`), which is why it derives
-/// `JsonSchema`: the MCP tool advertises an `output_schema` built from it, and
-/// `bro models --json` emits the same shape. It lives here rather than
-/// beside the action because it already rides a wire — `GET /v1/models` and the
-/// daemon control socket both carry it.
+/// Also the element type of the app-owned `list_models` action report. It
+/// derives `JsonSchema` because typed control clients consume that report. It
+/// lives here rather than beside the action because it already rides a wire —
+/// `GET /v1/models` and the daemon control socket both carry it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelInfo {
     /// A routable model selector. Subscription-backed providers use an

@@ -2,15 +2,15 @@
 //!
 //! ## What this is, and what it deliberately is not
 //!
-//! BitRouter is a skills **server** and **gateway**: it serves the skills that
-//! are installed and proxies the skills upstream MCP servers hold. It is not a
-//! skills **host** (it never decides what enters a model's context) and, as of
-//! the package-manager cut, it is not a skills **installer** either.
+//! BitRouter's local skill support is a CLI inspection/scaffolding surface.
+//! The independent MCP gateway can relay skills from configured upstream MCP
+//! servers, but the OSS daemon does not originate installed local skills. It
+//! is not a skills **host** (it never decides what enters a model's context)
+//! and, as of the package-manager cut, it is not a skills **installer** either.
 //!
 //! Getting a skill onto disk is the ecosystem's job — `npx skills add`, Claude
-//! Code's and Codex's plugin marketplaces. BitRouter reads the directory those
-//! tools populate. That is the same line as "server, not host", applied one
-//! level out: BitRouter handles transport, not content lifecycle.
+//! Code's and Codex's plugin marketplaces. BitRouter's CLI reads the directory
+//! those tools populate.
 //!
 //! The former `bitrouter-skills` crate held both halves. Its package-manager
 //! half (git clone, source resolution, install-to-disk, registry client) was
@@ -21,9 +21,7 @@
 //! - [`root`] — which `.claude/skills` directory to read, and what is in it.
 //! - [`cli`] — the surviving `skills list` / `skills init` verbs.
 //!
-//! Consumers: [`crate::skills_catalog`] (the SEP-2640 `skills/list` /
-//! `skills/get` server), [`crate::actions::skills`] (the `skills_search` /
-//! `skills_get` tools), and [`cli`].
+//! Consumers: [`crate::actions::skills`] and [`cli`].
 
 pub mod cli;
 pub mod format;

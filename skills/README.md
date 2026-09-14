@@ -60,8 +60,9 @@ snapshots, candidate compilation, and publication.
 All three skills are installable directly from this repository; select a
 specific skill explicitly because the source exposes more than one `SKILL.md`.
 
-BitRouter does not install skills — it *serves* them. Use the generic skills
-CLI, a plugin marketplace, or copy the directory.
+BitRouter does not install or originate skills over MCP. Use the generic skills
+CLI, a plugin marketplace, or copy the directory; the agent host loads the
+installed skill and invokes `bro` directly.
 
 ```bash
 # Generic skills CLI — discovers skills/ automatically. Always pass --skill:
@@ -80,9 +81,9 @@ cp -r skills/run-bitrouter-benchmark      ~/.claude/skills/
 cp -r skills/evaluating-bitrouter-routes  ~/.claude/skills/
 ```
 
-Once installed, `bro mcp serve --backend skills` serves them to any MCP
-client over SEP-2640 (`skills/list`, `skills/get`, `resources/read`), and
-`bro skills list` shows what is installed.
+Once installed, the agent host can follow the skill to operate `bro` directly;
+`bro skills list` shows what is installed. Skills exposed by configured
+upstream MCP servers remain available through the independent MCP gateway.
 
 ## Editing conventions
 
