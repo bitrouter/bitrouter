@@ -822,23 +822,26 @@ pub struct McpConfig {
 /// `mcp.upstream_protocol` — the startup lifecycle and protocol version the
 /// gateway uses when dialing upstream MCP servers.
 ///
-/// `latest` keeps the legacy `initialize` path. `2026-07-28` starts with
-/// `server/discover` and falls back to `initialize` only when discovery returns
-/// JSON-RPC `METHOD_NOT_FOUND`. Any other discovery error fails the connection,
-/// so opt in only for upstreams expected to support the modern lifecycle.
+/// `auto` (the default) starts with modern `server/discover` and uses rmcp's
+/// classified legacy fallback. `latest` forces the legacy `initialize` path;
+/// `2026-07-28` is the explicit spelling of the modern preference.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum McpUpstreamProtocol {
-    /// Use the legacy `initialize` lifecycle with the latest version the MCP
-    /// SDK treats as current — today `2025-11-25`. This is the default.
+    /// Prefer `server/discover` and `2026-07-28`, falling back through rmcp's
+    /// compatibility path when the upstream identifies itself as legacy.
     #[default]
+    Auto,
+    /// Use the legacy `initialize` lifecycle with the latest version the MCP
+    /// SDK treats as current — today `2025-11-25`.
     Latest,
-    /// Use `server/discover` and the modern `2026-07-28` lifecycle, falling
-    /// back to legacy `initialize` only on `METHOD_NOT_FOUND`. Other discovery
-    /// errors fail the connection. Opting in also lets upstreams answer
-    /// `tools/call` with MRTR `input_required` or a Tasks `task` handle;
-    /// neither is a shape this gateway can carry, so both surface as explicit
-    /// errors (see `docs/MCP_2026_07_28_SPEC.md` D1).
+    /// Use `server/discover` and the modern `2026-07-28` lifecycle. rmcp falls
+    /// back after its discovery timeout or a correlated JSON-RPC error it
+    /// classifies as legacy; transport failures, malformed or uncorrelated
+    /// responses, and modern rejection codes fail the connection. Opting in
+    /// also lets upstreams answer `tools/call` with MRTR `input_required` or a
+    /// Tasks `task` handle; neither is a shape this gateway can carry, so both
+    /// surface as explicit errors (see `docs/MCP_2026_07_28_SPEC.md` D1).
     #[serde(rename = "2026-07-28")]
     V2026_07_28,
 }

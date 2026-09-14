@@ -620,7 +620,7 @@ impl ServerHandler for BitrouterMcp {
     async fn list_resources(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::ListResourcesResult, McpError> {
         let catalog = self.skill_catalog()?;
         let listed = catalog.list().await.map_err(skills_error)?;
@@ -629,18 +629,54 @@ impl ServerHandler for BitrouterMcp {
             .iter()
             // A dynamic skill enumerates nothing, so it contributes no
             // resources here; its files are reachable only by direct read.
-            .filter_map(|skill| skill.resources.entries())
-            .flatten()
-            .map(|resource| {
-                let name = resource
-                    .uri
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(resource.uri.as_str());
-                rmcp::model::Resource::new(resource.uri.clone(), name.to_string())
+            .flat_map(|skill| {
+                skill
+                    .resources
+                    .entries()
+                    .into_iter()
+                    .flatten()
+                    .map(move |resource| {
+                        let file_name = resource
+                            .uri
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(resource.uri.as_str());
+                        let is_entrypoint = resource.uri == skill.uri;
+                        let name = is_entrypoint
+                            .then(|| skill.frontmatter.get("name").and_then(|v| v.as_str()))
+                            .flatten()
+                            .unwrap_or(file_name);
+                        let mut listed_resource =
+                            rmcp::model::Resource::new(resource.uri.clone(), name.to_string())
+                                .with_size(resource.size);
+                        if is_entrypoint {
+                            listed_resource = listed_resource.with_mime_type("text/markdown");
+                            if let Some(description) = skill
+                                .frontmatter
+                                .get("description")
+                                .and_then(|value| value.as_str())
+                            {
+                                listed_resource = listed_resource.with_description(description);
+                            }
+                        }
+                        listed_resource
+                    })
             })
             .collect();
-        Ok(rmcp::model::ListResourcesResult::with_all_items(resources))
+        let mut result = rmcp::model::ListResourcesResult::with_all_items(resources);
+        if draft_protocol(&context) {
+            result = result
+                .with_ttl_ms(listed.ttl_ms)
+                .with_cache_scope(match listed.cache_scope {
+                    bitrouter_sdk::mcp::skills::SkillsCacheScope::Public => {
+                        rmcp::model::CacheScope::Public
+                    }
+                    bitrouter_sdk::mcp::skills::SkillsCacheScope::Private => {
+                        rmcp::model::CacheScope::Private
+                    }
+                });
+        }
+        Ok(result)
     }
 
     /// Read one skill file. Resolution is by lookup against the catalog's own
@@ -650,7 +686,7 @@ impl ServerHandler for BitrouterMcp {
     async fn read_resource(
         &self,
         request: rmcp::model::ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::ReadResourceResponse, McpError> {
         let catalog = self.skill_catalog()?;
         let file = catalog.read(&request.uri).await.map_err(skills_error)?;
@@ -668,10 +704,20 @@ impl ServerHandler for BitrouterMcp {
                 meta: None,
             },
         };
-        Ok(rmcp::model::ReadResourceResponse::Complete(
-            rmcp::model::ReadResourceResult::new(vec![contents]),
-        ))
+        let mut result = rmcp::model::ReadResourceResult::new(vec![contents]);
+        if draft_protocol(&context) {
+            result = result
+                .with_ttl_ms(0)
+                .with_cache_scope(rmcp::model::CacheScope::Public);
+        }
+        Ok(rmcp::model::ReadResourceResponse::Complete(result))
     }
+}
+
+fn draft_protocol(context: &RequestContext<RoleServer>) -> bool {
+    context
+        .protocol_version()
+        .is_some_and(|version| version.as_str() >= ProtocolVersion::V_2026_07_28.as_str())
 }
 
 use crate::backend::cloud::{CloudAuth, CloudBackend};
@@ -918,7 +964,7 @@ pub async fn serve_stdio(server: BitrouterMcp) -> anyhow::Result<()> {
             ))
             .await?;
     };
-    // rmcp 3.1's normal startup accepts both lifecycle openers. A legacy
+    // rmcp 3.3's normal startup accepts both lifecycle openers. A legacy
     // `initialize` negotiates and stores the agreed fallback version; a
     // self-contained modern request enables required per-request metadata for
     // the rest of the connection. Keeping those transitions inside rmcp is
@@ -1152,18 +1198,22 @@ mod tests {
     #[async_trait::async_trait]
     impl SkillCatalog for StubCatalog {
         async fn list(&self) -> Result<bitrouter_sdk::mcp::skills::ListSkillsResult, ToolError> {
-            Ok(bitrouter_sdk::mcp::skills::ListSkillsResult {
-                skills: vec![Self::entry()],
-            })
+            Ok(bitrouter_sdk::mcp::skills::ListSkillsResult::complete(
+                vec![Self::entry()],
+                60_000,
+                bitrouter_sdk::mcp::skills::SkillsCacheScope::Public,
+            ))
         }
         async fn get(
             &self,
             uri: &str,
         ) -> Result<bitrouter_sdk::mcp::skills::GetSkillResult, ToolError> {
             if uri == "skill://demo/SKILL.md" {
-                Ok(bitrouter_sdk::mcp::skills::GetSkillResult {
-                    skill: Self::entry(),
-                })
+                Ok(bitrouter_sdk::mcp::skills::GetSkillResult::complete(
+                    Self::entry(),
+                    0,
+                    bitrouter_sdk::mcp::skills::SkillsCacheScope::Public,
+                ))
             } else {
                 Err(ToolError::new(format!("no installed skill at '{uri}'")))
             }

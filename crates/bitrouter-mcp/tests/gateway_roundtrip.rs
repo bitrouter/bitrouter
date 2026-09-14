@@ -73,6 +73,14 @@ fn assert_complete_two_page_result(result: &serde_json::Value) {
     assert!(result.get("nextCursor").is_none(), "got: {result}");
 }
 
+fn assert_ttl_does_not_exceed(result: &serde_json::Value, allowance_ms: u64) {
+    let ttl = result["ttlMs"].as_u64().expect("ttlMs");
+    assert!(
+        ttl <= allowance_ms,
+        "remaining ttl {ttl} exceeds upstream allowance {allowance_ms}: {result}"
+    );
+}
+
 /// The default path, unchanged by the `2026-07-28` work: the client dials with
 /// the `initialize` handshake and the server answers it.
 #[tokio::test]
@@ -102,7 +110,7 @@ async fn gateway_client_reaches_origin_server_on_2026_07_28() {
     assert_eq!(tool_names(&result.result), ["list_models", "status"]);
     // The SEP-2549 hints the server attaches for draft peers survive the client
     // round-trip, which is what lets `CachingExecutor` honour them.
-    assert_eq!(result.result["ttlMs"], 5 * 60 * 1000);
+    assert_ttl_does_not_exceed(&result.result, 5 * 60 * 1000);
     assert_eq!(result.result["cacheScope"], "public");
 }
 
@@ -126,7 +134,7 @@ async fn later_zero_ttl_wins_across_pages() -> anyhow::Result<()> {
 async fn positive_page_ttls_merge_to_minimum() -> anyhow::Result<()> {
     let result = paginated_tools("shorter-ttl").await?;
     assert_complete_two_page_result(&result);
-    assert_eq!(result["ttlMs"], 1_000, "got: {result}");
+    assert_ttl_does_not_exceed(&result, 1_000);
     Ok(())
 }
 
@@ -168,6 +176,9 @@ async fn skills_call(method: &str, params: serde_json::Value) -> anyhow::Result<
 #[tokio::test]
 async fn skills_list_survives_the_relay() -> anyhow::Result<()> {
     let result = skills_call("skills/list", serde_json::json!({})).await?;
+    assert_eq!(result["resultType"], "complete");
+    assert_ttl_does_not_exceed(&result, 60_000);
+    assert_eq!(result["cacheScope"], "public");
     let skills = result["skills"].as_array().expect("skills array");
     assert_eq!(skills.len(), 1, "got: {result}");
     assert_eq!(skills[0]["uri"], "skill://git-workflow/SKILL.md");
@@ -202,7 +213,7 @@ async fn skills_list_exhausts_real_upstream_cursor_pages() -> anyhow::Result<()>
     assert_eq!(skills[0]["frontmatter"]["name"], "first");
     assert_eq!(skills[1]["frontmatter"]["name"], "second");
     assert!(result.get("nextCursor").is_none(), "got: {result}");
-    assert_eq!(result["ttlMs"], 1_000);
+    assert_ttl_does_not_exceed(&result, 1_000);
     assert_eq!(result["cacheScope"], "private");
     Ok(())
 }
@@ -214,6 +225,9 @@ async fn skills_get_survives_the_relay() -> anyhow::Result<()> {
         serde_json::json!({ "uri": "skill://git-workflow/SKILL.md" }),
     )
     .await?;
+    assert_eq!(result["resultType"], "complete");
+    assert_eq!(result["ttlMs"], 0);
+    assert_eq!(result["cacheScope"], "public");
     assert_eq!(result["skill"]["frontmatter"]["name"], "git-workflow");
     Ok(())
 }
@@ -242,6 +256,43 @@ async fn skill_files_are_readable_through_resources_read() -> anyhow::Result<()>
     let contents = result["contents"].as_array().expect("contents");
     assert_eq!(contents[0]["text"], "# Guide", "got: {result}");
     assert_eq!(contents[0]["mimeType"], "text/markdown");
+    // This call uses the executor's forced-legacy constructor, so the origin
+    // omits 2026 cache fields and the direct gateway fills the conservative
+    // downstream defaults.
+    assert_eq!(result["resultType"], "complete");
+    assert_eq!(result["ttlMs"], 0);
+    assert_eq!(result["cacheScope"], "private");
+    Ok(())
+}
+
+#[tokio::test]
+async fn modern_resource_listing_preserves_origin_metadata_and_cache_policy() -> anyhow::Result<()>
+{
+    let executor =
+        RmcpExecutor::new().with_protocol_version(rmcp::model::ProtocolVersion::V_2026_07_28);
+    let request = McpRequest::direct(
+        "skills",
+        "resources/list",
+        serde_json::json!({}),
+        CallerContext::new("k", "u"),
+    );
+    let result = executor.execute(&skills_target(), &request).await?.result;
+    assert_eq!(result["resultType"], "complete");
+    assert_ttl_does_not_exceed(&result, 60_000);
+    assert_eq!(result["cacheScope"], "public");
+    let entrypoint = result["resources"]
+        .as_array()
+        .and_then(|resources| {
+            resources
+                .iter()
+                .find(|resource| resource["uri"] == "skill://git-workflow/SKILL.md")
+        })
+        .expect("SKILL.md resource");
+    assert_eq!(entrypoint["name"], "git-workflow");
+    assert_eq!(
+        entrypoint["description"],
+        "Follow the team's Git conventions"
+    );
     Ok(())
 }
 

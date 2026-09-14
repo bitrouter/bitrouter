@@ -19,7 +19,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, serve};
@@ -311,8 +311,9 @@ async fn prometheus_metrics(State(state): State<AppState>) -> Response {
 
 /// `POST /mcp/{server}` — Model Context Protocol invocation.
 ///
-/// v1.0 implements the JSON-RPC request/response shape only; the Streamable
-/// HTTP SSE response variant is a documented follow-up. Spec refs:
+/// Implements legacy initialized sessions and the self-contained stateless
+/// `2026-07-28` lifecycle, including the Streamable HTTP SSE response variant.
+/// Spec refs:
 /// - JSON-RPC envelope: <https://modelcontextprotocol.io/specification/2025-06-18/basic>
 ///   ("Result responses MUST include the same ID as the request they
 ///   correspond to"). The MCP Streamable HTTP transport (Origin /
@@ -347,9 +348,9 @@ async fn mcp_invoke_inner(
         return BitrouterError::NotFound("mcp pipeline not configured".to_string()).into_response();
     };
 
-    // Validate Streamable HTTP transport headers per spec. `Origin` MUST be
-    // validated to defeat DNS-rebinding; an unsupported `MCP-Protocol-Version`
-    // MUST be rejected with 400.
+    // Validate the transport-level Origin before interpreting the message.
+    // Protocol-version failures need the JSON-RPC id and the structured
+    // `-32022` data payload, so they are handled after envelope validation.
     if let Err(e) = validate_mcp_transport_headers(&headers) {
         return e.into_response();
     }
@@ -375,10 +376,38 @@ async fn mcp_invoke_inner(
     if method.is_empty() {
         return mcp_error_response(inbound_id, -32600, "Invalid Request: missing 'method'");
     }
+    if let Some(version) = headers
+        .get("mcp-protocol-version")
+        .and_then(|value| value.to_str().ok())
+        && !MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
+    {
+        return mcp_error_response_with_data(
+            inbound_id,
+            -32022,
+            &format!("unsupported MCP protocol version `{version}`"),
+            serde_json::json!({
+                "requested": version,
+                "supported": MCP_SUPPORTED_PROTOCOL_VERSIONS,
+            }),
+        );
+    }
     let params = body
         .get("params")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let modern_request =
+        match validate_mcp_request_protocol(&headers, &method, &params, body.get("id").is_some()) {
+            Ok(modern) => modern,
+            Err((code, message, Some(data))) => {
+                return mcp_error_response_with_data(inbound_id, code, &message, data);
+            }
+            Err((code, message, None)) => return mcp_error_response(inbound_id, code, &message),
+        };
+    if modern_request
+        && let Err(message) = validate_mcp_standard_headers(&headers, &method, &params)
+    {
+        return mcp_error_response(inbound_id, -32020, &message);
+    }
 
     // MCP lifecycle methods are answered by the gateway itself — they negotiate
     // the client<->gateway session and MUST NOT be proxied to an upstream
@@ -389,6 +418,26 @@ async fn mcp_invoke_inner(
     // only handshake-skipping callers (curl, `bro tools`) worked before.
     // See <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>.
     match method.as_str() {
+        "server/discover" => {
+            return Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": inbound_id,
+                "result": {
+                    "resultType": "complete",
+                    "supportedVersions": MCP_SUPPORTED_PROTOCOL_VERSIONS,
+                    "capabilities": mcp_gateway_capabilities(),
+                    "ttlMs": 0,
+                    "cacheScope": "private",
+                    "_meta": {
+                        "io.modelcontextprotocol/serverInfo": {
+                            "name": "bitrouter-mcp-gateway",
+                            "version": env!("CARGO_PKG_VERSION"),
+                        },
+                    },
+                },
+            }))
+            .into_response();
+        }
         "initialize" => {
             // Spec: echo the client's protocol version when we support it,
             // otherwise answer with our latest. `params.protocolVersion` is the
@@ -396,8 +445,8 @@ async fn mcp_invoke_inner(
             let protocol_version = params
                 .get("protocolVersion")
                 .and_then(|v| v.as_str())
-                .filter(|v| MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(v))
-                .unwrap_or(MCP_SUPPORTED_PROTOCOL_VERSIONS[0]);
+                .filter(|v| MCP_LEGACY_PROTOCOL_VERSIONS.contains(v))
+                .unwrap_or(MCP_LATEST_LEGACY_PROTOCOL_VERSION);
             return Json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": inbound_id,
@@ -430,11 +479,7 @@ async fn mcp_invoke_inner(
                     // `resources/directory/read` against a server that has not
                     // declared it, so `false` is the safe answer for a gateway
                     // that cannot know whether its members implement it.
-                    "capabilities": {
-                        "tools": {},
-                        "resources": {},
-                        "extensions": { "io.modelcontextprotocol/skills": {} },
-                    },
+                    "capabilities": mcp_gateway_capabilities(),
                     "serverInfo": {
                         "name": "bitrouter-mcp-gateway",
                         "version": env!("CARGO_PKG_VERSION"),
@@ -449,10 +494,12 @@ async fn mcp_invoke_inner(
             return axum::http::StatusCode::ACCEPTED.into_response();
         }
         "ping" => {
+            let mut result = serde_json::json!({});
+            shape_mcp_result_for_peer(&method, modern_request, &mut result);
             return Json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": inbound_id,
-                "result": {},
+                "result": result,
             }))
             .into_response();
         }
@@ -467,31 +514,64 @@ async fn mcp_invoke_inner(
     } else {
         CallerContext::anonymous()
     };
-    let request = match selector {
+    let client_context = modern_request
+        .then(|| downstream_mcp_client_context(&params))
+        .flatten();
+    let upstream_params = strip_downstream_request_context(params);
+    let mut request = match selector {
         mcp::ServerSelector::Direct(server) => {
-            mcp::McpRequest::direct(server, method, params, caller)
+            mcp::McpRequest::direct(server, method.clone(), upstream_params, caller)
         }
-        mcp::ServerSelector::Aggregate => mcp::McpRequest::aggregate(method, params, caller),
+        mcp::ServerSelector::Aggregate => {
+            mcp::McpRequest::aggregate(method.clone(), upstream_params, caller)
+        }
     }
     .with_headers(headers.clone());
+    if let Some(client_context) = client_context {
+        request = request.with_client_context(client_context);
+    }
+
+    // A modern tools/call must be checked against the schema BitRouter
+    // publishes on this same downstream route. Fetching through the pipeline
+    // deliberately runs auth before schema lookup, then the shared cache keeps
+    // the ordinary case cheap. The upstream hop will construct its own
+    // headers; validating here prevents a caller from presenting one value to
+    // downstream middleware while asking BitRouter to execute another.
+    if modern_request && method == "tools/call" {
+        let mut list_request = request.clone();
+        list_request.method = "tools/list".to_string();
+        list_request.params = serde_json::json!({});
+        let listed = match pipeline.execute(list_request).await {
+            Ok(response) => response,
+            Err(error) => return mcp_pipeline_error_response(inbound_id, &error),
+        };
+        if let Err(message) =
+            validate_mcp_tool_parameter_headers(&headers, &request.params, &listed.result)
+        {
+            return mcp_error_response(inbound_id, -32020, &message);
+        }
+    }
 
     // SSE branch per the MCP Streamable HTTP spec — if the client opts in via
     // `Accept: text/event-stream` we return the JSON-RPC frames as `data:`
     // events. JSON clients get the buffered JSON shape (the existing path).
     if accepts_event_stream(&headers) {
         return match pipeline.execute_streaming(request).await {
-            Ok(stream) => sse_response(inbound_id, stream),
+            Ok(stream) => sse_response(inbound_id, method, modern_request, stream),
             Err(e) => mcp_pipeline_error_response(inbound_id, &e),
         };
     }
 
     match pipeline.execute(request).await {
-        Ok(response) => Json(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": inbound_id,
-            "result": response.result,
-        }))
-        .into_response(),
+        Ok(mut response) => {
+            shape_mcp_result_for_peer(&method, modern_request, &mut response.result);
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": inbound_id,
+                "result": response.result,
+            }))
+            .into_response()
+        }
         Err(e) => mcp_pipeline_error_response(inbound_id, &e),
     }
 }
@@ -545,6 +625,8 @@ fn accepts_event_stream(headers: &HeaderMap) -> bool {
 /// never sits on an open connection waiting for nothing.
 fn sse_response(
     inbound_id: serde_json::Value,
+    method: String,
+    modern: bool,
     stream: futures::stream::BoxStream<'static, crate::error::Result<mcp::McpStreamPart>>,
 ) -> Response {
     use axum::response::sse::{Event, KeepAlive, Sse};
@@ -573,7 +655,8 @@ fn sse_response(
                 });
                 Ok::<_, Infallible>(Event::default().data(payload.to_string()))
             }
-            Ok(mcp::McpStreamPart::Final(response)) => {
+            Ok(mcp::McpStreamPart::Final(mut response)) => {
+                shape_mcp_result_for_peer(&method, modern, &mut response.result);
                 let payload = serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": &*inbound_id,
@@ -598,31 +681,494 @@ fn sse_response(
 
 /// MCP supported transport protocol versions. Update when adding spec revisions.
 /// See <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>.
-const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
+const MCP_MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
+const MCP_LATEST_LEGACY_PROTOCOL_VERSION: &str = "2025-11-25";
+const MCP_LEGACY_PROTOCOL_VERSIONS: &[&str] =
     &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
+    MCP_MODERN_PROTOCOL_VERSION,
+    MCP_LATEST_LEGACY_PROTOCOL_VERSION,
+    MCP_LEGACY_PROTOCOL_VERSIONS[1],
+    MCP_LEGACY_PROTOCOL_VERSIONS[2],
+    MCP_LEGACY_PROTOCOL_VERSIONS[3],
+];
+
+fn mcp_gateway_capabilities() -> serde_json::Value {
+    serde_json::json!({
+        "tools": {},
+        "resources": {},
+        "extensions": { "io.modelcontextprotocol/skills": {} },
+    })
+}
+
+/// Validate SEP-2575 per-request context and the Streamable HTTP protocol
+/// header. Returns whether this request uses the stateless 2026 lifecycle.
+fn validate_mcp_request_protocol(
+    headers: &HeaderMap,
+    method: &str,
+    params: &serde_json::Value,
+    has_id: bool,
+) -> std::result::Result<bool, (i64, String, Option<serde_json::Value>)> {
+    let header_version = headers
+        .get("mcp-protocol-version")
+        .and_then(|value| value.to_str().ok());
+
+    if method == "initialize" {
+        if let (Some(header), Some(body)) = (
+            header_version,
+            params
+                .get("protocolVersion")
+                .and_then(|value| value.as_str()),
+        ) && header != body
+        {
+            return Err((
+                -32600,
+                format!(
+                    "Invalid Request: MCP-Protocol-Version header ({header}) does not match initialize params.protocolVersion ({body})"
+                ),
+                None,
+            ));
+        }
+        return Ok(false);
+    }
+
+    // Notifications do not carry per-request context and receive no result.
+    if !has_id {
+        return Ok(header_version == Some(MCP_MODERN_PROTOCOL_VERSION));
+    }
+
+    let meta = params.get("_meta").and_then(serde_json::Value::as_object);
+    let meta_version = meta
+        .and_then(|value| value.get("io.modelcontextprotocol/protocolVersion"))
+        .and_then(serde_json::Value::as_str);
+    let modern = method == "server/discover"
+        || meta_version.is_some()
+        || header_version == Some(MCP_MODERN_PROTOCOL_VERSION);
+    if !modern {
+        return Ok(false);
+    }
+
+    let mut missing = Vec::new();
+    if meta_version.is_none() {
+        missing.push("io.modelcontextprotocol/protocolVersion");
+    }
+    if !meta
+        .and_then(|value| value.get("io.modelcontextprotocol/clientCapabilities"))
+        .is_some_and(serde_json::Value::is_object)
+    {
+        missing.push("io.modelcontextprotocol/clientCapabilities");
+    }
+    if !missing.is_empty() {
+        return Err((
+            -32602,
+            format!(
+                "Invalid params: request _meta is missing or has malformed required fields: {}",
+                missing.join(", ")
+            ),
+            None,
+        ));
+    }
+    let Some(header_version) = header_version else {
+        return Err((
+            -32020,
+            "request _meta protocolVersion requires MCP-Protocol-Version header".to_string(),
+            None,
+        ));
+    };
+    let meta_version = meta_version.unwrap_or(MCP_MODERN_PROTOCOL_VERSION);
+    if header_version != meta_version {
+        return Err((
+            -32020,
+            format!(
+                "MCP-Protocol-Version header ({header_version}) does not match request _meta protocolVersion ({meta_version})"
+            ),
+            None,
+        ));
+    }
+    if meta_version != MCP_MODERN_PROTOCOL_VERSION {
+        return Err((
+            -32022,
+            format!("protocol version `{meta_version}` does not support stateless requests"),
+            Some(serde_json::json!({
+                "requested": meta_version,
+                "supported": [MCP_MODERN_PROTOCOL_VERSION],
+            })),
+        ));
+    }
+    Ok(true)
+}
+
+/// Per-request identity belongs to the downstream hop. The rmcp client adds
+/// BitRouter's own protocol/client context for the upstream hop, so forwarding
+/// the caller's reserved fields would conflate two MCP peers.
+fn strip_downstream_request_context(mut params: serde_json::Value) -> serde_json::Value {
+    let Some(params_object) = params.as_object_mut() else {
+        return params;
+    };
+    let Some(meta) = params_object
+        .get_mut("_meta")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return params;
+    };
+    for key in [
+        "io.modelcontextprotocol/protocolVersion",
+        "io.modelcontextprotocol/clientInfo",
+        "io.modelcontextprotocol/clientCapabilities",
+    ] {
+        meta.remove(key);
+    }
+    if meta.is_empty() {
+        params_object.remove("_meta");
+    }
+    params
+}
+
+fn downstream_mcp_client_context(params: &serde_json::Value) -> Option<mcp::McpClientContext> {
+    let meta = params.get("_meta")?.as_object()?;
+    Some(mcp::McpClientContext {
+        protocol_version: meta
+            .get("io.modelcontextprotocol/protocolVersion")?
+            .as_str()?
+            .to_string(),
+        client_info: meta.get("io.modelcontextprotocol/clientInfo").cloned(),
+        client_capabilities: meta
+            .get("io.modelcontextprotocol/clientCapabilities")?
+            .clone(),
+    })
+}
+
+/// Validate the SEP-2243 standard routing headers introduced with
+/// `2026-07-28`. Tool-parameter headers are validated separately after the
+/// authenticated pipeline resolves the schema published on this route.
+fn validate_mcp_standard_headers(
+    headers: &HeaderMap,
+    method: &str,
+    params: &serde_json::Value,
+) -> std::result::Result<(), String> {
+    match headers
+        .get("mcp-method")
+        .and_then(|value| value.to_str().ok())
+    {
+        None => return Err("missing required Mcp-Method header".to_string()),
+        Some(value) if value != method => {
+            return Err(format!(
+                "Mcp-Method header `{value}` does not match body method `{method}`"
+            ));
+        }
+        Some(_) => {}
+    }
+    let name_key = if matches!(method, "tools/call" | "prompts/get") {
+        Some("name")
+    } else if matches!(
+        method,
+        "resources/read" | "resources/subscribe" | "resources/unsubscribe"
+    ) {
+        Some("uri")
+    } else if matches!(method, "tasks/get" | "tasks/update" | "tasks/cancel") {
+        Some("taskId")
+    } else {
+        None
+    };
+    let Some(expected) = name_key
+        .and_then(|key| params.get(key))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(());
+    };
+    let raw = headers
+        .get("mcp-name")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| format!("missing required Mcp-Name header for `{method}`"))?;
+    let decoded = decode_mcp_header_value(raw)
+        .ok_or_else(|| "Mcp-Name header is not valid Base64".to_string())?;
+    if decoded != expected {
+        return Err(format!(
+            "Mcp-Name header `{decoded}` does not match body value `{expected}`"
+        ));
+    }
+    Ok(())
+}
+
+fn decode_mcp_header_value(value: &str) -> Option<String> {
+    use base64::{Engine, prelude::BASE64_STANDARD};
+
+    match value
+        .strip_prefix("=?base64?")
+        .and_then(|inner| inner.strip_suffix("?="))
+    {
+        Some(inner) => String::from_utf8(BASE64_STANDARD.decode(inner).ok()?).ok(),
+        None => Some(value.to_string()),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum McpParameterKind {
+    String,
+    Integer,
+    Boolean,
+}
+
+struct McpParameterHeader {
+    name: HeaderName,
+    display_name: String,
+    path: Vec<String>,
+    kind: McpParameterKind,
+}
+
+fn validate_mcp_tool_parameter_headers(
+    headers: &HeaderMap,
+    params: &serde_json::Value,
+    tools_result: &serde_json::Value,
+) -> std::result::Result<(), String> {
+    let Some(tool_name) = params.get("name").and_then(serde_json::Value::as_str) else {
+        return Ok(());
+    };
+    let Some(tool) = tools_result
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find(|tool| {
+                tool.get("name").and_then(serde_json::Value::as_str) == Some(tool_name)
+            })
+        })
+    else {
+        return Ok(());
+    };
+    let Some(schema) = tool.get("inputSchema") else {
+        return Ok(());
+    };
+    let bindings = collect_mcp_parameter_headers(schema).map_err(|error| {
+        format!("tool `{tool_name}` has invalid x-mcp-header metadata: {error}")
+    })?;
+    let null_arguments = serde_json::Value::Null;
+    let arguments = params.get("arguments").unwrap_or(&null_arguments);
+    for binding in bindings {
+        let value = value_at_property_path(arguments, &binding.path);
+        let raw = headers
+            .get(&binding.name)
+            .map(|header| header.to_str())
+            .transpose()
+            .map_err(|_| format!("{} contains invalid bytes", binding.display_name))?;
+        match value {
+            None | Some(serde_json::Value::Null) => {
+                if raw.is_some() {
+                    return Err(format!(
+                        "{} is present but its tool argument is absent or null",
+                        binding.display_name
+                    ));
+                }
+            }
+            Some(value) => {
+                let raw = raw.ok_or_else(|| {
+                    format!(
+                        "missing required {} for argument `{}`",
+                        binding.display_name,
+                        binding.path.join(".")
+                    )
+                })?;
+                let decoded = decode_mcp_header_value(raw)
+                    .ok_or_else(|| format!("{} is not valid Base64", binding.display_name))?;
+                if !mcp_parameter_value_matches(binding.kind, value, &decoded) {
+                    return Err(format!(
+                        "{} does not match argument `{}`",
+                        binding.display_name,
+                        binding.path.join(".")
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_mcp_parameter_headers(
+    schema: &serde_json::Value,
+) -> std::result::Result<Vec<McpParameterHeader>, String> {
+    fn count_annotations(value: &serde_json::Value) -> usize {
+        match value {
+            serde_json::Value::Object(object) => {
+                usize::from(object.contains_key("x-mcp-header"))
+                    + object.values().map(count_annotations).sum::<usize>()
+            }
+            serde_json::Value::Array(values) => values.iter().map(count_annotations).sum(),
+            _ => 0,
+        }
+    }
+
+    fn visit_properties(
+        schema: &serde_json::Value,
+        path: &mut Vec<String>,
+        seen_names: &mut std::collections::BTreeSet<String>,
+        bindings: &mut Vec<McpParameterHeader>,
+        visited: &mut usize,
+    ) -> std::result::Result<(), String> {
+        let Some(properties) = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+        else {
+            return Ok(());
+        };
+        for (property_name, property_schema) in properties {
+            path.push(property_name.clone());
+            if let Some(annotation) = property_schema.get("x-mcp-header") {
+                *visited += 1;
+                let annotation = annotation
+                    .as_str()
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| "annotation name must be a non-empty string".to_string())?;
+                let canonical = annotation.to_ascii_lowercase();
+                let wire_name = format!("mcp-param-{canonical}");
+                if !seen_names.insert(canonical) {
+                    return Err(format!(
+                        "duplicate case-insensitive annotation name `{annotation}`"
+                    ));
+                }
+                let display_name = format!("Mcp-Param-{annotation}");
+                let name = HeaderName::from_bytes(wire_name.as_bytes())
+                    .map_err(|_| format!("`{annotation}` is not a valid HTTP field-name token"))?;
+                let kind = match property_schema
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    Some("string") => McpParameterKind::String,
+                    Some("integer") => McpParameterKind::Integer,
+                    Some("boolean") => McpParameterKind::Boolean,
+                    _ => {
+                        return Err(format!(
+                            "annotation `{annotation}` is not on a string, integer, or boolean"
+                        ));
+                    }
+                };
+                bindings.push(McpParameterHeader {
+                    name,
+                    display_name,
+                    path: path.clone(),
+                    kind,
+                });
+            }
+            visit_properties(property_schema, path, seen_names, bindings, visited)?;
+            path.pop();
+        }
+        Ok(())
+    }
+
+    let total = count_annotations(schema);
+    let mut bindings = Vec::new();
+    let mut visited = 0;
+    visit_properties(
+        schema,
+        &mut Vec::new(),
+        &mut std::collections::BTreeSet::new(),
+        &mut bindings,
+        &mut visited,
+    )?;
+    if visited != total {
+        return Err(
+            "annotation is not reachable from the schema root through properties only".to_string(),
+        );
+    }
+    Ok(bindings)
+}
+
+fn value_at_property_path<'a>(
+    arguments: &'a serde_json::Value,
+    path: &[String],
+) -> Option<&'a serde_json::Value> {
+    path.iter().try_fold(arguments, |value, segment| {
+        value.as_object().and_then(|object| object.get(segment))
+    })
+}
+
+fn mcp_parameter_value_matches(
+    kind: McpParameterKind,
+    value: &serde_json::Value,
+    header: &str,
+) -> bool {
+    match kind {
+        McpParameterKind::String => value.as_str() == Some(header),
+        McpParameterKind::Boolean => match value.as_bool() {
+            Some(true) => header == "true",
+            Some(false) => header == "false",
+            None => false,
+        },
+        McpParameterKind::Integer => {
+            const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+            let Some(body) = value.as_f64().filter(|number| {
+                number.is_finite() && number.fract() == 0.0 && number.abs() <= MAX_SAFE_INTEGER
+            }) else {
+                return false;
+            };
+            header.parse::<f64>().is_ok_and(|candidate| {
+                candidate.is_finite()
+                    && candidate.fract() == 0.0
+                    && candidate.abs() <= MAX_SAFE_INTEGER
+                    && candidate == body
+            })
+        }
+    }
+}
+
+fn shape_mcp_result_for_peer(method: &str, modern: bool, result: &mut serde_json::Value) {
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    if modern {
+        object
+            .entry("resultType".to_string())
+            .or_insert_with(|| "complete".into());
+        if matches!(
+            method,
+            "tools/list"
+                | "resources/list"
+                | "resources/templates/list"
+                | "resources/read"
+                | "prompts/list"
+                | "skills/list"
+                | "skills/get"
+        ) {
+            object
+                .entry("ttlMs".to_string())
+                .or_insert_with(|| 0.into());
+            object
+                .entry("cacheScope".to_string())
+                .or_insert_with(|| "private".into());
+        }
+        let meta = object
+            .entry("_meta".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if !meta.is_object() {
+            *meta = serde_json::json!({});
+        }
+        if let Some(meta) = meta.as_object_mut() {
+            meta.insert(
+                "io.modelcontextprotocol/serverInfo".to_string(),
+                serde_json::json!({
+                    "name": "bitrouter-mcp-gateway",
+                    "version": env!("CARGO_PKG_VERSION"),
+                }),
+            );
+        }
+    } else if !matches!(method, "skills/list" | "skills/get") {
+        object.remove("resultType");
+        object.remove("ttlMs");
+        object.remove("cacheScope");
+    }
+}
 
 /// Validates the MCP Streamable HTTP transport headers per the spec at
 /// <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports>.
 /// `Origin`: MUST be validated by the server to defeat DNS rebinding — we accept
 /// localhost / 127.0.0.1 / [::1] by default (the only safe default for a local
-/// daemon binding to loopback). `MCP-Protocol-Version`: if present, MUST be a
-/// version this server supports.
+/// daemon binding to loopback). Protocol-version validation happens after the
+/// JSON-RPC envelope is parsed so failures can carry the request id and the
+/// structured `UnsupportedProtocolVersion` data.
 fn validate_mcp_transport_headers(headers: &HeaderMap) -> Result<()> {
     if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok())
         && !is_safe_mcp_origin(origin)
     {
         return Err(BitrouterError::Forbidden(format!(
             "MCP Origin not allowed: '{origin}'. Local daemons accept only loopback origins."
-        )));
-    }
-    if let Some(version) = headers
-        .get("mcp-protocol-version")
-        .and_then(|v| v.to_str().ok())
-        && !MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
-    {
-        return Err(BitrouterError::bad_request(format!(
-            "unsupported MCP-Protocol-Version '{version}' (supported: {})",
-            MCP_SUPPORTED_PROTOCOL_VERSIONS.join(", ")
         )));
     }
     Ok(())
@@ -653,6 +1199,25 @@ fn mcp_error_response(id: serde_json::Value, code: i64, message: &str) -> Respon
             "jsonrpc": "2.0",
             "id": id,
             "error": { "code": code, "message": message },
+        })),
+    )
+        .into_response()
+}
+
+/// Build a JSON-RPC protocol error whose machine-readable payload is required
+/// for version negotiation.
+fn mcp_error_response_with_data(
+    id: serde_json::Value,
+    code: i64,
+    message: &str,
+    data: serde_json::Value,
+) -> Response {
+    (
+        axum::http::StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": code, "message": message, "data": data },
         })),
     )
         .into_response()
@@ -1182,6 +1747,110 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tower::ServiceExt;
 
+    fn annotated_tool_result(schema: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "tools": [{
+                "name": "deploy",
+                "inputSchema": schema
+            }]
+        })
+    }
+
+    #[test]
+    fn mcp_parameter_headers_validate_nested_primitive_arguments() {
+        let tools = annotated_tool_result(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "object",
+                    "properties": {
+                        "region": {"type": "string", "x-mcp-header": "Region"}
+                    }
+                },
+                "count": {"type": "integer", "x-mcp-header": "Count"},
+                "enabled": {"type": "boolean", "x-mcp-header": "Enabled"}
+            }
+        }));
+        let params = serde_json::json!({
+            "name": "deploy",
+            "arguments": {
+                "target": {"region": "us-east"},
+                "count": 42,
+                "enabled": true
+            }
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "mcp-param-region",
+            "=?base64?dXMtZWFzdA==?=".parse().unwrap(),
+        );
+        headers.insert("mcp-param-count", "42.0".parse().unwrap());
+        headers.insert("mcp-param-enabled", "true".parse().unwrap());
+
+        validate_mcp_tool_parameter_headers(&headers, &params, &tools)
+            .expect("matching parameter headers are valid");
+    }
+
+    #[test]
+    fn mcp_parameter_headers_reject_missing_mismatched_and_spurious_values() {
+        let tools = annotated_tool_result(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "tenant": {"type": "string", "x-mcp-header": "Tenant"}
+            }
+        }));
+        let params = serde_json::json!({
+            "name": "deploy",
+            "arguments": {"tenant": "alpha"}
+        });
+        let missing = validate_mcp_tool_parameter_headers(&HeaderMap::new(), &params, &tools)
+            .expect_err("body value requires a header");
+        assert!(missing.contains("missing required Mcp-Param-Tenant"));
+
+        let mut mismatched = HeaderMap::new();
+        mismatched.insert("mcp-param-tenant", "beta".parse().unwrap());
+        let mismatch = validate_mcp_tool_parameter_headers(&mismatched, &params, &tools)
+            .expect_err("header and body must match");
+        assert!(mismatch.contains("does not match"));
+
+        let params_without_tenant = serde_json::json!({
+            "name": "deploy",
+            "arguments": {"tenant": null}
+        });
+        let spurious =
+            validate_mcp_tool_parameter_headers(&mismatched, &params_without_tenant, &tools)
+                .expect_err("header must be absent for null arguments");
+        assert!(spurious.contains("absent or null"));
+    }
+
+    #[test]
+    fn mcp_parameter_header_annotations_must_be_reachable_and_unique() {
+        let unreachable = annotated_tool_result(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "values": {
+                    "type": "array",
+                    "items": {"type": "string", "x-mcp-header": "Value"}
+                }
+            }
+        }));
+        let params = serde_json::json!({"name": "deploy", "arguments": {}});
+        let error = validate_mcp_tool_parameter_headers(&HeaderMap::new(), &params, &unreachable)
+            .expect_err("array annotations are not statically reachable");
+        assert!(error.contains("properties only"));
+
+        let duplicate = annotated_tool_result(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "a": {"type": "string", "x-mcp-header": "Tenant"},
+                "b": {"type": "string", "x-mcp-header": "tenant"}
+            }
+        }));
+        let error = validate_mcp_tool_parameter_headers(&HeaderMap::new(), &params, &duplicate)
+            .expect_err("header annotation names are case-insensitively unique");
+        assert!(error.contains("duplicate case-insensitive"));
+    }
+
     struct CountingExecutor {
         calls: Arc<AtomicUsize>,
         inner: MockExecutor,
@@ -1520,7 +2189,12 @@ mod tests {
             })
         })
         .boxed();
-        let response = sse_response(serde_json::json!(7), stream);
+        let response = sse_response(
+            serde_json::json!(7),
+            "tools/call".to_string(),
+            false,
+            stream,
+        );
 
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), 64 * 1024).await?;

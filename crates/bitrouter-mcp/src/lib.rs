@@ -187,7 +187,7 @@ mod profile_tests {
     use crate::actions::skills::{SkillDetail, SkillsQuery, SkillsReport};
     use crate::backend::Backend;
     use crate::error::ToolError;
-    use bitrouter_sdk::mcp::skills::{GetSkillResult, ListSkillsResult};
+    use bitrouter_sdk::mcp::skills::{GetSkillResult, ListSkillsResult, SkillsCacheScope};
     use std::sync::Arc;
 
     struct StubSkills;
@@ -205,7 +205,11 @@ mod profile_tests {
     #[async_trait::async_trait]
     impl capabilities::skill_catalog::SkillCatalog for StubSkills {
         async fn list(&self) -> Result<ListSkillsResult, ToolError> {
-            Ok(ListSkillsResult { skills: Vec::new() })
+            Ok(ListSkillsResult::complete(
+                Vec::new(),
+                60_000,
+                SkillsCacheScope::Public,
+            ))
         }
         async fn get(&self, uri: &str) -> Result<GetSkillResult, ToolError> {
             Err(ToolError::new(format!("no installed skill at '{uri}'")))

@@ -12,7 +12,7 @@ use bitrouter_mcp::capabilities::skill_catalog::{SkillCatalog, SkillFile, SkillF
 use bitrouter_mcp::error::ToolError;
 use bitrouter_mcp::server::BitrouterMcp;
 use bitrouter_sdk::mcp::skills::{
-    GetSkillResult, ListSkillsResult, SkillEntry, SkillResource, SkillResources,
+    GetSkillResult, ListSkillsResult, SkillEntry, SkillResource, SkillResources, SkillsCacheScope,
 };
 use rmcp::model::{
     CacheScope, CustomRequest, CustomResult, ListToolsResult, PaginatedRequestParams, ResultType,
@@ -77,16 +77,20 @@ impl FixtureCatalog {
 #[async_trait::async_trait]
 impl SkillCatalog for FixtureCatalog {
     async fn list(&self) -> Result<ListSkillsResult, ToolError> {
-        Ok(ListSkillsResult {
-            skills: vec![Self::entry()],
-        })
+        Ok(ListSkillsResult::complete(
+            vec![Self::entry()],
+            60_000,
+            SkillsCacheScope::Public,
+        ))
     }
 
     async fn get(&self, uri: &str) -> Result<GetSkillResult, ToolError> {
         if uri == Self::SKILL_MD {
-            Ok(GetSkillResult {
-                skill: Self::entry(),
-            })
+            Ok(GetSkillResult::complete(
+                Self::entry(),
+                0,
+                SkillsCacheScope::Public,
+            ))
         } else {
             Err(ToolError::new(format!("no installed skill at '{uri}'")))
         }
