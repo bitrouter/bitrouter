@@ -252,6 +252,21 @@
           }
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 12.5,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 50.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "anthropic/claude-fable-5.1"
+        },
+        {
           "api_protocol": "anthropic",
           "provider": "claude-code",
           "provider_model_id": "claude-fable-5-1"
@@ -2906,6 +2921,23 @@
           },
           "provider": "openrouter",
           "provider_model_id": "deepseek/deepseek-v4.1-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.13,
+              "no_cache": 0.65
+            },
+            "output_tokens": {
+              "text": 1.45
+            }
+          },
+          "provider": "tinfoil",
+          "provider_model_id": "deepseek-v4-1-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "release_date": "2026-09-10"
@@ -3179,6 +3211,20 @@
       "providers": [
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "no_cache": 0.75
+            },
+            "output_tokens": {
+              "text": 3.75
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "google/gemini-3.7-flash"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "gemini-3.7-flash"
         },
@@ -3271,6 +3317,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "no_cache": 0.75
+            },
+            "output_tokens": {
+              "text": 3.75
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "google/gemini-3.8-flash"
+        },
         {
           "api_protocol": "openai",
           "provider": "github-copilot",
@@ -5816,6 +5876,21 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.0,
+              "cache_write": 12.5,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 50.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "openai/gpt-6-astra"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "gpt-6-astra"
         },
@@ -7193,6 +7268,21 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "cache_write": 0.2,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "qwen/qwen3.8-flash"
         },
         {
           "api_protocol": "openai",
