@@ -3493,6 +3493,20 @@
             }
           },
           "provider_model_id": "qwen/qwen3.8-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4.1-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.13,
+              "no_cache": 0.65
+            },
+            "output_tokens": {
+              "text": 1.45
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4.1-flash"
         }
       ],
       "name": "bitrouter",
