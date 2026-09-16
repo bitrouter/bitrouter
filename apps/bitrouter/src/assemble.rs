@@ -375,6 +375,7 @@ pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
+    config.validate_router_config()?;
     let ignored_config = ignored_config_warnings(config);
     // Validate and construct ingress aliases before opening the database or
     // performing any other startup work. A custom transform must not run ahead

@@ -965,10 +965,15 @@ impl Pipeline {
     }
 
     async fn resolve_route(&self, ctx: &mut PipelineContext) -> Result<Vec<RoutingTarget>> {
-        // Stage 0 resolves `@preset` / `:variant` exactly once. App-owned model
-        // selectors then choose an effective model without losing the preset's
-        // prompt defaults or routing preferences.
-        let resolution = self.routing_table.resolve_model(ctx.model()).await?;
+        // Stage 0 resolves a named router or legacy `@preset` / `:variant`
+        // address exactly once. App-owned model selectors then choose an
+        // effective model without losing request defaults or routing prefs.
+        let mut resolution = self.routing_table.resolve_model(ctx.model()).await?;
+        if let Some(mut identity) = resolution.router.take() {
+            identity.original_selector = ctx.original_model().to_owned();
+            ctx.set_router_identity(identity.clone());
+            ctx.emit(identity);
+        }
         ctx.apply_preset_overrides(&resolution.overrides);
         ctx.set_model(resolution.clean_model);
         if let Some(policy) = resolution.policy.as_deref() {

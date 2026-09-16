@@ -12,7 +12,7 @@ use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::event::PipelineEvent;
 use crate::language_model::executor::MockResponse;
-use crate::language_model::routing::PromptOverrides;
+use crate::language_model::routing::{PromptOverrides, RouterRequestIdentity};
 use crate::language_model::*;
 
 // ===== test fixtures =====
@@ -387,6 +387,21 @@ impl SettlementRecorder for ProviderCapturingRecorder {
     }
 }
 
+struct RouterIdentityCapturingRecorder(Arc<std::sync::Mutex<Vec<RouterRequestIdentity>>>);
+
+#[async_trait]
+impl SettlementRecorder for RouterIdentityCapturingRecorder {
+    async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
+        if let Some(identity) = ctx.get_event::<RouterRequestIdentity>() {
+            match self.0.lock() {
+                Ok(mut captured) => captured.push(identity.clone()),
+                Err(poisoned) => poisoned.into_inner().push(identity.clone()),
+            }
+        }
+        Ok(())
+    }
+}
+
 struct PresetAwareRoutingTable;
 
 #[async_trait]
@@ -402,6 +417,11 @@ impl RoutingTable for PresetAwareRoutingTable {
                 overrides: PromptOverrides::default(),
                 policy: Some("coding".into()),
                 variant: Some("preferred".into()),
+                router: Some(RouterRequestIdentity {
+                    router_id: "adaptive".into(),
+                    original_selector: model.into(),
+                    binding_digest: "router-v1:sha256:test".into(),
+                }),
             })
         } else {
             Ok(ModelResolution::passthrough(model))
@@ -1175,6 +1195,34 @@ async fn policy_selection_is_preset_scoped_and_preserves_routing_preferences() {
             ("default-provider".into(), "strong-model".into()),
         ]
     );
+}
+
+#[tokio::test]
+async fn router_identity_uses_inbound_selector_and_reaches_settlement() -> Result<()> {
+    let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(Arc::new(PresetAwareRoutingTable))
+        .executor(Arc::new(MockExecutor::always_text("ok")))
+        .model_selector(Arc::new(CountingModelSelector(Arc::new(AtomicUsize::new(
+            0,
+        )))))
+        .settlement_recorder(RouterIdentityCapturingRecorder(captured.clone()));
+    let pipeline = builder.build()?;
+    let mut request = request_for_model("@adaptive:preferred");
+    request.original_model = "@inbound-alias".into();
+
+    pipeline.execute(request).await?;
+
+    let identities = match captured.lock() {
+        Ok(identities) => identities.clone(),
+        Err(poisoned) => poisoned.into_inner().clone(),
+    };
+    assert_eq!(identities.len(), 1);
+    assert_eq!(identities[0].router_id, "adaptive");
+    assert_eq!(identities[0].original_selector, "@inbound-alias");
+    assert_eq!(identities[0].binding_digest, "router-v1:sha256:test");
+    Ok(())
 }
 
 #[tokio::test]
