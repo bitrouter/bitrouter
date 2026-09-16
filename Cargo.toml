@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/*", "helpers/*"]
 
 [workspace.package]
-version = "1.0.0-alpha.30"
+version = "1.0.0-alpha.31"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -30,12 +30,12 @@ keyring = { version = "3", default-features = false, features = [
 ] }
 
 # internal crates
-bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.30", default-features = false }
-bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.30" }
-bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.30" }
+bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.31", default-features = false }
+bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.31" }
+bitrouter-guardrails = { path = "crates/bitrouter-guardrails", version = "1.0.0-alpha.31" }
 # Optional telemetry egress. `default-features = false` keeps a consumer that
 # only wants the observability contract off the OpenTelemetry stack entirely.
-bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-alpha.30", default-features = false }
+bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-alpha.31", default-features = false }
 
 # Safe syscall wrappers. Used by the SDK's `acp` runtime for `killpg(2)`;
 # `libc` would need an `unsafe` block, and `bitrouter-sdk` forbids unsafe code.
