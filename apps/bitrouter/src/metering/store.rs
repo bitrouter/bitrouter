@@ -312,6 +312,12 @@ pub struct RequestRow {
     pub request_id: String,
     /// RFC3339 settle timestamp.
     pub created_at: String,
+    /// Named router selected during Stage 0, when the request used one.
+    pub router_id: Option<String>,
+    /// Versioned digest of the non-secret router binding used by the request.
+    pub binding_digest: Option<String>,
+    /// Caller selector captured before ingress transforms.
+    pub original_selector: Option<String>,
     /// Model the router resolved to.
     pub model_id: String,
     /// Provider that actually served the request.
@@ -362,6 +368,9 @@ impl From<requests::Model> for RequestRow {
         Self {
             request_id: m.request_id,
             created_at: m.created_at,
+            router_id: m.router_id,
+            binding_digest: m.binding_digest,
+            original_selector: m.original_selector,
             model_id: m.model_id,
             provider_id: m.provider_id,
             prompt_tokens: m.prompt_tokens,
@@ -1305,6 +1314,9 @@ impl MeteringStore {
                 session_identity.and_then(|identity| identity.route_lease_id.clone())
             ),
             session_identity_json: Set(session_identity.map(|identity| identity.serialized.clone())),
+            router_id: Set(record.router_id),
+            binding_digest: Set(record.binding_digest),
+            original_selector: Set(record.original_selector),
             model_id: Set(record.model_id),
             provider_id: Set(record.provider_id),
             prompt_tokens: Set(record.prompt_tokens as i64),
@@ -1350,6 +1362,9 @@ impl MeteringStore {
                         requests::Column::NativeTurnId,
                         requests::Column::RouteLeaseId,
                         requests::Column::SessionIdentityJson,
+                        requests::Column::RouterId,
+                        requests::Column::BindingDigest,
+                        requests::Column::OriginalSelector,
                         requests::Column::ModelId,
                         requests::Column::ProviderId,
                         requests::Column::PromptTokens,

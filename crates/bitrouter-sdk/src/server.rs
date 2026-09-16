@@ -4,7 +4,7 @@
 //! - `POST /v1/messages` — Messages
 //! - `POST /v1/chat/completions` — Chat Completions
 //! - `POST /v1/responses` — Responses
-//! - `POST /v1beta/models/{model_action}` — Google `generateContent` /
+//! - `POST /v1beta/models/{*model_action}` — Google `generateContent` /
 //!   `streamGenerateContent`
 //!
 //! Each handler parses the inbound body with that protocol's adapter, runs the
@@ -271,7 +271,7 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
         .route("/v1/messages", post(messages))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(responses))
-        .route("/v1beta/models/{model_action}", post(generate_content));
+        .route("/v1beta/models/{*model_action}", post(generate_content));
     if !options.omit_v1_models {
         router = router.route("/v1/models", get(list_models));
     }
@@ -1272,8 +1272,9 @@ async fn responses(
     handle(state, headers, ApiProtocol::Responses, body, None).await
 }
 
-/// Generate Content encodes the model and the streaming verb in the path segment, e.g.
-/// `gemini-2.0-flash:generateContent` or `…:streamGenerateContent`.
+/// Generate Content encodes the model and streaming verb in the path. The
+/// catch-all also admits slash selectors such as `bitrouter/coding`; Axum
+/// decodes a percent-escaped slash before this handler validates the selector.
 async fn generate_content(
     State(state): State<AppState>,
     Path(model_action): Path<String>,
@@ -1281,10 +1282,14 @@ async fn generate_content(
     Json(mut body): Json<serde_json::Value>,
 ) -> Response {
     let (model, action) = match model_action.rsplit_once(':') {
-        Some((m, a)) => (m.to_string(), a.to_string()),
-        None => {
+        Some((m, a))
+            if !m.is_empty() && matches!(a, "generateContent" | "streamGenerateContent") =>
+        {
+            (m.to_string(), a.to_string())
+        }
+        _ => {
             return BitrouterError::bad_request(
-                "google path must be 'models/{model}:generateContent'",
+                "google path must be 'models/{model}:generateContent' or 'models/{model}:streamGenerateContent'",
             )
             .into_response();
         }
@@ -1926,6 +1931,115 @@ mod tests {
 
     fn test_state_with_models() -> AppState {
         test_state_with_executor(Arc::new(MockExecutor::always_text("ok")))
+    }
+
+    #[tokio::test]
+    async fn google_slash_selectors_and_actions_reach_the_pipeline()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let scripted = (0..2)
+            .flat_map(|_| {
+                [
+                    MockResponse::Generate(crate::language_model::GenerateResult {
+                        content: vec![crate::language_model::Content::Text {
+                            text: "ok".into(),
+                            provider_metadata: Default::default(),
+                        }],
+                        usage: None,
+                        finish_reason: Some(crate::language_model::FinishReason::Stop),
+                        response_id: Some("response-fixture".into()),
+                        stop_details: None,
+                        provider_metadata: Default::default(),
+                    }),
+                    MockResponse::Stream(vec![
+                        crate::language_model::StreamPart::TextDelta { text: "ok".into() },
+                        crate::language_model::StreamPart::Finish {
+                            reason: crate::language_model::FinishReason::Stop,
+                        },
+                    ]),
+                ]
+            })
+            .collect();
+        let table = StaticRoutingTable::new();
+        table.insert(
+            "gpt-5.5",
+            vec![RoutingTarget {
+                provider_name: "fixture".into(),
+                service_id: "gpt-5.5".into(),
+                api_base: "https://fixture.invalid".into(),
+                api_key: String::new(),
+                api_protocol: ApiProtocol::ChatCompletions,
+                chat_token_limit_field: None,
+                chat_supports_store: None,
+                chat_supports_stream_options: None,
+                reasoning_effort: None,
+                account_label: None,
+                api_key_override: None,
+                api_base_override: None,
+                auth_scheme: AuthScheme::Bearer,
+                headers: Vec::new(),
+            }],
+        );
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(table))
+            .executor(Arc::new(CountingExecutor {
+                calls: calls.clone(),
+                inner: MockExecutor::new(scripted),
+            }));
+        let app = build_router(AppState {
+            language_model: Arc::new(builder.build()?),
+            mcp: None,
+            skip_auth: true,
+            metrics_renderer: None,
+            prompt_transforms: vec![Arc::new(RewriteModel("gpt-5.5"))],
+        });
+        for selector in ["bitrouter/coding", "bitrouter%2Fcoding"] {
+            for action in ["generateContent", "streamGenerateContent"] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(format!("/v1beta/models/{selector}:{action}"))
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(
+                                r#"{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}"#,
+                            ))?,
+                    )
+                    .await?;
+                assert_eq!(response.status(), axum::http::StatusCode::OK);
+                assert!(
+                    !to_bytes(response.into_body(), MAX_BODY_BYTES)
+                        .await?
+                        .is_empty()
+                );
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        for invalid in [
+            "bitrouter/coding:unknown",
+            "bitrouter/coding",
+            ":generateContent",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/v1beta/models/{invalid}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from("{}"))?,
+                )
+                .await?;
+            assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            4,
+            "invalid action must not execute upstream"
+        );
+        Ok(())
     }
 
     fn test_state_with_executor(executor: Arc<dyn Executor>) -> AppState {

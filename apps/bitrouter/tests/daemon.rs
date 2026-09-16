@@ -318,7 +318,7 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
     .await
     .unwrap();
     match route {
-        DaemonResponse::Route { chain } => {
+        DaemonResponse::Route { chain, .. } => {
             assert_eq!(chain.len(), 2);
             assert_eq!(chain[0].provider, "anthropic");
             assert_eq!(chain[1].provider, "openai");
@@ -606,7 +606,7 @@ providers:
     .await
     .unwrap();
     match route {
-        DaemonResponse::Route { chain } => {
+        DaemonResponse::Route { chain, .. } => {
             assert_eq!(chain.len(), 1, "anthropic should be gone after reload");
             assert_eq!(chain[0].provider, "openai");
         }

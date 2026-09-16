@@ -761,6 +761,7 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "futures-core",
+ "hex",
  "http",
  "httpdate",
  "pin-project-lite",

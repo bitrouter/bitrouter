@@ -558,6 +558,13 @@ fn restart_required_fields(
     if current.continuation != candidate.continuation {
         fields.insert("continuation".to_string());
     }
+    // Named router definitions are resolved once for a request and their
+    // public identity is persisted with settlement. The first release does
+    // not hot-swap that binding, so every reload entry point must leave the
+    // running definitions unchanged until the daemon restarts.
+    if current.routers != candidate.routers {
+        fields.insert("routers".to_string());
+    }
     if current.plugins != candidate.plugins {
         fields.insert("plugins".to_string());
     }
@@ -1222,15 +1229,22 @@ impl AppReloader {
     ) -> Result<PreparedReload, PreparationError> {
         self.wait_during_prepare().await;
         let (config, unclassified_fields) = self.prepare_candidate().await?;
-        if matches!(invocation, ReloadInvocation::Remote) {
-            let restart_required = restart_required_fields(
-                &self.startup_config,
-                &config,
-                unclassified_fields.as_ref(),
-            );
-            if !restart_required.is_empty() {
-                return Err(PreparationError::restart_required(restart_required));
-            }
+        let restart_required =
+            restart_required_fields(&self.startup_config, &config, unclassified_fields.as_ref());
+        let rejected_fields = if matches!(invocation, ReloadInvocation::Remote) {
+            restart_required
+        } else {
+            // Local IPC and SIGHUP retain their established reload behavior for
+            // every other field. Named routers are the deliberate exception:
+            // this release classifies their definitions as restart-only on all
+            // entry points, while legacy presets keep their existing reload.
+            restart_required
+                .into_iter()
+                .filter(|field| field == "routers")
+                .collect()
+        };
+        if !rejected_fields.is_empty() {
+            return Err(PreparationError::restart_required(rejected_fields));
         }
         let policy_table = self.prepare_policy_table(&config)?;
         let named_policy_runtime = match &self.policy_runtime {
@@ -2501,6 +2515,62 @@ presets:
         let candidate =
             config::parse("inherit_defaults: false\nupstream:\n  timeouts:\n    read_secs: 10\n")?;
         assert!(restart_required_fields(&current, &candidate, Some(&BTreeSet::new())).is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_reload_rejects_router_changes_before_mutating_the_live_table()
+    -> anyhow::Result<()> {
+        let (path, dir) = temp_config_path();
+        let config = |prompt: &str| {
+            format!(
+                "inherit_defaults: false\nrouters:\n  coding:\n    selection:\n      kind: model\n      model: demo/model\n    defaults:\n      system_prompt: {prompt}\n"
+            )
+        };
+        std::fs::write(&path, config("old"))?;
+        let mut initial = config::load(&path).await?;
+        resolve_reloadable_config(&mut initial).await;
+        let routing_table = Arc::new(ConfigRoutingTable::from_config(initial));
+        let reloader = AppReloader::new(
+            Arc::new(PolicyStore::new()),
+            routing_table.clone(),
+            Arc::new(HttpExecutor::new(HttpTimeouts::default())?),
+            ReloadSource::File(path.clone()),
+        );
+
+        std::fs::write(&path, config("new"))?;
+        if reloader.reload().await.is_ok() {
+            anyhow::bail!("router edits unexpectedly reloaded without a restart");
+        }
+        let running = routing_table.snapshot_config();
+        assert_eq!(
+            running
+                .routers
+                .get("coding")
+                .and_then(|router| router.defaults.system_prompt.as_deref()),
+            Some("old")
+        );
+        let state = reloader
+            .reload_state()
+            .ok_or_else(|| anyhow::anyhow!("coordinator state unavailable"))?;
+        assert_eq!(state.generation, 1);
+        assert_eq!(state.consistency, ReloadConsistency::Consistent);
+        assert!(
+            state
+                .last_outcome
+                .as_ref()
+                .is_some_and(|report| report.restart_required_fields == ["routers"])
+        );
+        assert!(state.last_outcome.as_ref().is_some_and(|report| {
+            report.participants.iter().any(|participant| {
+                participant.participant == ReloadParticipant::RoutingTable
+                    && participant
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.code == "restart_required")
+            })
+        }));
+        let _ = std::fs::remove_dir_all(dir);
         Ok(())
     }
 

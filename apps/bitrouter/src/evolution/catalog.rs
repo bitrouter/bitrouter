@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::config::{AccountStrategy, Config, ConfigRoutingTable, resolve_presets};
+use bitrouter_sdk::config::{AccountStrategy, Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::{
     ApiProtocol, PipelineContext, PipelineRequest, RoutingTable, RoutingTarget,
 };
@@ -23,7 +23,7 @@ pub(super) async fn request_compatible(
     route: &str,
     ctx: &PipelineContext,
 ) -> Result<bool> {
-    let resolution = resolve_presets(route, &config.presets, &config.variants)?;
+    let resolution = config.resolve_router(route)?;
     let mut preview = PipelineContext::new(PipelineRequest::new(
         route,
         ctx.caller().clone(),
@@ -100,9 +100,10 @@ pub(super) async fn block_digest(
     for rule in &definition.rules {
         ensure!(
             rule.selector.starts_with('@')
-                || rule.selector == "bitrouter/auto"
+                || (rule.selector.starts_with("bitrouter/")
+                    && config.resolve_router(&rule.selector).is_ok())
                 || config.models.contains_key(&rule.selector),
-            "an evolution matcher must name a configured preset or virtual route"
+            "an evolution matcher must name a configured router, preset, or virtual route"
         );
         for route in [&rule.baseline_route, &rule.challenger_route] {
             if !routes.contains_key(route) {
@@ -128,7 +129,7 @@ pub(super) async fn route_contract(
     policies: &PolicyRoutingSnapshot,
     route: &str,
 ) -> Result<Value> {
-    let resolution = resolve_presets(route, &config.presets, &config.variants)?;
+    let resolution = config.resolve_router(route)?;
     let mut models = BTreeMap::from([(resolution.clean_model.clone(), None)]);
     let mut policy_contract = Value::Null;
     if let Some(policy) = &resolution.policy {

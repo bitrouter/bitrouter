@@ -5,6 +5,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [`ROUTER_PRESET_MIGRATION_SPEC.md`](ROUTER_PRESET_MIGRATION_SPEC.md) — **design
+  proposal; not implemented.** First alpha batch replacing presets with directly
+  addressable routers, one default coding router using existing policy locks,
+  compatibility migration, diagnostics, six PR slices, and acceptance criteria.
 - [`CLI.md`](CLI.md) — full command reference, flags, and config resolution.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for

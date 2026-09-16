@@ -209,6 +209,61 @@ async fn recorder_correlates_normalized_acp_identity_without_prompt_content() ->
 }
 
 #[tokio::test]
+async fn recorder_persists_router_identity_and_leaves_direct_requests_unknown() -> anyhow::Result<()>
+{
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store, pricing());
+    let mut routed = ctx("router", 3, 2);
+    routed.request_id = "routed-request".to_string();
+    routed.emit(
+        bitrouter_sdk::language_model::routing::RouterRequestIdentity {
+            router_id: "coding".to_string(),
+            original_selector: "bitrouter/coding".to_string(),
+            binding_digest: "router-v1:sha256:abc".to_string(),
+        },
+    );
+    recorder.record(&mut routed).await?;
+
+    let mut direct = ctx("direct", 3, 2);
+    direct.request_id = "direct-request".to_string();
+    recorder.record(&mut direct).await?;
+
+    let routed = pool
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT router_id, binding_digest, original_selector FROM requests WHERE request_id = 'routed-request'".to_owned(),
+        ))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("routed request row is missing"))?;
+    assert_eq!(routed.try_get::<String>("", "router_id")?, "coding");
+    assert_eq!(
+        routed.try_get::<String>("", "binding_digest")?,
+        "router-v1:sha256:abc"
+    );
+    assert_eq!(
+        routed.try_get::<String>("", "original_selector")?,
+        "bitrouter/coding"
+    );
+
+    let direct = pool
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT router_id, binding_digest, original_selector FROM requests WHERE request_id = 'direct-request'".to_owned(),
+        ))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("direct request row is missing"))?;
+    for column in ["router_id", "binding_digest", "original_selector"] {
+        assert_eq!(
+            direct.try_get::<Option<String>>("", column)?,
+            None,
+            "{column}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn recorder_emits_authoritative_content_free_settlement_after_persisting() -> Result<()> {
     let pool = pool().await;
     let store = MeteringStore::new(pool);

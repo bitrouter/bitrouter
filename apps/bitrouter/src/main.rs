@@ -745,6 +745,21 @@ enum ContextAction {
 
 #[derive(Subcommand)]
 enum ConfigAction {
+    /// Preview a source-preserving migration from presets to named routers.
+    MigrateRouters {
+        /// Source bitrouter.yaml; standard local config resolution applies.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Candidate output path for preview, or reviewed input path for apply.
+        #[arg(long)]
+        candidate: Option<PathBuf>,
+        /// Apply the reviewed candidate and retain a backup of the source.
+        #[arg(long, requires_all = ["candidate", "source_digest"])]
+        apply: bool,
+        /// Exact source digest returned by the preview; refuses stale edits.
+        #[arg(long, requires = "apply")]
+        source_digest: Option<String>,
+    },
     /// Validate a config file: structure, provider `derives` resolution, and
     /// upstream-URL (SSRF) safety. Exits non-zero on an invalid config — safe
     /// to run in CI. Unset `${VAR}` references are substituted with a
@@ -1139,14 +1154,18 @@ enum PolicyAction {
         #[arg(long, default_value = "./policies")]
         dir: PathBuf,
     },
-    /// Create a routing policy lock and bind it to a preset.
+    /// Create a routing policy lock and bind it to a router.
     Init {
         /// Policy name written under `policies:`.
         name: String,
-        /// Preset users select as `@preset` or `@preset:variant`.
-        #[arg(long)]
-        preset: String,
-        /// Strong base model. Inferred from an existing preset when omitted.
+        /// Router users select as `bitrouter/<id>`. Defaults to `coding` when
+        /// neither binding flag is supplied.
+        #[arg(long, conflicts_with = "preset")]
+        router: Option<String>,
+        /// Legacy preset binding kept for compatibility.
+        #[arg(long, conflicts_with = "router")]
+        preset: Option<String>,
+        /// Strong base model. Inferred from an existing router or preset when omitted.
         #[arg(long)]
         strong: Option<String>,
         /// Exact reasoning effort owned by the strong target.
@@ -2062,15 +2081,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             };
             bitrouter::onboarding::run(flags, output).await
         }
-        Command::Config { action } => {
-            let report = config_cmd(action).await?;
-            output.emit(&report)?;
-            if report.valid {
-                Ok(())
-            } else {
-                std::process::exit(1)
-            }
-        }
+        Command::Config { action } => config_cmd(action, output).await,
         Command::Key { action } => {
             output.emit(&key(action).await?)?;
             Ok(())
@@ -2440,8 +2451,26 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
 // ===== `bro config …` (config tooling) =====
 
-async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
+async fn config_cmd(action: ConfigAction, output: &Output) -> Result<()> {
     match action {
+        ConfigAction::MigrateRouters {
+            config,
+            candidate,
+            apply,
+            source_digest,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let path = require_policy_config_path(&source)?;
+            let report = bitrouter::router_migration::migrate(
+                path,
+                candidate.as_deref(),
+                apply,
+                source_digest.as_deref(),
+            )
+            .await?;
+            output.emit(&report)?;
+            Ok(())
+        }
         ConfigAction::Validate { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             // A `chat.commands` name that shadows one of BitRouter's own is a
@@ -2449,7 +2478,13 @@ async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
             // told — not on the first `bro chat` of the day.
             let loaded = bitrouter::paths::load_config(&source).await?;
             bitrouter::actions::session::prompt_commands(&loaded.chat)?;
-            validate_config(&source).await
+            let report = validate_config(&source).await?;
+            output.emit(&report)?;
+            if report.valid {
+                Ok(())
+            } else {
+                std::process::exit(1)
+            }
         }
     }
 }
@@ -2861,6 +2896,7 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
                     .map(|name| UnsetVar { unset_env: name })
                     .collect(),
             )
+            .with_routers(cfg.routers.len())
             // Reported, never fatal: an unread `plugins.<id>` block is a
             // misconfiguration rather than a malformed config, and this
             // command is CI-gating. The daemon warns about the same set on
@@ -4391,6 +4427,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
         }
         PolicyAction::Init {
             name,
+            router,
             preset,
             strong,
             strong_effort,
@@ -4419,16 +4456,47 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                 economy_effort,
             )
             .await?;
-            let update = bitrouter::policy_lock::initialize_files_with_efforts(
-                config_path,
-                &name,
-                &preset,
-                strong.as_deref(),
-                strong_effort,
-                &economy,
-                economy_effort,
-            )
-            .await?;
+            let update = match (router.as_deref(), preset.as_deref()) {
+                (Some(router), None) => {
+                    bitrouter::policy_lock::initialize_router_files_with_efforts(
+                        config_path,
+                        &name,
+                        router,
+                        strong.as_deref(),
+                        strong_effort,
+                        &economy,
+                        economy_effort,
+                    )
+                    .await?
+                }
+                (None, Some(preset)) => {
+                    bitrouter::policy_lock::initialize_files_with_efforts(
+                        config_path,
+                        &name,
+                        preset,
+                        strong.as_deref(),
+                        strong_effort,
+                        &economy,
+                        economy_effort,
+                    )
+                    .await?
+                }
+                (None, None) => {
+                    bitrouter::policy_lock::initialize_router_files_with_efforts(
+                        config_path,
+                        &name,
+                        "coding",
+                        strong.as_deref(),
+                        strong_effort,
+                        &economy,
+                        economy_effort,
+                    )
+                    .await?
+                }
+                (Some(_), Some(_)) => {
+                    anyhow::bail!("--router and --preset are mutually exclusive")
+                }
+            };
             output.emit(
                 &routing_policy_report(config_path, "init", true, update.changes, None).await?,
             )?;
@@ -5438,14 +5506,8 @@ async fn routing_policy_report(
         None => None,
     };
     let bindings = cfg
-        .presets
-        .iter()
-        .filter_map(|(name, preset)| {
-            preset
-                .policy
-                .as_ref()
-                .map(|policy| (name.clone(), policy.clone()))
-        })
+        .router_policy_bindings()
+        .map(|(name, policy, _)| (name.to_owned(), policy.to_owned()))
         .collect();
     let path = loaded
         .as_ref()
@@ -6856,6 +6918,8 @@ mod tests {
                         listen: "127.0.0.1:4356".to_string(),
                         models: 0,
                         providers: Vec::new(),
+                        running_routers: None,
+                        router_restart_required: None,
                     }),
                 ),
                 (RestartCommandKind::Stop, Ok(DaemonResponse::Ok)),
@@ -6891,6 +6955,8 @@ mod tests {
                         listen: "127.0.0.1:4356".to_string(),
                         models: 0,
                         providers: Vec::new(),
+                        running_routers: None,
+                        router_restart_required: None,
                     }),
                 ),
                 (RestartCommandKind::Stop, Ok(DaemonResponse::Ok)),
@@ -6917,6 +6983,8 @@ mod tests {
                     listen: "127.0.0.1:4356".to_string(),
                     models: 0,
                     providers: Vec::new(),
+                    running_routers: None,
+                    router_restart_required: None,
                 }),
             ),
             (
@@ -8160,7 +8228,7 @@ mod tests {
             "policy",
             "init",
             "terminal-bench",
-            "--preset",
+            "--router",
             "coding",
             "--strong",
             "openai-codex:gpt-5.6-sol",
@@ -8179,6 +8247,7 @@ mod tests {
                 action:
                     PolicyAction::Init {
                         name,
+                        router,
                         preset,
                         strong,
                         strong_effort,
@@ -8188,7 +8257,8 @@ mod tests {
                     },
             }) => {
                 assert_eq!(name, "terminal-bench");
-                assert_eq!(preset, "coding");
+                assert_eq!(router.as_deref(), Some("coding"));
+                assert_eq!(preset, None);
                 assert_eq!(strong.as_deref(), Some("openai-codex:gpt-5.6-sol"));
                 assert_eq!(
                     strong_effort,
@@ -8203,6 +8273,71 @@ mod tests {
             }
             _ => panic!("expected policy init"),
         }
+
+        let default_coding = Cli::try_parse_from([
+            "bitrouter",
+            "policy",
+            "init",
+            "coding",
+            "--strong",
+            "openai-codex:gpt-5.6-sol",
+            "--economy",
+            "openai-codex:gpt-5.6-luna",
+        ]);
+        assert!(matches!(
+            default_coding,
+            Ok(Cli {
+                command: Some(Command::Policy {
+                    action: PolicyAction::Init {
+                        router: None,
+                        preset: None,
+                        ..
+                    }
+                }),
+                ..
+            })
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "policy",
+                "init",
+                "coding",
+                "--router",
+                "coding",
+                "--preset",
+                "coding",
+                "--economy",
+                "openai-codex:gpt-5.6-luna",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "policy",
+                "init",
+                "coding",
+                "--strong",
+                "openai-codex:gpt-5.6-sol",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "policy",
+                "init",
+                "auto",
+                "--preset",
+                "auto",
+                "--strong",
+                "openai-codex:gpt-5.6-sol",
+                "--economy",
+                "openai-codex:gpt-5.6-luna",
+            ])
+            .is_ok()
+        );
 
         let evolve = Cli::try_parse_from(["bitrouter", "policy", "evolve", "--apply"])
             .expect("parse evolve");

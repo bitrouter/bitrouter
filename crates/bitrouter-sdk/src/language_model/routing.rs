@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
+use crate::event::PipelineEvent;
 use crate::language_model::context::PipelineContext;
 use crate::language_model::hooks::FallbackDecision;
 use crate::language_model::stream::UsagePricing;
@@ -77,26 +78,52 @@ pub struct ModelInfo {
     pub providers: Vec<String>,
 }
 
+/// Stable identity of the named router selected for one request.
+///
+/// This value is frozen when Stage 0 resolves the raw selector, emitted as a
+/// typed pipeline event, and preserved through policy selection and provider
+/// fallback. `binding_digest` identifies the redaction-safe router binding;
+/// any policy artifact digest remains a separate app-owned identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RouterRequestIdentity {
+    /// Canonical router id, including the name normalized from a legacy preset.
+    pub router_id: String,
+    /// Exact inbound model selector before ingress transforms, such as
+    /// `bitrouter/coding` or `@coding`.
+    pub original_selector: String,
+    /// Versioned, redaction-safe effective binding digest.
+    pub binding_digest: String,
+}
+
+impl PipelineEvent for RouterRequestIdentity {
+    fn event_name(&self) -> &'static str {
+        "router.resolved"
+    }
+}
+
 /// One-time resolution of the request's raw model selector. Config-backed
-/// tables use this to peel `@preset` / `:variant` before app-level model
-/// selectors run, preserving the preset's prompt defaults and routing prefs
-/// even when a policy chooses a different effective model.
+/// tables use this to resolve a named router or legacy `@preset` / `:variant`
+/// compatibility address before app-level model selectors run, preserving
+/// request defaults and routing preferences even when a policy chooses a
+/// different effective model.
 #[derive(Debug, Clone)]
 pub struct ModelResolution {
-    /// Model after preset substitution and variant removal.
+    /// Model after router/preset selection and variant removal.
     pub clean_model: String,
-    /// Routing preferences contributed by the preset and variant.
+    /// Routing preferences contributed by the named definition and variant.
     pub prefs: RoutingPrefs,
-    /// Prompt defaults contributed by the preset.
+    /// Prompt defaults contributed by the named definition.
     pub overrides: PromptOverrides,
-    /// Optional app-owned policy name bound to the preset.
+    /// Optional app-owned policy name bound to the named definition.
     pub policy: Option<String>,
     /// Optional known preset/model variant selected in Stage 0.
     pub variant: Option<String>,
+    /// Named router identity, absent for bare and provider-pinned model routes.
+    pub router: Option<RouterRequestIdentity>,
 }
 
 impl ModelResolution {
-    /// Passthrough resolution used by routing tables without preset support.
+    /// Passthrough resolution used by routing tables without named routers.
     pub fn passthrough(model: &str) -> Self {
         Self {
             clean_model: model.to_string(),
@@ -104,6 +131,7 @@ impl ModelResolution {
             overrides: PromptOverrides::default(),
             policy: None,
             variant: None,
+            router: None,
         }
     }
 }
@@ -130,7 +158,8 @@ pub trait ModelSelector: Send + Sync {
 #[async_trait]
 pub trait RoutingTable: Send + Sync {
     /// Resolve a raw model selector once before app-level model selection.
-    /// Tables without presets return a passthrough resolution.
+    /// Tables without named routers or legacy presets return a passthrough
+    /// resolution.
     async fn resolve_model(&self, model: &str) -> Result<ModelResolution> {
         Ok(ModelResolution::passthrough(model))
     }
@@ -145,9 +174,9 @@ pub trait RoutingTable: Send + Sync {
 
     /// Resolve a model that has already passed through [`Self::resolve_model`].
     ///
-    /// Preset-aware tables override this to skip their Stage-0 parsing. The
-    /// default preserves the behavior of tables that do not distinguish raw
-    /// selectors from effective model ids.
+    /// Named-router-aware tables override this to skip their Stage-0 parsing.
+    /// The default preserves the behavior of tables that do not distinguish
+    /// raw selectors from effective model ids.
     async fn route_resolved(
         &self,
         model: &str,

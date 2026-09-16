@@ -98,6 +98,12 @@ pub struct RequestMetric {
     pub launch_id: Option<String>,
     /// Normalized ACP/native identity, absent for ordinary model API traffic.
     pub session_identity: Option<MeteringSessionIdentity>,
+    /// Named router selected during Stage 0, when one handled the request.
+    pub router_id: Option<String>,
+    /// Versioned digest of the non-secret router binding used by the request.
+    pub binding_digest: Option<String>,
+    /// Caller selector captured before ingress transforms.
+    pub original_selector: Option<String>,
     /// Resolved model id.
     pub model_id: String,
     /// Resolved provider id.

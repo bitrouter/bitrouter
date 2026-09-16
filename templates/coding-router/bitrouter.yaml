@@ -1,0 +1,8 @@
+# Add credentials for the providers you choose, or export their documented
+# environment variables before initialization. BitRouter does not select a
+# provider or model automatically.
+inherit_defaults: true
+
+policy:
+  path: ./policy-lock.yaml
+  mode: frozen

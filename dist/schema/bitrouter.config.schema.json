@@ -944,6 +944,12 @@
         },
         "routing": {
           "$ref": "#/$defs/RoutingConfig",
+          "default": {
+            "ignore": [],
+            "only": [],
+            "require_tags": [],
+            "sort": null
+          },
           "description": "Routing knobs fed into the cascade."
         },
         "system_prompt": {
@@ -1488,6 +1494,156 @@
       },
       "type": "object"
     },
+    "RouterConfig": {
+      "additionalProperties": false,
+      "description": "One named router definition.",
+      "properties": {
+        "defaults": {
+          "$ref": "#/$defs/RouterDefaults",
+          "default": {
+            "params": {},
+            "system_prompt": null
+          },
+          "description": "Request values filled only when the caller omitted them."
+        },
+        "selection": {
+          "$ref": "#/$defs/RouterSelection",
+          "description": "The model or policy selection performed by this router."
+        }
+      },
+      "required": [
+        "selection"
+      ],
+      "type": "object"
+    },
+    "RouterDefaults": {
+      "additionalProperties": false,
+      "description": "Defaults supplied by a named router.",
+      "properties": {
+        "params": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "Generation parameters shallow-merged behind explicit request values.",
+          "type": "object"
+        },
+        "system_prompt": {
+          "default": null,
+          "description": "System prompt used only when the request did not provide one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RouterRoutingConfig": {
+      "additionalProperties": false,
+      "description": "Provider routing preferences accepted by a named router.",
+      "properties": {
+        "ignore": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "only": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "require_tags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SortOrder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "RouterSelection": {
+      "description": "Model selection performed by a named router.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Resolve one existing model selector.",
+          "properties": {
+            "kind": {
+              "const": "model",
+              "type": "string"
+            },
+            "model": {
+              "description": "Existing physical or virtual model selector.",
+              "type": "string"
+            },
+            "routing": {
+              "$ref": "#/$defs/RouterRoutingConfig",
+              "default": {
+                "ignore": [],
+                "only": [],
+                "require_tags": [],
+                "sort": null
+              },
+              "description": "Provider preferences applied by the existing cascade resolver."
+            }
+          },
+          "required": [
+            "kind",
+            "model"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Let one existing policy choose the effective model.",
+          "properties": {
+            "base_model": {
+              "description": "Exact base-model input retained by the current policy runtime.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "policy",
+              "type": "string"
+            },
+            "policy": {
+              "description": "Policy name in `policy-lock.yaml`.",
+              "type": "string"
+            },
+            "routing": {
+              "$ref": "#/$defs/RouterRoutingConfig",
+              "default": {
+                "ignore": [],
+                "only": [],
+                "require_tags": [],
+                "sort": null
+              },
+              "description": "Provider preferences applied after the policy selects a model."
+            }
+          },
+          "required": [
+            "kind",
+            "policy",
+            "base_model"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RoutingConfig": {
       "description": "Routing knobs shared by presets and variants.",
       "properties": {
@@ -1749,6 +1905,12 @@
       "properties": {
         "routing": {
           "$ref": "#/$defs/RoutingConfig",
+          "default": {
+            "ignore": [],
+            "only": [],
+            "require_tags": [],
+            "sort": null
+          },
           "description": "Routing knobs fed into the cascade."
         }
       },
@@ -2236,6 +2398,14 @@
     "registry": {
       "$ref": "#/$defs/RegistryConfig",
       "description": "Public registry integration: whether to fetch + merge the registry's\nBYOK providers, where to fetch it from, and the provider-class priority\nladder used to order the auto-cascade."
+    },
+    "routers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/RouterConfig"
+      },
+      "default": {},
+      "description": "Named request routers, addressed as `bitrouter/<id>`.",
+      "type": "object"
     },
     "server": {
       "$ref": "#/$defs/ServerConfig",

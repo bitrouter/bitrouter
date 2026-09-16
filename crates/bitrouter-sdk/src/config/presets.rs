@@ -33,9 +33,10 @@
 
 use std::collections::HashMap;
 
+use crate::config::router::{EffectiveRouterDefinition, RouterConfig};
 use crate::config::{PresetConfig, RoutingConfig, VariantConfig};
 use crate::error::{BitrouterError, Result};
-use crate::language_model::routing::RoutingPrefs;
+use crate::language_model::routing::{RouterRequestIdentity, RoutingPrefs};
 
 // `PromptOverrides` is defined in `language_model::routing` because it is the
 // return type of [`crate::language_model::RoutingTable::preset_overrides`],
@@ -116,6 +117,23 @@ pub struct PresetResolution {
     /// Known variant selected by the caller, preserved for app-owned policy
     /// selection independently of routing preferences.
     pub variant: Option<String>,
+    /// Stable router identity for canonical and legacy named addresses.
+    pub router: Option<RouterRequestIdentity>,
+}
+
+#[derive(Clone, Copy)]
+enum LocatedRouter<'a> {
+    Configured(&'a RouterConfig),
+    Legacy(&'a PresetConfig),
+}
+
+impl<'a> LocatedRouter<'a> {
+    fn effective(self) -> EffectiveRouterDefinition<'a> {
+        match self {
+            Self::Configured(router) => EffectiveRouterDefinition::from_router(router),
+            Self::Legacy(preset) => EffectiveRouterDefinition::from_legacy_preset(preset),
+        }
+    }
 }
 
 fn apply_routing(prefs: &mut RoutingPrefs, routing: &RoutingConfig) {
@@ -146,6 +164,15 @@ pub fn resolve_presets(
     presets: &HashMap<String, PresetConfig>,
     variants: &HashMap<String, VariantConfig>,
 ) -> Result<PresetResolution> {
+    resolve_routers(raw_model, &HashMap::new(), presets, variants)
+}
+
+pub(super) fn resolve_routers(
+    raw_model: &str,
+    routers: &HashMap<String, RouterConfig>,
+    presets: &HashMap<String, PresetConfig>,
+    variants: &HashMap<String, VariantConfig>,
+) -> Result<PresetResolution> {
     // Reject a reserved colon spelling before variant parsing. Otherwise a
     // configured variant with the same name (for example `auto`) could consume
     // the suffix and disguise `bitrouter:auto` as the bare model `bitrouter`.
@@ -154,6 +181,19 @@ pub fn resolve_presets(
     {
         return Err(BitrouterError::bad_request(format!(
             "'{raw_model}' is not a provider route; use '{RESERVED_NAMESPACE}{slug}'"
+        )));
+    }
+
+    // Canonical named routers do not accept variants in this batch. `auto`
+    // keeps its existing compatibility behavior, while `@name:variant`
+    // remains available for migrated callers.
+    if let Some(slug) = raw_model.strip_prefix(RESERVED_NAMESPACE)
+        && let Some((router_id, _)) = slug.rsplit_once(':')
+        && router_id != "auto"
+        && routers.contains_key(router_id)
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "router '{RESERVED_NAMESPACE}{router_id}' does not support ':variant'; use '@{router_id}:variant' during the compatibility window"
         )));
     }
 
@@ -168,10 +208,16 @@ pub fn resolve_presets(
     //    `bitrouter:` colon form is a near-miss worth catching here — it would
     //    otherwise reach Strategy 1 and be dispatched to the BitRouter Cloud
     //    provider as an upstream model id it does not serve.
-    let (preset_name, base_from_head, reserved) = match head.strip_prefix('@') {
+    let (router_name, base_from_head, canonical) = match head.strip_prefix('@') {
         Some(name) => (Some(name), None, false),
         None => match head.strip_prefix(RESERVED_NAMESPACE) {
-            Some(slug) => (Some(reserved_preset(slug)?), None, true),
+            Some("fusion") => (Some(reserved_preset("fusion")?), None, true),
+            Some(slug) if slug == "auto" || routers.contains_key(slug) => (Some(slug), None, true),
+            Some(slug) => {
+                return Err(BitrouterError::bad_request(format!(
+                    "unknown BitRouter model '{RESERVED_NAMESPACE}{slug}'"
+                )));
+            }
             None => match head.strip_prefix("bitrouter:") {
                 Some(slug) if reserved_slug(slug).is_some() => {
                     return Err(BitrouterError::bad_request(format!(
@@ -186,60 +232,80 @@ pub fn resolve_presets(
     // 3. An unknown preset is a hard error: 400. A reserved slug resolves to a
     //    preset the operator has to have configured, so its miss reports the
     //    missing binding rather than an unknown name the caller never typed.
-    let preset: Option<&PresetConfig> = match preset_name {
+    let router: Option<EffectiveRouterDefinition<'_>> = match router_name {
         Some(name) => {
-            let preset = presets.get(name).ok_or_else(|| {
-                if reserved {
-                    missing_reserved_binding(name)
-                } else {
-                    BitrouterError::bad_request(format!("unknown preset '@{name}'"))
-                }
-            })?;
-            if reserved && preset.policy.is_none() {
+            let located = routers
+                .get(name)
+                .map(LocatedRouter::Configured)
+                .or_else(|| presets.get(name).map(LocatedRouter::Legacy))
+                .ok_or_else(|| {
+                    if canonical && name == "auto" {
+                        missing_reserved_binding(name)
+                    } else {
+                        BitrouterError::bad_request(format!("unknown preset '@{name}'"))
+                    }
+                })?;
+            let router = located.effective();
+            if canonical && name == "auto" && router.policy().is_none() {
                 return Err(missing_reserved_binding(name));
             }
-            Some(preset)
+            if canonical && !routers.contains_key(name) && name != "auto" {
+                return Err(BitrouterError::bad_request(format!(
+                    "unknown BitRouter model '{RESERVED_NAMESPACE}{name}'"
+                )));
+            }
+            Some(router)
         }
         None => None,
     };
 
-    // 4. The clean model: a preset's `model:` wins, else the literal base.
-    let clean_model = preset
-        .and_then(|p| p.model.clone())
+    let router_identity = match (router_name, router) {
+        (Some(name), Some(router)) => Some(RouterRequestIdentity {
+            router_id: name.to_owned(),
+            original_selector: raw_model.to_owned(),
+            binding_digest: router.binding_digest(name)?,
+        }),
+        _ => None,
+    };
+
+    // 4. The clean model: a router's model/base_model wins, else the literal base.
+    let clean_model = router
+        .as_ref()
+        .and_then(EffectiveRouterDefinition::base_model)
+        .map(ToOwned::to_owned)
         .or_else(|| base_from_head.map(|s| s.to_string()))
         .ok_or_else(|| {
             BitrouterError::bad_request(format!(
                 "preset '{}' defines no model: and the request gave none",
-                preset_name.unwrap_or_default()
+                router_name.unwrap_or_default()
             ))
         })?;
     if clean_model.is_empty() {
         return Err(BitrouterError::bad_request("empty model name"));
     }
 
-    // 5. Routing prefs: preset first, then variant refines.
+    // 5. Routing prefs: router first, then a legacy-address variant refines.
     let mut prefs = RoutingPrefs::default();
-    if let Some(p) = preset {
-        apply_routing(&mut prefs, &p.routing);
+    if let Some(router) = &router {
+        apply_routing(&mut prefs, router.routing);
     }
     if let Some(name) = variant_name {
         apply_routing(&mut prefs, &variants[name].routing);
     }
 
-    // 6. Prompt overrides — preset only.
-    let overrides = preset
-        .map(|p| PromptOverrides {
-            system_prompt: p.system_prompt.clone(),
-            params: p.params.clone(),
-        })
+    // 6. Prompt overrides — named definitions only.
+    let overrides = router
+        .as_ref()
+        .map(|router| router.defaults.to_prompt_overrides())
         .unwrap_or_default();
 
     Ok(PresetResolution {
         clean_model,
         prefs,
         overrides,
-        policy: preset.and_then(|p| p.policy.clone()),
+        policy: router.and_then(|router| router.policy().map(ToOwned::to_owned)),
         variant: variant_name.map(ToString::to_string),
+        router: router_identity,
     })
 }
 
@@ -247,6 +313,7 @@ pub fn resolve_presets(
 mod tests {
     use super::*;
     use crate::config::RoutingConfig;
+    use crate::config::router::{RouterDefaults, RouterSelection};
     use crate::language_model::routing::SortOrder;
 
     fn presets() -> HashMap<String, PresetConfig> {
@@ -291,6 +358,39 @@ mod tests {
         m
     }
 
+    fn routers() -> HashMap<String, RouterConfig> {
+        HashMap::from([
+            (
+                "project".to_string(),
+                RouterConfig {
+                    selection: RouterSelection::Model {
+                        model: "gpt-5".into(),
+                        routing: RoutingConfig {
+                            sort: Some(SortOrder::Latency),
+                            require_tags: vec!["paid".into()],
+                            ..RoutingConfig::default()
+                        },
+                    },
+                    defaults: RouterDefaults {
+                        system_prompt: Some("Be exact.".into()),
+                        params: serde_json::Map::new(),
+                    },
+                },
+            ),
+            (
+                "auto".to_string(),
+                RouterConfig {
+                    selection: RouterSelection::Policy {
+                        policy: "auto".into(),
+                        base_model: "openai-codex:gpt-5.6-sol".into(),
+                        routing: RoutingConfig::default(),
+                    },
+                    defaults: RouterDefaults::default(),
+                },
+            ),
+        ])
+    }
+
     #[test]
     fn bare_model_passes_through() {
         let r = resolve_presets("gpt-5", &presets(), &variants()).unwrap();
@@ -300,8 +400,8 @@ mod tests {
     }
 
     #[test]
-    fn preset_supplies_model_and_prefs_and_overrides() {
-        let r = resolve_presets("@careful", &presets(), &variants()).unwrap();
+    fn preset_supplies_model_and_prefs_and_overrides() -> Result<()> {
+        let r = resolve_presets("@careful", &presets(), &variants())?;
         assert_eq!(r.clean_model, "gpt-5");
         assert_eq!(r.prefs.sort, SortOrder::Latency);
         assert_eq!(r.prefs.require_tags, vec!["paid"]);
@@ -309,6 +409,84 @@ mod tests {
             r.overrides.system_prompt.as_deref(),
             Some("Reason carefully.")
         );
+        let identity = r
+            .router
+            .as_ref()
+            .ok_or_else(|| BitrouterError::internal("legacy preset identity was not recorded"))?;
+        assert_eq!(identity.router_id, "careful");
+        assert_eq!(identity.original_selector, "@careful");
+        assert!(identity.binding_digest.starts_with("router-v1:sha256:"));
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_router_resolves_without_a_same_named_preset() -> Result<()> {
+        let resolved = resolve_routers("bitrouter/project", &routers(), &presets(), &variants())?;
+        assert_eq!(resolved.clean_model, "gpt-5");
+        assert_eq!(resolved.prefs.sort, SortOrder::Latency);
+        assert_eq!(resolved.prefs.require_tags, vec!["paid"]);
+        assert_eq!(
+            resolved.overrides.system_prompt.as_deref(),
+            Some("Be exact.")
+        );
+        let identity = resolved
+            .router
+            .ok_or_else(|| BitrouterError::internal("router identity was not recorded"))?;
+        assert_eq!(identity.router_id, "project");
+        assert_eq!(identity.original_selector, "bitrouter/project");
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_router_address_keeps_known_variant_compatibility() -> Result<()> {
+        let resolved = resolve_routers("@project:free", &routers(), &presets(), &variants())?;
+        assert_eq!(resolved.clean_model, "gpt-5");
+        assert_eq!(resolved.variant.as_deref(), Some("free"));
+        assert_eq!(resolved.prefs.require_tags, vec!["paid", "free"]);
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_router_rejects_variant_suffixes() -> Result<()> {
+        for selector in ["bitrouter/project:free", "bitrouter/project:unknown"] {
+            let error = resolve_routers(selector, &routers(), &presets(), &variants())
+                .err()
+                .ok_or_else(|| BitrouterError::internal("canonical router variant was accepted"))?;
+            assert!(error.to_string().contains("does not support ':variant'"));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_auto_keeps_policy_and_variant_compatibility() -> Result<()> {
+        let resolved = resolve_routers("bitrouter/auto:cost", &routers(), &presets(), &variants())?;
+        assert_eq!(resolved.clean_model, "openai-codex:gpt-5.6-sol");
+        assert_eq!(resolved.policy.as_deref(), Some("auto"));
+        assert_eq!(resolved.variant.as_deref(), Some("cost"));
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_auto_preserves_an_explicit_custom_policy_binding() -> Result<()> {
+        let mut configured = routers();
+        configured.insert(
+            "auto".into(),
+            RouterConfig {
+                selection: RouterSelection::Policy {
+                    policy: "custom-policy".into(),
+                    base_model: "vendor:base".into(),
+                    routing: RoutingConfig::default(),
+                },
+                defaults: RouterDefaults::default(),
+            },
+        );
+
+        for selector in ["bitrouter/auto", "bitrouter/auto:cost"] {
+            let resolved = resolve_routers(selector, &configured, &presets(), &variants())?;
+            assert_eq!(resolved.clean_model, "vendor:base");
+            assert_eq!(resolved.policy.as_deref(), Some("custom-policy"));
+        }
+        Ok(())
     }
 
     #[test]

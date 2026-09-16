@@ -22,6 +22,7 @@ exclude = ["public-api-deps.txt", "public-api.pins"]
 async-trait.workspace = true
 serde.workspace = true
 sha2.workspace = true
+hex = { workspace = true, optional = true }
 serde_json.workspace = true
 thiserror.workspace = true
 futures.workspace = true
@@ -80,7 +81,7 @@ default = []
 # axum HTTP server + SSE handlers + admin endpoints.
 server = ["dep:axum", "dep:tower", "tokio/signal"]
 # yaml config loading (serde-saphyr + tokio::fs)
-config_file = ["dep:serde-saphyr", "tokio/fs"]
+config_file = ["dep:serde-saphyr", "dep:hex", "tokio/fs"]
 # rmcp-backed `RmcpExecutor` + `ConfigMcpRoutingTable` for the `mcp`
 # pure-routing pipeline. Without this feature the SDK still exposes
 # `mcp::Pipeline`, hook traits, and the `McpTransport` enum, so a consumer

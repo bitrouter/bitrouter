@@ -53,8 +53,8 @@ use crate::output::human::{Health, Human, Table};
 
 /// Column headers for the request table, in the order [`RequestView::cells`]
 /// emits.
-const HEADERS: [&str; 8] = [
-    "time", "model", "provider", "in", "out", "cost", "latency", "status",
+const HEADERS: [&str; 9] = [
+    "time", "router", "model", "provider", "in", "out", "cost", "latency", "status",
 ];
 
 /// What the report is looking at.
@@ -95,6 +95,15 @@ pub struct RequestView {
     pub request_id: String,
     /// RFC3339 settle timestamp.
     pub created_at: String,
+    /// Named router selected during Stage 0, or `null` for direct and legacy rows.
+    #[serde(default)]
+    pub router_id: Option<String>,
+    /// Versioned digest of the non-secret router binding, or `null` when unknown.
+    #[serde(default)]
+    pub binding_digest: Option<String>,
+    /// Caller selector captured before ingress transforms, or `null` when unknown.
+    #[serde(default)]
+    pub original_selector: Option<String>,
     /// Model the router resolved to.
     pub model: String,
     /// Provider that actually served the request.
@@ -131,6 +140,9 @@ impl From<RequestRow> for RequestView {
         Self {
             request_id: row.request_id,
             created_at: row.created_at,
+            router_id: row.router_id,
+            binding_digest: row.binding_digest,
+            original_selector: row.original_selector,
             model: row.model_id,
             provider: row.provider_id,
             prompt_tokens: row.prompt_tokens,
@@ -148,9 +160,10 @@ impl From<RequestRow> for RequestView {
 
 impl RequestView {
     /// The row as the human table's cells, in `HEADERS` order.
-    pub fn display_cells(&self) -> [String; 8] {
+    pub fn display_cells(&self) -> [String; 9] {
         [
             clock(&self.created_at),
+            self.router_id.clone().unwrap_or_else(|| "—".to_string()),
             self.model.clone(),
             self.provider.clone(),
             tokens(self.prompt_tokens),
@@ -162,7 +175,7 @@ impl RequestView {
     }
 
     #[cfg(test)]
-    fn cells(&self) -> [String; 8] {
+    fn cells(&self) -> [String; 9] {
         self.display_cells()
     }
 }
@@ -640,6 +653,9 @@ mod tests {
         RequestRow {
             request_id: "r1".into(),
             created_at: "2026-08-10T12:00:00Z".into(),
+            router_id: None,
+            binding_digest: None,
+            original_selector: None,
             model_id: "gpt-5".into(),
             provider_id: "openai".into(),
             prompt_tokens: 12_431,
@@ -711,13 +727,14 @@ mod tests {
     #[test]
     fn a_row_renders_every_column_the_table_promises() {
         let cells = RequestView::from(row()).cells();
-        assert_eq!(cells[1], "gpt-5");
-        assert_eq!(cells[2], "openai");
-        assert_eq!(cells[3], "12.4k");
-        assert_eq!(cells[4], "891");
-        assert_eq!(cells[5], "$0.04");
-        assert_eq!(cells[6], "1.8s");
-        assert_eq!(cells[7], "ok");
+        assert_eq!(cells[1], "—");
+        assert_eq!(cells[2], "gpt-5");
+        assert_eq!(cells[3], "openai");
+        assert_eq!(cells[4], "12.4k");
+        assert_eq!(cells[5], "891");
+        assert_eq!(cells[6], "$0.04");
+        assert_eq!(cells[7], "1.8s");
+        assert_eq!(cells[8], "ok");
     }
 
     #[test]
@@ -729,8 +746,8 @@ mod tests {
         r.latency_ms = 0;
         r.charge_status = ChargeStatus::NotCharged;
         let cells = RequestView::from(r).cells();
-        assert_eq!(cells[5], "—");
         assert_eq!(cells[6], "—");
+        assert_eq!(cells[7], "—");
     }
 
     /// The bug this pair exists to prevent: an unpriced request is neither a
@@ -739,9 +756,9 @@ mod tests {
     #[test]
     fn an_unpriced_request_is_not_rendered_as_free() {
         let cells = RequestView::from(unpriced()).cells();
-        assert_eq!(cells[5], "?", "unknown evidence must not read as a price");
-        assert_ne!(cells[5], "—");
-        assert_ne!(cells[5], "$0.00");
+        assert_eq!(cells[6], "?", "unknown evidence must not read as a price");
+        assert_ne!(cells[6], "—");
+        assert_ne!(cells[6], "$0.00");
     }
 
     /// `bro chat` renders an unscoped cost as `unreported`. This surface
@@ -794,6 +811,26 @@ mod tests {
         assert_eq!(without["rows"][0]["episode_id"], serde_json::Value::Null);
     }
 
+    #[test]
+    fn a_row_carries_router_identity_without_inventing_it_for_legacy_rows() {
+        let mut routed = row();
+        routed.router_id = Some("coding".into());
+        routed.binding_digest = Some("router-v1:sha256:abc".into());
+        routed.original_selector = Some("bitrouter/coding".into());
+        let value = json(&report(None, vec![routed]));
+        assert_eq!(value["rows"][0]["router_id"], "coding");
+        assert_eq!(value["rows"][0]["binding_digest"], "router-v1:sha256:abc");
+        assert_eq!(value["rows"][0]["original_selector"], "bitrouter/coding");
+
+        let legacy = json(&report(None, vec![row()]));
+        assert_eq!(legacy["rows"][0]["router_id"], serde_json::Value::Null);
+        assert_eq!(legacy["rows"][0]["binding_digest"], serde_json::Value::Null);
+        assert_eq!(
+            legacy["rows"][0]["original_selector"],
+            serde_json::Value::Null
+        );
+    }
+
     /// An agent must be able to tell measured from unmeasured per row, not
     /// only in aggregate.
     #[test]
@@ -809,8 +846,8 @@ mod tests {
         r.error =
             Some("upstream refused the request\nwith a very long multi-line explanation".into());
         let cells = RequestView::from(r).cells();
-        assert!(!cells[7].contains('\n'), "newlines would break the row");
-        assert!(cells[7].chars().count() <= ERROR_CHARS + 1, "{}", cells[7]);
+        assert!(!cells[8].contains('\n'), "newlines would break the row");
+        assert!(cells[8].chars().count() <= ERROR_CHARS + 1, "{}", cells[8]);
     }
 
     #[test]

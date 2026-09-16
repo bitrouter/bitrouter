@@ -2,7 +2,8 @@
 //!
 //! Implements the full model-name resolution pipeline:
 //!
-//! - **Stage 0** — strip `@preset` / `:variant`, derive `RoutingPrefs`.
+//! - **Stage 0** — resolve a named router or legacy `@preset` / `:variant`
+//!   address and derive `RoutingPrefs`.
 //! - **Strategy 1** — `provider:model_id` → direct route (chain length 1).
 //! - **Strategy 2** — an explicit `models:` virtual model → its endpoint chain.
 //! - **Strategy 3** — *auto-cascade* (the v1 built-in default): scan every
@@ -16,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 
 use crate::caller::CallerContext;
-use crate::config::{Config, presets::resolve_presets};
+use crate::config::Config;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
 use crate::language_model::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
@@ -164,6 +165,7 @@ impl ConfigRoutingTable {
     }
 
     fn replace_prepared_config_locked(&self, fresh: Config) -> Result<()> {
+        fresh.validate_router_config()?;
         let mut current = match self.config.write() {
             Ok(current) => current,
             Err(poisoned) => poisoned.into_inner(),
@@ -432,10 +434,10 @@ pub fn resolve_route_chain(
     model: &str,
     caller_prefs: &RoutingPrefs,
 ) -> Result<Vec<RoutingTarget>> {
-    // ---- Stage 0: strip @preset / :variant, derive prefs ----
-    let resolution = resolve_presets(model, &config.presets, &config.variants)?;
+    // ---- Stage 0: resolve named definition / legacy variant, derive prefs ----
+    let resolution = config.resolve_router(model)?;
     let clean = resolution.clean_model;
-    // Caller-supplied prefs are additive on top of the preset-derived ones.
+    // Caller-supplied prefs are additive on top of definition-derived ones.
     let mut prefs = resolution.prefs;
     merge_prefs(&mut prefs, caller_prefs);
 
@@ -591,14 +593,20 @@ fn provider_rank(
 pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
     // §5.7: an explicit `models:` segment is the source of truth when set.
     if !config.models.is_empty() {
-        return config
+        let mut models = config
             .models
             .iter()
             .map(|(id, vm)| ModelInfo {
                 id: id.clone(),
                 providers: vm.endpoints.iter().map(|e| e.provider.clone()).collect(),
             })
-            .collect();
+            .collect::<Vec<_>>();
+        models.extend(config.routers.keys().map(|id| ModelInfo {
+            id: format!("bitrouter/{id}"),
+            providers: Vec::new(),
+        }));
+        models.sort_by(|left, right| left.id.cmp(&right.id));
+        return models;
     }
     // Otherwise: the de-duplicated union of every active provider's routable
     // selectors. Subscription providers are explicit-route-only, so expose a
@@ -622,13 +630,19 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
                 .push(provider_id.clone());
         }
     }
-    by_model
+    let mut models = by_model
         .into_iter()
         .map(|(id, mut providers)| {
             providers.sort();
             ModelInfo { id, providers }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    models.extend(config.routers.keys().map(|id| ModelInfo {
+        id: format!("bitrouter/{id}"),
+        providers: Vec::new(),
+    }));
+    models.sort_by(|left, right| left.id.cmp(&right.id));
+    models
 }
 
 #[async_trait]
@@ -638,13 +652,14 @@ impl RoutingTable for ConfigRoutingTable {
         model: &str,
     ) -> Result<crate::language_model::routing::ModelResolution> {
         let config = self.config.read().expect("config lock poisoned");
-        let resolution = crate::config::resolve_presets(model, &config.presets, &config.variants)?;
+        let resolution = config.resolve_router(model)?;
         Ok(crate::language_model::routing::ModelResolution {
             clean_model: resolution.clean_model,
             prefs: resolution.prefs,
             overrides: resolution.overrides,
             policy: resolution.policy,
             variant: resolution.variant,
+            router: resolution.router,
         })
     }
 
@@ -667,6 +682,7 @@ impl RoutingTable for ConfigRoutingTable {
         _caller: &CallerContext,
     ) -> Result<Vec<RoutingTarget>> {
         let config = self.config.read().expect("config lock poisoned");
+        config.validate_router_config()?;
         resolve_clean_route_chain(&config, model, prefs)
     }
 
@@ -726,16 +742,17 @@ impl RoutingTable for ConfigRoutingTable {
     }
 
     async fn preset_overrides(&self, model: &str) -> Result<crate::config::PromptOverrides> {
-        // Same resolution as `route_chain` (Stage 0): strip `@preset:variant`
-        // and return the preset's prompt body overrides. The synchronous part
-        // is wrapped in a brief read-lock; no `.await` is held across it.
+        // Same resolution as `route_chain` (Stage 0): resolve a named router or
+        // legacy `@preset:variant` and return its prompt defaults. The
+        // synchronous part is wrapped in a brief read-lock; no `.await` is
+        // held across it.
         let config = self.config.read().expect("config lock poisoned");
-        let resolution = crate::config::resolve_presets(model, &config.presets, &config.variants)?;
+        let resolution = config.resolve_router(model)?;
         Ok(resolution.overrides)
     }
 }
 
-/// Merge `extra`'s knobs additively into `base` (caller prefs refine preset ones).
+/// Merge `extra`'s knobs additively into `base` (caller prefs refine defaults).
 fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
     if extra.sort != SortOrder::default() {
         base.sort = extra.sort;
@@ -1303,6 +1320,75 @@ providers:
         // `shared-model` is offered by both providers
         let shared = models.iter().find(|m| m.id == "shared-model").unwrap();
         assert_eq!(shared.providers.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn named_router_routes_and_remains_visible_with_explicit_models() -> crate::Result<()> {
+        let config = parse(
+            r#"
+providers:
+  alpha:
+    api_base: https://alpha.example/v1
+    api_key: k
+    models: [{ id: backend }]
+models:
+  stable:
+    endpoints: [{ provider: alpha, service_id: backend }]
+routers:
+  project:
+    selection:
+      kind: model
+      model: stable
+"#,
+        )?;
+        let table = ConfigRoutingTable::from_config(config);
+
+        let models = table.list_models();
+        assert!(models.iter().any(|model| model.id == "stable"));
+        assert!(models.iter().any(|model| model.id == "bitrouter/project"));
+
+        let resolution = table.resolve_model("bitrouter/project").await?;
+        assert_eq!(resolution.clean_model, "stable");
+        let identity = resolution
+            .router
+            .ok_or_else(|| BitrouterError::internal("router identity was not resolved"))?;
+        assert_eq!(identity.router_id, "project");
+
+        let chain = table
+            .route_chain(
+                "bitrouter/project",
+                &RoutingPrefs::default(),
+                &CallerContext::local(),
+            )
+            .await?;
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].provider_name, "alpha");
+        assert_eq!(chain[0].service_id, "backend");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn first_resolution_rejects_invalid_direct_config_mutation() -> crate::Result<()> {
+        let mut config = Config::default();
+        config.routers.insert(
+            "Bad".into(),
+            crate::config::router::RouterConfig {
+                selection: crate::config::router::RouterSelection::Model {
+                    model: "vendor:base".into(),
+                    routing: crate::config::RoutingConfig::default(),
+                },
+                defaults: crate::config::router::RouterDefaults::default(),
+            },
+        );
+        let table = ConfigRoutingTable::from_config(config);
+
+        let error = table
+            .resolve_model("bitrouter/Bad")
+            .await
+            .err()
+            .ok_or_else(|| BitrouterError::internal("invalid direct config was resolved"))?;
+        assert!(error.to_string().contains("invalid router id"));
+        Ok(())
     }
 
     #[tokio::test]

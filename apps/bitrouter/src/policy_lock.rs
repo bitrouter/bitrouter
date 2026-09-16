@@ -1,4 +1,4 @@
-//! File-backed, preset-bound adaptive routing policies.
+//! File-backed, router-bound adaptive routing policies.
 //!
 //! `policy-lock.yaml` is the current effective policy artifact. The evidence
 //! ledger can compile a candidate, but only explicit publication replaces this
@@ -64,7 +64,7 @@ pub struct PolicyLock {
     /// Reproducible compiler inputs and artifact lineage. Required for v2+.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<PolicyArtifact>,
-    /// Named policies referenced by `presets.<name>.policy`.
+    /// Named policies referenced by router or legacy preset bindings.
     #[serde(default)]
     pub policies: BTreeMap<String, PolicyDefinition>,
     /// Decision-relevant provenance for explicit routes, nested by policy and
@@ -363,9 +363,8 @@ pub fn resolve_path(config: &Config, config_path: Option<&Path>) -> Option<PathB
 
 pub fn bound_policy_names(config: &Config) -> BTreeSet<String> {
     config
-        .presets
-        .values()
-        .filter_map(|preset| preset.policy.clone())
+        .router_policy_bindings()
+        .map(|(_, policy, _)| policy.to_owned())
         .collect()
 }
 
@@ -951,21 +950,24 @@ pub fn validate_for_config(config: &Config, document: &PolicyLock) -> Result<()>
                 )
             })?;
     }
-    for (preset_name, preset) in &config.presets {
-        let Some(policy_name) = &preset.policy else {
-            continue;
-        };
-        if preset
-            .model
-            .as_deref()
-            .is_none_or(|model| model.trim().is_empty())
-        {
-            anyhow::bail!(
-                "preset '@{preset_name}' must define a base model before binding policy '{policy_name}'"
-            );
+    for (router_id, policy_name, base_model) in config.router_policy_bindings() {
+        if base_model.is_none_or(|model| model.trim().is_empty()) {
+            if config.routers.contains_key(router_id) {
+                anyhow::bail!(
+                    "router '{router_id}' must define a base model before binding policy '{policy_name}'"
+                );
+            } else {
+                anyhow::bail!(
+                    "preset '@{router_id}' must define a base model before binding policy '{policy_name}'"
+                );
+            }
         }
         if !document.policies.contains_key(policy_name) {
-            anyhow::bail!("preset '@{preset_name}' references missing policy '{policy_name}'");
+            if config.routers.contains_key(router_id) {
+                anyhow::bail!("router '{router_id}' references missing policy '{policy_name}'");
+            } else {
+                anyhow::bail!("preset '@{router_id}' references missing policy '{policy_name}'");
+            }
         }
     }
     Ok(())
@@ -1578,8 +1580,8 @@ pub fn edit_config_provider_stubs(raw: &str, providers: &[String]) -> Result<Str
     Ok(edited)
 }
 
-/// Variant used by `policy init`, which may create the preset when a strong
-/// base model is supplied.
+/// Legacy variant used by `policy init --preset`, which may create the preset
+/// when a strong base model is supplied.
 pub fn edit_config_policy_with_model(
     raw: &str,
     preset: &str,
@@ -1617,6 +1619,79 @@ pub fn edit_config_policy_with_model(
         anyhow::bail!("edited config did not bind preset '@{preset}' to policy '{policy}'");
     }
     Ok(edited)
+}
+
+/// Bind a named router to a policy without changing process mode or any
+/// unrelated configuration. A compatible existing binding is left byte-for-
+/// byte unchanged.
+pub fn edit_config_router_policy_with_model(
+    raw: &str,
+    router: &str,
+    policy: &str,
+    model: Option<&str>,
+) -> Result<String> {
+    validate_router_name(router)?;
+    validate_name(policy)?;
+    let parsed = bitrouter_sdk::config::parse(raw).context("parsing bitrouter.yaml")?;
+    if parsed.presets.contains_key(router) {
+        anyhow::bail!(
+            "cannot initialize router '{router}' because legacy preset '@{router}' already exists; run `{} config migrate-routers --candidate routers.candidate.yaml` to convert it without changing policy mode",
+            invocation::name()
+        );
+    }
+    if let Some(existing) = parsed.routers.get(router) {
+        match &existing.selection {
+            bitrouter_sdk::config::router::RouterSelection::Policy {
+                policy: existing_policy,
+                base_model,
+                ..
+            } => {
+                if existing_policy != policy {
+                    anyhow::bail!(
+                        "router '{router}' already binds policy '{existing_policy}', not '{policy}'"
+                    );
+                }
+                if let Some(model) = model
+                    && base_model != model
+                {
+                    anyhow::bail!(
+                        "router '{router}' already uses base model '{base_model}', not '{model}'"
+                    );
+                }
+                return Ok(raw.to_string());
+            }
+            bitrouter_sdk::config::router::RouterSelection::Model {
+                model: existing_model,
+                ..
+            } => {
+                anyhow::bail!(
+                    "router '{router}' already uses fixed model '{existing_model}'; refusing to replace it with a policy binding"
+                );
+            }
+        }
+    }
+    let Some(model) = model else {
+        anyhow::bail!("router '{router}' does not exist; pass --strong <model> to initialize it");
+    };
+
+    let mut lines = source_lines(raw);
+    bind_router(&mut lines, router, policy, model)?;
+    let edited = render_source_lines(lines, raw.ends_with('\n'));
+    let checked =
+        bitrouter_sdk::config::parse(&edited).context("validating edited bitrouter.yaml")?;
+    let Some(created) = checked.routers.get(router) else {
+        anyhow::bail!("edited config did not create router '{router}'");
+    };
+    match &created.selection {
+        bitrouter_sdk::config::router::RouterSelection::Policy {
+            policy: checked_policy,
+            base_model,
+            ..
+        } if checked_policy == policy && base_model == model => Ok(edited),
+        _ => anyhow::bail!(
+            "edited config did not bind router '{router}' to policy '{policy}' with base model '{model}'"
+        ),
+    }
 }
 
 fn source_lines(raw: &str) -> Vec<String> {
@@ -1696,6 +1771,54 @@ fn bind_preset(
     Ok(())
 }
 
+fn bind_router(lines: &mut Vec<String>, router: &str, policy: &str, model: &str) -> Result<()> {
+    let policy = serde_json::to_string(policy).context("encoding router policy as YAML scalar")?;
+    let model = serde_json::to_string(model).context("encoding router model as YAML scalar")?;
+    if let Some((start, end)) = block_range(lines, "routers", 0) {
+        let inline_empty = lines[start]
+            .split_once(':')
+            .is_some_and(|(_, value)| matches!(value.trim(), "{}" | "{ }"));
+        if inline_empty {
+            lines[start] = "routers:".into();
+        } else {
+            require_block_header(&lines[start], "routers")?;
+        }
+        let insert_at = if inline_empty { start + 1 } else { end };
+        lines.insert(insert_at, format!("  {router}:"));
+        lines.insert(insert_at + 1, "    selection:".into());
+        lines.insert(insert_at + 2, "      kind: policy".into());
+        lines.insert(insert_at + 3, format!("      policy: {policy}"));
+        lines.insert(insert_at + 4, format!("      base_model: {model}"));
+        return Ok(());
+    }
+
+    if !lines.is_empty() && !lines.last().is_some_and(|line| line.is_empty()) {
+        lines.push(String::new());
+    }
+    lines.push("routers:".into());
+    lines.push(format!("  {router}:"));
+    lines.push("    selection:".into());
+    lines.push("      kind: policy".into());
+    lines.push(format!("      policy: {policy}"));
+    lines.push(format!("      base_model: {model}"));
+    Ok(())
+}
+
+fn validate_router_name(name: &str) -> Result<()> {
+    let mut bytes = name.bytes();
+    let valid = name.len() <= 64
+        && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
+        });
+    if !valid {
+        anyhow::bail!(
+            "invalid router id '{name}' (use 1-64 lowercase ASCII letters, digits, '_' or '-', starting with a letter)"
+        );
+    }
+    Ok(())
+}
+
 fn require_block_header(line: &str, key: &str) -> Result<()> {
     let Some((_, tail)) = line.trim_start().split_once(':') else {
         anyhow::bail!("expected YAML block for '{key}'");
@@ -1757,6 +1880,22 @@ pub struct PolicyFileUpdate {
     pub conflicts: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+enum PolicyInitBinding<'a> {
+    LegacyPreset(&'a str),
+    Router(&'a str),
+}
+
+#[derive(Clone, Copy)]
+struct PolicyInitRequest<'a> {
+    policy_name: &'a str,
+    binding: PolicyInitBinding<'a>,
+    strong_model: Option<&'a str>,
+    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    economy_model: &'a str,
+    economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+}
+
 /// Create one named adaptive policy and bind it to a preset. The candidate
 /// main config and lock are fully cross-validated before either file is
 /// published. Explicit policy initialization starts in adaptive mode.
@@ -1790,6 +1929,49 @@ pub async fn initialize_files_with_efforts(
     economy_model: &str,
     economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
 ) -> Result<PolicyFileUpdate> {
+    initialize_target_files_with_efforts(
+        config_path,
+        PolicyInitRequest {
+            policy_name,
+            binding: PolicyInitBinding::LegacyPreset(preset_name),
+            strong_model,
+            strong_effort,
+            economy_model,
+            economy_effort,
+        },
+    )
+    .await
+}
+
+/// Create or reuse one named policy and bind it to a router. Unlike the legacy
+/// preset path, router initialization preserves the configured process mode.
+pub async fn initialize_router_files_with_efforts(
+    config_path: &Path,
+    policy_name: &str,
+    router_name: &str,
+    strong_model: Option<&str>,
+    strong_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    economy_model: &str,
+    economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+) -> Result<PolicyFileUpdate> {
+    initialize_target_files_with_efforts(
+        config_path,
+        PolicyInitRequest {
+            policy_name,
+            binding: PolicyInitBinding::Router(router_name),
+            strong_model,
+            strong_effort,
+            economy_model,
+            economy_effort,
+        },
+    )
+    .await
+}
+
+async fn initialize_target_files_with_efforts(
+    config_path: &Path,
+    request: PolicyInitRequest<'_>,
+) -> Result<PolicyFileUpdate> {
     let _config_lock = acquire_publication_lock(config_path)?;
     let raw = tokio::fs::read_to_string(config_path)
         .await
@@ -1798,16 +1980,7 @@ pub async fn initialize_files_with_efforts(
     let lock_path = resolve_path(&config, Some(config_path))
         .ok_or_else(|| anyhow::anyhow!("cannot resolve policy lock path"))?;
     let _policy_lock = acquire_publication_lock(&lock_path)?;
-    initialize_files_unlocked(
-        config_path,
-        policy_name,
-        preset_name,
-        strong_model,
-        strong_effort,
-        economy_model,
-        economy_effort,
-    )
-    .await
+    initialize_files_unlocked_with_writer(config_path, request, write_text_atomic_unlocked).await
 }
 
 /// Initialize while the caller holds both config and policy publication locks.
@@ -1820,26 +1993,108 @@ pub async fn initialize_files_unlocked(
     economy_model: &str,
     economy_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
 ) -> Result<PolicyFileUpdate> {
+    initialize_files_unlocked_with_writer(
+        config_path,
+        PolicyInitRequest {
+            policy_name,
+            binding: PolicyInitBinding::LegacyPreset(preset_name),
+            strong_model,
+            strong_effort,
+            economy_model,
+            economy_effort,
+        },
+        write_text_atomic_unlocked,
+    )
+    .await
+}
+
+async fn initialize_files_unlocked_with_writer<F>(
+    config_path: &Path,
+    request: PolicyInitRequest<'_>,
+    write_config: F,
+) -> Result<PolicyFileUpdate>
+where
+    F: FnOnce(&Path, &str, &str) -> Result<()>,
+{
+    let PolicyInitRequest {
+        policy_name,
+        binding,
+        strong_model,
+        strong_effort,
+        economy_model,
+        economy_effort,
+    } = request;
     validate_name(policy_name)?;
-    validate_name(preset_name).context("validating preset name")?;
+    match binding {
+        PolicyInitBinding::LegacyPreset(preset_name) => {
+            validate_name(preset_name).context("validating preset name")?;
+        }
+        PolicyInitBinding::Router(router_name) => validate_router_name(router_name)?,
+    }
     validate_tier_model(economy_model, "economy")?;
     let raw = tokio::fs::read_to_string(config_path)
         .await
         .with_context(|| format!("reading {}", config_path.display()))?;
     let config = bitrouter_sdk::config::parse(&raw).context("parsing bitrouter.yaml")?;
-    let strong_model = strong_model
-        .map(ToString::to_string)
-        .or_else(|| {
-            config
-                .presets
-                .get(preset_name)
-                .and_then(|preset| preset.model.clone())
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "preset '@{preset_name}' has no model; pass --strong <model> to create it"
-            )
-        })?;
+    let strong_model = match binding {
+        PolicyInitBinding::LegacyPreset(preset_name) => strong_model
+            .map(ToString::to_string)
+            .or_else(|| {
+                config
+                    .presets
+                    .get(preset_name)
+                    .and_then(|preset| preset.model.clone())
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "preset '@{preset_name}' has no model; pass --strong <model> to create it"
+                )
+            })?,
+        PolicyInitBinding::Router(router_name) => {
+            if config.presets.contains_key(router_name) {
+                anyhow::bail!(
+                    "cannot initialize router '{router_name}' because legacy preset '@{router_name}' already exists; run `{} config migrate-routers --candidate routers.candidate.yaml` to convert it without changing policy mode",
+                    invocation::name()
+                );
+            }
+            match config.routers.get(router_name) {
+                Some(router) => match &router.selection {
+                    bitrouter_sdk::config::router::RouterSelection::Policy {
+                        policy: existing_policy,
+                        base_model,
+                        ..
+                    } => {
+                        if existing_policy != policy_name {
+                            anyhow::bail!(
+                                "router '{router_name}' already binds policy '{existing_policy}', not '{policy_name}'"
+                            );
+                        }
+                        if let Some(strong_model) = strong_model
+                            && strong_model != base_model
+                        {
+                            anyhow::bail!(
+                                "router '{router_name}' already uses base model '{base_model}', not '{strong_model}'"
+                            );
+                        }
+                        base_model.clone()
+                    }
+                    bitrouter_sdk::config::router::RouterSelection::Model {
+                        model: existing_model,
+                        ..
+                    } => {
+                        anyhow::bail!(
+                            "router '{router_name}' already uses fixed model '{existing_model}'; refusing to replace it with a policy binding"
+                        );
+                    }
+                },
+                None => strong_model.map(ToString::to_string).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "router '{router_name}' does not exist; pass --strong <model> to initialize it"
+                    )
+                })?,
+            }
+        }
+    };
     validate_tier_model(&strong_model, "strong")?;
     if strong_model == economy_model && strong_effort == economy_effort {
         anyhow::bail!("strong and economy tiers must use different model/effort targets");
@@ -1868,12 +2123,6 @@ pub async fn initialize_files_unlocked(
     } else {
         (PolicyLock::default(), None)
     };
-    if document.policies.contains_key(policy_name) {
-        anyhow::bail!(
-            "policy '{policy_name}' already exists in {}",
-            lock_path.display()
-        );
-    }
 
     let adequacy = AdequacyConfig {
         escalation_tier: Some("strong".into()),
@@ -1881,53 +2130,94 @@ pub async fn initialize_files_unlocked(
         min_semantic_successes_for_lock: 1,
         ..AdequacyConfig::default()
     };
+    let initialized_policy = PolicyDefinition {
+        tiers: BTreeMap::from([
+            (
+                "economy".into(),
+                economy_effort.map_or_else(
+                    || PolicyModelTarget::from(economy_model),
+                    |effort| PolicyModelTarget::ModelEffort {
+                        model: economy_model.to_owned(),
+                        effort,
+                    },
+                ),
+            ),
+            (
+                "strong".into(),
+                strong_effort.map_or_else(
+                    || PolicyModelTarget::from(strong_model.as_str()),
+                    |effort| PolicyModelTarget::ModelEffort {
+                        model: strong_model.clone(),
+                        effort,
+                    },
+                ),
+            ),
+        ]),
+        default_tier: Some("strong".into()),
+        tool_use_tier: Some("strong".into()),
+        tool_safe_tiers,
+        adequacy,
+        ..PolicyDefinition::default()
+    };
     let original_document = document.clone();
-    document.policies.insert(
-        policy_name.to_string(),
-        PolicyDefinition {
-            tiers: BTreeMap::from([
-                (
-                    "economy".into(),
-                    economy_effort.map_or_else(
-                        || PolicyModelTarget::from(economy_model),
-                        |effort| PolicyModelTarget::ModelEffort {
-                            model: economy_model.to_owned(),
-                            effort,
-                        },
-                    ),
-                ),
-                (
-                    "strong".into(),
-                    strong_effort.map_or_else(
-                        || PolicyModelTarget::from(strong_model.as_str()),
-                        |effort| PolicyModelTarget::ModelEffort {
-                            model: strong_model.clone(),
-                            effort,
-                        },
-                    ),
-                ),
-            ]),
-            default_tier: Some("strong".into()),
-            tool_use_tier: Some("strong".into()),
-            tool_safe_tiers,
-            adequacy,
-            ..PolicyDefinition::default()
-        },
-    );
-    let preset_model = (!config.presets.contains_key(preset_name)).then_some(strong_model.as_str());
-    let edited_config = edit_config_policy_with_model(
-        &raw,
-        preset_name,
-        policy_name,
-        preset_model,
-        PolicyRuntimeMode::Adaptive,
-    )?;
+    let policy_changed = match document.policies.get(policy_name) {
+        Some(existing) if matches!(binding, PolicyInitBinding::Router(_)) => {
+            if existing != &initialized_policy {
+                anyhow::bail!(
+                    "policy '{policy_name}' already exists in {} with an incompatible definition; refusing to overwrite it",
+                    lock_path.display()
+                );
+            }
+            false
+        }
+        Some(_) => {
+            anyhow::bail!(
+                "policy '{policy_name}' already exists in {}",
+                lock_path.display()
+            );
+        }
+        None => {
+            document
+                .policies
+                .insert(policy_name.to_string(), initialized_policy);
+            true
+        }
+    };
+    let edited_config = match binding {
+        PolicyInitBinding::LegacyPreset(preset_name) => {
+            let preset_model =
+                (!config.presets.contains_key(preset_name)).then_some(strong_model.as_str());
+            edit_config_policy_with_model(
+                &raw,
+                preset_name,
+                policy_name,
+                preset_model,
+                PolicyRuntimeMode::Adaptive,
+            )?
+        }
+        PolicyInitBinding::Router(router_name) => edit_config_router_policy_with_model(
+            &raw,
+            router_name,
+            policy_name,
+            Some(&strong_model),
+        )?,
+    };
     let candidate_config =
         bitrouter_sdk::config::parse(&edited_config).context("validating candidate config")?;
     validate_for_config(&candidate_config, &document)?;
 
-    let digest = write_atomic_unlocked(&lock_path, expected_digest.as_deref(), &document)?;
-    if let Err(config_error) = write_text_atomic_unlocked(config_path, &raw, &edited_config) {
+    let digest = if policy_changed {
+        write_atomic_unlocked(&lock_path, expected_digest.as_deref(), &document)?
+    } else {
+        expected_digest.clone().ok_or_else(|| {
+            anyhow::anyhow!("existing policy '{policy_name}' has no loaded policy-lock digest")
+        })?
+    };
+    let config_changed = edited_config != raw;
+    if config_changed && let Err(config_error) = write_config(config_path, &raw, &edited_config) {
+        if !policy_changed {
+            return Err(config_error.context("config update failed; policy lock was unchanged"));
+        }
         let policy_recovery = if expected_digest.is_some() {
             write_atomic_unlocked(&lock_path, Some(&digest), &original_document).map(|_| ())
         } else {
@@ -1947,14 +2237,25 @@ pub async fn initialize_files_unlocked(
             ))),
         };
     }
+    let mut changes = Vec::new();
+    if policy_changed {
+        changes.push(format!("created policy '{policy_name}'"));
+    }
+    if config_changed {
+        changes.push(match binding {
+            PolicyInitBinding::LegacyPreset(preset_name) => {
+                format!("bound preset '@{preset_name}'")
+            }
+            PolicyInitBinding::Router(router_name) => {
+                format!("bound router 'bitrouter/{router_name}'")
+            }
+        });
+    }
     Ok(PolicyFileUpdate {
         path: lock_path,
         digest,
         document,
-        changes: vec![
-            format!("created policy '{policy_name}'"),
-            format!("bound preset '@{preset_name}'"),
-        ],
+        changes,
         conflicts: Vec::new(),
     })
 }
@@ -5258,7 +5559,7 @@ policies:
     }
 
     #[test]
-    fn validation_rejects_a_bound_preset_without_a_base_model() {
+    fn validation_rejects_a_bound_preset_without_a_base_model() -> anyhow::Result<()> {
         let mut config = Config::default();
         config.presets.insert(
             "coding".into(),
@@ -5267,17 +5568,31 @@ policies:
                 ..Default::default()
             },
         );
-        let error = validate_for_config(
-            &config,
-            &PolicyLock {
-                lockfile_version: 1,
-                artifact: None,
-                policies: BTreeMap::from([("coding".into(), definition())]),
-                certificates: BTreeMap::new(),
-            },
-        )
-        .unwrap_err();
+        assert_eq!(
+            bound_policy_names(&config),
+            BTreeSet::from(["coding".into()])
+        );
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
+        };
+        let error = validate_for_config(&config, &lock)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("policy binding without a base model was accepted"))?;
         assert!(error.to_string().contains("must define a base model"));
+
+        config.presets.insert(
+            "coding".into(),
+            bitrouter_sdk::config::PresetConfig {
+                model: Some("vendor:strong".into()),
+                policy: Some("coding".into()),
+                ..Default::default()
+            },
+        );
+        validate_for_config(&config, &lock)?;
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -5380,6 +5695,265 @@ inherit_defaults: true
                 .to_string()
                 .contains("already binds policy 'production'")
         );
+    }
+
+    #[test]
+    fn router_config_edit_preserves_mode_chat_and_existing_router_bindings() -> anyhow::Result<()> {
+        let raw = r#"# operator-owned
+chat:
+  agent: codex-acp
+  model: fixture:chat
+policy:
+  mode: frozen
+routers:
+  review:
+    selection:
+      kind: model
+      model: fixture:review
+"#;
+
+        let edited =
+            edit_config_router_policy_with_model(raw, "coding", "coding", Some("fixture:strong"))?;
+        let parsed = bitrouter_sdk::config::parse(&edited)?;
+
+        assert!(edited.contains("# operator-owned"));
+        assert!(edited.contains("  agent: codex-acp\n  model: fixture:chat"));
+        assert_eq!(parsed.chat.agent.as_deref(), Some("codex-acp"));
+        assert_eq!(parsed.chat.model.as_deref(), Some("fixture:chat"));
+        assert_eq!(parsed.policy.mode, PolicyRuntimeMode::Frozen);
+        assert!(matches!(
+            &parsed.routers["review"].selection,
+            bitrouter_sdk::config::router::RouterSelection::Model { model, .. }
+                if model == "fixture:review"
+        ));
+        assert!(matches!(
+            &parsed.routers["coding"].selection,
+            bitrouter_sdk::config::router::RouterSelection::Policy {
+                policy,
+                base_model,
+                ..
+            } if policy == "coding" && base_model == "fixture:strong"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn router_config_edit_refuses_a_conflicting_legacy_preset() -> anyhow::Result<()> {
+        let raw = r#"presets:
+  coding:
+    model: fixture:strong
+"#;
+
+        let error =
+            edit_config_router_policy_with_model(raw, "coding", "coding", Some("fixture:strong"))
+                .err()
+                .ok_or_else(|| anyhow::anyhow!("conflicting legacy preset was accepted"))?;
+
+        assert!(error.to_string().contains("legacy preset '@coding'"));
+        Ok(())
+    }
+
+    #[test]
+    fn router_config_edit_refuses_an_incompatible_policy_binding() -> anyhow::Result<()> {
+        let raw = r#"routers:
+  coding:
+    selection:
+      kind: policy
+      policy: production
+      base_model: fixture:strong
+"#;
+
+        let error =
+            edit_config_router_policy_with_model(raw, "coding", "coding", Some("fixture:strong"))
+                .err()
+                .ok_or_else(|| anyhow::anyhow!("incompatible router policy was accepted"))?;
+
+        assert!(
+            error
+                .to_string()
+                .contains("already binds policy 'production'")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn router_config_edit_quotes_user_selected_scalars() -> anyhow::Result<()> {
+        let edited = edit_config_router_policy_with_model(
+            "policy:\n  mode: frozen\n",
+            "coding",
+            "coding:variant",
+            Some("fixture:model # literal"),
+        )?;
+        let parsed = bitrouter_sdk::config::parse(&edited)?;
+
+        assert!(edited.contains("policy: \"coding:variant\""));
+        assert!(edited.contains("base_model: \"fixture:model # literal\""));
+        assert!(matches!(
+            &parsed.routers["coding"].selection,
+            bitrouter_sdk::config::router::RouterSelection::Policy {
+                policy,
+                base_model,
+                ..
+            } if policy == "coding:variant" && base_model == "fixture:model # literal"
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn router_initialize_requires_an_explicit_strong_model_when_unbound() -> anyhow::Result<()>
+    {
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(&config_path, "chat:\n  agent: codex-acp\n").await?;
+
+        let error = initialize_router_files_with_efforts(
+            &config_path,
+            "coding",
+            "coding",
+            None,
+            None,
+            "fixture:economy",
+            None,
+        )
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("missing strong model was accepted"))?;
+
+        assert!(error.to_string().contains("pass --strong <model>"));
+        assert!(!dir.path().join("policy-lock.yaml").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn router_initialize_is_idempotent_and_preserves_mode_and_chat() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            &config_path,
+            r#"# keep this comment
+chat:
+  agent: codex-acp
+  model: fixture:chat
+policy:
+  mode: frozen
+"#,
+        )
+        .await?;
+
+        let first = initialize_router_files_with_efforts(
+            &config_path,
+            "coding",
+            "coding",
+            Some("fixture:strong"),
+            None,
+            "fixture:economy",
+            None,
+        )
+        .await?;
+        let first_config = tokio::fs::read(&config_path).await?;
+        let first_lock = tokio::fs::read(&first.path).await?;
+
+        let second = initialize_router_files_with_efforts(
+            &config_path,
+            "coding",
+            "coding",
+            None,
+            None,
+            "fixture:economy",
+            None,
+        )
+        .await?;
+
+        assert!(second.changes.is_empty());
+        assert_eq!(second.digest, first.digest);
+        assert_eq!(tokio::fs::read(&config_path).await?, first_config);
+        assert_eq!(tokio::fs::read(&first.path).await?, first_lock);
+        let config = bitrouter_sdk::config::load(&config_path).await?;
+        assert_eq!(config.policy.mode, PolicyRuntimeMode::Frozen);
+        assert_eq!(config.chat.agent.as_deref(), Some("codex-acp"));
+        assert_eq!(config.chat.model.as_deref(), Some("fixture:chat"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn router_initialize_restores_existing_lock_when_config_publication_fails()
+    -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        let original_config = "policy:\n  mode: frozen\n";
+        tokio::fs::write(&config_path, original_config).await?;
+        let lock_path = dir.path().join("policy-lock.yaml");
+        let mut original_lock = PolicyLock::default();
+        original_lock
+            .policies
+            .insert("existing".into(), definition());
+        write_atomic(&lock_path, None, &original_lock)?;
+        let original_lock_bytes = tokio::fs::read(&lock_path).await?;
+
+        let error = initialize_files_unlocked_with_writer(
+            &config_path,
+            PolicyInitRequest {
+                policy_name: "coding",
+                binding: PolicyInitBinding::Router("coding"),
+                strong_model: Some("fixture:strong"),
+                strong_effort: None,
+                economy_model: "fixture:economy",
+                economy_effort: None,
+            },
+            |_, _, _| anyhow::bail!("simulated config publication failure"),
+        )
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("simulated config failure was ignored"))?;
+
+        assert!(
+            error
+                .to_string()
+                .contains("restored policy after config update failed")
+        );
+        assert_eq!(tokio::fs::read(&lock_path).await?, original_lock_bytes);
+        assert_eq!(
+            tokio::fs::read_to_string(&config_path).await?,
+            original_config
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn router_initialize_removes_new_lock_when_config_publication_fails() -> anyhow::Result<()>
+    {
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("bitrouter.yaml");
+        let original_config = "policy:\n  mode: frozen\n";
+        tokio::fs::write(&config_path, original_config).await?;
+
+        let error = initialize_files_unlocked_with_writer(
+            &config_path,
+            PolicyInitRequest {
+                policy_name: "coding",
+                binding: PolicyInitBinding::Router("coding"),
+                strong_model: Some("fixture:strong"),
+                strong_effort: None,
+                economy_model: "fixture:economy",
+                economy_effort: None,
+            },
+            |_, _, _| anyhow::bail!("simulated config publication failure"),
+        )
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("simulated config failure was ignored"))?;
+
+        assert!(
+            error
+                .to_string()
+                .contains("restored policy after config update failed")
+        );
+        assert!(!dir.path().join("policy-lock.yaml").exists());
+        assert_eq!(
+            tokio::fs::read_to_string(&config_path).await?,
+            original_config
+        );
+        Ok(())
     }
 
     #[tokio::test]

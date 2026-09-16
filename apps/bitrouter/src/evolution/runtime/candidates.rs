@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
-use bitrouter_sdk::config::{AccountStrategy, ConfigRoutingTable, resolve_presets};
+use bitrouter_sdk::config::{AccountStrategy, ConfigRoutingTable};
 use bitrouter_sdk::language_model::RoutingTable;
 use serde::{Deserialize, Serialize};
 
@@ -282,7 +282,7 @@ impl EvolutionRuntime {
                 let mut routes = BTreeMap::new();
                 for model in table.list_models() {
                     let can_match = config.models.contains_key(&model.id)
-                        || model.id == "bitrouter/auto"
+                        || model.id.starts_with("bitrouter/")
                         || model.id.starts_with('@');
                     routes.insert(model.id, can_match);
                 }
@@ -363,7 +363,7 @@ impl EvolutionRuntime {
                             continue;
                         }
                         let contract = route_contract(&config, &table, &policies, route).await?;
-                        let resolution = resolve_presets(route, &config.presets, &config.variants)?;
+                        let resolution = config.resolve_router(route)?;
                         let mut lines = vec![format!("Route: {route}")];
                         if let Some(policy) = resolution.policy {
                             lines.push(format!("Policy: {policy}"));

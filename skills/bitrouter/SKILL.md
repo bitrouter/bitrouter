@@ -134,7 +134,7 @@ wire contract are there — before reasoning about this surface.
 
 ### 6. Verify
 ```bash
-bro route claude-sonnet-4-6   # what would actually run: read `effective_model`
+bro route claude-sonnet-4-6   # preview; check `policy_decision_executed`
 bro models                    # everything routable, with every provider that serves it
 bro requests                  # settled requests + spend, JSON (--human for a table)
 ```
@@ -193,6 +193,6 @@ boundaries. Remote errors never fall back to this machine's configuration.
 - **`providers add/remove/use/test/stats` and `bro doctor` do not exist.**
   Manage with `providers list|login|logout` + `bitrouter.yaml`/`reload`; diagnose
   with `status`, `route <model>`, `models`, `~/.bitrouter/bitrouter.log`.
-- **`bitrouter/*` is reserved** — resolved before any provider lookup, holding
-  `bitrouter/auto` and `bitrouter/fusion`. An unrecognised slug is a `400`, and
-  `bitrouter:auto` is rejected in favour of the slash spelling.
+- **`bitrouter/<id>` selects a named router**, resolved before provider lookup.
+  `bitrouter/auto` and `bitrouter/fusion` keep compatibility semantics; unknown
+  names fail. See `references/cli.md` for coding initialization and preset migration.

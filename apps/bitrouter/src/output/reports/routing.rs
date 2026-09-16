@@ -18,10 +18,28 @@ use crate::output::human::{Human, Table};
 impl CliReport for ModelsReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         if self.models.is_empty() {
-            return h.line("(no routable models)");
+            h.line("(no routable models)")?;
+        } else {
+            for m in &self.models {
+                h.line(&format!("{}\t{}", m.id, m.providers.join(", ")))?;
+            }
         }
-        for m in &self.models {
-            h.line(&format!("{}\t{}", m.id, m.providers.join(", ")))?;
+        if let Some(routers) = &self.routers {
+            h.blank()?;
+            if routers.is_empty() {
+                h.line("(no routers configured)")?;
+            } else {
+                let mut table = Table::new(["ROUTER", "READINESS", "SOURCE", "REASON"]);
+                for router in routers {
+                    table.push([
+                        router.address.clone(),
+                        format!("{:?}", router.readiness).to_ascii_lowercase(),
+                        format!("{:?}", router.source).to_ascii_lowercase(),
+                        router.reason.clone().unwrap_or_else(|| "—".to_string()),
+                    ]);
+                }
+                h.table(&table)?;
+            }
         }
         // Which view answered, stated only where it is a caveat: a live
         // catalog needs no annotation, a projected one does — a provider whose

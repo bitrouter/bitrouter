@@ -872,6 +872,93 @@ variants:
 }
 
 #[test]
+fn parses_strict_named_router_configuration() -> crate::Result<()> {
+    let config = parse(
+        r#"
+routers:
+  project-coding:
+    selection:
+      kind: model
+      model: vendor:base
+      routing:
+        sort: cost
+        only: [vendor]
+    defaults:
+      system_prompt: Be precise.
+      params:
+        temperature: 0.2
+  adaptive:
+    selection:
+      kind: policy
+      policy: coding
+      base_model: vendor:strong
+"#,
+    )?;
+
+    assert_eq!(config.routers.len(), 2);
+    let project = config
+        .routers
+        .get("project-coding")
+        .ok_or_else(|| BitrouterError::internal("project router was not parsed"))?;
+    assert_eq!(
+        project.defaults.system_prompt.as_deref(),
+        Some("Be precise.")
+    );
+    assert_eq!(project.defaults.params["temperature"], 0.2);
+    match &project.selection {
+        router::RouterSelection::Model { model, routing } => {
+            assert_eq!(model, "vendor:base");
+            assert_eq!(routing.sort, Some(crate::language_model::SortOrder::Cost));
+            assert_eq!(routing.only, vec!["vendor"]);
+        }
+        router::RouterSelection::Policy { .. } => {
+            return Err(BitrouterError::internal(
+                "model router parsed as policy selection",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn named_router_configuration_rejects_unknown_nested_fields() {
+    for yaml in [
+        r#"
+routers:
+  project:
+    selection: { kind: model, model: vendor:base, checks: [] }
+"#,
+        r#"
+routers:
+  project:
+    selection:
+      kind: model
+      model: vendor:base
+      routing: { only: [vendor], typo: true }
+"#,
+        r#"
+routers:
+  project:
+    selection: { kind: model, model: vendor:base }
+    defaults: { params: {}, typo: true }
+"#,
+        r#"
+routers:
+  project:
+    selection: { kind: model, model: vendor:base }
+    workflow: later
+"#,
+    ] {
+        assert!(parse(yaml).is_err(), "unknown router field was accepted");
+    }
+}
+
+#[test]
+fn default_config_does_not_implicitly_create_coding_router() {
+    assert!(Config::default().routers.is_empty());
+}
+
+#[test]
 fn auto_router_template_resolves_auto_and_cost_variant() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")

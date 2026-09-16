@@ -30,12 +30,12 @@ bro config validate --config bitrouter.yaml
 bro serve --config bitrouter.yaml
 ```
 
-`policy init` writes `policy.mode: adaptive`, allowing an explicit optimizer or
-low-level publication command to replace the active lock. Routing remains
-deterministic from the signed lock: Eval rows never mutate live routes on their
-own. Set the process mode to `frozen` to forbid replacement while telemetry and
-Eval evidence continue to accumulate. The lock itself never selects runtime
-mode.
+The router form of `policy init` preserves `policy.mode`; a missing mode remains
+`frozen`. Routing stays deterministic from the signed lock: Eval rows never
+mutate live routes on their own. Set the process mode to `adaptive` only when an
+explicit optimizer or low-level publication command may replace the active
+lock. The legacy `policy init --preset` form retains its historical behavior of
+writing `policy.mode: adaptive`. The lock itself never selects runtime mode.
 
 ## Route inputs and safety
 

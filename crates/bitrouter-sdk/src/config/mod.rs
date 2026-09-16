@@ -1,8 +1,8 @@
 //! YAML configuration — gated behind the `config_file` feature.
 //!
 //! The [`Config`] type is the parsed shape of a `bitrouter.yaml` file. Top
-//! level keys: `server`, `database`, `providers`, `models`, `presets`,
-//! `variants`; per-plugin config lives under `plugins`. Load a file with
+//! level keys: `server`, `database`, `providers`, `models`, `routers`,
+//! `presets`, `variants`; per-plugin config lives under `plugins`. Load a file with
 //! [`load`]; build a [`RoutingTable`](crate::language_model::RoutingTable) over
 //! it with [`ConfigRoutingTable`].
 //!
@@ -33,6 +33,7 @@ use crate::language_model::types::{
 
 pub mod pattern;
 pub mod presets;
+pub mod router;
 pub mod routing_table;
 
 #[cfg(test)]
@@ -104,6 +105,8 @@ pub struct Config {
     /// Explicit virtual-model definitions (Strategy 2.2). Optional —
     /// when absent, bare model names fall through to Strategy 3 auto-cascade.
     pub models: HashMap<String, VirtualModel>,
+    /// Named request routers, addressed as `bitrouter/<id>`.
+    pub routers: HashMap<String, router::RouterConfig>,
     /// `@preset` definitions.
     pub presets: HashMap<String, PresetConfig>,
     /// `:variant` definitions.
@@ -157,6 +160,7 @@ impl Default for Config {
             continuation: ContinuationConfig::default(),
             providers: HashMap::new(),
             models: HashMap::new(),
+            routers: HashMap::new(),
             presets: HashMap::new(),
             variants: HashMap::new(),
             plugins: HashMap::new(),
@@ -169,6 +173,48 @@ impl Default for Config {
             policy: PolicyConfig::default(),
             policy_table: PolicyTableConfig::default(),
         }
+    }
+}
+
+impl Config {
+    /// Validate named router ids, selection boundaries, and legacy conflicts.
+    ///
+    /// Callers that construct or mutate [`Config`] directly must run this
+    /// before activation. Config-backed routing also runs it at first
+    /// resolution so infallible table constructors cannot bypass validation.
+    pub fn validate_router_config(&self) -> Result<()> {
+        router::validate_router_config(self)
+    }
+
+    /// Resolve a raw model selector through canonical routers and legacy
+    /// preset compatibility syntax.
+    pub fn resolve_router(&self, raw_model: &str) -> Result<PresetResolution> {
+        self.validate_router_config()?;
+        presets::resolve_routers(raw_model, &self.routers, &self.presets, &self.variants)
+    }
+
+    /// Redaction-safe inventory of canonical and legacy router definitions.
+    pub fn router_inventory(&self) -> Result<Vec<router::RouterInventoryEntry>> {
+        router::router_inventory(self)
+    }
+
+    /// Policy bindings from normalized router definitions.
+    ///
+    /// The optional base model deliberately preserves legacy parsing behavior
+    /// so read and validation consumers can distinguish a valid binding from
+    /// one whose missing model must be reported at their existing boundary.
+    pub fn router_policy_bindings(&self) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
+        let routers = self.routers.iter().filter_map(|(id, config)| {
+            router::EffectiveRouterDefinition::from_router(config)
+                .into_policy_binding()
+                .map(|(policy, base_model)| (id.as_str(), policy, base_model))
+        });
+        let presets = self.presets.iter().filter_map(|(id, preset)| {
+            router::EffectiveRouterDefinition::from_legacy_preset(preset)
+                .into_policy_binding()
+                .map(|(policy, base_model)| (id.as_str(), policy, base_model))
+        });
+        routers.chain(presets)
     }
 }
 
@@ -1517,7 +1563,7 @@ pub struct VirtualEndpoint {
 }
 
 /// Routing knobs shared by presets and variants.
-#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct RoutingConfig {
     /// Cascade-chain ordering.
@@ -1737,6 +1783,7 @@ where
     let mut config: Config = serde_saphyr::from_str(&substituted)
         .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))?;
     resolve_derivations(&mut config)?;
+    config.validate_router_config()?;
     validate_policy_table(&config)?;
     validate_trajectory_config(&config.trajectory)?;
     validate_continuation_config(&config.continuation)?;

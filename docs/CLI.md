@@ -290,6 +290,54 @@ Portable — there is no terminal-only path left to gate.
 
 ## Config
 
+### `bro config migrate-routers`
+
+Preview conversion of block-form `presets:` into named `routers:` without
+changing the source. The candidate preserves comments, request defaults,
+provider preferences and policy bindings. Policy-lock contents, credentials,
+`chat.model` and runtime mode stay unchanged.
+
+```bash
+bro config migrate-routers -c bitrouter.yaml --candidate routers.candidate.yaml
+# Review the candidate diff, then use source_digest from the preview report:
+bro config migrate-routers -c bitrouter.yaml --candidate routers.candidate.yaml \
+  --apply --source-digest 'sha256:...'
+```
+
+Apply rejects a changed source or edited candidate, keeps a separate backup,
+and replaces the source atomically. Restart the daemon to activate new routers.
+Candidate and backup files can contain the same secrets as the original config;
+they are local files, not included in report JSON. Unsupported YAML layouts,
+invalid legacy names, or incompatible existing routers need an explicit manual
+edit; migration never silently renames a caller-visible address.
+Pass the actual file path for symlink-backed configs. CRLF is preserved; mixed
+line endings must be normalized before migration.
+Existing `@name[:variant]` calls continue to work during the compatibility
+window. New callers should use `bitrouter/name`; canonical addresses do not
+accept variants, except the existing `bitrouter/auto` compatibility entry.
+
+Router authorization retains the existing requested-selector contract. An
+access policy that grants `bitrouter/coding` delegates model choice to coding;
+granting only a physical model does not grant the router alias. The current
+pipeline does not recheck the model allowlist after router selection.
+
+`bro config validate` reports named-router counts and legacy migration guidance.
+The routing binding digest in diagnostics excludes prompt and parameter values;
+it cannot identify changes confined to those values. It is distinct from the
+policy artifact digest and from the exact-file checksum used by migration.
+
+`bro models` adds a router inventory alongside the compatible model catalog.
+`bro status` distinguishes `saved_routers`, `running_routers`, and the optional
+`router_restart_required` result; unavailable runtime evidence stays unknown.
+`bro route bitrouter/coding` reports `router`, `router_source`, `bound_policy`,
+and routable `candidate_models`. A dynamic policy preview reports
+`policy_decision_executed: false`, labels `effective_model` as the base input,
+and leaves `provider_chain` empty: it has not executed the policy or selected
+an upstream. Settled request history records optional `router_id`,
+`binding_digest`, and `original_selector` beside the actual provider/model.
+Old rows keep null identities; these fields are not exported as new trace
+attributes in this batch.
+
 ### `bro init` (onboarding wizard)
 
 ```bash
@@ -375,21 +423,24 @@ route selection. An empty or omitted schedule preserves the existing behavior.
 bro route gpt-4o [--prompt <text>] [-c <path>] [--socket <path>]
 ```
 
-Resolves a model name through the routing table and prints the full fallback chain (provider → upstream service id → protocol). Queries the running daemon if reachable — its `route` verb resolves the model exactly as given, since the daemon's policy table runs on real requests rather than on this preview — and otherwise falls back to a local config parse, **policy table included**, so `effective_model` there is what would actually run.
+Resolves a model or router selector using the running daemon when reachable, otherwise the local configuration. Fixed routes include the provider fallback chain. A policy-bound router reports its binding and routable candidates with `policy_decision_executed: false`: the preview does not execute its dynamic policy or predict the selected model.
 
-`--prompt` supplies the request text the policy table keys on: it routes by the agent-loop step a request represents, so the model it selects can differ with the prompt. Omit it for a bare model resolution. It is consulted on the config path only; a `live` answer is the same with or without it.
+`--prompt` supplies request text for the existing static policy-table preview on the local config path. It does not execute a router's dynamic policy; live previews do not use it.
 
-The report is the shared `route` action's, so `bro route --json` is byte-identical to the MCP `route_preview` tool's structured content:
+`bro route --json` returns the shared route action report:
 
 | Field | Meaning |
 |---|---|
-| `requested_model` | what you asked about |
-| `effective_model` | what would actually run — differs when the policy table selects another model |
-| `effective_effort` | the reasoning effort policy selected, when it selected one |
-| `resolved_via` | `live` \| `config` \| `zero_config` — the same words `bro models` uses |
-| `policy_decision` | the static decision behind `effective_model`. Absent on `live`: the daemon's `route` verb does not replay policy, so there is no decision to show and `effective_model` equals `requested_model` there |
-| `provider_chain[]` | `provider` / `service_id` / `api_protocol`, preferred hop first. Never the provider's credential |
-| `estimated_cost` | the first hop's per-token rate card, including any steeper long-context brackets. Rates, not a total: nothing was sent |
+| `requested_model` | the selector you asked about |
+| `effective_model` | resolved model for fixed routes; base model for a dynamic-policy preview, not a selected target |
+| `effective_effort` | reasoning effort selected by an executed static preview, when present |
+| `resolved_via` | `live` \| `config` \| `zero_config` |
+| `router` / `router_source` | router identity, public binding digest, original selector, and configuration source |
+| `bound_policy` / `candidate_models` | bound policy and routable candidates; candidates are not a decision |
+| `policy_decision_executed` | whether this preview executed a policy decision; false for a dynamic-policy router |
+| `policy_decision` | an executed static policy-table preview, when available; absent on live previews |
+| `provider_chain[]` | provider / upstream service id / protocol, preferred hop first; empty for dynamic-policy previews |
+| `estimated_cost` | first hop's per-token rate card, when a fixed chain is available; not a request total |
 
 Read-only throughout — nothing is sent upstream.
 
@@ -870,8 +921,10 @@ compatibility forms keep stdout reserved for ACP frames.
 ### `bro policy`
 
 ```text
+bro policy init NAME [--router ROUTER] --economy MODEL \
+  [--economy-effort LEVEL] [--strong MODEL] [--strong-effort LEVEL]
 bro policy init NAME --preset PRESET --economy MODEL [--economy-effort LEVEL] \
-  [--strong MODEL] [--strong-effort LEVEL]
+  [--strong MODEL] [--strong-effort LEVEL] # legacy compatibility
 bro policy check|status|show [--config PATH]
 bro policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS]
 bro policy diff ACTIVE CANDIDATE
@@ -890,15 +943,31 @@ policy:
   mode: frozen # or adaptive
 ```
 
-`policy init` creates the named policy in `adaptive` mode so an explicit
-`optimize run` can publish its controller decision. Live routes still use only
-the signed lock; Eval rows never change request routing on their own. Operators
-can set `mode: frozen` to prohibit low-level or direct publication while
-continuing to record observations and evaluator results. Invoking `optimize
-run` is explicit authorization to activate adaptive mode and autonomously
-publish its successor when the controller decides to do so. Dry-run compilation
-and candidate export remain available. The mode controls write authority, not
-request-time learning.
+```bash
+bro policy init coding \
+  --strong provider:strong-model \
+  --economy provider:economy-model
+```
+
+This creates the `coding` policy and router, addressed as `bitrouter/coding`.
+Omitting both binding flags defaults `--router` to `coding`; another router
+requires `--router ID`. The command never chooses either model or provider. A
+new router requires both model arguments, while a compatible existing policy
+router supplies its recorded strong base model when `--strong` is omitted.
+
+Router initialization preserves the existing `policy.mode` and all chat or
+harness settings. With no explicit mode, the configuration remains `frozen`.
+Live routes use only the signed lock; Eval rows never change request routing on
+their own. Operators can set `mode: adaptive` when explicit publication is
+allowed. Invoking `optimize run` is explicit authorization to activate adaptive
+mode and autonomously publish its successor when the controller decides to do
+so. Dry-run compilation and candidate export remain available. The mode
+controls write authority, not request-time learning.
+
+`--preset PRESET` is the compatibility initializer for legacy `@preset`
+configuration. It remains mutually exclusive with `--router`, can infer the
+strong model from an existing preset, and retains its historical behavior of
+setting `policy.mode: adaptive`.
 
 `policy publish` promotes the exact compiled v3 candidate after validating its
 parent digest, certificates, and current config. A stale candidate or frozen
