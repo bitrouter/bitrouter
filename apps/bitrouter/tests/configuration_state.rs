@@ -286,9 +286,13 @@ async fn cli_status(home: &Path, source: &Path) -> Result<Value> {
 
 #[tokio::test]
 async fn cli_finds_live_daemon_after_socket_edit_and_source_deletion() -> Result<()> {
+    #[cfg(unix)]
+    let temporary_root = PathBuf::from("/tmp");
+    #[cfg(not(unix))]
+    let temporary_root = std::env::temp_dir();
     let directory = tempfile::Builder::new()
         .prefix("bro-state-")
-        .tempdir_in("/tmp")?;
+        .tempdir_in(temporary_root)?;
     let home = directory.path();
     let source = home.join("bitrouter.yaml");
     let original = "inherit_defaults: false\nserver:\n  listen: '127.0.0.1:0'\n  skip_auth: true\n  control_socket: old.sock\ndatabase:\n  url: 'sqlite::memory:'\n";
