@@ -246,6 +246,15 @@ the Code loop; piped compatibility output stays plain.
 
 ## Setup helpers
 
+For legacy YAML, `bro config migrate-routers -c bitrouter.yaml --candidate
+routers.candidate.yaml` writes a reviewable candidate and reports `source_digest`.
+Apply with the same paths plus `--apply --source-digest <reported-digest>`;
+stale source/candidate changes are refused, a backup is retained, and activation
+requires a restart. Unsupported YAML needs manual migration. `@name[:variant]`
+remains a compatibility address after conversion; use `bitrouter/name` for new
+calls. Router access policies authorize the requested alias, delegating model
+selection; a physical-model-only allowlist does not authorize the alias.
+
 | Command | Effect |
 |---|---|
 | `bro init [--yes] [--force] [--reset] [-c PATH] [credential flags] [--harness claude\|codex] [--after launch\|serve\|exit] [--model ID]` | Save the default ACP harness and model in the resolved configuration, or BitRouter home when absent. Credential flags: `--cloud-login`, `--api-key`, `--provider`, `--provider-api-key`, `--use-detected`. Headless setup reports-and-skips interactive logins. `--after launch` opens BitRouter ACP TUI; `--force` resets existing configuration. |

@@ -290,6 +290,54 @@ Portable — there is no terminal-only path left to gate.
 
 ## Config
 
+### `bro config migrate-routers`
+
+Preview conversion of block-form `presets:` into named `routers:` without
+changing the source. The candidate preserves comments, request defaults,
+provider preferences and policy bindings. Policy-lock contents, credentials,
+`chat.model` and runtime mode stay unchanged.
+
+```bash
+bro config migrate-routers -c bitrouter.yaml --candidate routers.candidate.yaml
+# Review the candidate diff, then use source_digest from the preview report:
+bro config migrate-routers -c bitrouter.yaml --candidate routers.candidate.yaml \
+  --apply --source-digest 'sha256:...'
+```
+
+Apply rejects a changed source or edited candidate, keeps a separate backup,
+and replaces the source atomically. Restart the daemon to activate new routers.
+Candidate and backup files can contain the same secrets as the original config;
+they are local files, not included in report JSON. Unsupported YAML layouts,
+invalid legacy names, or incompatible existing routers need an explicit manual
+edit; migration never silently renames a caller-visible address.
+Pass the actual file path for symlink-backed configs. CRLF is preserved; mixed
+line endings must be normalized before migration.
+Existing `@name[:variant]` calls continue to work during the compatibility
+window. New callers should use `bitrouter/name`; canonical addresses do not
+accept variants, except the existing `bitrouter/auto` compatibility entry.
+
+Router authorization retains the existing requested-selector contract. An
+access policy that grants `bitrouter/coding` delegates model choice to coding;
+granting only a physical model does not grant the router alias. The current
+pipeline does not recheck the model allowlist after router selection.
+
+`bro config validate` reports named-router counts and legacy migration guidance.
+The routing binding digest in diagnostics excludes prompt and parameter values;
+it cannot identify changes confined to those values. It is distinct from the
+policy artifact digest and from the exact-file checksum used by migration.
+
+`bro models` adds a router inventory alongside the compatible model catalog.
+`bro status` distinguishes `saved_routers`, `running_routers`, and the optional
+`router_restart_required` result; unavailable runtime evidence stays unknown.
+`bro route bitrouter/coding` reports `router`, `router_source`, `bound_policy`,
+and routable `candidate_models`. A dynamic policy preview reports
+`policy_decision_executed: false`, labels `effective_model` as the base input,
+and leaves `provider_chain` empty: it has not executed the policy or selected
+an upstream. Settled request history records optional `router_id`,
+`binding_digest`, and `original_selector` beside the actual provider/model.
+Old rows keep null identities; these fields are not exported as new trace
+attributes in this batch.
+
 ### `bro init` (onboarding wizard)
 
 ```bash

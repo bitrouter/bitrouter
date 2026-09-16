@@ -745,6 +745,21 @@ enum ContextAction {
 
 #[derive(Subcommand)]
 enum ConfigAction {
+    /// Preview a source-preserving migration from presets to named routers.
+    MigrateRouters {
+        /// Source bitrouter.yaml; standard local config resolution applies.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Candidate output path for preview, or reviewed input path for apply.
+        #[arg(long)]
+        candidate: Option<PathBuf>,
+        /// Apply the reviewed candidate and retain a backup of the source.
+        #[arg(long, requires_all = ["candidate", "source_digest"])]
+        apply: bool,
+        /// Exact source digest returned by the preview; refuses stale edits.
+        #[arg(long, requires = "apply")]
+        source_digest: Option<String>,
+    },
     /// Validate a config file: structure, provider `derives` resolution, and
     /// upstream-URL (SSRF) safety. Exits non-zero on an invalid config — safe
     /// to run in CI. Unset `${VAR}` references are substituted with a
@@ -2066,15 +2081,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             };
             bitrouter::onboarding::run(flags, output).await
         }
-        Command::Config { action } => {
-            let report = config_cmd(action).await?;
-            output.emit(&report)?;
-            if report.valid {
-                Ok(())
-            } else {
-                std::process::exit(1)
-            }
-        }
+        Command::Config { action } => config_cmd(action, output).await,
         Command::Key { action } => {
             output.emit(&key(action).await?)?;
             Ok(())
@@ -2444,8 +2451,26 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
 // ===== `bro config …` (config tooling) =====
 
-async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
+async fn config_cmd(action: ConfigAction, output: &Output) -> Result<()> {
     match action {
+        ConfigAction::MigrateRouters {
+            config,
+            candidate,
+            apply,
+            source_digest,
+        } => {
+            let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            let path = require_policy_config_path(&source)?;
+            let report = bitrouter::router_migration::migrate(
+                path,
+                candidate.as_deref(),
+                apply,
+                source_digest.as_deref(),
+            )
+            .await?;
+            output.emit(&report)?;
+            Ok(())
+        }
         ConfigAction::Validate { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             // A `chat.commands` name that shadows one of BitRouter's own is a
@@ -2453,7 +2478,13 @@ async fn config_cmd(action: ConfigAction) -> Result<ValidateReport> {
             // told — not on the first `bro chat` of the day.
             let loaded = bitrouter::paths::load_config(&source).await?;
             bitrouter::actions::session::prompt_commands(&loaded.chat)?;
-            validate_config(&source).await
+            let report = validate_config(&source).await?;
+            output.emit(&report)?;
+            if report.valid {
+                Ok(())
+            } else {
+                std::process::exit(1)
+            }
         }
     }
 }
@@ -2865,6 +2896,7 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
                     .map(|name| UnsetVar { unset_env: name })
                     .collect(),
             )
+            .with_routers(cfg.routers.len())
             // Reported, never fatal: an unread `plugins.<id>` block is a
             // misconfiguration rather than a malformed config, and this
             // command is CI-gating. The daemon warns about the same set on

@@ -53,6 +53,7 @@ mod prompt;
 pub mod reload;
 pub mod remote_control;
 pub mod result_contract;
+pub mod router_migration;
 pub mod session_identity;
 pub mod skills;
 pub mod spawn;
