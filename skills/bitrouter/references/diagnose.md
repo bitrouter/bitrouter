@@ -231,3 +231,8 @@ required credentials prevent activation; timeout, incompatible response and
 oversize input fail closed before model dispatch. The initial checker covers
 entry-request text only, including router defaults and existing tool text. It
 does not inspect file bytes, generated output or later tools inside a harness.
+
+Actual-use inventory is derived from the latest started invocation's retained
+receipt. When that receipt expires or is evicted, the view reports no retained
+evidence; it does not substitute an older allow or claim the checker was never
+used. Synthetic probe history is separate from receipt retention.

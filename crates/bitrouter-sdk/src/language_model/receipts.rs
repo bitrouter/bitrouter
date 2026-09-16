@@ -71,6 +71,12 @@ pub struct RequestCheckReceipt {
     pub invocation_id: Option<String>,
     /// Stable result classification.
     pub status: RequestCheckStatus,
+    /// Furthest remote-dispatch boundary reached by a started invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch: Option<RequestCheckDispatchStatus>,
+    /// Time of the latest lifecycle observation in Unix milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at_unix_ms: Option<u64>,
     /// Bounded ASCII denial code, when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason_code: Option<String>,
@@ -112,6 +118,27 @@ pub enum RequestCheckStatus {
     Failed,
     /// An earlier binding stopped the ordered checker chain.
     Skipped,
+}
+
+/// How far a real checker invocation progressed toward its remote service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestCheckDispatchStatus {
+    /// The invocation was queued or rejected locally before an HTTP attempt.
+    NotAttempted,
+    /// An HTTP attempt began but no response headers were received.
+    Attempted,
+    /// Response headers were received from the checker.
+    ResponseReceived,
+}
+
+/// Latest retained invocation started for one checker binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatestRequestCheck {
+    /// Caller-visible gateway request id.
+    pub request_id: String,
+    /// Receipt-owned invocation evidence.
+    pub check: RequestCheckReceipt,
 }
 
 /// Terminal request outcome.
@@ -299,6 +326,13 @@ struct StoreState {
     records: HashMap<String, StoredReceipt>,
     order: VecDeque<String>,
     next_sequence: u64,
+    latest_started: HashMap<String, LatestStartedCheck>,
+}
+
+#[derive(Debug)]
+struct LatestStartedCheck {
+    receipt_id: String,
+    check_index: usize,
 }
 
 #[derive(Debug)]
@@ -407,6 +441,8 @@ impl RequestReceiptStore {
                     binding_digest: None,
                     invocation_id: None,
                     status: RequestCheckStatus::NotEnabled,
+                    dispatch: None,
+                    observed_at_unix_ms: None,
                     reason_code: None,
                     implementation_version: None,
                     failure_kind: None,
@@ -423,6 +459,8 @@ impl RequestReceiptStore {
                         binding_digest: Some(binding.binding_digest.clone()),
                         invocation_id: None,
                         status: RequestCheckStatus::NotRun,
+                        dispatch: None,
+                        observed_at_unix_ms: None,
                         reason_code: None,
                         implementation_version: None,
                         failure_kind: None,
@@ -532,6 +570,35 @@ impl RequestReceiptStore {
         }
     }
 
+    /// Snapshot the latest retained invocation started for each binding.
+    /// Start transitions are serialized by the store mutex, so concurrent
+    /// requests have a deterministic latest-started view without timestamps.
+    pub fn latest_started_checks(&self) -> HashMap<String, LatestRequestCheck> {
+        if !self.inner.healthy.load(Ordering::Acquire) {
+            return HashMap::new();
+        }
+        let Ok(mut state) = self.inner.state.lock() else {
+            self.inner.healthy.store(false, Ordering::Release);
+            return HashMap::new();
+        };
+        prune_expired(&mut state, Instant::now(), self.inner.config.completed_ttl);
+        state
+            .latest_started
+            .iter()
+            .filter_map(|(binding_digest, latest)| {
+                let record = state.records.get(&latest.receipt_id)?;
+                let check = record.receipt.checks.get(latest.check_index)?.clone();
+                Some((
+                    binding_digest.clone(),
+                    LatestRequestCheck {
+                        request_id: record.receipt.identity.request_id.clone(),
+                        check,
+                    },
+                ))
+            })
+            .collect()
+    }
+
     fn mutate(&self, request_id: &str, update: impl FnOnce(&mut StoredReceipt)) {
         if !self.inner.healthy.load(Ordering::Acquire) {
             return;
@@ -572,16 +639,44 @@ impl RequestReceiptHandle {
         index: usize,
         invocation_id: &str,
         coverage: RequestCheckCoverage,
-    ) {
-        self.store.mutate(&self.receipt_id, |record| {
-            if let Some(check) = record.receipt.checks.get_mut(index) {
-                check.invocation_id =
-                    Some(truncate(invocation_id.to_owned(), MAX_IDENTIFIER_BYTES));
-                check.status = RequestCheckStatus::Pending;
-                check.coverage = Some(coverage);
-                check.started_at_unix_ms = Some(unix_millis());
+    ) -> Option<RequestCheckReporter> {
+        if !self.store.inner.healthy.load(Ordering::Acquire) {
+            return None;
+        }
+        let Ok(mut state) = self.store.inner.state.lock() else {
+            self.store.inner.healthy.store(false, Ordering::Release);
+            return None;
+        };
+        let binding_digest = {
+            let record = state.records.get_mut(&self.receipt_id)?;
+            if record.receipt.outcome.is_some() {
+                return None;
             }
-        });
+            let check = record.receipt.checks.get_mut(index)?;
+            if check.status != RequestCheckStatus::NotRun {
+                return None;
+            }
+            check.invocation_id = Some(truncate(invocation_id.to_owned(), MAX_IDENTIFIER_BYTES));
+            check.status = RequestCheckStatus::Pending;
+            check.dispatch = Some(RequestCheckDispatchStatus::NotAttempted);
+            check.coverage = Some(coverage);
+            let now = unix_millis();
+            check.started_at_unix_ms = Some(now);
+            check.observed_at_unix_ms = Some(now);
+            check.binding_digest.clone()?
+        };
+        state.latest_started.insert(
+            binding_digest,
+            LatestStartedCheck {
+                receipt_id: self.receipt_id.clone(),
+                check_index: index,
+            },
+        );
+        Some(RequestCheckReporter {
+            store: self.store.clone(),
+            receipt_id: self.receipt_id.clone(),
+            check_index: index,
+        })
     }
 
     /// Complete one ordered checker invocation.
@@ -593,8 +688,20 @@ impl RequestReceiptHandle {
         implementation_version: Option<String>,
         failure_kind: Option<CheckerFailureKind>,
     ) {
+        if !matches!(
+            status,
+            RequestCheckStatus::Allowed | RequestCheckStatus::Denied | RequestCheckStatus::Failed
+        ) {
+            return;
+        }
         self.store.mutate(&self.receipt_id, |record| {
+            if record.receipt.outcome.is_some() {
+                return;
+            }
             if let Some(check) = record.receipt.checks.get_mut(index) {
+                if check.status != RequestCheckStatus::Pending {
+                    return;
+                }
                 check.status = status;
                 check.reason_code = reason_code
                     .filter(|value| value.is_ascii())
@@ -602,7 +709,9 @@ impl RequestReceiptHandle {
                 check.implementation_version =
                     implementation_version.map(|value| truncate(value, MAX_IDENTIFIER_BYTES));
                 check.failure_kind = failure_kind;
-                check.finished_at_unix_ms = Some(unix_millis());
+                let now = unix_millis();
+                check.finished_at_unix_ms = Some(now);
+                check.observed_at_unix_ms = Some(now);
             }
         });
     }
@@ -636,9 +745,69 @@ impl RequestReceiptHandle {
                     } else if check.status == RequestCheckStatus::Pending {
                         check.status = RequestCheckStatus::Interrupted;
                         check.finished_at_unix_ms = record.receipt.completed_at_unix_ms;
+                        check.observed_at_unix_ms = record.receipt.completed_at_unix_ms;
                     }
                 }
                 record.completed_at = Some(Instant::now());
+            }
+        });
+    }
+}
+
+/// Receipt-owned progress reporter for one real checker invocation.
+#[derive(Debug, Clone)]
+pub struct RequestCheckReporter {
+    store: RequestReceiptStore,
+    receipt_id: String,
+    check_index: usize,
+}
+
+impl RequestCheckReporter {
+    /// Record that the HTTP attempt began.
+    pub fn mark_dispatched(&self) {
+        self.advance(RequestCheckDispatchStatus::Attempted);
+    }
+
+    /// Record that response headers arrived from the checker.
+    pub fn mark_response_received(&self) {
+        self.advance(RequestCheckDispatchStatus::ResponseReceived);
+    }
+
+    /// Read the current receipt-owned dispatch boundary.
+    pub fn dispatch_status(&self) -> Option<RequestCheckDispatchStatus> {
+        if !self.store.inner.healthy.load(Ordering::Acquire) {
+            return None;
+        }
+        let Ok(state) = self.store.inner.state.lock() else {
+            self.store.inner.healthy.store(false, Ordering::Release);
+            return None;
+        };
+        state
+            .records
+            .get(&self.receipt_id)
+            .and_then(|record| record.receipt.checks.get(self.check_index))
+            .and_then(|check| check.dispatch)
+    }
+
+    fn advance(&self, next: RequestCheckDispatchStatus) {
+        self.store.mutate(&self.receipt_id, |record| {
+            let Some(check) = record.receipt.checks.get_mut(self.check_index) else {
+                return;
+            };
+            if check.status != RequestCheckStatus::Pending {
+                return;
+            }
+            let advances = match (check.dispatch, next) {
+                (Some(RequestCheckDispatchStatus::ResponseReceived), _) => false,
+                (
+                    Some(RequestCheckDispatchStatus::Attempted),
+                    RequestCheckDispatchStatus::NotAttempted,
+                ) => false,
+                (current, next) => current != Some(next),
+            };
+            if advances {
+                check.dispatch = Some(next);
+                check.observed_at_unix_ms = Some(unix_millis());
             }
         });
     }
@@ -676,6 +845,9 @@ fn prune_expired(state: &mut StoreState, now: Instant, ttl: Duration) {
 fn remove_record(state: &mut StoreState, request_id: &str) {
     state.records.remove(request_id);
     state.order.retain(|id| id != request_id);
+    state
+        .latest_started
+        .retain(|_, latest| latest.receipt_id != request_id);
 }
 
 fn unix_millis() -> u64 {
@@ -707,6 +879,25 @@ mod tests {
             router_id: name.to_owned(),
             original_selector: format!("bitrouter/{name}"),
             binding_digest: format!("digest-{name}"),
+        }
+    }
+
+    fn binding(id: &str) -> RequestCheckBinding {
+        RequestCheckBinding {
+            checker_id: id.to_owned(),
+            binding_digest: format!("digest-{id}"),
+            max_input_bytes: 1024,
+            timeout_ms: 100,
+        }
+    }
+
+    fn coverage() -> RequestCheckCoverage {
+        RequestCheckCoverage {
+            scope: crate::language_model::request_checks::RequestCheckCoverageScope::EntryRequestText,
+            text_bytes: 4,
+            text_fragments: 1,
+            excluded_media_fragments: 0,
+            status: crate::language_model::request_checks::RequestCheckCoverageStatus::CompleteWithinScope,
         }
     }
 
@@ -892,24 +1083,9 @@ mod tests {
             RequestReceiptStoreConfig::default(),
             "process-1",
         );
-        let bindings = ["first", "second"].map(|id| RequestCheckBinding {
-            checker_id: id.to_owned(),
-            binding_digest: format!("digest-{id}"),
-            max_input_bytes: 1024,
-            timeout_ms: 100,
-        });
+        let bindings = ["first", "second"].map(binding);
         let handle = store.admit("request-1", &router("coding"), &bindings)?;
-        handle.mark_check_started(
-            0,
-            "invocation-1",
-            RequestCheckCoverage {
-                scope: crate::language_model::request_checks::RequestCheckCoverageScope::EntryRequestText,
-                text_bytes: 4,
-                text_fragments: 1,
-                excluded_media_fragments: 0,
-                status: crate::language_model::request_checks::RequestCheckCoverageStatus::CompleteWithinScope,
-            },
-        );
+        handle.mark_check_started(0, "invocation-1", coverage());
         handle.mark_check_finished(
             0,
             RequestCheckStatus::Denied,
@@ -929,6 +1105,117 @@ mod tests {
         assert!(receipt.checks[0].started_at_unix_ms.is_some());
         assert!(receipt.checks[0].finished_at_unix_ms.is_some());
         assert_eq!(receipt.checks[1].status, RequestCheckStatus::Skipped);
+        Ok(())
+    }
+
+    #[test]
+    fn reporter_is_monotonic_and_cannot_mutate_terminal_check()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let store = RequestReceiptStore::with_incarnation(
+            RequestReceiptStoreConfig::default(),
+            "process-1",
+        );
+        let handle = store.admit("request-1", &router("coding"), &[binding("safety")])?;
+        let reporter = handle
+            .mark_check_started(0, "invocation-1", coverage())
+            .ok_or("check did not start")?;
+        reporter.mark_response_received();
+        reporter.mark_dispatched();
+        assert_eq!(
+            reporter.dispatch_status(),
+            Some(RequestCheckDispatchStatus::ResponseReceived)
+        );
+        handle.mark_check_finished(0, RequestCheckStatus::Allowed, None, None, None);
+        reporter.mark_dispatched();
+        assert!(
+            handle
+                .mark_check_started(0, "invocation-2", coverage())
+                .is_none()
+        );
+        let RequestReceiptLookup::Found { receipt, .. } = store.get("request-1", None) else {
+            return Err("receipt missing".into());
+        };
+        assert_eq!(receipt.checks[0].status, RequestCheckStatus::Allowed);
+        assert_eq!(
+            receipt.checks[0].dispatch,
+            Some(RequestCheckDispatchStatus::ResponseReceived)
+        );
+
+        let terminal = store.admit("request-2", &router("coding"), &[binding("safety")])?;
+        let terminal_reporter = terminal
+            .mark_check_started(0, "invocation-2", coverage())
+            .ok_or("terminal check did not start")?;
+        terminal.mark_check_finished(0, RequestCheckStatus::Allowed, None, None, None);
+        terminal.finish(
+            RequestReceiptOutcome::Completed,
+            RequestDeliveryStatus::ServerCommitted,
+            None,
+        );
+        terminal_reporter.mark_response_received();
+        assert_eq!(
+            terminal_reporter.dispatch_status(),
+            Some(RequestCheckDispatchStatus::NotAttempted)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn evicting_latest_started_check_does_not_revive_older_evidence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let store = RequestReceiptStore::with_incarnation(
+            RequestReceiptStoreConfig {
+                capacity: 2,
+                completed_ttl: Duration::from_secs(60),
+            },
+            "process-1",
+        );
+        let checker = binding("safety");
+        let older = store.admit(
+            "request-older",
+            &router("coding"),
+            std::slice::from_ref(&checker),
+        )?;
+        older
+            .mark_check_started(0, "invocation-older", coverage())
+            .ok_or("older check did not start")?;
+        older.mark_check_finished(0, RequestCheckStatus::Allowed, None, None, None);
+        let newer = store.admit(
+            "request-newer",
+            &router("coding"),
+            std::slice::from_ref(&checker),
+        )?;
+        newer
+            .mark_check_started(0, "invocation-newer", coverage())
+            .ok_or("newer check did not start")?;
+        newer.mark_check_finished(0, RequestCheckStatus::Denied, None, None, None);
+        newer.finish(
+            RequestReceiptOutcome::Denied,
+            RequestDeliveryStatus::NotApplicable,
+            Some(RequestFailureStage::RequestCheck),
+        );
+
+        let latest = store.latest_started_checks();
+        assert_eq!(
+            latest
+                .get(&checker.binding_digest)
+                .and_then(|view| view.check.invocation_id.as_deref()),
+            Some("invocation-newer")
+        );
+        let _third = store.admit("request-third", &router("coding"), &[])?;
+
+        assert!(matches!(
+            store.get("request-older", None),
+            RequestReceiptLookup::Found { .. }
+        ));
+        assert!(matches!(
+            store.get("request-newer", None),
+            RequestReceiptLookup::Unknown { .. }
+        ));
+        assert!(
+            !store
+                .latest_started_checks()
+                .contains_key(&checker.binding_digest)
+        );
         Ok(())
     }
 }

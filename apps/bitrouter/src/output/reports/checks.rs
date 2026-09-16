@@ -1,9 +1,9 @@
 //! Human views for request-check inventory, probes, and process-local receipts.
 
 use bitrouter_sdk::language_model::receipts::{
-    RequestCheckStatus, RequestDeliveryStatus, RequestFailureStage, RequestReceipt,
-    RequestReceiptList, RequestReceiptLookup, RequestReceiptOutcome, RequestReceiptStoreHealth,
-    RequestReceiptUnknownReason,
+    RequestCheckDispatchStatus, RequestCheckStatus, RequestDeliveryStatus, RequestFailureStage,
+    RequestReceipt, RequestReceiptList, RequestReceiptLookup, RequestReceiptOutcome,
+    RequestReceiptStoreHealth, RequestReceiptUnknownReason,
 };
 use bitrouter_sdk::language_model::request_checks::{
     CheckerFailureKind, RequestCheckCoverageScope, RequestCheckCoverageStatus,
@@ -13,10 +13,7 @@ use crate::actions::checks::{CheckerProbeReport, ChecksReport};
 use crate::output::CliReport;
 use crate::output::human::{Human, Table};
 use crate::reload::{RunningConfigState, SavedConfigState};
-use crate::request_checks::{
-    CheckerActualStatus, CheckerDispatchStatus, CheckerProbeDecision, ProbeProtocolStatus,
-    ProbeReachability,
-};
+use crate::request_checks::{CheckerProbeDecision, ProbeProtocolStatus, ProbeReachability};
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
@@ -178,6 +175,18 @@ impl CliReport for RequestReceiptLookup {
                         }
                         if let Some(invocation) = &check.invocation_id {
                             human.field("check invocation", invocation)?;
+                        }
+                        if let Some(dispatch) = check.dispatch {
+                            human.field(
+                                "check dispatch",
+                                match dispatch {
+                                    RequestCheckDispatchStatus::NotAttempted => "not_attempted",
+                                    RequestCheckDispatchStatus::Attempted => "attempted",
+                                    RequestCheckDispatchStatus::ResponseReceived => {
+                                        "response_received"
+                                    }
+                                },
+                            )?;
                         }
                         if let Some(reason) = &check.reason_code {
                             human.field("check reason", reason)?;
@@ -371,21 +380,26 @@ impl CliReport for ChecksReport {
                             format!(
                                 "{}; {} @{}",
                                 match actual.status {
-                                    CheckerActualStatus::Pending => "pending",
-                                    CheckerActualStatus::Interrupted => "interrupted",
-                                    CheckerActualStatus::Allowed => "allowed",
-                                    CheckerActualStatus::Denied => "denied",
-                                    CheckerActualStatus::Failed => "failed",
+                                    RequestCheckStatus::Pending => "pending",
+                                    RequestCheckStatus::Interrupted => "interrupted",
+                                    RequestCheckStatus::Allowed => "allowed",
+                                    RequestCheckStatus::Denied => "denied",
+                                    RequestCheckStatus::Failed => "failed",
+                                    RequestCheckStatus::NotRun
+                                    | RequestCheckStatus::NotEnabled
+                                    | RequestCheckStatus::Skipped => "unknown",
                                 },
                                 match actual.dispatch {
-                                    CheckerDispatchStatus::NotAttempted => "not_attempted",
-                                    CheckerDispatchStatus::Attempted => "attempted",
-                                    CheckerDispatchStatus::ResponseReceived => "response_received",
+                                    RequestCheckDispatchStatus::NotAttempted => "not_attempted",
+                                    RequestCheckDispatchStatus::Attempted => "attempted",
+                                    RequestCheckDispatchStatus::ResponseReceived => {
+                                        "response_received"
+                                    }
                                 },
                                 actual.observed_at_unix_ms
                             )
                         })
-                        .unwrap_or_else(|| "never".into()),
+                        .unwrap_or_else(|| "no retained evidence".into()),
                 ]);
             }
             human.table(&table)?;
@@ -498,6 +512,8 @@ mod tests {
                     binding_digest: Some("sha256:checker-binding".into()),
                     invocation_id: Some("invocation-1".into()),
                     status: RequestCheckStatus::Failed,
+                    dispatch: Some(RequestCheckDispatchStatus::ResponseReceived),
+                    observed_at_unix_ms: Some(3),
                     reason_code: Some("review_required".into()),
                     implementation_version: Some("checker-v1".into()),
                     failure_kind: Some(CheckerFailureKind::Timeout),

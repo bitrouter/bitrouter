@@ -1841,3 +1841,8 @@ Checkers and router check bindings require restart after changes. Static
 validation and runtime credential readiness are distinct from connectivity.
 See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for the HTTP contract,
 coverage boundary and acceptance ledger.
+
+Actual-use inventory is derived from the latest started invocation's retained
+receipt. When that receipt expires or is evicted, the view reports no retained
+evidence; it does not substitute an older allow or claim the checker was never
+used. Synthetic probe history is separate from receipt retention.

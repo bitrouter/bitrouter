@@ -1,5 +1,4 @@
-//! The `language_model` pipeline — the four-stage flight pipeline plus the
-//! interleaved StreamHook stage.
+//! The `language_model` flight pipeline plus its interleaved StreamHook stage.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -54,7 +53,44 @@ struct StreamingExecution {
 struct ResolvedRequestBinding {
     resolution: ModelResolution,
     request_checks: Vec<RequestCheckBinding>,
-    selector_at_binding: String,
+    resolved_selector: String,
+}
+
+struct PreparedEntry {
+    ctx: PipelineContext,
+    chain: Vec<RoutingTarget>,
+}
+
+struct EntryPreparationFailure {
+    error: BitrouterError,
+    stage: RequestFailureStage,
+    requires_settlement: bool,
+}
+
+impl EntryPreparationFailure {
+    fn pre_request(error: BitrouterError) -> Self {
+        Self {
+            error,
+            stage: RequestFailureStage::PreRequest,
+            requires_settlement: false,
+        }
+    }
+
+    fn request_check(error: BitrouterError) -> Self {
+        Self {
+            error,
+            stage: RequestFailureStage::RequestCheck,
+            requires_settlement: false,
+        }
+    }
+
+    fn route(error: BitrouterError) -> Self {
+        Self {
+            error,
+            stage: RequestFailureStage::Route,
+            requires_settlement: true,
+        }
+    }
 }
 
 pub(crate) struct DeliveryPermit {
@@ -524,108 +560,7 @@ impl Pipeline {
     }
 
     async fn execute_prepared(&self, req: PipelineRequest) -> Result<PreparedPipelineResponse> {
-        let mut ctx = PipelineContext::new(req);
-        self.observe_start(&ctx).await;
-
-        // ---- Stage 0: local auth/session/continuation normalization ----
-        if let Err(e) = self.run_pre_resolution(&mut ctx).await {
-            log_request_resolve_failed(&ctx, &e);
-            self.observe_end(
-                &ctx,
-                RequestOutcome::Failed(e.clone()),
-                Some(RequestFailureStage::PreRequest),
-            )
-            .await;
-            return Err(e);
-        }
-
-        // Freeze the ingress router identity and checker bindings before any
-        // hook may select a different effective named route.
-        let mut resolution = match self.resolve_binding(&mut ctx).await {
-            Ok(resolution) => resolution,
-            Err(e) => {
-                log_request_resolve_failed(&ctx, &e);
-                self.run_settlement(&mut ctx, false, Some(e.clone())).await;
-                self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(
-                    &ctx,
-                    RequestOutcome::Failed(e.clone()),
-                    Some(RequestFailureStage::Route),
-                )
-                .await;
-                return Err(e);
-            }
-        };
-
-        if let Err(e) = self.run_router_preparation(&mut ctx).await {
-            log_request_resolve_failed(&ctx, &e);
-            self.observe_end(
-                &ctx,
-                RequestOutcome::Failed(e.clone()),
-                Some(RequestFailureStage::PreRequest),
-            )
-            .await;
-            return Err(e);
-        }
-        resolution = match self.resolve_effective_binding(&mut ctx, resolution).await {
-            Ok(resolution) => resolution,
-            Err(e) => {
-                log_request_resolve_failed(&ctx, &e);
-                self.run_settlement(&mut ctx, false, Some(e.clone())).await;
-                self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(
-                    &ctx,
-                    RequestOutcome::Failed(e.clone()),
-                    Some(RequestFailureStage::Route),
-                )
-                .await;
-                return Err(e);
-            }
-        };
-        // ---- Stage 1: local policy/guardrail checks, then external checks ----
-        if let Err(e) = self.run_pre_request(&mut ctx).await {
-            log_request_resolve_failed(&ctx, &e);
-            self.observe_end(
-                &ctx,
-                RequestOutcome::Failed(e.clone()),
-                Some(RequestFailureStage::PreRequest),
-            )
-            .await;
-            return Err(e);
-        }
-        if let Err(e) = self
-            .run_request_checks(&mut ctx, &resolution.request_checks)
-            .await
-        {
-            log_request_resolve_failed(&ctx, &e);
-            self.observe_end(
-                &ctx,
-                RequestOutcome::Failed(e.clone()),
-                Some(RequestFailureStage::RequestCheck),
-            )
-            .await;
-            return Err(e);
-        }
-        self.observe_after(Phase::PreRequest, &ctx).await;
-
-        // ---- Stage 2: route resolution ----
-        let chain = match self.resolve_route(&mut ctx, resolution).await {
-            Ok(chain) => chain,
-            Err(e) => {
-                log_request_resolve_failed(&ctx, &e);
-                self.run_settlement(&mut ctx, false, Some(e.clone())).await;
-                self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(
-                    &ctx,
-                    RequestOutcome::Failed(e.clone()),
-                    Some(RequestFailureStage::Route),
-                )
-                .await;
-                return Err(e);
-            }
-        };
-        self.observe_after(Phase::Route, &ctx).await;
-        log_request_received(&ctx, chain.first(), false);
+        let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, false).await?;
 
         // ---- Stage 3: execution (with the server-side tool loop when configured) ----
         let exec_outcome = match &self.server_tool_loop {
@@ -803,101 +738,7 @@ impl Pipeline {
         self: Arc<Self>,
         req: PipelineRequest,
     ) -> Result<PreparedPipelineStream> {
-        let mut ctx = PipelineContext::new(req);
-        self.observe_start(&ctx).await;
-
-        if let Err(e) = self.run_pre_resolution(&mut ctx).await {
-            log_request_resolve_failed(&ctx, &e);
-            self.observe_end(
-                &ctx,
-                RequestOutcome::Failed(e.clone()),
-                Some(RequestFailureStage::PreRequest),
-            )
-            .await;
-            return Err(e);
-        }
-        let mut resolution = match self.resolve_binding(&mut ctx).await {
-            Ok(resolution) => resolution,
-            Err(e) => {
-                log_request_resolve_failed(&ctx, &e);
-                self.run_settlement(&mut ctx, false, Some(e.clone())).await;
-                self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(
-                    &ctx,
-                    RequestOutcome::Failed(e.clone()),
-                    Some(RequestFailureStage::Route),
-                )
-                .await;
-                return Err(e);
-            }
-        };
-        if let Err(e) = self.run_router_preparation(&mut ctx).await {
-            log_request_resolve_failed(&ctx, &e);
-            self.observe_end(
-                &ctx,
-                RequestOutcome::Failed(e.clone()),
-                Some(RequestFailureStage::PreRequest),
-            )
-            .await;
-            return Err(e);
-        }
-        resolution = match self.resolve_effective_binding(&mut ctx, resolution).await {
-            Ok(resolution) => resolution,
-            Err(e) => {
-                log_request_resolve_failed(&ctx, &e);
-                self.run_settlement(&mut ctx, false, Some(e.clone())).await;
-                self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(
-                    &ctx,
-                    RequestOutcome::Failed(e.clone()),
-                    Some(RequestFailureStage::Route),
-                )
-                .await;
-                return Err(e);
-            }
-        };
-        if let Err(e) = self.run_pre_request(&mut ctx).await {
-            log_request_resolve_failed(&ctx, &e);
-            self.observe_end(
-                &ctx,
-                RequestOutcome::Failed(e.clone()),
-                Some(RequestFailureStage::PreRequest),
-            )
-            .await;
-            return Err(e);
-        }
-        if let Err(e) = self
-            .run_request_checks(&mut ctx, &resolution.request_checks)
-            .await
-        {
-            log_request_resolve_failed(&ctx, &e);
-            self.observe_end(
-                &ctx,
-                RequestOutcome::Failed(e.clone()),
-                Some(RequestFailureStage::RequestCheck),
-            )
-            .await;
-            return Err(e);
-        }
-        self.observe_after(Phase::PreRequest, &ctx).await;
-
-        let chain = match self.resolve_route(&mut ctx, resolution).await {
-            Ok(chain) => chain,
-            Err(e) => {
-                log_request_resolve_failed(&ctx, &e);
-                self.run_settlement(&mut ctx, false, Some(e.clone())).await;
-                self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(
-                    &ctx,
-                    RequestOutcome::Failed(e.clone()),
-                    Some(RequestFailureStage::Route),
-                )
-                .await;
-                return Err(e);
-            }
-        };
-        self.observe_after(Phase::Route, &ctx).await;
-        log_request_received(&ctx, chain.first(), true);
+        let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, true).await?;
         let latest_attempt: SharedStreamAttempt = Arc::new(std::sync::Mutex::new(None));
 
         // Route Stage 3 through the server-side tool loop when configured: the
@@ -1088,6 +929,92 @@ impl Pipeline {
 
     // ===== stage helpers =====
 
+    async fn prepare_entry(&self, req: PipelineRequest, streamed: bool) -> Result<PreparedEntry> {
+        let mut ctx = PipelineContext::new(req);
+        self.observe_start(&ctx).await;
+
+        match self.prepare_entry_stages(&mut ctx).await {
+            Ok(chain) => {
+                self.observe_after(Phase::Route, &ctx).await;
+                log_request_received(&ctx, chain.first(), streamed);
+                Ok(PreparedEntry { ctx, chain })
+            }
+            Err(failure) => {
+                log_request_resolve_failed(&ctx, &failure.error);
+                if failure.requires_settlement {
+                    self.run_settlement(&mut ctx, false, Some(failure.error.clone()))
+                        .await;
+                    self.observe_after(Phase::Settlement, &ctx).await;
+                }
+                self.observe_end(
+                    &ctx,
+                    RequestOutcome::Failed(failure.error.clone()),
+                    Some(failure.stage),
+                )
+                .await;
+                Err(failure.error)
+            }
+        }
+    }
+
+    async fn prepare_entry_stages(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> std::result::Result<Vec<RoutingTarget>, EntryPreparationFailure> {
+        // Local auth/session/continuation normalization must finish before any
+        // configured checker can cause external egress.
+        self.run_pre_resolution(ctx)
+            .await
+            .map_err(EntryPreparationFailure::pre_request)?;
+
+        // Freeze the ingress router identity and checker bindings before an
+        // app hook can choose a different effective route.
+        let mut binding = self
+            .resolve_binding(ctx)
+            .await
+            .map_err(EntryPreparationFailure::route)?;
+        self.run_router_preparation(ctx)
+            .await
+            .map_err(EntryPreparationFailure::pre_request)?;
+
+        if binding.request_checks.is_empty() {
+            // Compatibility path: before named-router request checks existed,
+            // ordinary pre-request hooks could rewrite a bare/legacy selector
+            // before its defaults were resolved. Preserve that behavior for
+            // unguarded requests so only the final selector contributes
+            // defaults, preferences, and policy.
+            self.run_pre_request(ctx, None)
+                .await
+                .map_err(EntryPreparationFailure::pre_request)?;
+            binding = self
+                .resolve_effective_binding(ctx, binding)
+                .await
+                .map_err(EntryPreparationFailure::route)?;
+        } else {
+            // Checked routers resolve preparation rewrites and defaults before
+            // local policy/guardrail hooks. The effective selector is then
+            // immutable: changing it here would either mix two sets of
+            // defaults or check content for a route that will not be served.
+            binding = self
+                .resolve_effective_binding(ctx, binding)
+                .await
+                .map_err(EntryPreparationFailure::route)?;
+            let checked_selector = binding.resolved_selector.clone();
+            self.run_pre_request(ctx, Some(&checked_selector))
+                .await
+                .map_err(EntryPreparationFailure::pre_request)?;
+        }
+
+        self.run_request_checks(ctx, &binding.request_checks)
+            .await
+            .map_err(EntryPreparationFailure::request_check)?;
+        self.observe_after(Phase::PreRequest, ctx).await;
+
+        self.resolve_route(ctx, binding)
+            .await
+            .map_err(EntryPreparationFailure::route)
+    }
+
     async fn run_pre_resolution(&self, ctx: &mut PipelineContext) -> Result<()> {
         for hook in &self.pre_resolution_hooks {
             match hook.check(ctx).await? {
@@ -1098,12 +1025,17 @@ impl Pipeline {
         Ok(())
     }
 
-    async fn run_pre_request(&self, ctx: &mut PipelineContext) -> Result<()> {
-        self.run_admitted_hooks(ctx, &self.pre_request_hooks).await
+    async fn run_pre_request(
+        &self,
+        ctx: &mut PipelineContext,
+        checked_selector: Option<&str>,
+    ) -> Result<()> {
+        self.run_admitted_hooks(ctx, &self.pre_request_hooks, checked_selector)
+            .await
     }
 
     async fn run_router_preparation(&self, ctx: &mut PipelineContext) -> Result<()> {
-        self.run_admitted_hooks(ctx, &self.router_preparation_hooks)
+        self.run_admitted_hooks(ctx, &self.router_preparation_hooks, None)
             .await
     }
 
@@ -1111,6 +1043,7 @@ impl Pipeline {
         &self,
         ctx: &mut PipelineContext,
         hooks: &[Arc<dyn PreRequestHook>],
+        checked_selector: Option<&str>,
     ) -> Result<()> {
         for hook in hooks {
             let decision = match hook.check(ctx).await {
@@ -1125,7 +1058,18 @@ impl Pipeline {
                 }
             };
             match decision {
-                HookDecision::Allow => continue,
+                HookDecision::Allow => {
+                    if checked_selector.is_some_and(|selector| ctx.model() != selector) {
+                        ctx.finish_request_receipt(
+                            RequestReceiptOutcome::Failed,
+                            RequestDeliveryStatus::NotApplicable,
+                            Some(RequestFailureStage::PreRequest),
+                        );
+                        return Err(BitrouterError::internal(
+                            "a pre-request hook cannot change a checked router selector; register selector rewrites as router preparation hooks",
+                        ));
+                    }
+                }
                 HookDecision::Deny(reason) => {
                     ctx.finish_request_receipt(
                         RequestReceiptOutcome::Denied,
@@ -1140,7 +1084,7 @@ impl Pipeline {
     }
 
     async fn resolve_binding(&self, ctx: &mut PipelineContext) -> Result<ResolvedRequestBinding> {
-        let selector_at_binding = ctx.model().to_owned();
+        let resolved_selector = ctx.model().to_owned();
         let mut resolution = self.routing_table.resolve_model(ctx.model()).await?;
         if resolution.request_checks.len() > MAX_RECEIPT_CHECKS {
             return Err(BitrouterError::internal(
@@ -1149,7 +1093,7 @@ impl Pipeline {
         }
         if let Some(mut identity) = resolution.router.take() {
             // Preserve the documented exact ingress selector in public router
-            // identity. `selector_at_binding` separately retains the
+            // identity. `resolved_selector` separately retains the
             // post-session value used for this resolution.
             identity.original_selector = ctx.original_model().to_owned();
             ctx.set_router_identity(identity.clone());
@@ -1180,7 +1124,7 @@ impl Pipeline {
         Ok(ResolvedRequestBinding {
             resolution,
             request_checks,
-            selector_at_binding,
+            resolved_selector,
         })
     }
 
@@ -1189,14 +1133,15 @@ impl Pipeline {
         ctx: &mut PipelineContext,
         mut binding: ResolvedRequestBinding,
     ) -> Result<ResolvedRequestBinding> {
-        if ctx.model() != binding.selector_at_binding {
+        if ctx.model() != binding.resolved_selector {
             let effective = self.routing_table.resolve_model(ctx.model()).await?;
-            if ctx.router_identity().is_none() && !effective.request_checks.is_empty() {
+            if binding.request_checks.is_empty() && !effective.request_checks.is_empty() {
                 return Err(BitrouterError::internal(
-                    "a router-preparation rewrite cannot introduce request checks",
+                    "a selector rewrite cannot introduce request checks after the ingress binding is frozen",
                 ));
             }
             binding.resolution = effective;
+            binding.resolved_selector = ctx.model().to_owned();
         }
         ctx.apply_preset_overrides(&binding.resolution.overrides);
         Ok(binding)
@@ -1220,7 +1165,12 @@ impl Pipeline {
             {
                 Ok(input) => input,
                 Err(coverage) => {
-                    ctx.mark_request_check_started(index, &invocation_id, coverage);
+                    ctx.mark_request_check_started(index, &invocation_id, coverage)
+                        .ok_or_else(|| {
+                            BitrouterError::internal(
+                                "request receipt could not start configured checker",
+                            )
+                        })?;
                     ctx.mark_request_check_finished(
                         index,
                         RequestCheckStatus::Failed,
@@ -1238,7 +1188,11 @@ impl Pipeline {
                     });
                 }
             };
-            ctx.mark_request_check_started(index, &invocation_id, coverage.clone());
+            let reporter = ctx
+                .mark_request_check_started(index, &invocation_id, coverage.clone())
+                .ok_or_else(|| {
+                    BitrouterError::internal("request receipt could not start configured checker")
+                })?;
             let Some(runner) = runner else {
                 ctx.mark_request_check_finished(
                     index,
@@ -1265,7 +1219,7 @@ impl Pipeline {
                 content,
                 coverage,
             };
-            match runner.check(invocation).await {
+            match runner.check(invocation, reporter).await {
                 Ok(CheckerDecision::Allow {
                     implementation_version,
                 }) => ctx.mark_request_check_finished(
@@ -1399,6 +1353,11 @@ impl Pipeline {
         // Binding/default resolution already ran before local and external
         // request checks. Effective model selection remains here so existing
         // pre-request ACLs continue to see the normalized named selector.
+        if ctx.model() != binding.resolved_selector {
+            return Err(BitrouterError::internal(
+                "the effective selector changed after entry preparation",
+            ));
+        }
         let resolution = binding.resolution;
         ctx.set_model(resolution.clean_model);
         if let Some(policy) = resolution.policy.as_deref() {

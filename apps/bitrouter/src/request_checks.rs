@@ -11,7 +11,10 @@ use async_trait::async_trait;
 use bitrouter_sdk::config::Config;
 use bitrouter_sdk::config::checker::CONTRACT_VERSION;
 use bitrouter_sdk::config::router::{DEFAULT_CHECKER_MAX_INPUT_BYTES, MAX_CHECKER_TIMEOUT_MS};
-use bitrouter_sdk::language_model::receipts::{RequestReceiptStore, RequestReceiptStoreConfig};
+use bitrouter_sdk::language_model::receipts::{
+    LatestRequestCheck, RequestCheckDispatchStatus, RequestCheckReporter, RequestCheckStatus,
+    RequestReceiptStore, RequestReceiptStoreConfig,
+};
 use bitrouter_sdk::language_model::request_checks::{
     CheckerDecision, CheckerFailure, CheckerFailureKind, CheckerInvocation, ContentFragment,
     ContentFragmentKind, ContentRole, RequestCheckBinding, RequestCheckCoverage,
@@ -74,41 +77,13 @@ pub struct CheckerActualUsage {
     /// Binding identity used for this invocation.
     pub binding_digest: String,
     /// Current or terminal checker outcome.
-    pub status: CheckerActualStatus,
+    pub status: RequestCheckStatus,
     /// Furthest remote-dispatch boundary reached.
-    pub dispatch: CheckerDispatchStatus,
+    pub dispatch: RequestCheckDispatchStatus,
     /// Validated remote implementation version, when returned.
     pub implementation_version: Option<String>,
     /// Observation time in Unix milliseconds.
     pub observed_at_unix_ms: u64,
-}
-
-/// Stable outcome class for the latest real checker invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum CheckerActualStatus {
-    /// Invocation is queued or in flight.
-    Pending,
-    /// Local execution was cancelled; remote completion is unknown.
-    Interrupted,
-    /// Checker returned allow.
-    Allowed,
-    /// Checker returned deny.
-    Denied,
-    /// Invocation failed closed.
-    Failed,
-}
-
-/// How far a real invocation progressed toward the remote checker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum CheckerDispatchStatus {
-    /// Local validation rejected the invocation before an HTTP attempt.
-    NotAttempted,
-    /// An HTTP attempt began but no response headers were received.
-    Attempted,
-    /// Response headers were received from the checker.
-    ResponseReceived,
 }
 
 /// Non-secret metadata for one checker in the running configuration.
@@ -191,12 +166,6 @@ pub enum CheckerProbeDecision {
     Deny,
 }
 
-#[derive(Default)]
-struct RuntimeObservations {
-    probes: HashMap<String, ProbeResult>,
-    actual: HashMap<String, CheckerActualUsage>,
-}
-
 /// Activated HTTP checkers plus the receipt store shared with the pipeline.
 pub struct RequestCheckRuntime {
     http: reqwest::Client,
@@ -204,7 +173,7 @@ pub struct RequestCheckRuntime {
     active_bindings: HashMap<String, ActiveBinding>,
     inventory: Vec<CheckerInfo>,
     receipts: RequestReceiptStore,
-    observations: Mutex<RuntimeObservations>,
+    probes: Mutex<HashMap<String, ProbeResult>>,
 }
 
 impl RequestCheckRuntime {
@@ -260,7 +229,7 @@ impl RequestCheckRuntime {
             active_bindings,
             inventory,
             receipts: RequestReceiptStore::new(RequestReceiptStoreConfig::default()),
-            observations: Mutex::new(RuntimeObservations::default()),
+            probes: Mutex::new(HashMap::new()),
         })
     }
 
@@ -271,14 +240,18 @@ impl RequestCheckRuntime {
 
     /// Sorted, redaction-safe running checker inventory.
     pub fn configured(&self) -> Vec<CheckerInfo> {
-        let observations = lock_observations(&self.observations);
+        let latest_actual = self.receipts.latest_started_checks();
+        let probes = lock_probes(&self.probes);
         self.inventory
             .iter()
             .cloned()
             .map(|mut checker| {
-                checker.last_probe = observations.probes.get(&checker.checker_id).cloned();
+                checker.last_probe = probes.get(&checker.checker_id).cloned();
                 for binding in &mut checker.bindings {
-                    binding.last_actual = observations.actual.get(&binding.binding_digest).cloned();
+                    binding.last_actual = latest_actual
+                        .get(&binding.binding_digest)
+                        .cloned()
+                        .and_then(actual_usage);
                 }
                 checker
             })
@@ -339,8 +312,9 @@ impl RequestCheckRuntime {
             },
         };
         let started = Instant::now();
+        let progress = ProbeProgress::default();
         let result = match self
-            .invoke(invocation, false, &InvocationProgress::default())
+            .invoke(invocation, false, InvocationProgress::Probe(&progress))
             .await
         {
             Ok(outcome) => ProbeResult {
@@ -392,7 +366,7 @@ impl RequestCheckRuntime {
         &self,
         invocation: CheckerInvocation,
         require_active_binding: bool,
-        progress: &InvocationProgress,
+        progress: InvocationProgress<'_>,
     ) -> Result<WireOutcome, InvokeError> {
         let checker = self
             .checkers
@@ -475,17 +449,11 @@ impl RequestCheckRuntime {
                     false,
                 )
             })?;
-            progress.request_dispatched.store(true, Ordering::Relaxed);
-            if require_active_binding {
-                self.update_dispatch(&invocation, CheckerDispatchStatus::Attempted);
-            }
+            progress.mark_dispatched();
             let response = self.http.execute(request).await.map_err(|_| {
                 InvokeError::dispatched(CheckerFailureKind::Unavailable, "unavailable", false)
             })?;
-            progress.response_received.store(true, Ordering::Relaxed);
-            if require_active_binding {
-                self.update_dispatch(&invocation, CheckerDispatchStatus::ResponseReceived);
-            }
+            progress.mark_response_received();
             if !response.status().is_success() {
                 return Err(InvokeError::failure(
                     CheckerFailureKind::InvalidResponse,
@@ -531,83 +499,95 @@ impl RequestCheckRuntime {
                 InvokeError::with_progress(
                     CheckerFailureKind::Timeout,
                     "timeout",
-                    progress.request_dispatched.load(Ordering::Relaxed),
-                    progress.response_received.load(Ordering::Relaxed),
+                    progress.request_dispatched(),
+                    progress.response_received(),
                 )
             })?
     }
 
     fn record_probe(&self, result: ProbeResult) {
-        let mut observations = lock_observations(&self.observations);
+        let mut probes = lock_probes(&self.probes);
         if self.checkers.contains_key(&result.checker_id) {
-            observations
-                .probes
-                .insert(result.checker_id.clone(), result);
-        }
-    }
-
-    fn update_dispatch(&self, invocation: &CheckerInvocation, dispatch: CheckerDispatchStatus) {
-        let mut observations = lock_observations(&self.observations);
-        if let Some(usage) = observations
-            .actual
-            .get_mut(&invocation.checker.binding_digest)
-            && usage.invocation_id == invocation.invocation_id
-        {
-            usage.dispatch = dispatch;
-            usage.observed_at_unix_ms = unix_millis();
-        }
-    }
-
-    fn update_actual(&self, usage: CheckerActualUsage, starting: bool) {
-        if !self.active_bindings.contains_key(&usage.binding_digest) {
-            return;
-        }
-        let mut observations = lock_observations(&self.observations);
-        if starting
-            || observations
-                .actual
-                .get(&usage.binding_digest)
-                .is_some_and(|current| current.invocation_id == usage.invocation_id)
-        {
-            observations
-                .actual
-                .insert(usage.binding_digest.clone(), usage);
+            probes.insert(result.checker_id.clone(), result);
         }
     }
 }
 
+fn actual_usage(latest: LatestRequestCheck) -> Option<CheckerActualUsage> {
+    let status = match latest.check.status {
+        RequestCheckStatus::Pending
+        | RequestCheckStatus::Interrupted
+        | RequestCheckStatus::Allowed
+        | RequestCheckStatus::Denied
+        | RequestCheckStatus::Failed => latest.check.status,
+        RequestCheckStatus::NotRun
+        | RequestCheckStatus::NotEnabled
+        | RequestCheckStatus::Skipped => return None,
+    };
+    Some(CheckerActualUsage {
+        request_id: latest.request_id,
+        invocation_id: latest.check.invocation_id?,
+        binding_digest: latest.check.binding_digest?,
+        status,
+        dispatch: latest
+            .check
+            .dispatch
+            .unwrap_or(RequestCheckDispatchStatus::NotAttempted),
+        implementation_version: latest.check.implementation_version,
+        observed_at_unix_ms: latest
+            .check
+            .observed_at_unix_ms
+            .or(latest.check.finished_at_unix_ms)
+            .or(latest.check.started_at_unix_ms)?,
+    })
+}
+
 #[derive(Default)]
-struct InvocationProgress {
+struct ProbeProgress {
     request_dispatched: AtomicBool,
     response_received: AtomicBool,
 }
 
-impl InvocationProgress {
-    fn dispatch(&self) -> CheckerDispatchStatus {
-        if self.response_received.load(Ordering::Relaxed) {
-            CheckerDispatchStatus::ResponseReceived
-        } else if self.request_dispatched.load(Ordering::Relaxed) {
-            CheckerDispatchStatus::Attempted
-        } else {
-            CheckerDispatchStatus::NotAttempted
+#[derive(Clone, Copy)]
+enum InvocationProgress<'a> {
+    Actual(&'a RequestCheckReporter),
+    Probe(&'a ProbeProgress),
+}
+
+impl InvocationProgress<'_> {
+    fn mark_dispatched(self) {
+        match self {
+            Self::Actual(reporter) => reporter.mark_dispatched(),
+            Self::Probe(progress) => progress.request_dispatched.store(true, Ordering::Relaxed),
         }
     }
-}
 
-struct ActualInvocation<'a> {
-    runtime: &'a RequestCheckRuntime,
-    usage: CheckerActualUsage,
-    progress: InvocationProgress,
-    finished: bool,
-}
+    fn mark_response_received(self) {
+        match self {
+            Self::Actual(reporter) => reporter.mark_response_received(),
+            Self::Probe(progress) => progress.response_received.store(true, Ordering::Relaxed),
+        }
+    }
 
-impl Drop for ActualInvocation<'_> {
-    fn drop(&mut self) {
-        if !self.finished {
-            self.usage.status = CheckerActualStatus::Interrupted;
-            self.usage.dispatch = self.progress.dispatch();
-            self.usage.observed_at_unix_ms = unix_millis();
-            self.runtime.update_actual(self.usage.clone(), false);
+    fn request_dispatched(self) -> bool {
+        match self {
+            Self::Actual(reporter) => reporter.dispatch_status().is_some_and(|status| {
+                matches!(
+                    status,
+                    RequestCheckDispatchStatus::Attempted
+                        | RequestCheckDispatchStatus::ResponseReceived
+                )
+            }),
+            Self::Probe(progress) => progress.request_dispatched.load(Ordering::Relaxed),
+        }
+    }
+
+    fn response_received(self) -> bool {
+        match self {
+            Self::Actual(reporter) => {
+                reporter.dispatch_status() == Some(RequestCheckDispatchStatus::ResponseReceived)
+            }
+            Self::Probe(progress) => progress.response_received.load(Ordering::Relaxed),
         }
     }
 }
@@ -617,45 +597,12 @@ impl RequestCheckerRunner for RequestCheckRuntime {
     async fn check(
         &self,
         invocation: CheckerInvocation,
+        reporter: RequestCheckReporter,
     ) -> Result<CheckerDecision, CheckerFailure> {
-        let usage = CheckerActualUsage {
-            binding_digest: invocation.checker.binding_digest.clone(),
-            request_id: invocation.request_id.clone(),
-            invocation_id: invocation.invocation_id.clone(),
-            status: CheckerActualStatus::Pending,
-            dispatch: CheckerDispatchStatus::NotAttempted,
-            implementation_version: None,
-            observed_at_unix_ms: unix_millis(),
-        };
-        self.update_actual(usage.clone(), true);
-        let mut observed = ActualInvocation {
-            runtime: self,
-            usage,
-            progress: InvocationProgress::default(),
-            finished: false,
-        };
-        let result = self
-            .invoke(invocation, true, &observed.progress)
+        self.invoke(invocation, true, InvocationProgress::Actual(&reporter))
             .await
             .map(WireOutcome::into_decision)
-            .map_err(|error| error.failure);
-        let (status, version) = match &result {
-            Ok(CheckerDecision::Allow {
-                implementation_version,
-            }) => (CheckerActualStatus::Allowed, implementation_version.clone()),
-            Ok(CheckerDecision::Deny {
-                implementation_version,
-                ..
-            }) => (CheckerActualStatus::Denied, implementation_version.clone()),
-            Err(_) => (CheckerActualStatus::Failed, None),
-        };
-        observed.usage.status = status;
-        observed.usage.dispatch = observed.progress.dispatch();
-        observed.usage.implementation_version = version;
-        observed.usage.observed_at_unix_ms = unix_millis();
-        self.update_actual(observed.usage.clone(), false);
-        observed.finished = true;
-        result
+            .map_err(|error| error.failure)
     }
 }
 
@@ -945,10 +892,10 @@ fn build_inventory(
     Ok((inventory, active_bindings))
 }
 
-fn lock_observations(
-    observations: &Mutex<RuntimeObservations>,
-) -> std::sync::MutexGuard<'_, RuntimeObservations> {
-    match observations.lock() {
+fn lock_probes(
+    probes: &Mutex<HashMap<String, ProbeResult>>,
+) -> std::sync::MutexGuard<'_, HashMap<String, ProbeResult>> {
+    match probes.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
@@ -970,6 +917,10 @@ mod tests {
     use bitrouter_sdk::config::router::{
         RouterChecks, RouterConfig, RouterDefaults, RouterRequestCheck, RouterSelection,
     };
+    use bitrouter_sdk::language_model::receipts::{
+        RequestDeliveryStatus, RequestFailureStage, RequestReceiptHandle, RequestReceiptOutcome,
+    };
+    use bitrouter_sdk::language_model::routing::RouterRequestIdentity;
     use serde_json::{Value, json};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
@@ -1083,6 +1034,41 @@ mod tests {
         }
     }
 
+    fn started_invocation(
+        runtime: &RequestCheckRuntime,
+        config: &Config,
+        invocation_id: &str,
+    ) -> anyhow::Result<(
+        CheckerInvocation,
+        RequestCheckReporter,
+        RequestReceiptHandle,
+    )> {
+        let binding = binding(config)?;
+        let invocation = invocation(binding.clone(), invocation_id);
+        let router = RouterRequestIdentity {
+            router_id: invocation.router_id.clone(),
+            original_selector: "bitrouter/guarded".to_owned(),
+            binding_digest: invocation.router_binding_digest.clone(),
+        };
+        let receipt = runtime.receipts().admit(
+            &invocation.request_id,
+            &router,
+            std::slice::from_ref(&binding),
+        )?;
+        let reporter = receipt
+            .mark_check_started(0, &invocation.invocation_id, invocation.coverage.clone())
+            .ok_or_else(|| anyhow::anyhow!("request check did not start"))?;
+        Ok((invocation, reporter, receipt))
+    }
+
+    fn cancel(receipt: RequestReceiptHandle) {
+        receipt.finish(
+            RequestReceiptOutcome::Cancelled,
+            RequestDeliveryStatus::Unknown,
+            Some(RequestFailureStage::RequestCheck),
+        );
+    }
+
     #[tokio::test]
     async fn cancelled_and_older_invocations_cannot_leave_stale_allow_evidence()
     -> anyhow::Result<()> {
@@ -1106,20 +1092,28 @@ mod tests {
                 .and_then(|binding| binding.last_actual.clone())
                 .ok_or_else(|| anyhow::anyhow!("missing actual observation"))
         };
-        let mut older = Box::pin(runtime.check(invocation(binding(&config)?, "older")));
+        let (older_invocation, older_reporter, older_receipt) =
+            started_invocation(&runtime, &config, "older")?;
+        let mut older = Box::pin(runtime.check(older_invocation, older_reporter));
         assert!(futures::poll!(&mut older).is_pending());
-        assert_eq!(actual()?.status, CheckerActualStatus::Pending);
-        let mut newer = Box::pin(runtime.check(invocation(binding(&config)?, "newer")));
+        assert_eq!(actual()?.status, RequestCheckStatus::Pending);
+        let (newer_invocation, newer_reporter, newer_receipt) =
+            started_invocation(&runtime, &config, "newer")?;
+        let mut newer = Box::pin(runtime.check(newer_invocation, newer_reporter));
         assert!(futures::poll!(&mut newer).is_pending());
         drop(older);
+        cancel(older_receipt);
         assert_eq!(actual()?.invocation_id, "newer");
-        assert_eq!(actual()?.status, CheckerActualStatus::Pending);
+        assert_eq!(actual()?.status, RequestCheckStatus::Pending);
         drop(newer);
-        assert_eq!(actual()?.status, CheckerActualStatus::Interrupted);
-        assert_eq!(actual()?.dispatch, CheckerDispatchStatus::NotAttempted);
+        cancel(newer_receipt);
+        assert_eq!(actual()?.status, RequestCheckStatus::Interrupted);
+        assert_eq!(actual()?.dispatch, RequestCheckDispatchStatus::NotAttempted);
         drop(permits);
 
-        let mut in_flight = Box::pin(runtime.check(invocation(binding(&config)?, "in-flight")));
+        let (in_flight_invocation, in_flight_reporter, in_flight_receipt) =
+            started_invocation(&runtime, &config, "in-flight")?;
+        let mut in_flight = Box::pin(runtime.check(in_flight_invocation, in_flight_reporter));
         tokio::select! {
             _ = &mut in_flight => anyhow::bail!("delayed checker unexpectedly completed"),
             observed = tokio::time::timeout(Duration::from_secs(2), async {
@@ -1131,11 +1125,12 @@ mod tests {
                 }
             }) => { observed?; }
         }
-        assert_eq!(actual()?.status, CheckerActualStatus::Pending);
-        assert_eq!(actual()?.dispatch, CheckerDispatchStatus::Attempted);
+        assert_eq!(actual()?.status, RequestCheckStatus::Pending);
+        assert_eq!(actual()?.dispatch, RequestCheckDispatchStatus::Attempted);
         drop(in_flight);
-        assert_eq!(actual()?.status, CheckerActualStatus::Interrupted);
-        assert_eq!(actual()?.dispatch, CheckerDispatchStatus::Attempted);
+        cancel(in_flight_receipt);
+        assert_eq!(actual()?.status, RequestCheckStatus::Interrupted);
+        assert_eq!(actual()?.dispatch, RequestCheckDispatchStatus::Attempted);
         Ok(())
     }
 
@@ -1148,9 +1143,9 @@ mod tests {
             .get_mut("safety")
             .ok_or_else(|| anyhow::anyhow!("missing checker"))?;
         checker.credential = Some("invalid\ncredential".into());
-        let result = runtime
-            .check(invocation(binding(&config)?, "bad-credential"))
-            .await;
+        let (invocation, reporter, receipt) =
+            started_invocation(&runtime, &config, "bad-credential")?;
+        let result = runtime.check(invocation, reporter).await;
         assert!(matches!(
             result,
             Err(CheckerFailure {
@@ -1158,13 +1153,20 @@ mod tests {
                 ..
             })
         ));
+        receipt.mark_check_finished(
+            0,
+            RequestCheckStatus::Failed,
+            None,
+            None,
+            Some(CheckerFailureKind::NotConfigured),
+        );
         let actual = runtime
             .configured()
             .first()
             .and_then(|checker| checker.bindings.first())
             .and_then(|binding| binding.last_actual.clone())
             .ok_or_else(|| anyhow::anyhow!("missing actual observation"))?;
-        assert_eq!(actual.dispatch, CheckerDispatchStatus::NotAttempted);
+        assert_eq!(actual.dispatch, RequestCheckDispatchStatus::NotAttempted);
         Ok(())
     }
 
@@ -1178,11 +1180,31 @@ mod tests {
             .await;
         let config = config(format!("{}/check", server.uri()), None, true, 500);
         let runtime = RequestCheckRuntime::activate(&config)?;
+        let (invocation, reporter, receipt) =
+            started_invocation(&runtime, &config, "actual-invocation")?;
         let decision = runtime
-            .check(invocation(binding(&config)?, "actual-invocation"))
+            .check(invocation, reporter)
             .await
             .map_err(|failure| anyhow::anyhow!("checker failed: {failure:?}"))?;
-        assert!(matches!(decision, CheckerDecision::Allow { .. }));
+        assert!(matches!(&decision, CheckerDecision::Allow { .. }));
+        let implementation_version = match decision {
+            CheckerDecision::Allow {
+                implementation_version,
+            } => implementation_version,
+            CheckerDecision::Deny { .. } => None,
+        };
+        receipt.mark_check_finished(
+            0,
+            RequestCheckStatus::Allowed,
+            None,
+            implementation_version,
+            None,
+        );
+        receipt.finish(
+            RequestReceiptOutcome::Completed,
+            RequestDeliveryStatus::ServerCommitted,
+            None,
+        );
 
         let before_probe = runtime.configured();
         let actual = before_probe
@@ -1190,7 +1212,7 @@ mod tests {
             .and_then(|checker| checker.bindings.first())
             .and_then(|binding| binding.last_actual.as_ref())
             .ok_or_else(|| anyhow::anyhow!("actual usage was not observed"))?;
-        assert_eq!(actual.status, CheckerActualStatus::Allowed);
+        assert_eq!(actual.status, RequestCheckStatus::Allowed);
         assert_eq!(actual.invocation_id, "actual-invocation");
         assert!(
             before_probe
@@ -1208,7 +1230,7 @@ mod tests {
                 .and_then(|checker| checker.last_probe.as_ref())
                 .is_some_and(|latest| latest.protocol == ProbeProtocolStatus::Valid)
         );
-        assert!(runtime.receipts().list(10).receipts.is_empty());
+        assert_eq!(runtime.receipts().list(10).receipts.len(), 1);
         assert_eq!(
             server
                 .received_requests()
@@ -1231,14 +1253,23 @@ mod tests {
             .await;
         let config = config(format!("{}/check", server.uri()), None, true, 500);
         let runtime = RequestCheckRuntime::activate(&config)?;
+        let (invocation, reporter, receipt) =
+            started_invocation(&runtime, &config, "hostile-response")?;
         let failure = runtime
-            .check(invocation(binding(&config)?, "hostile-response"))
+            .check(invocation, reporter)
             .await
             .err()
             .ok_or_else(|| anyhow::anyhow!("hostile checker response was accepted"))?;
         assert_eq!(failure.kind, CheckerFailureKind::InvalidResponse);
         assert_eq!(failure.detail.as_deref(), Some("response_too_large"));
         assert!(!format!("{failure:?}").contains(&hostile));
+        receipt.mark_check_finished(
+            0,
+            RequestCheckStatus::Failed,
+            None,
+            None,
+            Some(failure.kind),
+        );
         Ok(())
     }
 
@@ -1260,13 +1291,21 @@ mod tests {
             .await;
         let config = config(format!("{}/check", server.uri()), None, true, 10);
         let runtime = RequestCheckRuntime::activate(&config)?;
+        let (invocation, reporter, receipt) = started_invocation(&runtime, &config, "slow")?;
         let failure = runtime
-            .check(invocation(binding(&config)?, "slow"))
+            .check(invocation, reporter)
             .await
             .err()
             .ok_or_else(|| anyhow::anyhow!("slow checker response was accepted"))?;
         assert_eq!(failure.kind, CheckerFailureKind::Timeout);
         assert_eq!(failure.detail.as_deref(), Some("timeout"));
+        receipt.mark_check_finished(
+            0,
+            RequestCheckStatus::Failed,
+            None,
+            None,
+            Some(failure.kind),
+        );
         Ok(())
     }
 

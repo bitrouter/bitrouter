@@ -17,6 +17,26 @@ variables never supply remote daemon credentials. Checker configuration and
 router bindings are startup-owned: saved changes require restart and cannot be
 activated by reload. All management transports query the selected daemon.
 
+## Entry preparation and extension contract
+
+Streaming and non-streaming requests share one entry-preparation path. It owns
+stage-specific failures and settlement policy; only execution and delivery
+branch by response mode.
+
+| Extension point | Selector/defaults contract |
+| --- | --- |
+| `pre_resolution_hook` | Local authentication and session normalization may change the ingress selector before its router/check binding is frozen. No external checker has run. |
+| `router_preparation_hook` | A checked router may select a candidate recipe here, before effective defaults are applied. Its original logical identity and checks remain fixed. |
+| `pre_request_hook`, checked ingress | Receives the effective defaults. Deny/error stops execution; selector mutation is explicitly rejected before checker/model dispatch. |
+| `pre_request_hook`, unguarded ingress | Retains the legacy model-rewrite contract. Final selector resolution and defaults follow these hooks, so defaults from the original selector are not mixed into the replacement. A rewrite cannot introduce a checked router after admission. |
+| model selector | Runs only after required checks allow and uses the effective selection policy. It cannot replace the original logical router/check binding. |
+
+The unguarded legacy path retains its previous defaults timing; it does not
+claim that ordinary pre-request hooks inspected defaults applied afterward.
+Use the checked-router preparation path when defaults must participate in the
+entry content-check contract. A denied/failed hook does not promise rollback
+of its request-local changes.
+
 ## Check coverage and protocol
 
 Contract version 1 projects effective request text: system instructions, message
@@ -131,11 +151,15 @@ daemon, use a fixed harmless input and the configured credential, and are subjec
 to the same bounds as normal calls. They never accept an arbitrary caller URL or
 prompt. Remote probes require the existing `control:read` administrative scope.
 
-Usage evidence is tied to the running binding and the latest started invocation.
+Usage evidence is derived from the receipt store for the running binding and
+the latest started invocation that is still retained. Real invocation state
+has one owner; the HTTP runtime reports transport progress and does not retain
+a second terminal-state machine. Synthetic probes remain separate.
 Queued/in-flight calls show pending; cancellation shows interrupted and does
 not claim that remote execution stopped. An older completion cannot replace a
-newer invocation's observation. Success for an earlier binding
-must not make a saved replacement appear active. Unconfigured checks are shown
+newer invocation's observation. Evicting or expiring that latest receipt removes
+its inventory evidence; an older retained allow is not substituted. Success for
+an earlier binding must not make a saved replacement appear active. Unconfigured checks are shown
 as not enabled, not as successful protection.
 
 ## Acceptance ledger
@@ -146,7 +170,7 @@ SDK contracts, HTTP runtime and daemon management implementation.
 
 | ID | Acceptance | Automated evidence |
 | --- | --- | --- |
-| RC01 | Original router/checker identity survives candidate selection. | `routers_apply_distinct_checks_to_effective_text_before_model_dispatch`; `preparation_defaults_precede_original_checker_and_selection` |
+| RC01 | Original router/checker identity survives candidate selection. | `routers_apply_distinct_checks_to_effective_text_before_model_dispatch`; `checked_preparation_freezes_checks_nonstream`; `checked_preparation_freezes_checks_stream` |
 | RC02 | Effective defaults are checked; media exclusions and resource limits are explicit. | `routers_apply_distinct_checks_to_effective_text_before_model_dispatch`; `projection_counts_top_level_and_tool_result_media`; `projection_caps_empty_fragments`; `projection_bounds_json_serialization_by_remaining_bytes` |
 | RC03 | Rejection or checker failure prevents model dispatch. | `timeout_and_protocol_failure_never_dispatch_a_model`; `oversize_text_is_rejected_without_checker_or_model_dispatch`; `hostile_response_body_is_bounded_and_never_exposed`; `total_deadline_covers_the_response_body` |
 | RC04 | Early rejection, cancellation and delivery failure remain queryable without an exporter. | `host_rejection_prevents_content_from_reaching_external_checker`; `cancelled_pending_checker_finalizes_receipt_without_executor_dispatch`; `stream_disconnect_and_error_finalize_truthful_receipts`; `failed_receipts_identify_route_upstream_and_delivery_stages` |
@@ -157,18 +181,22 @@ SDK contracts, HTTP runtime and daemon management implementation.
 | RC09 | Probe success is separate from real use and generation success. | `real_use_and_probe_are_observed_separately`; `cancelled_and_older_invocations_cannot_leave_stale_allow_evidence`; `probe_has_no_request_receipt_and_allow_does_not_mask_upstream_failure` |
 | RC10 | Existing router, policy and continuation behavior remains intact. | `named_router_migration_protocol_matrix`; `named_candidate_keeps_preset_defaults_and_tool_safety_selection`; `transport_retry_identity_is_idempotent_without_becoming_a_route_key`; existing continuation suite |
 
+| RC11 | Ordinary hooks retain unguarded rewrite semantics; checked mutations stop before checker/model dispatch in both response modes. | `unguarded_bare_and_legacy_rewrites_converge_nonstream`; `unguarded_bare_and_legacy_rewrites_converge_stream`; `checked_ordinary_mutation_stops_nonstream`; `checked_ordinary_mutation_stops_stream` |
+| RC12 | Real-use views share receipt lifecycle and never revive older evidence after eviction. | `reporter_is_monotonic_and_cannot_mutate_terminal_check`; `evicting_latest_started_check_does_not_revive_older_evidence`; `cancelled_and_older_invocations_cannot_leave_stale_allow_evidence` |
+
 ## Local validation
 
-Validated on macOS on 2026-09-16:
+The converged implementation was validated on macOS on 2026-09-16:
 
-- Workspace all-feature nextest: 3,449 passed, 22 skipped.
+- Workspace all-feature nextest: 3,456 passed, 22 skipped.
 - Workspace all-feature clippy, including tests, with warnings denied: passed.
 - Workspace doctests: 5 passed, 1 ignored; strict rustdoc: passed.
 - SDK no-default-feature checks: minimal, `config_file`, `server`, and `acp` passed.
 - Formatting, diff whitespace, and generated distribution consistency: passed.
-- Actual `bro checks`, `checks receipt`, and `checks receipts` help output verified.
+- Pinned nightly SDK public-API check: dependency set unchanged; no OTel exposure.
 
 The config schema and shipped CLI/diagnosis references are updated. These are
-local results; remote CI and deployment verification have not run for this
-branch. The independent review's projection allocation, failure-stage, and
-cancelled actual-use findings were fixed and covered by regression tests.
+local results; GitHub CI validates the published PR head separately. Production
+deployment verification is outside this local suite. Regression coverage includes
+ordinary-hook rewrites, shared stream/non-stream preparation, receipt-owned
+transport progress, terminal immutability, and latest-evidence eviction.

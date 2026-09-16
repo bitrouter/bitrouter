@@ -519,6 +519,7 @@ impl request_checks::RequestCheckerRunner for PendingRequestChecker {
     async fn check(
         &self,
         _invocation: request_checks::CheckerInvocation,
+        _reporter: receipts::RequestCheckReporter,
     ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
         self.entered.notify_one();
         futures::future::pending().await
@@ -532,6 +533,7 @@ impl request_checks::RequestCheckerRunner for AllowingRequestChecker {
     async fn check(
         &self,
         _invocation: request_checks::CheckerInvocation,
+        _reporter: receipts::RequestCheckReporter,
     ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
         Ok(request_checks::CheckerDecision::Allow {
             implementation_version: Some("fixture-v1".to_owned()),
@@ -539,22 +541,44 @@ impl request_checks::RequestCheckerRunner for AllowingRequestChecker {
     }
 }
 
-struct PreparedCheckedRoutingTable;
+struct ConvergenceRoutingTable;
 
 #[async_trait]
-impl RoutingTable for PreparedCheckedRoutingTable {
+impl RoutingTable for ConvergenceRoutingTable {
     async fn resolve_model(&self, model: &str) -> Result<ModelResolution> {
         match model {
-            "@checked" => Ok(ModelResolution {
-                clean_model: "original-model".to_owned(),
+            "@legacy-a" => Ok(ModelResolution {
+                clean_model: "legacy-a-model".to_owned(),
                 prefs: RoutingPrefs::default(),
-                overrides: PromptOverrides::default(),
+                overrides: PromptOverrides {
+                    system_prompt: Some("legacy-a default".to_owned()),
+                    params: serde_json::Map::from_iter([(
+                        "legacy_a_only".to_owned(),
+                        serde_json::json!(true),
+                    )]),
+                },
+                policy: None,
+                variant: None,
+                router: None,
+                request_checks: Vec::new(),
+            }),
+            "@legacy-b" => Ok(candidate_resolution(model, false)),
+            "@checked-a" => Ok(ModelResolution {
+                clean_model: "checked-a-model".to_owned(),
+                prefs: RoutingPrefs::default(),
+                overrides: PromptOverrides {
+                    system_prompt: Some("checked-a default".to_owned()),
+                    params: serde_json::Map::from_iter([(
+                        "checked_a_only".to_owned(),
+                        serde_json::json!(true),
+                    )]),
+                },
                 policy: None,
                 variant: None,
                 router: Some(RouterRequestIdentity {
-                    router_id: "checked".to_owned(),
+                    router_id: "checked-a".to_owned(),
                     original_selector: model.to_owned(),
-                    binding_digest: "router-v1:checked".to_owned(),
+                    binding_digest: "router-v1:checked-a".to_owned(),
                 }),
                 request_checks: vec![request_checks::RequestCheckBinding {
                     checker_id: "original-checker".to_owned(),
@@ -563,30 +587,7 @@ impl RoutingTable for PreparedCheckedRoutingTable {
                     timeout_ms: 1000,
                 }],
             }),
-            "@candidate" => Ok(ModelResolution {
-                clean_model: "candidate-model".to_owned(),
-                prefs: RoutingPrefs::default(),
-                overrides: PromptOverrides {
-                    system_prompt: Some("candidate default".to_owned()),
-                    params: serde_json::Map::from_iter([(
-                        "temperature".to_owned(),
-                        serde_json::json!(0.2),
-                    )]),
-                },
-                policy: Some("candidate-policy".to_owned()),
-                variant: None,
-                router: Some(RouterRequestIdentity {
-                    router_id: "candidate".to_owned(),
-                    original_selector: model.to_owned(),
-                    binding_digest: "router-v1:candidate".to_owned(),
-                }),
-                request_checks: vec![request_checks::RequestCheckBinding {
-                    checker_id: "candidate-checker".to_owned(),
-                    binding_digest: "checker-v1:candidate".to_owned(),
-                    max_input_bytes: 4096,
-                    timeout_ms: 1000,
-                }],
-            }),
+            "@checked-b" => Ok(candidate_resolution(model, true)),
             other => Ok(ModelResolution::passthrough(other)),
         }
     }
@@ -594,10 +595,18 @@ impl RoutingTable for PreparedCheckedRoutingTable {
     async fn route_chain(
         &self,
         model: &str,
-        _prefs: &RoutingPrefs,
+        prefs: &RoutingPrefs,
         _caller: &CallerContext,
     ) -> Result<Vec<RoutingTarget>> {
-        let mut selected = target("fixture");
+        if model != "candidate-selected"
+            || prefs.only.len() != 1
+            || prefs.only.first().map(String::as_str) != Some("candidate-provider")
+        {
+            return Err(BitrouterError::internal(
+                "route did not retain the effective selector preferences",
+            ));
+        }
+        let mut selected = target("candidate-provider");
         selected.service_id = model.to_owned();
         Ok(vec![selected])
     }
@@ -615,13 +624,62 @@ impl RoutingTable for PreparedCheckedRoutingTable {
     }
 }
 
-struct SelectCandidateRoute;
+fn candidate_resolution(model: &str, checked: bool) -> ModelResolution {
+    ModelResolution {
+        clean_model: "candidate-model".to_owned(),
+        prefs: RoutingPrefs {
+            only: vec!["candidate-provider".to_owned()],
+            ..RoutingPrefs::default()
+        },
+        overrides: PromptOverrides {
+            system_prompt: Some("candidate default".to_owned()),
+            params: serde_json::Map::from_iter([
+                ("temperature".to_owned(), serde_json::json!(0.2)),
+                ("candidate_only".to_owned(), serde_json::json!(true)),
+            ]),
+        },
+        policy: Some("candidate-policy".to_owned()),
+        variant: None,
+        router: checked.then(|| RouterRequestIdentity {
+            router_id: "checked-b".to_owned(),
+            original_selector: model.to_owned(),
+            binding_digest: "router-v1:checked-b".to_owned(),
+        }),
+        request_checks: checked
+            .then(|| request_checks::RequestCheckBinding {
+                checker_id: "candidate-checker".to_owned(),
+                binding_digest: "checker-v1:candidate".to_owned(),
+                max_input_bytes: 4096,
+                timeout_ms: 1000,
+            })
+            .into_iter()
+            .collect(),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RewriteOutcome {
+    Allow,
+    Deny,
+    Error,
+}
+
+struct RewriteSelector {
+    selector: &'static str,
+    outcome: RewriteOutcome,
+}
 
 #[async_trait]
-impl PreRequestHook for SelectCandidateRoute {
+impl PreRequestHook for RewriteSelector {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
-        ctx.set_model("@candidate");
-        Ok(HookDecision::Allow)
+        ctx.set_model(self.selector);
+        match self.outcome {
+            RewriteOutcome::Allow => Ok(HookDecision::Allow),
+            RewriteOutcome::Deny => Ok(HookDecision::Deny(DenyReason::Forbidden(
+                "rewrite denied".to_owned(),
+            ))),
+            RewriteOutcome::Error => Err(BitrouterError::bad_request("rewrite failed")),
+        }
     }
 }
 
@@ -633,6 +691,18 @@ impl PreRequestHook for EffectiveDefaultsHook {
         if ctx.prompt().system.as_deref() != Some("candidate default")
             || ctx.prompt().params.supplemental_extra.get("temperature")
                 != Some(&serde_json::json!(0.2))
+            || ctx.prompt().params.supplemental_extra.get("candidate_only")
+                != Some(&serde_json::json!(true))
+            || ctx
+                .prompt()
+                .params
+                .supplemental_extra
+                .contains_key("checked_a_only")
+            || ctx.router_identity().is_none_or(|identity| {
+                identity.router_id != "checked-a"
+                    || identity.original_selector != "@checked-a"
+                    || identity.binding_digest != "router-v1:checked-a"
+            })
         {
             return Err(BitrouterError::internal(
                 "ordinary policy did not see candidate defaults",
@@ -643,8 +713,15 @@ impl PreRequestHook for EffectiveDefaultsHook {
     }
 }
 
+#[derive(Clone, Copy)]
+enum CheckerOutcome {
+    Allow,
+    Deny,
+    Error,
+}
+
 struct RecordingOriginalChecker {
-    allow: bool,
+    outcome: CheckerOutcome,
     calls: Arc<AtomicUsize>,
     selector_calls: Arc<AtomicUsize>,
 }
@@ -654,14 +731,22 @@ impl request_checks::RequestCheckerRunner for RecordingOriginalChecker {
     async fn check(
         &self,
         invocation: request_checks::CheckerInvocation,
+        _reporter: receipts::RequestCheckReporter,
     ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
         let saw_candidate_default = invocation.content.iter().any(|fragment| {
             fragment.role == request_checks::ContentRole::System
                 && fragment.text.as_deref() == Some("candidate default")
         });
-        if invocation.router_id != "checked"
+        let saw_checked_default = invocation.content.iter().any(|fragment| {
+            fragment.role == request_checks::ContentRole::System
+                && fragment.text.as_deref() == Some("checked-a default")
+        });
+        if invocation.router_id != "checked-a"
+            || invocation.router_binding_digest != "router-v1:checked-a"
             || invocation.checker.checker_id != "original-checker"
+            || invocation.checker.binding_digest != "checker-v1:original"
             || !saw_candidate_default
+            || saw_checked_default
             || self.selector_calls.load(Ordering::SeqCst) != 0
         {
             return Err(request_checks::CheckerFailure {
@@ -670,15 +755,18 @@ impl request_checks::RequestCheckerRunner for RecordingOriginalChecker {
             });
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
-        if self.allow {
-            Ok(request_checks::CheckerDecision::Allow {
+        match self.outcome {
+            CheckerOutcome::Allow => Ok(request_checks::CheckerDecision::Allow {
                 implementation_version: Some("fixture-v1".to_owned()),
-            })
-        } else {
-            Ok(request_checks::CheckerDecision::Deny {
+            }),
+            CheckerOutcome::Deny => Ok(request_checks::CheckerDecision::Deny {
                 reason_code: Some("blocked".to_owned()),
                 implementation_version: Some("fixture-v1".to_owned()),
-            })
+            }),
+            CheckerOutcome::Error => Err(request_checks::CheckerFailure {
+                kind: request_checks::CheckerFailureKind::InvalidResponse,
+                detail: Some("checker response was invalid".to_owned()),
+            }),
         }
     }
 }
@@ -695,6 +783,24 @@ impl ModelSelector for CandidateModelSelector {
     ) -> Result<()> {
         if policy != "candidate-policy" {
             return Err(BitrouterError::internal("unexpected candidate policy"));
+        }
+        if ctx.prompt().system.as_deref() != Some("candidate default")
+            || ctx.prompt().params.supplemental_extra.get("candidate_only")
+                != Some(&serde_json::json!(true))
+            || ctx
+                .prompt()
+                .params
+                .supplemental_extra
+                .contains_key("legacy_a_only")
+            || ctx
+                .prompt()
+                .params
+                .supplemental_extra
+                .contains_key("checked_a_only")
+        {
+            return Err(BitrouterError::internal(
+                "selector did not receive only the effective defaults",
+            ));
         }
         self.0.fetch_add(1, Ordering::SeqCst);
         ctx.set_model("candidate-selected");
@@ -1024,6 +1130,226 @@ impl FallbackPolicy for RetryUpstreamRequestErrors {
     }
 }
 
+fn convergence_executor(streamed: bool) -> Arc<dyn Executor> {
+    if streamed {
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta {
+                text: "allowed".to_owned(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])]))
+    } else {
+        Arc::new(MockExecutor::always_text("allowed"))
+    }
+}
+
+async fn run_convergence_request(
+    pipeline: Arc<Pipeline>,
+    model: &str,
+    streamed: bool,
+) -> Result<()> {
+    let mut request = request_for_model(model);
+    request.prompt.stream = streamed;
+    if streamed {
+        let parts = collect_stream(pipeline.execute_stream(request).await?).await;
+        for part in parts {
+            let _ = part?;
+        }
+        Ok(())
+    } else {
+        pipeline.execute(request).await.map(|_| ())
+    }
+}
+
+async fn unguarded_rewrite_contract(streamed: bool) -> Result<()> {
+    let bare_table = routing_table(&[]);
+    bare_table.insert("rewritten-model", vec![target("rewritten-provider")]);
+    let mut bare_builder = PipelineBuilder::new();
+    bare_builder
+        .routing_table(bare_table)
+        .executor(convergence_executor(streamed))
+        .pre_request_hook(RewriteSelector {
+            selector: "rewritten-model",
+            outcome: RewriteOutcome::Allow,
+        });
+    run_convergence_request(Arc::new(bare_builder.build()?), "test-model", streamed).await?;
+
+    let selector_calls = Arc::new(AtomicUsize::new(0));
+    let mut legacy_builder = PipelineBuilder::new();
+    legacy_builder
+        .routing_table(Arc::new(ConvergenceRoutingTable))
+        .executor(convergence_executor(streamed))
+        .pre_request_hook(RewriteSelector {
+            selector: "@legacy-b",
+            outcome: RewriteOutcome::Allow,
+        })
+        .model_selector(Arc::new(CandidateModelSelector(selector_calls.clone())));
+    run_convergence_request(Arc::new(legacy_builder.build()?), "@legacy-a", streamed).await?;
+    assert_eq!(selector_calls.load(Ordering::SeqCst), 1);
+
+    let checker_calls = Arc::new(AtomicUsize::new(0));
+    let rejected_selector_calls = Arc::new(AtomicUsize::new(0));
+    let executor_calls = Arc::new(AtomicUsize::new(0));
+    let mut checked_introduction_builder = PipelineBuilder::new();
+    checked_introduction_builder
+        .routing_table(Arc::new(ConvergenceRoutingTable))
+        .executor(Arc::new(NeverCalledExecutor(executor_calls.clone())))
+        .pre_request_hook(RewriteSelector {
+            selector: "@checked-b",
+            outcome: RewriteOutcome::Allow,
+        })
+        .request_checker_runner(Arc::new(CountingAllowingRequestChecker(
+            checker_calls.clone(),
+        )))
+        .model_selector(Arc::new(CandidateModelSelector(
+            rejected_selector_calls.clone(),
+        )));
+    let rejected = run_convergence_request(
+        Arc::new(checked_introduction_builder.build()?),
+        "@legacy-a",
+        streamed,
+    )
+    .await;
+    let Err(error) = rejected else {
+        return Err(BitrouterError::internal(
+            "unguarded selector rewrite introduced request checks",
+        ));
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("cannot introduce request checks")
+    );
+    assert_eq!(checker_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(rejected_selector_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor_calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+async fn checked_preparation_contract(streamed: bool) -> Result<()> {
+    for outcome in [
+        CheckerOutcome::Allow,
+        CheckerOutcome::Deny,
+        CheckerOutcome::Error,
+    ] {
+        let local_policy_calls = Arc::new(AtomicUsize::new(0));
+        let checker_calls = Arc::new(AtomicUsize::new(0));
+        let selector_calls = Arc::new(AtomicUsize::new(0));
+        let executor_calls = Arc::new(AtomicUsize::new(0));
+        let executor: Arc<dyn Executor> = match outcome {
+            CheckerOutcome::Allow => convergence_executor(streamed),
+            CheckerOutcome::Deny | CheckerOutcome::Error => {
+                Arc::new(NeverCalledExecutor(executor_calls.clone()))
+            }
+        };
+        let store = receipts::RequestReceiptStore::with_incarnation(
+            receipts::RequestReceiptStoreConfig::default(),
+            "checked-preparation",
+        );
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(ConvergenceRoutingTable))
+            .executor(executor)
+            .router_preparation_hook(RewriteSelector {
+                selector: "@checked-b",
+                outcome: RewriteOutcome::Allow,
+            })
+            .pre_request_hook(EffectiveDefaultsHook(local_policy_calls.clone()))
+            .request_checker_runner(Arc::new(RecordingOriginalChecker {
+                outcome,
+                calls: checker_calls.clone(),
+                selector_calls: selector_calls.clone(),
+            }))
+            .request_receipt_store(store)
+            .model_selector(Arc::new(CandidateModelSelector(selector_calls.clone())));
+        let result =
+            run_convergence_request(Arc::new(builder.build()?), "@checked-a", streamed).await;
+
+        assert_eq!(local_policy_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(checker_calls.load(Ordering::SeqCst), 1);
+        match outcome {
+            CheckerOutcome::Allow => {
+                assert!(result.is_ok());
+                assert_eq!(selector_calls.load(Ordering::SeqCst), 1);
+            }
+            CheckerOutcome::Deny | CheckerOutcome::Error => {
+                assert!(result.is_err());
+                assert_eq!(selector_calls.load(Ordering::SeqCst), 0);
+                assert_eq!(executor_calls.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+    Ok(())
+}
+
+struct CountingAllowingRequestChecker(Arc<AtomicUsize>);
+
+#[async_trait]
+impl request_checks::RequestCheckerRunner for CountingAllowingRequestChecker {
+    async fn check(
+        &self,
+        _invocation: request_checks::CheckerInvocation,
+        _reporter: receipts::RequestCheckReporter,
+    ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(request_checks::CheckerDecision::Allow {
+            implementation_version: None,
+        })
+    }
+}
+
+async fn checked_ordinary_mutation_contract(streamed: bool) -> Result<()> {
+    for outcome in [
+        RewriteOutcome::Allow,
+        RewriteOutcome::Deny,
+        RewriteOutcome::Error,
+    ] {
+        let checker_calls = Arc::new(AtomicUsize::new(0));
+        let selector_calls = Arc::new(AtomicUsize::new(0));
+        let executor_calls = Arc::new(AtomicUsize::new(0));
+        let store = receipts::RequestReceiptStore::with_incarnation(
+            receipts::RequestReceiptStoreConfig::default(),
+            "checked-ordinary-mutation",
+        );
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(ConvergenceRoutingTable))
+            .executor(Arc::new(NeverCalledExecutor(executor_calls.clone())))
+            .pre_request_hook(RewriteSelector {
+                selector: "@checked-b",
+                outcome,
+            })
+            .request_checker_runner(Arc::new(CountingAllowingRequestChecker(
+                checker_calls.clone(),
+            )))
+            .request_receipt_store(store)
+            .model_selector(Arc::new(CandidateModelSelector(selector_calls.clone())));
+        let result =
+            run_convergence_request(Arc::new(builder.build()?), "@checked-a", streamed).await;
+
+        let Err(error) = result else {
+            return Err(BitrouterError::internal(
+                "checked ordinary selector mutation was accepted",
+            ));
+        };
+        match outcome {
+            RewriteOutcome::Allow => assert!(
+                error
+                    .to_string()
+                    .contains("cannot change a checked router selector")
+            ),
+            RewriteOutcome::Deny => assert_eq!(error.status(), 403),
+            RewriteOutcome::Error => assert_eq!(error.status(), 400),
+        }
+        assert_eq!(checker_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(selector_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(executor_calls.load(Ordering::SeqCst), 0);
+    }
+    Ok(())
+}
+
 // ===== tests =====
 
 #[tokio::test]
@@ -1070,55 +1396,33 @@ async fn cancelled_pending_checker_finalizes_receipt_without_executor_dispatch()
 }
 
 #[tokio::test]
-async fn preparation_defaults_precede_original_checker_and_selection() -> Result<()> {
-    for allow in [true, false] {
-        let local_policy_calls = Arc::new(AtomicUsize::new(0));
-        let checker_calls = Arc::new(AtomicUsize::new(0));
-        let selector_calls = Arc::new(AtomicUsize::new(0));
-        let executor_calls = Arc::new(AtomicUsize::new(0));
-        let store = receipts::RequestReceiptStore::with_incarnation(
-            receipts::RequestReceiptStoreConfig::default(),
-            if allow {
-                "allow-process"
-            } else {
-                "deny-process"
-            },
-        );
-        let executor: Arc<dyn Executor> = if allow {
-            Arc::new(MockExecutor::always_text("allowed"))
-        } else {
-            Arc::new(NeverCalledExecutor(executor_calls.clone()))
-        };
-        let mut builder = PipelineBuilder::new();
-        builder
-            .routing_table(Arc::new(PreparedCheckedRoutingTable))
-            .executor(executor)
-            .router_preparation_hook(SelectCandidateRoute)
-            .pre_request_hook(EffectiveDefaultsHook(local_policy_calls.clone()))
-            .request_checker_runner(Arc::new(RecordingOriginalChecker {
-                allow,
-                calls: checker_calls.clone(),
-                selector_calls: selector_calls.clone(),
-            }))
-            .request_receipt_store(store)
-            .model_selector(Arc::new(CandidateModelSelector(selector_calls.clone())));
-        let pipeline = builder.build()?;
-        let result = pipeline.execute(request_for_model("@checked")).await;
+async fn unguarded_bare_and_legacy_rewrites_converge_nonstream() -> Result<()> {
+    unguarded_rewrite_contract(false).await
+}
 
-        assert_eq!(local_policy_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(checker_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            selector_calls.load(Ordering::SeqCst),
-            if allow { 1 } else { 0 }
-        );
-        if allow {
-            assert!(result.is_ok());
-        } else {
-            assert!(result.is_err());
-            assert_eq!(executor_calls.load(Ordering::SeqCst), 0);
-        }
-    }
-    Ok(())
+#[tokio::test]
+async fn unguarded_bare_and_legacy_rewrites_converge_stream() -> Result<()> {
+    unguarded_rewrite_contract(true).await
+}
+
+#[tokio::test]
+async fn checked_preparation_freezes_checks_nonstream() -> Result<()> {
+    checked_preparation_contract(false).await
+}
+
+#[tokio::test]
+async fn checked_preparation_freezes_checks_stream() -> Result<()> {
+    checked_preparation_contract(true).await
+}
+
+#[tokio::test]
+async fn checked_ordinary_mutation_stops_nonstream() -> Result<()> {
+    checked_ordinary_mutation_contract(false).await
+}
+
+#[tokio::test]
+async fn checked_ordinary_mutation_stops_stream() -> Result<()> {
+    checked_ordinary_mutation_contract(true).await
 }
 
 #[tokio::test]

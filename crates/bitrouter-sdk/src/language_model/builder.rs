@@ -107,7 +107,18 @@ impl PipelineBuilder {
         self
     }
 
-    /// Register a Stage-1 pre-request hook (runs in registration order).
+    /// Register a local pre-request hook (runs in registration order before
+    /// configured external request checks).
+    ///
+    /// For a router with request checks, these hooks see the effective
+    /// router defaults and must not change
+    /// [`PipelineContext::model`](crate::language_model::PipelineContext::model).
+    /// Register checked-router selector rewrites with
+    /// [`Self::router_preparation_hook`] so they happen before defaults while
+    /// the ingress router identity and checker bindings stay frozen.
+    ///
+    /// Requests without checks retain the legacy SDK order: ordinary hooks
+    /// run before the final selector's defaults and may rewrite the selector.
     pub fn pre_request_hook(&mut self, hook: impl PreRequestHook + 'static) -> &mut Self {
         self.pre_request_hooks.push(Arc::new(hook));
         self
@@ -125,6 +136,9 @@ impl PipelineBuilder {
     /// Register a local router-preparation hook. It runs after the ingress
     /// router identity and request-check bindings are frozen, and before the
     /// effective selector's defaults and ordinary pre-request policy checks.
+    /// A selector rewrite changes effective defaults, preferences, and policy,
+    /// but never replaces the ingress router identity or checker bindings. A
+    /// request without frozen checks cannot gain checks through a rewrite.
     pub fn router_preparation_hook(&mut self, hook: impl PreRequestHook + 'static) -> &mut Self {
         self.router_preparation_hooks.push(Arc::new(hook));
         self

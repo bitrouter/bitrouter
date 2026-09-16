@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::language_model::receipts::RequestCheckReporter;
 use crate::language_model::types::{
     Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
 };
@@ -186,10 +187,13 @@ pub struct CheckerFailure {
 /// Host implementation of an external request checker.
 #[async_trait]
 pub trait RequestCheckerRunner: Send + Sync {
-    /// Evaluate one configured entry-request invocation.
+    /// Evaluate one configured entry-request invocation. The host reports only
+    /// transport progress through `reporter`; the pipeline owns checker
+    /// outcomes and cancellation transitions in the request receipt.
     async fn check(
         &self,
         invocation: CheckerInvocation,
+        reporter: RequestCheckReporter,
     ) -> std::result::Result<CheckerDecision, CheckerFailure>;
 }
 

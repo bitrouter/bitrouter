@@ -17,8 +17,8 @@ use crate::language_model::protocol::responses::{
     assistant_turn_commitment, extend_causal_prefix,
 };
 use crate::language_model::receipts::{
-    RequestCheckStatus, RequestDeliveryStatus, RequestFailureStage, RequestReceiptHandle,
-    RequestReceiptOutcome,
+    RequestCheckReporter, RequestCheckStatus, RequestDeliveryStatus, RequestFailureStage,
+    RequestReceiptHandle, RequestReceiptOutcome,
 };
 use crate::language_model::request_checks::{CheckerFailureKind, RequestCheckCoverage};
 use crate::language_model::routing::RouterRequestIdentity;
@@ -507,10 +507,10 @@ impl PipelineContext {
         index: usize,
         invocation_id: &str,
         coverage: RequestCheckCoverage,
-    ) {
-        if let Some(receipt) = self.request_receipt.get() {
-            receipt.mark_check_started(index, invocation_id, coverage);
-        }
+    ) -> Option<RequestCheckReporter> {
+        self.request_receipt
+            .get()?
+            .mark_check_started(index, invocation_id, coverage)
     }
 
     pub(crate) fn mark_request_check_finished(

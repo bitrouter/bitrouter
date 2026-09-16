@@ -425,3 +425,8 @@ only (4,096-record capacity, completed-record TTL 15 minutes, possible earlier
 capacity eviction); settled token/cost history remains under `bro requests`.
 Checker and router check-binding edits require restart. See `diagnose.md` for
 coverage and how to distinguish a successful probe from a real check.
+
+Actual-use inventory is derived from the latest started invocation's retained
+receipt. When that receipt expires or is evicted, the view reports no retained
+evidence; it does not substitute an older allow or claim the checker was never
+used. Synthetic probe history is separate from receipt retention.

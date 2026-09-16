@@ -303,11 +303,15 @@ configured check and independent of the optional observability exporter.
 
 Authentication and session/continuation normalization precede router binding.
 The logical router/check binding remains fixed through candidate preparation,
-model selection and fallback. Effective request defaults are applied before
-content checks; only then may the existing selector and executor run. Local
-policy rejection never sends the request to an external checker. SDK receipt
+model selection and fallback. One preparation path serves both response modes.
+Checked routers apply effective defaults before content checks; ordinary local
+hooks cannot change their selector afterward. Unguarded requests preserve the
+legacy pre-request rewrite/defaults timing. The existing model selector and
+executor run after required checks allow. Local policy rejection never sends the request to an external checker. SDK receipt
 lifecycle handling also covers early failures, cancellation and streaming
-termination. It does not turn these requests into durable workflow tasks.
+termination. Real-use inventory is derived from retained receipts; the HTTP
+runtime only contributes transport progress, while probes remain separate.
+It does not turn these requests into durable workflow tasks.
 
 See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for coverage, resource limits,
 retention, activation and the acceptance ledger. Existing in-process guardrails
