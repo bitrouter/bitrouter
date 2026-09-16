@@ -28,6 +28,236 @@ use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// A file migration must preserve real policy routing, request overrides and
+/// settlement through every supported inbound protocol, including SSE.
+#[tokio::test]
+async fn named_router_migration_protocol_matrix() -> anyhow::Result<()> {
+    use anyhow::Context;
+    for streaming in [false, true] {
+        for migrated in [false, true] {
+            let upstream = if streaming {
+                mock_streaming_chat_completions_upstream("test-model").await
+            } else {
+                mock_chat_completions_upstream().await
+            };
+            let directory = tempfile::tempdir()?;
+            let config_path = directory.path().join("bitrouter.yaml");
+            let policy_path = directory.path().join("policy-lock.yaml");
+            let policy = "lockfileVersion: 1\npolicies:\n  coding:\n    tiers:\n      strong: mock:test-model\n    default_tier: strong\n    tool_use_tier: strong\n    tool_safe_tiers: [strong]\n";
+            std::fs::write(&policy_path, policy)?;
+            let legacy = format!(
+                "inherit_defaults: false\nserver:\n  skip_auth: true\ndatabase:\n  url: 'sqlite::memory:'\nproviders:\n  mock:\n    api_base: {}\n    api_key: test-key\n    models:\n      - id: base-model\n      - id: test-model\npresets:\n  coding:\n    model: mock:base-model\n    policy: coding\n    system_prompt: default system\n    params:\n      temperature: 0.2\n",
+                upstream.uri()
+            );
+            let raw = if migrated {
+                bitrouter::router_migration::candidate_text(&legacy)?.0
+            } else {
+                legacy
+            };
+            std::fs::write(&config_path, &raw)?;
+            let cfg = config::parse(&raw)?;
+            let assembled = bitrouter::build_app_with_path(&cfg, Some(&config_path)).await?;
+            let server = TestServer::new(build_router(AppState {
+                language_model: assembled
+                    .app
+                    .language_model()
+                    .context("missing pipeline")?
+                    .clone(),
+                mcp: assembled.app.mcp().cloned(),
+                skip_auth: assembled.app.skip_auth(),
+                metrics_renderer: assembled.app.metrics_renderer().cloned(),
+                prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+            }));
+            if migrated && !streaming {
+                for invalid in ["bitrouter/missing", "bitrouter/coding:cost"] {
+                    server
+                        .post("/v1/chat/completions")
+                        .json(&json!({
+                            "model": invalid, "messages": [{"role": "user", "content": "hello"}]
+                        }))
+                        .await
+                        .assert_status_bad_request();
+                }
+                assert!(
+                    upstream
+                        .received_requests()
+                        .await
+                        .context("missing capture")?
+                        .is_empty()
+                );
+            }
+            let selectors = if migrated {
+                vec!["@coding", "bitrouter/coding"]
+            } else {
+                vec!["@coding"]
+            };
+            for selector in &selectors {
+                let cases = [
+                    (
+                        "/v1/chat/completions".to_string(),
+                        json!({"model": selector, "messages": [{"role": "user", "content": "hello"}], "temperature": 0.7, "stream": streaming}),
+                    ),
+                    (
+                        "/v1/responses".to_string(),
+                        json!({"model": selector, "input": "hello", "temperature": 0.7, "stream": streaming}),
+                    ),
+                    (
+                        "/v1/messages".to_string(),
+                        json!({"model": selector, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 64, "temperature": 0.7, "stream": streaming}),
+                    ),
+                    (
+                        format!(
+                            "/v1beta/models/{selector}:{}",
+                            if streaming {
+                                "streamGenerateContent"
+                            } else {
+                                "generateContent"
+                            }
+                        ),
+                        json!({"contents": [{"role": "user", "parts": [{"text": "hello"}]}], "generationConfig": {"temperature": 0.7}}),
+                    ),
+                ];
+                for (path, body) in cases {
+                    let response = server.post(&path).json(&body).await;
+                    response.assert_status_ok();
+                    assert!(!response.text().is_empty());
+                }
+            }
+            let received = upstream
+                .received_requests()
+                .await
+                .context("missing capture")?;
+            assert_eq!(received.len(), selectors.len() * 4);
+            for request in received {
+                let body: Value = serde_json::from_slice(&request.body)?;
+                assert_eq!(body["model"], "test-model");
+                assert_eq!(body["temperature"], 0.7);
+                assert_eq!(body["messages"][0]["role"], "system");
+                assert_eq!(body["messages"][0]["content"], "default system");
+            }
+            assembled
+                .app
+                .language_model()
+                .context("missing pipeline")?
+                .drain_required_pending_settlements()
+                .await?;
+            let rows = requests::Entity::find().all(&assembled.db).await?;
+            let rejected = usize::from(migrated && !streaming) * 2;
+            assert_eq!(
+                rows.len(),
+                selectors.len() * 4 + rejected,
+                "one settlement per request"
+            );
+            assert_eq!(
+                rows.iter().filter(|row| row.router_id.is_none()).count(),
+                rejected
+            );
+            for row in rows.iter().filter(|row| row.router_id.is_none()) {
+                assert!(row.binding_digest.is_none());
+                assert!(row.original_selector.is_none());
+            }
+            let digests: std::collections::BTreeSet<_> = rows
+                .iter()
+                .filter_map(|row| row.binding_digest.as_deref())
+                .collect();
+            assert_eq!(digests.len(), 1, "aliases retain one binding identity");
+            for row in rows.into_iter().filter(|row| row.router_id.is_some()) {
+                assert_eq!(row.router_id.as_deref(), Some("coding"));
+                assert!(row.binding_digest.is_some());
+                assert!(
+                    row.original_selector
+                        .as_deref()
+                        .is_some_and(|value| selectors.contains(&value))
+                );
+                assert_eq!(row.model_id, "test-model");
+                assert_eq!(row.provider_id, "mock");
+            }
+            assert_eq!(
+                std::fs::read_to_string(policy_path)?,
+                policy,
+                "migration must not rewrite policy artifact"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn named_router_fallback_keeps_one_settled_identity() -> anyhow::Result<()> {
+    use anyhow::Context;
+    for streaming in [false, true] {
+        let failing = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(503).set_body_json(json!({"error": {"message": "retry"}})),
+            )
+            .mount(&failing)
+            .await;
+        let healthy = if streaming {
+            mock_streaming_chat_completions_upstream("test-model").await
+        } else {
+            mock_chat_completions_upstream().await
+        };
+        let cfg = config::parse(&format!(
+            "inherit_defaults: false\nserver:\n  skip_auth: true\ndatabase:\n  url: 'sqlite::memory:'\nproviders:\n  failing:\n    api_base: {}\n    api_key: fixture\n    models: [{{id: test-model}}]\n  healthy:\n    api_base: {}\n    api_key: fixture\n    models: [{{id: test-model}}]\nmodels:\n  resilient:\n    endpoints:\n      - {{provider: failing, service_id: test-model}}\n      - {{provider: healthy, service_id: test-model}}\nrouters:\n  user-defined:\n    selection:\n      kind: model\n      model: resilient\n",
+            failing.uri(),
+            healthy.uri()
+        ))?;
+        let assembled = bitrouter::build_app(&cfg).await?;
+        let server = TestServer::new(build_router(AppState {
+            language_model: assembled
+                .app
+                .language_model()
+                .context("missing pipeline")?
+                .clone(),
+            mcp: assembled.app.mcp().cloned(),
+            skip_auth: assembled.app.skip_auth(),
+            metrics_renderer: assembled.app.metrics_renderer().cloned(),
+            prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+        }));
+        server.post("/v1/chat/completions").json(&json!({
+            "model": "bitrouter/user-defined", "messages": [{"role":"user","content":"hello"}], "stream": streaming
+        })).await.assert_status_ok();
+        assert!(
+            !failing
+                .received_requests()
+                .await
+                .context("missing failed capture")?
+                .is_empty()
+        );
+        assert_eq!(
+            healthy
+                .received_requests()
+                .await
+                .context("missing healthy capture")?
+                .len(),
+            1
+        );
+        assembled
+            .app
+            .language_model()
+            .context("missing pipeline")?
+            .drain_required_pending_settlements()
+            .await?;
+        let rows = requests::Entity::find().all(&assembled.db).await?;
+        assert_eq!(rows.len(), 1, "fallback must not duplicate settlement");
+        let row = rows.first().context("missing settlement")?;
+        assert_eq!(row.router_id.as_deref(), Some("user-defined"));
+        assert!(
+            row.binding_digest
+                .as_ref()
+                .is_some_and(|digest| !digest.is_empty())
+        );
+        assert_eq!(
+            row.original_selector.as_deref(),
+            Some("bitrouter/user-defined")
+        );
+        assert_eq!(row.provider_id, "healthy");
+        assert_eq!(row.model_id, "test-model");
+    }
+    Ok(())
+}
+
 /// Stand up a wiremock upstream speaking Chat Completions.
 async fn mock_chat_completions_upstream() -> MockServer {
     mock_chat_completions_upstream_with_content("hello from the mock upstream").await

@@ -1046,15 +1046,10 @@ async fn running_router_state(
 ) -> Option<RunningRouterState> {
     let administration = administration.as_ref()?;
     let running = administration.routing.snapshot_config();
-    let policy_names = administration
-        .policy
-        .administration_snapshot()
-        .policies
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>();
+    let policy_report = administration.policy.administration_snapshot();
     let statuses = crate::actions::models::router_statuses(
         &running,
-        crate::actions::models::PolicyReadiness::Known(&policy_names),
+        crate::actions::models::PolicyReadiness::Known(&policy_report),
     )
     .await
     .ok()?;

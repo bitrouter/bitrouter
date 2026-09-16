@@ -1,6 +1,6 @@
 # Router 替代 Preset：第一批设计与实施计划
 
-状态：**设计提案；产品方向已确认，配置/API 细节待实施验证；R1–R6 均未实现。**
+状态：**R1–R6 已实现，本地批次验收通过；尚未执行远端 CI 和真实外部 harness 互操作验收。**
 
 日期：2026-09-15。源码基线：`f1f29db0`，`1.0.0-alpha.30`。
 
@@ -58,9 +58,14 @@ Guardrails 独立发布及其他 extension 默认排除仍是后续发布门槛�
 必须在真实调用链上保证：认证/授权完成、有效输入已形成、selector 尚未执行，
 再检查输入；本批不能由新增 Router 类型推断该顺序已正确。
 
-## 4. 配置语义草案
+权限契约沿用现有 requested-selector 检查：授权 `bitrouter/coding` 表示允许调用
+这个 router，并由其绑定策略选择模型；只授权物理模型不会自动授权这个地址。
+当前流程不会在选模后再次执行物理模型 allowlist 检查。本批不把 routing.only
+解释成权限白名单，也不声称已提供选模后的逐模型授权。
 
-以下 YAML 是候选设计，当前 alpha 不支持；字段名在 R2 实施前锁定。
+## 4. 配置语义
+
+以下 YAML 已在本分支实现；发布前仍需合并与 CI 验证。
 现有 providers、models、policy.path/mode 等配置继续按现有语义提供。
 
 ```yaml
@@ -133,8 +138,8 @@ router id。普通模型/显式 provider pin 保持兼容路径，不在本批�
 | --- | --- |
 | `bitrouter/coding`、用户新 router 地址 | 直接解析对应 router，无同名 preset 要求 |
 | 未知 `bitrouter/<id>` | 明确错误；不降级为 provider 查找或 default router |
-| `@old-name`、旧 `:variant` | 兼容窗口内经旧语法解析，使用同一有效 router 定义；保留已知/未知 variant 的旧行为 |
-| 新 router 的 `:variant` | 首批不开放；明确报不支持，不把后缀隐式吞掉 |
+| `@name`、旧 `:variant` | 兼容窗口内可解析 legacy preset 或新 router，使用同一有效定义；因此迁移后旧调用仍有效；保留已知/未知 variant 的旧行为 |
+| 规范地址 `bitrouter/<id>:variant` | 首批不开放（auto 例外）；明确报不支持，不把后缀隐式吞掉 |
 | `bitrouter/auto[:variant]` | 保留旧 policy-bound 入口的行为和错误；迁移后可绑定 routers.auto，但不能改指向 coding |
 | `bitrouter/fusion` | 保留原 ingress alias；不允许新 router 抢占 fusion 名称 |
 | 原生 harness/ACP session | 保持模式及会话身份；不因新地址启动持久任务 workflow |
@@ -157,6 +162,15 @@ Config 当前能由 Rust 消费者直接构建/修改；不得在反序列化时
 隐藏缓存。所有装配入口和 reload 候选走同一转换/校验函数，读取固定快照。
 SDK 公共结构体变化按 alpha API 迁移明确记录，workspace 内消费者同 PR 更新；
 不新增 pub use facade 违反仓库规则。
+
+本批 Rust 源码兼容说明：`Config` 新增 `routers`；构建完整 struct literal 的
+使用者需要补空 map（使用 `..Config::default()` 的调用者自然继承空值）。
+`ModelResolution` / `PresetResolution` 新增可空 `router` 身份；自定义 routing
+table 对普通模型返回 `None`，或使用已有 passthrough 构造器。新配置类型从
+`config::router` 模块引用。`PipelineContext::router_identity()` 及同类型的
+`RouterRequestIdentity` event 提供一次请求的 router 归属，不改变 settlement
+调用次数。应用的 metering/report 完整 literal 也需补新增可空字段；JSON 读取
+对旧 daemon/旧记录保留缺失字段兼容。
 
 | 旧输入 | 归一化规则 |
 | --- | --- |
@@ -195,10 +209,11 @@ CLI 新参数和 JSON 字段名称在对应 PR 固定；以下是报告语义，
   按当前配置倒推历史归属。`route_scope_id` 是既有 session/policy 归属，不可挪用。
 - 不在数据库或遥测中重复计费；history 只覆盖已有记录路径。Exporter 关闭时，
   本地已有记录仍可查询；提前 auth/check 拒绝的完整回执在下一批完成。
-- Binding digest 使用稳定序列化后的非敏感执行定义；明确算法版本，排除凭据值
-  与原文 prompt。policy artifact digest 单独记录；不能用一个 digest 冒充全部
-  运行状态或远端实现版本。敏感默认值改变的识别需采用安全修订标识，不能泄露
-  可枚举的 secret 摘要；R4 应给出精确定义后再对外承诺。
+- Binding digest 使用带版本的稳定序列化及 SHA-256，仅覆盖 router id、selection、
+  routing 与默认字段的名称/是否存在；排除所有 prompt/params 值以及它们的散列。
+  它是路由绑定摘要，不能识别敏感默认值变更，也不代表完整配置修订。
+  saved/running 比较在进程内比较完整配置，报告只返回变更状态。policy artifact
+  digest 单独记录；不能用一个 digest 冒充全部运行状态或远端实现版本。
 - Local/remote 共用报告语义；远程不读取本地 Config/provider 环境作为补偿。
 
 ## 9. PR 拆分与依赖
@@ -225,8 +240,8 @@ R1 的具体执行顺序：先添加旧行为 characterization cases → 引入�
 
 ## 10. 验收 ledger
 
-全部状态初始为 **未执行**。证明文件、命令结果和 CI 链接随实施补入，不能用本次
-源码阅读或文档校验代替运行验收。
+以下场景由新增测试与已有回归共同验证；最终命令结果见第 12 节。
+真实外部 harness/提供商互操作与远端 CI 未执行，本地 mock HTTP 不能替代它们。
 
 | ID | 验收场景 | 对应 PR |
 | --- | --- | --- |
@@ -272,16 +287,56 @@ CLI、默认 config 或 harness 接线变化在同一 PR 更新 [仓库 Skill](.
 Skill 只描述已实现内容；不提前发布本设计的提议命令。产品文档在 bitrouter-docs
 另行同步；此文件属于内部工程设计。提交与 PR 标题采用 conventional 格式。
 
-## 12. 实施状态与首个落点
+## 12. 实施状态与证据
 
-| 项目 | 状态 |
+| 项目 | 本分支结果 |
 | --- | --- |
-| 产品对象收敛、默认单 coding、沿用 policy-lock | 用户已确认 |
-| 当前调用链及配置消费者调查 | 本轮只读核验完成 |
-| schema 字段、命名限制、迁移窗口、digest 与 CLI 细节 | 本文提案，随对应 PR 验证 |
-| R1–R6、B01–B16 | 未实现 / 未执行 |
-| 本轮代码修改与运行测试 | 无 |
+| R1 归一化 | 已提交 `06d2a685`；保留 legacy preset 公开类型及请求默认值语义 |
+| R2 配置和地址 | 已提交 `52a0ef2f`；严格 schema、新旧地址、Google 斜杠路径、稳定 router 身份 |
+| R3 coding 初始化 | 已提交 `c12aa814`；复用 policy-lock，幂等和失败恢复；不改 chat/harness/mode |
+| R4 诊断和历史 | 已提交 `2392afbe`，R6 补齐候选就绪检查；动态 preview 不执行选模；router 修改需要重启；历史字段可空 |
+| R5 迁移 | 已提交 `55d14463`，R6 补齐相对路径；候选、摘要、备份、原子发布；不支持的布局要求人工迁移 |
+| R6 集成回归 | 已实现；四协议 × 流式/非流式 × 新旧配置，fallback 和 Responses continuation |
 
-首个实现落点为 R1：在不改现有公开配置和行为的条件下，先让旧 preset 经统一
-router 定义进入已有解析与 policy 校验路径。它的结果必须是可用且已验证的内部
-接点，随后 R2 才向用户开放新的 router 对象。
+具体验收入口：
+
+- B01–B06：SDK `config::presets` / `config::router` / routing-table tests；
+  `named_router_migration_protocol_matrix` 使用不同 base/selected 模型，验证真正经过 policy。
+- B07–B08：`policy_lock::tests::router_*` 和 `actions::models` 的未初始化/缺少 policy
+  诊断；初始化回归验证原 mode/chat 配置保留。原生 harness 启动方式未改动。
+- B09–B12：`named_router_fallback_keeps_one_settled_identity`、
+  `router_continuation` 集成测试、DB migration/metering tests、daemon status 和 reload tests。
+  只新增本地 settlement 字段，不扩展遥测 attribute schema，也不声称覆盖提前拒绝。
+- B13：`router_migration::tests` 和 `router_migration_cli`；候选被修改、源文件变化、
+  幂等、私有备份、权限、CRLF、symlink 拒绝、语义等价检查。底层发布锁约束协作写入者；
+  不宣称与不遵守锁的外部文件替换具有文件系统事务隔离。
+- B14：`named_router_migration_protocol_matrix` 经真实本地 HTTP/mock upstream 验证四协议；
+  `router_continuation` 验证第二次 Responses 请求携带对应提供商 continuation id。
+- B15：生成 schema、CLI parsing、skill/references、模板同步；plugin manifests 只分发 skill，
+  无需修改。SDK 新字段对使用 struct literal 的下游 Rust 调用者是源码变更，需要补字段
+  或使用现有构造路径；不宣称 Rust struct-literal 源码兼容。
+- B16：没有新 task store、checker、workflow runtime 或 extension 发布系统。
+
+本地验证结果（2026-09-15，macOS arm64）：
+
+| 检查 | 结果 |
+| --- | --- |
+| `cargo nextest run --workspace --all-features --no-fail-fast` | 3,381 passed；22 skipped；0 failed |
+| `cargo clippy --workspace --all-features --tests -- -D warnings` | 通过 |
+| `cargo fmt -- --check`、`git diff --check` | 通过 |
+| `cargo test --doc --workspace --all-features` | 5 passed；1 ignored；0 failed |
+| `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps` | 通过 |
+| `cargo run -p dist-helper -- check` | schema 与 registry 制品一致 |
+| SDK `--no-default-features`，以及分别启用 `config_file` / `server` / `acp` | 全部通过 |
+| telemetry 分别启用 `otel-http` / `otel-grpc` / `otel,server` | 全部通过 |
+| pinned nightly `2026-05-05` + `cargo-public-api 0.52.0` | API listing 非空、sentinel 存在、无 OTel 泄漏、公开依赖集合不变（15 crates） |
+
+所有 Cargo 验证使用 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4` 控制本地构建资源。
+编译仍提示既有 `proc-macro-error2` future-incompatibility 与 macOS linker unwind-table
+大小警告；上述检查均成功退出。没有调用真实付费模型，也没有将 mock HTTP 通过
+计作外部提供商或原生 harness 的发布认证。
+
+验收中实际修正了迁移候选相对路径的父目录同步、policy 目标不可路由时的 readiness，
+并补上异步 settlement 完成后读取历史的回归。策略选模、鉴权次序与原生 harness
+执行位置保持既有契约；本批未实现的新架构边界见第 2 节。

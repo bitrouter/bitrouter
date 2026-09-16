@@ -72,7 +72,7 @@ pub enum RouterReadiness {
 
 #[derive(Clone, Copy)]
 pub(crate) enum PolicyReadiness<'a> {
-    Known(&'a BTreeSet<String>),
+    Known(&'a crate::actions::administration::PolicyReport),
     Invalid,
 }
 
@@ -212,9 +212,9 @@ impl RoutableModels {
         let mut resolved = crate::commands::resolve_static(config.clone());
         bitrouter_sdk::config::discover_models(&mut resolved).await;
         let models = ConfigRoutingTable::from_config(resolved.clone()).list_models();
-        let policies = disk_policy_names(&config, &self.source).await;
+        let policies = disk_policy_report(&config, &self.source).await;
         let policy_readiness = match &policies {
-            Ok(names) => PolicyReadiness::Known(names),
+            Ok(report) => PolicyReadiness::Known(report),
             Err(_) => PolicyReadiness::Invalid,
         };
         let routers = router_statuses(&resolved, policy_readiness).await?;
@@ -288,10 +288,10 @@ pub(crate) async fn router_statuses(
             RouterSource::Legacy => format!("@{}", entry.id),
             RouterSource::Default => String::new(),
         };
-        let policy_readiness = bound_policy
+        let policy_problem = bound_policy
             .as_deref()
             .map(|policy| match policy_readiness {
-                PolicyReadiness::Known(names) if names.contains(policy) => None,
+                PolicyReadiness::Known(report) if report.definitions.contains_key(policy) => None,
                 PolicyReadiness::Known(_) => Some((
                     RouterReadiness::NotReady,
                     format!("bound policy '{policy}' is unavailable"),
@@ -301,24 +301,59 @@ pub(crate) async fn router_statuses(
                     "policy lock is missing or invalid".to_string(),
                 )),
             });
-        let (readiness, reason) = match policy_readiness.flatten() {
+        let (readiness, reason) = match policy_problem.flatten() {
             Some((readiness, reason)) => (readiness, Some(reason)),
             None => match table.resolve_model(&address).await {
-                Ok(resolution) => match table
-                    .route_resolved(
-                        &resolution.clean_model,
-                        &resolution.prefs,
-                        &CallerContext::local(),
-                    )
-                    .await
-                {
-                    Ok(chain) if !chain.is_empty() => (RouterReadiness::Ready, None),
-                    Ok(_) => (
-                        RouterReadiness::NotReady,
-                        Some("router resolves to an empty provider chain".to_string()),
-                    ),
-                    Err(error) => (RouterReadiness::NotReady, Some(error.to_string())),
-                },
+                Ok(resolution) => {
+                    if let (Some(policy), PolicyReadiness::Known(report)) =
+                        (bound_policy.as_deref(), policy_readiness)
+                    {
+                        let candidates = crate::actions::route::policy_candidate_models(
+                            Some(report),
+                            Some(policy),
+                            &resolution.clean_model,
+                        );
+                        let routable = crate::actions::route::resolvable_policy_candidates(
+                            &table,
+                            candidates.clone(),
+                            &resolution.prefs,
+                        )
+                        .await
+                        .into_iter()
+                        .collect::<BTreeSet<_>>();
+                        let missing = candidates
+                            .into_iter()
+                            .filter(|candidate| !routable.contains(candidate))
+                            .collect::<Vec<_>>();
+                        if missing.is_empty() {
+                            (RouterReadiness::Ready, None)
+                        } else {
+                            (
+                                RouterReadiness::NotReady,
+                                Some(format!(
+                                    "bound policy '{policy}' has unroutable candidate models: {}",
+                                    missing.join(", ")
+                                )),
+                            )
+                        }
+                    } else {
+                        match table
+                            .route_resolved(
+                                &resolution.clean_model,
+                                &resolution.prefs,
+                                &CallerContext::local(),
+                            )
+                            .await
+                        {
+                            Ok(chain) if !chain.is_empty() => (RouterReadiness::Ready, None),
+                            Ok(_) => (
+                                RouterReadiness::NotReady,
+                                Some("router resolves to an empty provider chain".to_string()),
+                            ),
+                            Err(error) => (RouterReadiness::NotReady, Some(error.to_string())),
+                        }
+                    }
+                }
                 Err(error) => (RouterReadiness::NotReady, Some(error.to_string())),
             },
         };
@@ -363,29 +398,28 @@ pub(crate) async fn disk_router_statuses_for_config(
 ) -> Option<Vec<RouterStatus>> {
     let mut resolved = crate::commands::resolve_static(config.clone());
     bitrouter_sdk::config::discover_models(&mut resolved).await;
-    let policies = disk_policy_names(config, source).await;
+    let policies = disk_policy_report(config, source).await;
     let policy_readiness = match &policies {
-        Ok(names) => PolicyReadiness::Known(names),
+        Ok(report) => PolicyReadiness::Known(report),
         Err(_) => PolicyReadiness::Invalid,
     };
     router_statuses(&resolved, policy_readiness).await.ok()
 }
 
-async fn disk_policy_names(
+async fn disk_policy_report(
     config: &Config,
     source: &ConfigSource,
-) -> anyhow::Result<BTreeSet<String>> {
+) -> anyhow::Result<crate::actions::administration::PolicyReport> {
     let path = match source {
         ConfigSource::File(path) => Some(path.as_path()),
         _ => None,
     };
-    crate::policy_lock::load_for_config(config, path)
-        .await
-        .map(|loaded| {
-            loaded
-                .map(|loaded| loaded.document.policies.keys().cloned().collect())
-                .unwrap_or_default()
-        })
+    let loaded = crate::policy_lock::load_for_config(config, path).await?;
+    Ok(crate::actions::administration::PolicyReport::from_loaded(
+        config,
+        loaded.as_ref(),
+        crate::actions::administration::PolicyView::Disk,
+    ))
 }
 
 /// Whether the control endpoint is currently bound, so an abandoned socket
@@ -560,7 +594,11 @@ presets:
     model: demo-model
 "#,
         )?;
-        let policies = BTreeSet::new();
+        let policies = crate::actions::administration::PolicyReport::from_loaded(
+            &config,
+            None,
+            crate::actions::administration::PolicyView::Disk,
+        );
         let routers = router_statuses(&config, PolicyReadiness::Known(&policies)).await?;
 
         let review = routers
@@ -643,6 +681,63 @@ routers:
                 .reason
                 .as_deref()
                 .is_some_and(|reason| reason != "policy runtime readiness is unavailable"),
+            "reason: {:?}",
+            coding.reason
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn policy_router_with_unroutable_policy_target_is_not_ready() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("bitrouter.yaml");
+        std::fs::write(
+            &path,
+            r#"
+inherit_defaults: false
+providers:
+  demo:
+    api_base: https://api.example.test
+    api_key: key
+    active: true
+    models: [{ id: demo-model }]
+routers:
+  coding:
+    selection:
+      kind: policy
+      policy: coding
+      base_model: demo-model
+"#,
+        )?;
+        std::fs::write(
+            dir.path().join("policy-lock.yaml"),
+            r#"lockfileVersion: 1
+policies:
+  coding:
+    key_strategy: agent_trace
+    tiers:
+      strong: unavailable-model
+    routes: {}
+    default_tier: strong
+    tool_use_tier: strong
+    tool_safe_tiers: [strong]
+"#,
+        )?;
+
+        let report = RoutableModels::new(ConfigSource::File(path), None)
+            .report()
+            .await?;
+        let coding = report
+            .routers
+            .as_deref()
+            .and_then(|routers| routers.iter().find(|router| router.id == "coding"))
+            .ok_or_else(|| anyhow::anyhow!("coding router diagnostic missing"))?;
+        assert_eq!(coding.readiness, RouterReadiness::NotReady);
+        assert!(
+            coding
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("unavailable-model")),
             "reason: {:?}",
             coding.reason
         );

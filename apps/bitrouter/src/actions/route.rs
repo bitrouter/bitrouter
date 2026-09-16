@@ -279,6 +279,7 @@ use crate::policy_table_router::{PolicyDecision, PolicyTableRouter};
 
 #[derive(Default)]
 struct RouteMetadata {
+    effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
     router_source: Option<crate::actions::models::RouterSource>,
     bound_policy: Option<String>,
@@ -409,10 +410,10 @@ impl RouteAction {
                 Ok(Some(assemble(
                     model,
                     effective_model,
-                    None,
                     ResolvedVia::Live,
                     None,
                     RouteMetadata {
+                        effective_effort: None,
                         router,
                         router_source,
                         bound_policy,
@@ -509,7 +510,6 @@ impl RouteAction {
         Ok(assemble(
             &input.model,
             &effective_model,
-            effective_effort,
             // A file on disk and the built-in zero-config defaults resolve the
             // same way but are not the same answer: one is what the user wrote.
             if self.source.is_default() {
@@ -519,6 +519,7 @@ impl RouteAction {
             },
             decision.as_ref(),
             RouteMetadata {
+                effective_effort,
                 router: resolution.router,
                 router_source,
                 bound_policy,
@@ -564,7 +565,6 @@ impl RouteAction {
 fn assemble(
     requested_model: &str,
     effective_model: &str,
-    effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     resolved_via: ResolvedVia,
     decision: Option<&PolicyDecision>,
     metadata: RouteMetadata,
@@ -579,7 +579,7 @@ fn assemble(
     RouteReport {
         requested_model: requested_model.to_string(),
         effective_model: effective_model.to_string(),
-        effective_effort,
+        effective_effort: metadata.effective_effort,
         resolved_via,
         policy_decision: decision.map(policy_selection),
         router: metadata.router,

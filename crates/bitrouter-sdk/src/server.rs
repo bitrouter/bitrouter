@@ -1941,10 +1941,10 @@ mod tests {
             .flat_map(|_| {
                 [
                     MockResponse::Generate(crate::language_model::GenerateResult {
-                    content: vec![crate::language_model::Content::Text {
-                        text: "ok".into(),
-                        provider_metadata: Default::default(),
-                    }],
+                        content: vec![crate::language_model::Content::Text {
+                            text: "ok".into(),
+                            provider_metadata: Default::default(),
+                        }],
                         usage: None,
                         finish_reason: Some(crate::language_model::FinishReason::Stop),
                         response_id: Some("response-fixture".into()),

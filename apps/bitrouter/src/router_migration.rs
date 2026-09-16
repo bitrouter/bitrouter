@@ -61,6 +61,8 @@ pub async fn migrate(
     if apply && (candidate_path.is_none() || expected_source.is_none()) {
         bail!("--apply requires --candidate and --source-digest from the preview");
     }
+    let absolute_source = std::path::absolute(path)?;
+    let path = absolute_source.as_path();
     require_regular_source(path)?;
     let _lock = crate::policy_lock::acquire_publication_lock(path)?;
     require_regular_source(path)?;
@@ -89,6 +91,7 @@ pub async fn migrate(
     let destination = candidate_path.map(Path::to_owned).unwrap_or_else(|| {
         path.with_file_name(format!("bitrouter.routers-{}.yaml", uuid::Uuid::new_v4()))
     });
+    let destination = std::path::absolute(destination)?;
     if destination == path {
         bail!("candidate path must differ from the source configuration");
     }
@@ -207,9 +210,9 @@ pub fn candidate_text(raw: &str) -> Result<(String, Vec<String>)> {
         bail!("block anchors, aliases, and merge keys require an explicit manual migration");
     }
     let mut entries = Vec::new();
-    for index in start + 1..end {
-        if let Some(id) = key_at(lines[index], 2) {
-            require_block_header(lines[index], id)?;
+    for (index, line) in lines.iter().enumerate().take(end).skip(start + 1) {
+        if let Some(id) = key_at(line, 2) {
+            require_block_header(line, id)?;
             if !original.presets.contains_key(id) {
                 bail!("unsupported preset key '{id}'; use unquoted literal keys");
             }
@@ -434,9 +437,9 @@ mod tests {
 
     #[test]
     fn preserves_flow_aliases_only_when_full_config_semantics_match() -> Result<()> {
-        let raw = "providers:\n  vendor: &provider\n    api_protocol: openai\n    api_base: https://example.invalid/v1\npresets:\n  coding:\n    model: vendor:base\n    params: {metadata: *provider}\n";
+        let raw = "providers:\n  vendor: &provider\n    api_base: https://example.invalid/v1\npresets:\n  coding:\n    model: vendor:base\n    params: {metadata: [*provider]}\n";
         let (candidate, _) = candidate_text(raw)?;
-        assert!(candidate.contains("params: {metadata: *provider}"));
+        assert!(candidate.contains("params: {metadata: [*provider]}"));
         verify_equivalence(&config::parse(raw)?, &config::parse(&candidate)?)?;
         Ok(())
     }
