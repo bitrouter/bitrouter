@@ -242,6 +242,73 @@ impl InspectionTarget {
         }
     }
 
+    pub async fn checks(&self) -> Result<crate::actions::checks::ChecksReport> {
+        match self {
+            Self::Local { .. } => match self.inspect(DaemonInspection::Checks).await? {
+                DaemonInspectionReport::Checks(report) => Ok(report),
+                other => unexpected_inspection("checks", other),
+            },
+            Self::Remote { client, .. } => client.checks().await,
+        }
+    }
+
+    pub async fn checks_probe(
+        &self,
+        checker: &str,
+    ) -> Result<crate::actions::checks::CheckerProbeReport> {
+        crate::actions::administration::validate_identifier(checker)?;
+        match self {
+            Self::Local { .. } => match self
+                .inspect(DaemonInspection::ChecksProbe {
+                    checker: checker.to_string(),
+                })
+                .await?
+            {
+                DaemonInspectionReport::ChecksProbe(report) => Ok(report),
+                other => unexpected_inspection("checks probe", other),
+            },
+            Self::Remote { client, .. } => client.checks_probe(checker).await,
+        }
+    }
+
+    pub async fn check_receipts(
+        &self,
+        limit: usize,
+    ) -> Result<bitrouter_sdk::language_model::receipts::RequestReceiptList> {
+        crate::actions::checks::validate_receipt_limit(limit)?;
+        match self {
+            Self::Local { .. } => match self
+                .inspect(DaemonInspection::CheckReceipts { limit })
+                .await?
+            {
+                DaemonInspectionReport::CheckReceipts(report) => Ok(report),
+                other => unexpected_inspection("checks receipts", other),
+            },
+            Self::Remote { client, .. } => client.check_receipts(limit).await,
+        }
+    }
+
+    pub async fn check_receipt(
+        &self,
+        request_id: &str,
+        incarnation: Option<&str>,
+    ) -> Result<bitrouter_sdk::language_model::receipts::RequestReceiptLookup> {
+        crate::actions::checks::validate_receipt_lookup(request_id, incarnation)?;
+        match self {
+            Self::Local { .. } => match self
+                .inspect(DaemonInspection::CheckReceipt {
+                    request_id: request_id.to_string(),
+                    incarnation: incarnation.map(str::to_string),
+                })
+                .await?
+            {
+                DaemonInspectionReport::CheckReceipt(report) => Ok(report),
+                other => unexpected_inspection("checks receipt", other),
+            },
+            Self::Remote { client, .. } => client.check_receipt(request_id, incarnation).await,
+        }
+    }
+
     pub async fn reload_state(&self) -> Result<ReloadState> {
         match self {
             Self::Local { socket, .. } => {

@@ -641,6 +641,11 @@ fn restart_required_fields(
     if current.routers != candidate.routers {
         fields.insert("routers".to_string());
     }
+    // Checker clients, credentials and request bindings are assembled once.
+    // A routing-table reload cannot activate a different checker connection.
+    if current.checkers != candidate.checkers {
+        fields.insert("checkers".to_string());
+    }
     if current.plugins != candidate.plugins {
         fields.insert("plugins".to_string());
     }
@@ -1195,6 +1200,7 @@ fn fixed_top_level_field(name: &str) -> &'static str {
         "providers" => "providers",
         "models" => "models",
         "routers" => "routers",
+        "checkers" => "checkers",
         "presets" => "presets",
         "variants" => "variants",
         "plugins" => "plugins",
@@ -1251,6 +1257,7 @@ fn fixed_restart_field(path: &str) -> String {
         | "acp_recording"
         | "continuation"
         | "routers"
+        | "checkers"
         | "plugins"
         | "mcp"
         | "mcp_servers"
@@ -3471,6 +3478,53 @@ presets:
         let candidate =
             config::parse("inherit_defaults: false\nupstream:\n  timeouts:\n    read_secs: 10\n")?;
         assert!(restart_required_fields(&current, &candidate, Some(&BTreeSet::new())).is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn checker_connection_edits_require_restart_before_any_reload_mutation()
+    -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("bitrouter.yaml");
+        let document = |port: u16| {
+            format!(
+                "inherit_defaults: false\ncheckers:\n  company:\n    endpoint: http://127.0.0.1:{port}/check\n    contract_version: 1\n"
+            )
+        };
+        std::fs::write(&path, document(18081))?;
+        let baseline =
+            load_configuration_baseline(&crate::paths::ConfigSource::File(path.clone())).await?;
+        let mut initial = baseline.config().clone();
+        resolve_reloadable_config(&mut initial).await;
+        let routing_table = Arc::new(ConfigRoutingTable::from_config(initial));
+        let reloader = AppReloader::new(
+            Arc::new(PolicyStore::new()),
+            routing_table.clone(),
+            Arc::new(HttpExecutor::new(HttpTimeouts::default())?),
+            ReloadSource::File(path.clone()),
+        )
+        .with_startup_configuration(baseline);
+
+        std::fs::write(&path, document(18082))?;
+        assert!(reloader.reload().await.is_err());
+        let running = routing_table.snapshot_config();
+        assert_eq!(
+            running
+                .checkers
+                .get("company")
+                .map(|checker| checker.endpoint.as_str()),
+            Some("http://127.0.0.1:18081/check")
+        );
+        let state = reloader
+            .reload_state()
+            .ok_or_else(|| anyhow::anyhow!("missing reload state"))?;
+        assert_eq!(state.consistency, ReloadConsistency::Consistent);
+        let report = state
+            .last_outcome
+            .ok_or_else(|| anyhow::anyhow!("missing reload report"))?;
+        assert_eq!(report.restart_required_fields, ["checkers"]);
+        assert_eq!(fixed_top_level_field("checkers"), "checkers");
+        assert_eq!(fixed_restart_field("checkers"), "checkers");
         Ok(())
     }
 

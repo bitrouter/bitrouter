@@ -2,7 +2,7 @@
 //!
 //! The [`Config`] type is the parsed shape of a `bitrouter.yaml` file. Top
 //! level keys: `server`, `database`, `providers`, `models`, `routers`,
-//! `presets`, `variants`; per-plugin config lives under `plugins`. Load a file with
+//! `checkers`, `presets`, `variants`; per-plugin config lives under `plugins`. Load a file with
 //! [`load`]; build a [`RoutingTable`](crate::language_model::RoutingTable) over
 //! it with [`ConfigRoutingTable`].
 //!
@@ -31,6 +31,7 @@ use crate::language_model::types::{
     ApiProtocol, ModelCompatibility, OutboundHeaderRule, ProtocolList,
 };
 
+pub mod checker;
 pub mod pattern;
 pub mod presets;
 pub mod router;
@@ -107,6 +108,8 @@ pub struct Config {
     pub models: HashMap<String, VirtualModel>,
     /// Named request routers, addressed as `bitrouter/<id>`.
     pub routers: HashMap<String, router::RouterConfig>,
+    /// Remote request checkers, keyed by the ids referenced from named routers.
+    pub checkers: HashMap<String, checker::CheckerConfig>,
     /// `@preset` definitions.
     pub presets: HashMap<String, PresetConfig>,
     /// `:variant` definitions.
@@ -161,6 +164,7 @@ impl Default for Config {
             providers: HashMap::new(),
             models: HashMap::new(),
             routers: HashMap::new(),
+            checkers: HashMap::new(),
             presets: HashMap::new(),
             variants: HashMap::new(),
             plugins: HashMap::new(),
@@ -190,7 +194,13 @@ impl Config {
     /// preset compatibility syntax.
     pub fn resolve_router(&self, raw_model: &str) -> Result<PresetResolution> {
         self.validate_router_config()?;
-        presets::resolve_routers(raw_model, &self.routers, &self.presets, &self.variants)
+        presets::resolve_routers(
+            raw_model,
+            &self.routers,
+            &self.presets,
+            &self.variants,
+            &self.checkers,
+        )
     }
 
     /// Redaction-safe inventory of canonical and legacy router definitions.

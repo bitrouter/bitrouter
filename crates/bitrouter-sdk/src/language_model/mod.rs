@@ -63,6 +63,8 @@ pub mod executor;
 pub mod hooks;
 pub mod pipeline;
 pub mod protocol;
+pub mod receipts;
+pub mod request_checks;
 pub mod routing;
 pub mod server_tools;
 pub mod settlement;

@@ -292,3 +292,23 @@ cargo +nightly-2026-05-05 public-api \
 ```
 
 Append the output under the comment header in `public-api-deps.txt` — the header is stripped before comparison, so keep it out of the generated part. Both versions are pinned in `crates/bitrouter-sdk/public-api.pins`, which the CI job reads; take them from there rather than from this snippet if the two ever disagree. They are pinned because the manifest is derived from `cargo public-api`'s rendering, and both rustdoc's JSON format and that rendering change across releases. Run it on Linux or macOS; the SDK has `#[cfg(unix)]` items, so a Windows-generated listing will not match.
+
+### Named-router request checks
+
+Named-router entry checks use the SDK's typed `language_model::request_checks`
+contract and process-local `language_model::receipts` store. The app assembles
+startup-owned HTTP clients in `request_checks` and shares that runtime with
+local IPC and remote administration. Receipt storage is mandatory for a
+configured check and independent of the optional observability exporter.
+
+Authentication and session/continuation normalization precede router binding.
+The logical router/check binding remains fixed through candidate preparation,
+model selection and fallback. Effective request defaults are applied before
+content checks; only then may the existing selector and executor run. Local
+policy rejection never sends the request to an external checker. SDK receipt
+lifecycle handling also covers early failures, cancellation and streaming
+termination. It does not turn these requests into durable workflow tasks.
+
+See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for coverage, resource limits,
+retention, activation and the acceptance ledger. Existing in-process guardrails
+remain during this increment; independent matcher packaging is a later change.
