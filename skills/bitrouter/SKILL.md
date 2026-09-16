@@ -134,7 +134,7 @@ wire contract are there — before reasoning about this surface.
 
 ### 6. Verify
 ```bash
-bro route claude-sonnet-4-6   # what would actually run: read `effective_model`
+bro route claude-sonnet-4-6   # preview; check `policy_decision_executed`
 bro models                    # everything routable, with every provider that serves it
 bro requests                  # settled requests + spend, JSON (--human for a table)
 ```

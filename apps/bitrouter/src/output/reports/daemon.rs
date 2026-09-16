@@ -116,6 +116,7 @@ impl CliReport for StatusReport {
             if let Some(socket) = &self.socket {
                 h.field("socket", socket)?;
             }
+            render_router_state(self, h)?;
             // Spend outlives the daemon: what a past daemon spent is on disk
             // and stays true after it exits, so it is shown here too.
             render_spend(self.spend.as_ref(), h)?;
@@ -140,7 +141,37 @@ impl CliReport for StatusReport {
         if let Some(socket) = &self.socket {
             h.field("socket", socket)?;
         }
+        render_router_state(self, h)?;
         render_spend(self.spend.as_ref(), h)
+    }
+}
+
+fn render_router_state(report: &StatusReport, h: &mut Human<'_>) -> std::io::Result<()> {
+    match (&report.saved_routers, &report.running_routers) {
+        (Some(saved), Some(running)) => {
+            h.field(
+                "routers",
+                format!("{} saved, {} running", saved.len(), running.len()),
+            )?;
+        }
+        (Some(saved), None) => {
+            h.field(
+                "routers",
+                format!("{} saved; running view unavailable", saved.len()),
+            )?;
+        }
+        (None, Some(running)) => {
+            h.field(
+                "routers",
+                format!("{} running; saved view unavailable", running.len()),
+            )?;
+        }
+        (None, None) => {}
+    }
+    match report.router_restart_required {
+        Some(true) => h.field("router config", "restart required"),
+        Some(false) => h.field("router config", "saved and running match"),
+        None => Ok(()),
     }
 }
 
@@ -205,9 +236,30 @@ impl CliReport for RouteReport {
             "model: {}  (resolved via: {via})",
             self.requested_model
         ))?;
-        // Only worth a line when the policy table moved the request: an
-        // unchanged model with no effort is what the reader already assumed.
-        if self.effective_model != self.requested_model || self.effective_effort.is_some() {
+        if let Some(router) = &self.router {
+            let source = match self.router_source {
+                Some(crate::actions::models::RouterSource::User) => "user",
+                Some(crate::actions::models::RouterSource::Legacy) => "legacy",
+                Some(crate::actions::models::RouterSource::Default) => "default",
+                None => "unknown",
+            };
+            h.line(&format!(
+                "  router: {} ({source}, {})",
+                router.router_id, router.binding_digest
+            ))?;
+        }
+        if let Some(policy) = &self.bound_policy {
+            h.line(&format!(
+                "  policy: {policy} (decision not executed; base model: {})",
+                self.effective_model
+            ))?;
+            if !self.candidate_models.is_empty() {
+                h.line(&format!(
+                    "  candidates: {}",
+                    self.candidate_models.join(", ")
+                ))?;
+            }
+        } else if self.effective_model != self.requested_model || self.effective_effort.is_some() {
             let effort = match self.effective_effort {
                 Some(effort) => format!("  (effort: {effort})"),
                 None => String::new(),
@@ -215,6 +267,9 @@ impl CliReport for RouteReport {
             h.line(&format!("  policy → {}{effort}", self.effective_model))?;
         }
         if self.provider_chain.is_empty() {
+            if self.bound_policy.is_some() && self.policy_decision_executed == Some(false) {
+                return h.line("  (no provider chain selected without a policy decision)");
+            }
             return h.line("  (empty chain — no provider declares this model)");
         }
         for (i, hop) in self.provider_chain.iter().enumerate() {
@@ -306,6 +361,45 @@ mod tests {
         assert!(h.contains("  models    42 routable"), "{h:?}");
         assert!(h.contains("anthropic, openai"), "{h:?}");
         assert!(h.contains("$1.23 today (9 requests)"), "{h:?}");
+    }
+
+    #[test]
+    fn status_distinguishes_saved_and_running_router_state() -> anyhow::Result<()> {
+        use crate::actions::models::{RouterReadiness, RouterSource, RouterStatus};
+
+        let router = |id: &str| RouterStatus {
+            id: id.to_string(),
+            address: format!("bitrouter/{id}"),
+            source: RouterSource::User,
+            readiness: RouterReadiness::Ready,
+            reason: None,
+            selection: None,
+            system_prompt_default: true,
+            parameter_defaults: vec!["temperature".to_string()],
+            binding_digest: Some("router-v1:sha256:test".to_string()),
+        };
+        let report = StatusReport::running(
+            7,
+            "127.0.0.1:4356".into(),
+            1,
+            vec!["demo".into()],
+            "/x.sock".into(),
+            None,
+        )
+        .with_router_views(
+            Some(vec![router("coding"), router("review")]),
+            Some(vec![router("coding")]),
+            Some(true),
+        );
+
+        let value = json(&report);
+        assert_eq!(value["router_restart_required"], true);
+        assert_eq!(value["saved_routers"].as_array().map(Vec::len), Some(2));
+        assert_eq!(value["running_routers"].as_array().map(Vec::len), Some(1));
+        let human = String::from_utf8(Output::new(Format::Human).render_to_vec(&report))?;
+        assert!(human.contains("2 saved, 1 running"), "{human}");
+        assert!(human.contains("restart required"), "{human}");
+        Ok(())
     }
 
     /// The invariant that costs money to get wrong: a partial figure must
@@ -405,6 +499,11 @@ mod tests {
             effective_effort: None,
             resolved_via: ResolvedVia::Config,
             policy_decision: None,
+            router: None,
+            router_source: None,
+            bound_policy: None,
+            policy_decision_executed: None,
+            candidate_models: Vec::new(),
             provider_chain: vec![],
             estimated_cost: None,
         };
@@ -425,6 +524,11 @@ mod tests {
             effective_effort: None,
             resolved_via: ResolvedVia::Config,
             policy_decision: None,
+            router: None,
+            router_source: None,
+            bound_policy: None,
+            policy_decision_executed: None,
+            candidate_models: Vec::new(),
             provider_chain: vec![ProviderHop {
                 provider: "demo".into(),
                 service_id: "big".into(),
@@ -460,6 +564,11 @@ mod tests {
                 effective_effort: Some(ReasoningEffort::High),
                 resolved_via: via,
                 policy_decision: None,
+                router: None,
+                router_source: None,
+                bound_policy: None,
+                policy_decision_executed: None,
+                candidate_models: Vec::new(),
                 provider_chain: vec![ProviderHop {
                     provider: "demo".into(),
                     service_id: "big".into(),

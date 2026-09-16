@@ -10,6 +10,12 @@
 //! serve a model and was told one answer where there were three. The wire has
 //! always carried the whole list.
 
+use std::collections::BTreeSet;
+
+use bitrouter_sdk::caller::CallerContext;
+use bitrouter_sdk::config::router::{RouterConfigSource, RouterInventorySelection};
+use bitrouter_sdk::config::{Config, ConfigRoutingTable, RoutingConfig};
+use bitrouter_sdk::language_model::RoutingTable;
 use bitrouter_sdk::language_model::routing::ModelInfo;
 
 use super::ToolError;
@@ -38,16 +44,86 @@ pub enum ModelsSource {
     Config,
 }
 
-/// Every model BitRouter can route, each with the providers that can serve it.
+/// Where one effective router definition came from.
 #[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
+#[serde(rename_all = "snake_case")]
+pub enum RouterSource {
+    /// A definition under the public `routers:` config section.
+    User,
+    /// A compatibility definition normalized from `presets:`.
+    Legacy,
+    /// The product's built-in coding initialization slot has no saved binding.
+    Default,
+}
+
+/// Whether a router can be resolved against the inspected runtime/config.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RouterReadiness {
+    Ready,
+    NotReady,
+    Uninitialized,
+    Unknown,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PolicyReadiness<'a> {
+    Known(&'a BTreeSet<String>),
+    Invalid,
+}
+
+/// Public, non-secret selection portion of a normalized router definition.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RouterSelectionStatus {
+    Model {
+        model: Option<String>,
+        routing: RoutingConfig,
+    },
+    Policy {
+        policy: String,
+        base_model: Option<String>,
+        routing: RoutingConfig,
+    },
+}
+
+/// One router as the inspected config/runtime understands it. Defaults expose
+/// only field presence and parameter names; prompt and parameter values never
+/// cross the diagnostics boundary.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct RouterStatus {
+    pub id: String,
+    pub address: String,
+    pub source: RouterSource,
+    pub readiness: RouterReadiness,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<RouterSelectionStatus>,
+    pub system_prompt_default: bool,
+    #[serde(default)]
+    pub parameter_defaults: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding_digest: Option<String>,
+}
+
+/// Every model BitRouter can route, each with the providers that can serve it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ModelsReport {
     /// The routable models. Each carries **every** provider that declares it,
     /// in fallback order — not just the first.
     pub models: Vec<ModelInfo>,
     /// Which view produced [`Self::models`].
     pub resolved_via: ModelsSource,
+    /// Router definitions from the same live/config source. `None` means the
+    /// answering daemon predates router inventory support; it is not an empty
+    /// successful inventory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routers: Option<Vec<RouterStatus>>,
 }
 
 impl ModelsReport {
@@ -56,6 +132,7 @@ impl ModelsReport {
         Self {
             models,
             resolved_via: ModelsSource::Live,
+            routers: None,
         }
     }
 
@@ -64,7 +141,13 @@ impl ModelsReport {
         Self {
             models,
             resolved_via: ModelsSource::Config,
+            routers: None,
         }
+    }
+
+    pub fn with_routers(mut self, routers: Option<Vec<RouterStatus>>) -> Self {
+        self.routers = routers;
+        self
     }
 
     /// Keep only the models `provider` can serve; `None` keeps everything.
@@ -119,16 +202,23 @@ impl RoutableModels {
     /// be read: a daemon that is merely absent is not an error, it is the
     /// reason the fallback exists.
     pub async fn report(&self) -> anyhow::Result<ModelsReport> {
-        if let Some(models) = self.live_models().await {
-            return Ok(ModelsReport::live(models));
+        if let Some(report) = self.live_models().await {
+            return Ok(report);
         }
         // Resolved per call, not snapshotted at construction: any long-lived
         // session must not answer from the config the machine had when it
         // started.
         let config = crate::paths::load_config(&self.source).await?;
-        Ok(ModelsReport::from_config(
-            crate::commands::list_models(&config).await?,
-        ))
+        let mut resolved = crate::commands::resolve_static(config.clone());
+        bitrouter_sdk::config::discover_models(&mut resolved).await;
+        let models = ConfigRoutingTable::from_config(resolved.clone()).list_models();
+        let policies = disk_policy_names(&config, &self.source).await;
+        let policy_readiness = match &policies {
+            Ok(names) => PolicyReadiness::Known(names),
+            Err(_) => PolicyReadiness::Invalid,
+        };
+        let routers = router_statuses(&resolved, policy_readiness).await?;
+        Ok(ModelsReport::from_config(models).with_routers(Some(routers)))
     }
 
     /// The live routing table's catalog, or `None` when no daemon answered.
@@ -138,10 +228,12 @@ impl RoutableModels {
     /// "fall back", never "fail". The distinction the caller needs — live
     /// versus projected — is carried in the report itself, so degrading here
     /// is visible rather than silent.
-    async fn live_models(&self) -> Option<Vec<bitrouter_sdk::language_model::routing::ModelInfo>> {
+    async fn live_models(&self) -> Option<ModelsReport> {
         let socket = self.socket.as_deref().filter(|s| endpoint_live(s))?;
         match daemon::send_command(socket, &DaemonCommand::Models).await {
-            Ok(DaemonResponse::Models { models }) => Some(models),
+            Ok(DaemonResponse::Models { models, routers }) => {
+                Some(ModelsReport::live(models).with_routers(routers))
+            }
             Ok(DaemonResponse::Error { message }) => {
                 tracing::debug!(%message, "daemon refused `models` — listing from config");
                 None
@@ -153,6 +245,147 @@ impl RoutableModels {
             }
         }
     }
+}
+
+/// Build the redacted router inventory for one already-resolved config.
+/// A known-invalid disk policy is `not_ready`. Older runtimes that cannot
+/// supply this view omit the whole inventory before reaching this function.
+pub(crate) async fn router_statuses(
+    config: &Config,
+    policy_readiness: PolicyReadiness<'_>,
+) -> anyhow::Result<Vec<RouterStatus>> {
+    let inventory = config.router_inventory()?;
+    let table = ConfigRoutingTable::from_config(config.clone());
+    let mut statuses = Vec::with_capacity(inventory.len() + 1);
+
+    for entry in inventory {
+        let (selection, bound_policy) = match entry.selection {
+            RouterInventorySelection::Model { model, routing } => {
+                (RouterSelectionStatus::Model { model, routing }, None)
+            }
+            RouterInventorySelection::Policy {
+                policy,
+                base_model,
+                routing,
+            } => (
+                RouterSelectionStatus::Policy {
+                    policy: policy.clone(),
+                    base_model,
+                    routing,
+                },
+                Some(policy),
+            ),
+        };
+        let source = match entry.source {
+            RouterConfigSource::User => RouterSource::User,
+            RouterConfigSource::LegacyPreset => RouterSource::Legacy,
+        };
+        let address = match source {
+            RouterSource::User => format!("bitrouter/{}", entry.id),
+            RouterSource::Legacy if entry.id == "auto" && bound_policy.is_some() => {
+                "bitrouter/auto".to_string()
+            }
+            RouterSource::Legacy => format!("@{}", entry.id),
+            RouterSource::Default => String::new(),
+        };
+        let policy_readiness = bound_policy
+            .as_deref()
+            .map(|policy| match policy_readiness {
+                PolicyReadiness::Known(names) if names.contains(policy) => None,
+                PolicyReadiness::Known(_) => Some((
+                    RouterReadiness::NotReady,
+                    format!("bound policy '{policy}' is unavailable"),
+                )),
+                PolicyReadiness::Invalid => Some((
+                    RouterReadiness::NotReady,
+                    "policy lock is missing or invalid".to_string(),
+                )),
+            });
+        let (readiness, reason) = match policy_readiness.flatten() {
+            Some((readiness, reason)) => (readiness, Some(reason)),
+            None => match table.resolve_model(&address).await {
+                Ok(resolution) => match table
+                    .route_resolved(
+                        &resolution.clean_model,
+                        &resolution.prefs,
+                        &CallerContext::local(),
+                    )
+                    .await
+                {
+                    Ok(chain) if !chain.is_empty() => (RouterReadiness::Ready, None),
+                    Ok(_) => (
+                        RouterReadiness::NotReady,
+                        Some("router resolves to an empty provider chain".to_string()),
+                    ),
+                    Err(error) => (RouterReadiness::NotReady, Some(error.to_string())),
+                },
+                Err(error) => (RouterReadiness::NotReady, Some(error.to_string())),
+            },
+        };
+        statuses.push(RouterStatus {
+            id: entry.id,
+            address,
+            source,
+            readiness,
+            reason,
+            selection: Some(selection),
+            system_prompt_default: entry.defaults.system_prompt_present,
+            parameter_defaults: entry.defaults.param_keys,
+            binding_digest: Some(entry.binding_digest),
+        });
+    }
+
+    if !statuses.iter().any(|router| router.id == "coding") {
+        statuses.push(RouterStatus {
+            id: "coding".to_string(),
+            address: "bitrouter/coding".to_string(),
+            source: RouterSource::Default,
+            readiness: RouterReadiness::Uninitialized,
+            reason: Some("coding router is not initialized".to_string()),
+            selection: None,
+            system_prompt_default: false,
+            parameter_defaults: Vec::new(),
+            binding_digest: None,
+        });
+    }
+    statuses.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(statuses)
+}
+
+pub async fn disk_router_statuses(source: &ConfigSource) -> Option<Vec<RouterStatus>> {
+    let config = crate::paths::load_config(source).await.ok()?;
+    disk_router_statuses_for_config(&config, source).await
+}
+
+pub(crate) async fn disk_router_statuses_for_config(
+    config: &Config,
+    source: &ConfigSource,
+) -> Option<Vec<RouterStatus>> {
+    let mut resolved = crate::commands::resolve_static(config.clone());
+    bitrouter_sdk::config::discover_models(&mut resolved).await;
+    let policies = disk_policy_names(config, source).await;
+    let policy_readiness = match &policies {
+        Ok(names) => PolicyReadiness::Known(names),
+        Err(_) => PolicyReadiness::Invalid,
+    };
+    router_statuses(&resolved, policy_readiness).await.ok()
+}
+
+async fn disk_policy_names(
+    config: &Config,
+    source: &ConfigSource,
+) -> anyhow::Result<BTreeSet<String>> {
+    let path = match source {
+        ConfigSource::File(path) => Some(path.as_path()),
+        _ => None,
+    };
+    crate::policy_lock::load_for_config(config, path)
+        .await
+        .map(|loaded| {
+            loaded
+                .map(|loaded| loaded.document.policies.keys().cloned().collect())
+                .unwrap_or_default()
+        })
 }
 
 /// Whether the control endpoint is currently bound, so an abandoned socket
@@ -297,6 +530,123 @@ providers:
             vec!["azure".to_string(), "openai".to_string()]
         );
         assert!(report.filtered(Some("nobody")).models.is_empty());
+    }
+
+    #[tokio::test]
+    async fn router_inventory_is_redacted_and_coding_is_not_callable_until_bound()
+    -> anyhow::Result<()> {
+        let config = bitrouter_sdk::config::parse(
+            r#"
+inherit_defaults: false
+providers:
+  demo:
+    api_base: https://api.example.test
+    api_key: key
+    active: true
+    models: [{ id: demo-model }]
+routers:
+  review:
+    selection:
+      kind: model
+      model: demo-model
+    defaults:
+      system_prompt: top secret prompt
+      params:
+        private_token: top secret value
+presets:
+  legacy:
+    model: demo-model
+  auto:
+    model: demo-model
+"#,
+        )?;
+        let policies = BTreeSet::new();
+        let routers = router_statuses(&config, PolicyReadiness::Known(&policies)).await?;
+
+        let review = routers
+            .iter()
+            .find(|router| router.id == "review")
+            .ok_or_else(|| anyhow::anyhow!("review router missing"))?;
+        assert_eq!(review.address, "bitrouter/review");
+        assert_eq!(review.source, RouterSource::User);
+        assert!(review.system_prompt_default);
+        assert_eq!(review.parameter_defaults, ["private_token"]);
+
+        let legacy = routers
+            .iter()
+            .find(|router| router.id == "legacy")
+            .ok_or_else(|| anyhow::anyhow!("legacy router missing"))?;
+        assert_eq!(legacy.address, "@legacy");
+        assert_eq!(legacy.source, RouterSource::Legacy);
+        let auto = routers
+            .iter()
+            .find(|router| router.id == "auto")
+            .ok_or_else(|| anyhow::anyhow!("legacy auto router missing"))?;
+        assert_eq!(auto.address, "@auto");
+        assert_eq!(auto.readiness, RouterReadiness::Ready);
+
+        let coding = routers
+            .iter()
+            .find(|router| router.id == "coding")
+            .ok_or_else(|| anyhow::anyhow!("coding diagnostic missing"))?;
+        assert_eq!(coding.readiness, RouterReadiness::Uninitialized);
+        assert!(
+            !ConfigRoutingTable::from_config(config.clone())
+                .list_models()
+                .iter()
+                .any(|model| model.id == "bitrouter/coding"),
+            "an uninitialized diagnostic must not advertise a callable model"
+        );
+
+        let json = serde_json::to_string(&routers)?;
+        assert!(!json.contains("top secret prompt"));
+        assert!(!json.contains("top secret value"));
+        assert!(json.contains("private_token"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn disk_router_with_missing_policy_is_not_ready_instead_of_unknown() -> anyhow::Result<()>
+    {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("bitrouter.yaml");
+        std::fs::write(
+            &path,
+            r#"
+inherit_defaults: false
+providers:
+  demo:
+    api_base: https://api.example.test
+    api_key: key
+    active: true
+    models: [{ id: demo-model }]
+routers:
+  coding:
+    selection:
+      kind: policy
+      policy: missing
+      base_model: demo-model
+"#,
+        )?;
+
+        let report = RoutableModels::new(ConfigSource::File(path), None)
+            .report()
+            .await?;
+        let coding = report
+            .routers
+            .as_deref()
+            .and_then(|routers| routers.iter().find(|router| router.id == "coding"))
+            .ok_or_else(|| anyhow::anyhow!("coding router diagnostic missing"))?;
+        assert_eq!(coding.readiness, RouterReadiness::NotReady);
+        assert!(
+            coding
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason != "policy runtime readiness is unavailable"),
+            "reason: {:?}",
+            coding.reason
+        );
+        Ok(())
     }
 
     #[tokio::test]

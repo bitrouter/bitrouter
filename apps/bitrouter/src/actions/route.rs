@@ -33,12 +33,9 @@ pub struct RouteInput {
 
 /// Which path produced the chain.
 ///
-/// This is not a provenance footnote: it says whether the policy half of the
-/// report — [`RouteReport::effective_model`] differing from
-/// [`RouteReport::requested_model`], and [`RouteReport::policy_decision`] —
-/// can be populated at all. Only the config paths replay the policy table; a
-/// live-daemon answer resolves the requested model as-is, because the daemon's
-/// policy table runs on real requests, not on its control-socket `route` verb.
+/// This is not a provenance footnote: it says which routing snapshot supplied
+/// the preview. [`RouteReport::policy_decision_executed`] separately says
+/// whether a policy decision was actually replayed.
 ///
 /// Wire values are `snake_case` — `live` / `config` / `zero_config` — the same
 /// vocabulary as the `list_models` report's `resolved_via`
@@ -53,14 +50,9 @@ pub enum ResolvedVia {
     /// subscription-backed providers that static config alone cannot resolve.
     /// Serialized as `live`.
     ///
-    /// **No policy replay here.** The daemon's `route` verb resolves the
-    /// requested model exactly as given: its policy table (pins, locks and
-    /// trials included) is applied to real requests, not to this preview. So
-    /// on this path `effective_model == requested_model`,
-    /// [`RouteReport::policy_decision`] is absent, and a `prompt` changes
-    /// nothing. Closing that means teaching the daemon's verb to take the
-    /// prompt and run its own live policy router — the only place the runtime
-    /// state that makes a decision *live* is known.
+    /// The daemon resolves Stage 0 and the provider chain, but does not execute
+    /// a dynamic policy decision. A policy-bound router reports its base model
+    /// and candidate set without claiming one candidate was selected.
     Live,
     /// Resolved from a `bitrouter.yaml` on disk, policy table included.
     Config,
@@ -214,8 +206,10 @@ impl EstimatedCost {
 pub struct RouteReport {
     /// The model the caller asked about.
     pub requested_model: String,
-    /// The model that would actually be routed to — equal to
-    /// [`Self::requested_model`] unless the policy table selected another.
+    /// The model used to build the displayed provider chain. For a
+    /// policy-bound router whose decision was not executed, this is its base
+    /// model; consult [`Self::policy_decision_executed`] before treating it as
+    /// a selected policy target.
     pub effective_model: String,
     /// The reasoning effort the policy table selected, when it selected one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -228,8 +222,27 @@ pub struct RouteReport {
     /// is configured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_decision: Option<PolicySelection>,
-    /// The resolved fallback chain, preferred hop first. Empty means no
-    /// provider declares the effective model.
+    /// Stable identity of the named router resolved during Stage 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
+    /// Whether the router came from canonical configuration or legacy preset
+    /// compatibility syntax.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub router_source: Option<crate::actions::models::RouterSource>,
+    /// Dynamic policy bound to the named router, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_policy: Option<String>,
+    /// Whether this preview actually executed the policy decision represented
+    /// by `effective_model` and `policy_decision`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_decision_executed: Option<bool>,
+    /// Models the bound policy may select. Empty for direct/fixed routes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_models: Vec<String>,
+    /// The resolved fallback chain, preferred hop first. An empty chain either
+    /// means no provider declares the effective model or a bound dynamic policy
+    /// was not executed; `bound_policy` and `policy_decision_executed`
+    /// distinguish those cases.
     #[serde(default)]
     pub provider_chain: Vec<ProviderHop>,
     /// The first hop's rate card, when the registry prices it.
@@ -263,6 +276,73 @@ use crate::daemon::{DaemonCommand, DaemonResponse, RouteHop};
 use crate::metering::PricingTable;
 use crate::paths::ConfigSource;
 use crate::policy_table_router::{PolicyDecision, PolicyTableRouter};
+
+#[derive(Default)]
+struct RouteMetadata {
+    router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
+    router_source: Option<crate::actions::models::RouterSource>,
+    bound_policy: Option<String>,
+    policy_decision_executed: Option<bool>,
+    candidate_models: Vec<String>,
+}
+
+pub(crate) fn router_source(
+    config: &Config,
+    router_id: &str,
+) -> Option<crate::actions::models::RouterSource> {
+    let source = config
+        .router_inventory()
+        .ok()?
+        .into_iter()
+        .find(|entry| entry.id == router_id)?
+        .source;
+    Some(match source {
+        bitrouter_sdk::config::router::RouterConfigSource::User => {
+            crate::actions::models::RouterSource::User
+        }
+        bitrouter_sdk::config::router::RouterConfigSource::LegacyPreset => {
+            crate::actions::models::RouterSource::Legacy
+        }
+    })
+}
+
+pub(crate) fn policy_candidate_models(
+    policy: Option<&crate::actions::administration::PolicyReport>,
+    policy_name: Option<&str>,
+    base_model: &str,
+) -> Vec<String> {
+    let Some(policy_name) = policy_name else {
+        return Vec::new();
+    };
+    let mut candidates = std::collections::BTreeSet::from([base_model.to_string()]);
+    if let Some(definition) = policy.and_then(|report| report.definitions.get(policy_name)) {
+        candidates.extend(
+            definition
+                .tiers
+                .values()
+                .map(|target| target.model().to_string()),
+        );
+    }
+    candidates.into_iter().collect()
+}
+
+pub(crate) async fn resolvable_policy_candidates(
+    table: &dyn RoutingTable,
+    candidates: Vec<String>,
+    prefs: &RoutingPrefs,
+) -> Vec<String> {
+    let mut resolved = Vec::new();
+    for candidate in candidates {
+        if table
+            .route_resolved(&candidate, prefs, &CallerContext::local())
+            .await
+            .is_ok_and(|chain| !chain.is_empty())
+        {
+            resolved.push(candidate);
+        }
+    }
+    resolved
+}
 
 /// Resolves a model against the daemon's live routing table, falling back to
 /// this machine's config.
@@ -316,19 +396,33 @@ impl RouteAction {
         )
         .await
         {
-            Ok(DaemonResponse::Route { chain }) => Ok(Some(assemble(
-                model,
-                model,
-                None,
-                ResolvedVia::Live,
-                // The daemon's `route` verb resolves the model as given — its
-                // policy table runs on real requests, not here — so there is
-                // no decision to surface, and the effective model is the
-                // requested one. `ResolvedVia::Live` documents this.
-                None,
-                &chain,
-                &self.pricing().await,
-            ))),
+            Ok(DaemonResponse::Route {
+                chain,
+                resolved_model,
+                router,
+                router_source,
+                bound_policy,
+                candidate_models,
+            }) => {
+                let effective_model = resolved_model.as_deref().unwrap_or(model);
+                let policy_decision_executed = bound_policy.as_ref().map(|_| false);
+                Ok(Some(assemble(
+                    model,
+                    effective_model,
+                    None,
+                    ResolvedVia::Live,
+                    None,
+                    RouteMetadata {
+                        router,
+                        router_source,
+                        bound_policy,
+                        policy_decision_executed,
+                        candidate_models,
+                    },
+                    &chain,
+                    &self.pricing().await,
+                )))
+            }
             Ok(DaemonResponse::Error { message }) => {
                 Err(anyhow::anyhow!("resolving model '{model}': {message}"))
             }
@@ -353,30 +447,65 @@ impl RouteAction {
         let resolved = self.resolved_config().await?;
         let pricing = crate::assemble::build_pricing_table(&resolved);
         let policy = PolicyTableRouter::from_config(&resolved.policy_table);
-        let table = ConfigRoutingTable::from_config(resolved);
+        let table = ConfigRoutingTable::from_config(resolved.clone());
+        let resolution = table
+            .resolve_model(&input.model)
+            .await
+            .with_context(|| format!("resolving model '{}'", input.model))?;
+        let router_source = resolution
+            .router
+            .as_ref()
+            .and_then(|identity| router_source(&resolved, &identity.router_id));
+        let bound_policy = resolution.policy.clone();
 
         let prompt = probe_prompt(&input);
-        let decision = policy.map(|p| p.decision_for(&prompt, &HeaderMap::new()));
+        // Named adaptive policies need request/session state owned by the live
+        // runtime. A preview resolves their base route and lists candidates,
+        // but never fabricates a decision. The legacy global policy table is
+        // deterministic and remains replayable for routes without a binding.
+        let decision = if bound_policy.is_some() {
+            None
+        } else {
+            policy.map(|p| p.decision_for(&prompt, &HeaderMap::new()))
+        };
         let effective_model = decision
             .as_ref()
             .and_then(|d| d.selected_model.clone())
-            .unwrap_or_else(|| input.model.clone());
+            .unwrap_or_else(|| resolution.clean_model.clone());
         let effective_effort = decision.as_ref().and_then(|d| d.selected_effort);
-        let chain: Vec<RouteHop> = table
-            .route_chain(
-                &effective_model,
-                &RoutingPrefs::default(),
-                &CallerContext::local(),
-            )
-            .await
-            .with_context(|| format!("resolving model '{effective_model}'"))?
-            .into_iter()
-            .map(|t| RouteHop {
-                provider: t.provider_name,
-                service_id: t.service_id,
-                api_protocol: format!("{:?}", t.api_protocol).to_lowercase(),
-            })
-            .collect();
+        let policy_report = if bound_policy.is_some() {
+            crate::actions::administration::disk_policy(&self.source)
+                .await
+                .ok()
+        } else {
+            None
+        };
+        let candidate_models = policy_candidate_models(
+            policy_report.as_ref(),
+            bound_policy.as_deref(),
+            &resolution.clean_model,
+        );
+        let candidate_models =
+            resolvable_policy_candidates(&table, candidate_models, &resolution.prefs).await;
+        let chain: Vec<RouteHop> = if bound_policy.is_some() {
+            Vec::new()
+        } else {
+            table
+                .route_resolved(&effective_model, &resolution.prefs, &CallerContext::local())
+                .await
+                .with_context(|| format!("resolving model '{effective_model}'"))?
+                .into_iter()
+                .map(|t| RouteHop {
+                    provider: t.provider_name,
+                    service_id: t.service_id,
+                    api_protocol: format!("{:?}", t.api_protocol).to_lowercase(),
+                })
+                .collect()
+        };
+        let policy_decision_executed = bound_policy
+            .as_ref()
+            .map(|_| false)
+            .or_else(|| decision.as_ref().map(|_| true));
         Ok(assemble(
             &input.model,
             &effective_model,
@@ -389,6 +518,13 @@ impl RouteAction {
                 ResolvedVia::Config
             },
             decision.as_ref(),
+            RouteMetadata {
+                router: resolution.router,
+                router_source,
+                bound_policy,
+                policy_decision_executed,
+                candidate_models,
+            },
             &chain,
             &pricing,
         ))
@@ -431,6 +567,7 @@ fn assemble(
     effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
     resolved_via: ResolvedVia,
     decision: Option<&PolicyDecision>,
+    metadata: RouteMetadata,
     chain: &[RouteHop],
     pricing: &PricingTable,
 ) -> RouteReport {
@@ -445,6 +582,11 @@ fn assemble(
         effective_effort,
         resolved_via,
         policy_decision: decision.map(policy_selection),
+        router: metadata.router,
+        router_source: metadata.router_source,
+        bound_policy: metadata.bound_policy,
+        policy_decision_executed: metadata.policy_decision_executed,
+        candidate_models: metadata.candidate_models,
         provider_chain: chain
             .iter()
             .map(|h| ProviderHop {
@@ -633,6 +775,77 @@ policy_table:
             serde_json::to_value(&cli).expect("cli json"),
             serde_json::to_value(&port).expect("port json"),
         );
+    }
+
+    #[tokio::test]
+    async fn policy_router_preview_lists_candidates_without_fabricating_a_decision()
+    -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let source = config_source(
+            dir.path(),
+            r#"
+providers:
+  demo:
+    api_base: https://api.example.test
+    api_key: sk-test
+    active: true
+    models:
+      - id: demo-model
+      - id: demo-model-big
+routers:
+  coding:
+    selection:
+      kind: policy
+      policy: coding
+      base_model: demo-model
+"#,
+        );
+        std::fs::write(
+            dir.path().join("policy-lock.yaml"),
+            r#"lockfileVersion: 1
+policies:
+  coding:
+    key_strategy: agent_trace
+    tiers:
+      strong: demo-model-big
+    routes: {}
+    default_tier: strong
+    tool_use_tier: strong
+    tool_safe_tiers: [strong]
+"#,
+        )?;
+
+        let report = RouteAction::new(source, None)
+            .report(RouteInput {
+                model: "bitrouter/coding".to_string(),
+                prompt: Some("write a function".to_string()),
+            })
+            .await?;
+
+        assert_eq!(report.effective_model, "demo-model");
+        assert_eq!(report.bound_policy.as_deref(), Some("coding"));
+        assert_eq!(report.policy_decision_executed, Some(false));
+        assert!(report.policy_decision.is_none());
+        assert_eq!(
+            report
+                .router
+                .as_ref()
+                .map(|router| router.router_id.as_str()),
+            Some("coding")
+        );
+        assert_eq!(
+            report.router_source,
+            Some(crate::actions::models::RouterSource::User)
+        );
+        assert_eq!(
+            report.candidate_models,
+            ["demo-model".to_string(), "demo-model-big".to_string()]
+        );
+        assert!(
+            report.provider_chain.is_empty(),
+            "without a policy decision no provider chain is selected"
+        );
+        Ok(())
     }
 
     /// The staleness bug: one long-lived action must see

@@ -209,14 +209,8 @@ impl PolicyReport {
             .into(),
             policies: definitions.keys().cloned().collect(),
             bindings: config
-                .presets
-                .iter()
-                .filter_map(|(name, preset)| {
-                    preset
-                        .policy
-                        .as_ref()
-                        .map(|policy| (name.clone(), policy.clone()))
-                })
+                .router_policy_bindings()
+                .map(|(router_id, policy, _)| (router_id.to_string(), policy.to_string()))
                 .collect(),
             evidence_root: artifact.map(|artifact| artifact.evidence_root.clone()),
             eval_snapshot_root: artifact.and_then(|artifact| artifact.eval_snapshot_root.clone()),

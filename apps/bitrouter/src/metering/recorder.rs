@@ -237,6 +237,9 @@ impl SettlementRecorder for MeteringRecorder {
                 )
             })
             .transpose()?;
+        let router = ctx
+            .get_event::<bitrouter_sdk::language_model::routing::RouterRequestIdentity>()
+            .cloned();
         if let Some(event) = &session_event {
             ctx.emit(bitrouter_sdk::observe::SpanAttributes(
                 session_span_attributes(event),
@@ -248,6 +251,11 @@ impl SettlementRecorder for MeteringRecorder {
             api_key_id: ctx.caller.api_key_id().to_string(),
             launch_id: ctx.caller.launch_id().map(str::to_string),
             session_identity,
+            router_id: router.as_ref().map(|identity| identity.router_id.clone()),
+            binding_digest: router
+                .as_ref()
+                .map(|identity| identity.binding_digest.clone()),
+            original_selector: router.map(|identity| identity.original_selector),
             model_id: ctx.model_id.clone(),
             provider_id: ctx.provider_id.clone(),
             prompt_tokens: ctx.prompt_tokens,

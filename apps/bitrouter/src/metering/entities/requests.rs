@@ -38,6 +38,12 @@ pub struct Model {
     pub route_lease_id: Option<String>,
     /// Redaction-reviewed normalized identity evidence and conflicts.
     pub session_identity_json: Option<String>,
+    /// Named router selected during Stage 0, when the request used one.
+    pub router_id: Option<String>,
+    /// Versioned digest of the non-secret router binding used by the request.
+    pub binding_digest: Option<String>,
+    /// Caller selector captured before ingress transforms.
+    pub original_selector: Option<String>,
     /// Resolved model id.
     pub model_id: String,
     /// Resolved provider id.

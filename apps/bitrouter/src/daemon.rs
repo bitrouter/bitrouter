@@ -248,16 +248,44 @@ pub enum DaemonResponse {
         /// failing the whole exchange.
         #[serde(default)]
         providers: Vec<String>,
+        /// Router inventory from the same running config. `None` means the
+        /// daemon predates this field or has no inspectable app routing config.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        running_routers: Option<Vec<crate::actions::models::RouterStatus>>,
+        /// Whether the saved canonical router map differs from the full map
+        /// held by this daemon. Computed host-side so secret default values do
+        /// not cross the control boundary.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        router_restart_required: Option<bool>,
     },
     /// The live routing table's catalog.
     Models {
         /// Every routable model, each with all the providers declaring it.
         models: Vec<bitrouter_sdk::language_model::routing::ModelInfo>,
+        /// Routers from the same live routing snapshot.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        routers: Option<Vec<crate::actions::models::RouterStatus>>,
     },
     /// A resolved route chain.
     Route {
         /// The ordered fallback chain.
         chain: Vec<RouteHop>,
+        /// Stage-0 model used to build `chain`. Missing from older daemons.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolved_model: Option<String>,
+        /// Stable named-router identity, when the selector resolved one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
+        /// Canonical or legacy source of the named-router definition.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        router_source: Option<crate::actions::models::RouterSource>,
+        /// Dynamic policy bound to the router. The control verb does not run
+        /// that policy and therefore never reports a selected candidate.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bound_policy: Option<String>,
+        /// Redaction-safe possible targets from the active policy snapshot.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        candidate_models: Vec<String>,
     },
     /// OTel exporter snapshot.
     ObserveStatus {
@@ -749,22 +777,31 @@ async fn dispatch(
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
+            let router_state = running_router_state(administration).await;
             DaemonResponse::Status {
                 pid: std::process::id(),
                 listen: listen.to_string(),
                 models: routable.len(),
                 providers,
+                running_routers: router_state.as_ref().map(|state| state.statuses.clone()),
+                router_restart_required: router_state.and_then(|state| state.restart_required),
             }
         }
-        DaemonCommand::Models => DaemonResponse::Models {
-            // The same read `Status` counts, returned whole. A daemon with no
-            // language-model pipeline routes nothing, which is an empty
-            // catalog rather than an error.
-            models: app
-                .language_model()
-                .map(|p| p.routing_table().list_models())
-                .unwrap_or_default(),
-        },
+        DaemonCommand::Models => {
+            let routers = running_router_state(administration)
+                .await
+                .map(|state| state.statuses);
+            DaemonResponse::Models {
+                // The same read `Status` counts, returned whole. A daemon with no
+                // language-model pipeline routes nothing, which is an empty
+                // catalog rather than an error.
+                models: app
+                    .language_model()
+                    .map(|p| p.routing_table().list_models())
+                    .unwrap_or_default(),
+                routers,
+            }
+        }
         DaemonCommand::AcpSessionSpend {
             api_principal,
             controller_instance_id,
@@ -920,11 +957,49 @@ async fn dispatch(
                     message: "no language_model pipeline configured".to_string(),
                 };
             };
-            match pipeline
-                .routing_table()
-                .route_chain(&model, &RoutingPrefs::default(), &CallerContext::local())
-                .await
-            {
+            let table = pipeline.routing_table();
+            let resolution = match table.resolve_model(&model).await {
+                Ok(resolution) => resolution,
+                Err(error) => {
+                    return DaemonResponse::Error {
+                        message: error.to_string(),
+                    };
+                }
+            };
+            let router_source = administration.as_ref().and_then(|administration| {
+                resolution.router.as_ref().and_then(|identity| {
+                    crate::actions::route::router_source(
+                        &administration.routing.snapshot_config(),
+                        &identity.router_id,
+                    )
+                })
+            });
+            let policy_report = administration
+                .as_ref()
+                .map(|administration| administration.policy.administration_snapshot());
+            let candidate_models = crate::actions::route::policy_candidate_models(
+                policy_report.as_ref(),
+                resolution.policy.as_deref(),
+                &resolution.clean_model,
+            );
+            let candidate_models = crate::actions::route::resolvable_policy_candidates(
+                table.as_ref(),
+                candidate_models,
+                &resolution.prefs,
+            )
+            .await;
+            let chain = if resolution.policy.is_some() {
+                Ok(Vec::new())
+            } else {
+                table
+                    .route_resolved(
+                        &resolution.clean_model,
+                        &resolution.prefs,
+                        &CallerContext::local(),
+                    )
+                    .await
+            };
+            match chain {
                 Ok(chain) => DaemonResponse::Route {
                     chain: chain
                         .into_iter()
@@ -934,9 +1009,14 @@ async fn dispatch(
                             api_protocol: format!("{:?}", t.api_protocol).to_lowercase(),
                         })
                         .collect(),
+                    resolved_model: Some(resolution.clean_model),
+                    router: resolution.router,
+                    router_source,
+                    bound_policy: resolution.policy,
+                    candidate_models,
                 },
-                Err(e) => DaemonResponse::Error {
-                    message: e.to_string(),
+                Err(error) => DaemonResponse::Error {
+                    message: error.to_string(),
                 },
             }
         }
@@ -947,6 +1027,45 @@ async fn dispatch(
             inspection_response(inspection, administration).await
         }
     }
+}
+
+struct RunningRouterState {
+    statuses: Vec<crate::actions::models::RouterStatus>,
+    restart_required: Option<bool>,
+}
+
+fn router_configuration_restart_required(
+    saved: &bitrouter_sdk::config::Config,
+    running: &bitrouter_sdk::config::Config,
+) -> bool {
+    saved.routers != running.routers
+}
+
+async fn running_router_state(
+    administration: &Option<Administration>,
+) -> Option<RunningRouterState> {
+    let administration = administration.as_ref()?;
+    let running = administration.routing.snapshot_config();
+    let policy_names = administration
+        .policy
+        .administration_snapshot()
+        .policies
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let statuses = crate::actions::models::router_statuses(
+        &running,
+        crate::actions::models::PolicyReadiness::Known(&policy_names),
+    )
+    .await
+    .ok()?;
+    let restart_required = crate::paths::load_config(&administration.source)
+        .await
+        .ok()
+        .map(|saved| router_configuration_restart_required(&saved, &running));
+    Some(RunningRouterState {
+        statuses,
+        restart_required,
+    })
 }
 
 async fn inspection_response(
@@ -1607,6 +1726,8 @@ mod tests {
             listen: "0.0.0.0:4356".to_string(),
             models: 3,
             providers: vec!["openai".to_string()],
+            running_routers: None,
+            router_restart_required: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: DaemonResponse = serde_json::from_str(&json).unwrap();
@@ -1623,6 +1744,35 @@ mod tests {
             }
             other => panic!("expected Status, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn router_restart_detection_uses_secret_defaults_without_exposing_them() -> anyhow::Result<()> {
+        let saved = bitrouter_sdk::config::parse(
+            "routers:\n  coding:\n    selection:\n      kind: model\n      model: demo/model\n    defaults:\n      system_prompt: saved secret\n      params:\n        temperature: 0.2\n",
+        )?;
+        let running = bitrouter_sdk::config::parse(
+            "routers:\n  coding:\n    selection:\n      kind: model\n      model: demo/model\n    defaults:\n      system_prompt: prior secret\n      params:\n        temperature: 0.8\n",
+        )?;
+
+        let saved_inventory = saved.router_inventory()?;
+        let saved_digest = saved_inventory
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("saved router inventory is empty"))?
+            .binding_digest
+            .clone();
+        let running_inventory = running.router_inventory()?;
+        let running_digest = running_inventory
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("running router inventory is empty"))?
+            .binding_digest
+            .clone();
+        assert_eq!(
+            saved_digest, running_digest,
+            "redacted binding identity deliberately excludes default values"
+        );
+        assert!(router_configuration_restart_required(&saved, &running));
+        Ok(())
     }
 
     #[test]

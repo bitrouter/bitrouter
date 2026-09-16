@@ -134,6 +134,17 @@ pub struct StatusReport {
     /// exists. `None` only when neither half could be read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spend: Option<Spend>,
+    /// Router definitions read from the currently saved configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_routers: Option<Vec<crate::actions::models::RouterStatus>>,
+    /// Router definitions held by the running daemon. `None` means there is no
+    /// daemon or it predates router inventory support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running_routers: Option<Vec<crate::actions::models::RouterStatus>>,
+    /// Whether saved public router definitions require a daemon restart to
+    /// become active. Unknown unless both views were observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub router_restart_required: Option<bool>,
 }
 
 impl StatusReport {
@@ -152,6 +163,9 @@ impl StatusReport {
             providers: Vec::new(),
             socket: Some(socket),
             spend,
+            saved_routers: None,
+            running_routers: None,
+            router_restart_required: None,
         }
     }
 
@@ -172,6 +186,9 @@ impl StatusReport {
             providers,
             socket: Some(socket),
             spend,
+            saved_routers: None,
+            running_routers: None,
+            router_restart_required: None,
         }
     }
 
@@ -187,7 +204,22 @@ impl StatusReport {
             providers: Vec::new(),
             socket: None,
             spend: Some(spend),
+            saved_routers: None,
+            running_routers: None,
+            router_restart_required: None,
         }
+    }
+
+    pub fn with_router_views(
+        mut self,
+        saved: Option<Vec<crate::actions::models::RouterStatus>>,
+        running: Option<Vec<crate::actions::models::RouterStatus>>,
+        restart_required: Option<bool>,
+    ) -> Self {
+        self.router_restart_required = restart_required;
+        self.saved_routers = saved;
+        self.running_routers = running;
+        self
     }
 }
 
@@ -252,12 +284,18 @@ impl DaemonStatus {
 /// CLI path without constructing a port.
 async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Result<StatusReport> {
     let spend = local_spend(source).await;
+    let saved_routers = match source {
+        Some(source) => crate::actions::models::disk_router_statuses(source).await,
+        None => None,
+    };
     match daemon::send_command(socket, &DaemonCommand::Status).await {
         Ok(DaemonResponse::Status {
             pid,
             listen,
             models,
             providers,
+            running_routers,
+            router_restart_required,
         }) => Ok(StatusReport::running(
             pid,
             listen,
@@ -265,15 +303,18 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
             providers,
             socket.display().to_string(),
             spend,
-        )),
+        )
+        .with_router_views(saved_routers, running_routers, router_restart_required)),
         Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
         Ok(other) => Err(anyhow::anyhow!("unexpected response: {other:?}")),
         // No daemon listening on the socket → report stopped, not error. The
         // spend half still rides along: what a past daemon spent is recorded
         // on disk and does not stop being true when it exits.
-        Err(e) if daemon::is_not_reachable(&e) => {
-            Ok(StatusReport::stopped(socket.display().to_string(), spend))
-        }
+        Err(e) if daemon::is_not_reachable(&e) => Ok(StatusReport::stopped(
+            socket.display().to_string(),
+            spend,
+        )
+        .with_router_views(saved_routers, None, None)),
         Err(e) => Err(e),
     }
 }

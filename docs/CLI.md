@@ -375,21 +375,24 @@ route selection. An empty or omitted schedule preserves the existing behavior.
 bro route gpt-4o [--prompt <text>] [-c <path>] [--socket <path>]
 ```
 
-Resolves a model name through the routing table and prints the full fallback chain (provider → upstream service id → protocol). Queries the running daemon if reachable — its `route` verb resolves the model exactly as given, since the daemon's policy table runs on real requests rather than on this preview — and otherwise falls back to a local config parse, **policy table included**, so `effective_model` there is what would actually run.
+Resolves a model or router selector using the running daemon when reachable, otherwise the local configuration. Fixed routes include the provider fallback chain. A policy-bound router reports its binding and routable candidates with `policy_decision_executed: false`: the preview does not execute its dynamic policy or predict the selected model.
 
-`--prompt` supplies the request text the policy table keys on: it routes by the agent-loop step a request represents, so the model it selects can differ with the prompt. Omit it for a bare model resolution. It is consulted on the config path only; a `live` answer is the same with or without it.
+`--prompt` supplies request text for the existing static policy-table preview on the local config path. It does not execute a router's dynamic policy; live previews do not use it.
 
-The report is the shared `route` action's, so `bro route --json` is byte-identical to the MCP `route_preview` tool's structured content:
+`bro route --json` returns the shared route action report:
 
 | Field | Meaning |
 |---|---|
-| `requested_model` | what you asked about |
-| `effective_model` | what would actually run — differs when the policy table selects another model |
-| `effective_effort` | the reasoning effort policy selected, when it selected one |
-| `resolved_via` | `live` \| `config` \| `zero_config` — the same words `bro models` uses |
-| `policy_decision` | the static decision behind `effective_model`. Absent on `live`: the daemon's `route` verb does not replay policy, so there is no decision to show and `effective_model` equals `requested_model` there |
-| `provider_chain[]` | `provider` / `service_id` / `api_protocol`, preferred hop first. Never the provider's credential |
-| `estimated_cost` | the first hop's per-token rate card, including any steeper long-context brackets. Rates, not a total: nothing was sent |
+| `requested_model` | the selector you asked about |
+| `effective_model` | resolved model for fixed routes; base model for a dynamic-policy preview, not a selected target |
+| `effective_effort` | reasoning effort selected by an executed static preview, when present |
+| `resolved_via` | `live` \| `config` \| `zero_config` |
+| `router` / `router_source` | router identity, public binding digest, original selector, and configuration source |
+| `bound_policy` / `candidate_models` | bound policy and routable candidates; candidates are not a decision |
+| `policy_decision_executed` | whether this preview executed a policy decision; false for a dynamic-policy router |
+| `policy_decision` | an executed static policy-table preview, when available; absent on live previews |
+| `provider_chain[]` | provider / upstream service id / protocol, preferred hop first; empty for dynamic-policy previews |
+| `estimated_cost` | first hop's per-token rate card, when a fixed chain is available; not a request total |
 
 Read-only throughout — nothing is sent upstream.
 
