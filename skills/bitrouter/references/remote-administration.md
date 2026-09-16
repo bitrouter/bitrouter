@@ -105,3 +105,13 @@ continues an admitted operation after HTTP disconnect. Lookup requires the same
 credential, and results remain in memory for at least 24 hours after completion,
 with a maximum of 1,024 retained operations. A restart or expired/missing result
 means the outcome is unknown, not that the earlier reload did not happen.
+
+## Saved versus running configuration
+
+`status.config_state` is computed by the target daemon, including independently
+loaded policy-lock and access-policy evidence. Missing/invalid files, unknown
+older-daemon capabilities, partial reloads, and restart-only changes are explicit;
+clients never substitute local config or credentials. Local IPC, SIGHUP, and
+remote reload now share startup-field rejection rules. Read `running` and the
+safe changed-field categories before choosing reload or restart; file writes
+alone do not establish activation.

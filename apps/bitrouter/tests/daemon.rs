@@ -629,12 +629,12 @@ providers:
 /// cannot fix this — it sits below `bitrouter-providers` — so the reloader
 /// rebuilds the config in the app layer.
 #[tokio::test]
-async fn reload_re_applies_builtin_provider_catalog() {
+async fn reload_re_applies_builtin_provider_catalog() -> anyhow::Result<()> {
     use bitrouter::daemon::DaemonReloader;
     use bitrouter::reload::{AppReloader, ReloadSource};
 
     let dir = tempdir("reload-builtin");
-    tokio::fs::create_dir_all(&dir).await.unwrap();
+    tokio::fs::create_dir_all(&dir).await?;
     let cfg_path = dir.join("bitrouter.yaml");
     // `bitrouter` is the compiled-in cloud gateway: `api_base` is omitted and
     // must be filled from the catalog. Explicit `models` keep the canonical
@@ -651,10 +651,12 @@ providers:
     api_key: k1
     models: [{ id: gpt-5 }]
 "#;
-    tokio::fs::write(&cfg_path, yaml).await.unwrap();
+    tokio::fs::write(&cfg_path, yaml).await?;
 
-    let cfg = config::load(&cfg_path).await.unwrap();
-    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+    let mut cfg = config::load(&cfg_path).await?;
+    bitrouter::claude_code::enable_if_logged_in(&mut cfg);
+    bitrouter::merge_registry_into(&mut cfg).await;
+    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await?;
 
     // Sanity: assembly already filled the catalog `api_base`.
     assert_eq!(
@@ -668,7 +670,7 @@ providers:
         assembled.upstream_executor.clone(),
         ReloadSource::File(cfg_path.clone()),
     );
-    reloader.reload().await.expect("reload succeeds");
+    reloader.reload().await?;
 
     // The reloaded config must STILL carry the catalog `api_base` and
     // `api_protocol` — the reload re-applies `apply_builtin_defaults`,
@@ -677,7 +679,7 @@ providers:
     let gateway = after
         .providers
         .get("bitrouter")
-        .expect("bitrouter still present");
+        .ok_or_else(|| anyhow::anyhow!("bitrouter provider disappeared after reload"))?;
     assert_eq!(
         gateway.api_base, "https://api.bitrouter.ai/v1",
         "built-in `api_base` must survive a file reload",
@@ -688,6 +690,7 @@ providers:
     );
 
     let _ = tokio::fs::remove_dir_all(&dir).await;
+    Ok(())
 }
 
 #[tokio::test]

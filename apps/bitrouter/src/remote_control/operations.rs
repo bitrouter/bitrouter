@@ -155,6 +155,13 @@ impl OperationService {
             .ok_or(OperationError::Unsupported)
     }
 
+    /// Read saved/running configuration evidence from the daemon that owns
+    /// this operation service. Remote handlers must not substitute a config
+    /// path from the inspecting client.
+    pub async fn configuration_state(&self) -> Option<crate::reload::ConfigurationState> {
+        self.reloader.configuration_state().await
+    }
+
     pub async fn submit(
         self: &Arc<Self>,
         credential_id: &str,

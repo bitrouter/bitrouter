@@ -116,6 +116,7 @@ impl CliReport for StatusReport {
             if let Some(socket) = &self.socket {
                 h.field("socket", socket)?;
             }
+            render_configuration_state(self, h)?;
             render_router_state(self, h)?;
             // Spend outlives the daemon: what a past daemon spent is on disk
             // and stays true after it exits, so it is shown here too.
@@ -141,9 +142,89 @@ impl CliReport for StatusReport {
         if let Some(socket) = &self.socket {
             h.field("socket", socket)?;
         }
+        render_configuration_state(self, h)?;
         render_router_state(self, h)?;
         render_spend(self.spend.as_ref(), h)
     }
+}
+
+fn render_configuration_state(report: &StatusReport, h: &mut Human<'_>) -> std::io::Result<()> {
+    use crate::reload::{
+        AuxiliaryConfigState, ConfigSourceKind, RunningConfigState, SavedConfigState,
+    };
+
+    let Some(state) = &report.config_state else {
+        if report.pid.is_some() || report.socket.is_some() {
+            return h.field("configuration", "saved/running state unavailable");
+        }
+        return Ok(());
+    };
+    h.field(
+        "config source",
+        match state.source {
+            ConfigSourceKind::File => "file",
+            ConfigSourceKind::Default => "generated default",
+        },
+    )?;
+    h.field(
+        "config saved",
+        match state.saved {
+            SavedConfigState::Available => "available",
+            SavedConfigState::Generated => "generated",
+            SavedConfigState::Missing => "missing",
+            SavedConfigState::Invalid => "invalid",
+            SavedConfigState::Unavailable => "unavailable",
+        },
+    )?;
+    h.field(
+        "config running",
+        match state.running {
+            RunningConfigState::InSync => "saved configuration inputs in sync",
+            RunningConfigState::ReloadRequired => "reload required",
+            RunningConfigState::RestartRequired => "restart required",
+            RunningConfigState::Mixed => "mixed; inspect last reload",
+            RunningConfigState::Unknown => "unknown",
+        },
+    )?;
+    if !state.reload_required_fields.is_empty() {
+        h.field("reload fields", state.reload_required_fields.join(", "))?;
+    }
+    if !state.restart_required_fields.is_empty() {
+        h.field("restart fields", state.restart_required_fields.join(", "))?;
+    }
+    let auxiliary = |state| match state {
+        AuxiliaryConfigState::InSync => "in sync",
+        AuxiliaryConfigState::ReloadRequired => "reload required",
+        AuxiliaryConfigState::NotConfigured => "not configured",
+        AuxiliaryConfigState::Missing => "missing",
+        AuxiliaryConfigState::Invalid => "invalid",
+        AuxiliaryConfigState::Unavailable => "unavailable",
+        AuxiliaryConfigState::Unknown => "unknown",
+    };
+    h.field("named policy", auxiliary(state.named_policy))?;
+    h.field("access policies", auxiliary(state.access_policies))?;
+    if matches!(state.running, RunningConfigState::Mixed)
+        && let Some(latest) = state.mixed_state_history.last()
+    {
+        let outcome = match latest.outcome {
+            crate::reload::ReloadOutcome::Succeeded => "succeeded",
+            crate::reload::ReloadOutcome::Failed => "failed",
+            crate::reload::ReloadOutcome::PartiallyApplied => "partially applied",
+            crate::reload::ReloadOutcome::Unknown => "unknown",
+        };
+        h.field(
+            "mixed reload history",
+            format!(
+                "{} retained; latest generation {} {outcome}; inspect JSON participant results",
+                state.mixed_state_history.len(),
+                latest.generation
+            ),
+        )?;
+    }
+    if let Some(generation) = state.generation {
+        h.field("config generation", generation)?;
+    }
+    Ok(())
 }
 
 fn render_router_state(report: &StatusReport, h: &mut Human<'_>) -> std::io::Result<()> {
@@ -168,10 +249,13 @@ fn render_router_state(report: &StatusReport, h: &mut Human<'_>) -> std::io::Res
         }
         (None, None) => {}
     }
-    match report.router_restart_required {
-        Some(true) => h.field("router config", "restart required"),
-        Some(false) => h.field("router config", "saved and running match"),
-        None => Ok(()),
+    match (
+        report.config_state.is_none(),
+        report.router_restart_required,
+    ) {
+        (true, Some(true)) => h.field("router config", "restart required"),
+        (true, Some(false)) => h.field("router config", "saved and running match"),
+        _ => Ok(()),
     }
 }
 
@@ -360,7 +444,137 @@ mod tests {
         assert!(h.contains("● bitrouter is running"), "{h:?}");
         assert!(h.contains("  models    42 routable"), "{h:?}");
         assert!(h.contains("anthropic, openai"), "{h:?}");
+        assert!(
+            h.contains("configuration  saved/running state unavailable"),
+            "{h:?}"
+        );
         assert!(h.contains("$1.23 today (9 requests)"), "{h:?}");
+    }
+
+    #[test]
+    fn status_renders_whole_configuration_state_without_values() -> anyhow::Result<()> {
+        use crate::reload::{
+            AuxiliaryConfigState, ConfigSourceKind, ConfigurationState, RunningConfigState,
+            SavedConfigState,
+        };
+
+        let report = StatusReport::running(
+            7,
+            "127.0.0.1:4356".into(),
+            1,
+            vec!["demo".into()],
+            "/x.sock".into(),
+            None,
+        )
+        .with_config_state(Some(ConfigurationState {
+            server_instance_id: Some("fixture-instance".into()),
+            generation: Some(4),
+            source: ConfigSourceKind::File,
+            saved: SavedConfigState::Available,
+            running: RunningConfigState::RestartRequired,
+            reload_required_fields: vec!["providers".into()],
+            restart_required_fields: vec!["server".into()],
+            named_policy: AuxiliaryConfigState::ReloadRequired,
+            access_policies: AuxiliaryConfigState::Unknown,
+            last_reload: None,
+            mixed_state_history: Vec::new(),
+        }));
+
+        let value = serde_json::to_value(&report)?;
+        assert_eq!(value["config_state"]["running"], "restart_required");
+        assert_eq!(
+            value["config_state"]["restart_required_fields"],
+            serde_json::json!(["server"])
+        );
+        let human = String::from_utf8(Output::new(Format::Human).render_to_vec(&report))?;
+        assert!(
+            human.contains("config running  restart required"),
+            "{human}"
+        );
+        assert!(human.contains("reload fields  providers"), "{human}");
+        assert!(human.contains("restart fields  server"), "{human}");
+        assert!(human.contains("named policy  reload required"), "{human}");
+        assert!(human.contains("access policies  unknown"), "{human}");
+        assert!(!human.contains("fixture-instance"), "{human}");
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_status_points_to_the_retained_participant_cause() -> anyhow::Result<()> {
+        use crate::reload::{
+            AuxiliaryConfigState, ConfigSourceKind, ConfigurationState, ReloadOutcome,
+            ReloadReport, RunningConfigState, SavedConfigState,
+        };
+
+        let report = StatusReport::running(
+            7,
+            "127.0.0.1:4356".into(),
+            1,
+            vec!["demo".into()],
+            "/x.sock".into(),
+            None,
+        )
+        .with_config_state(Some(ConfigurationState {
+            server_instance_id: Some("fixture-instance".into()),
+            generation: Some(4),
+            source: ConfigSourceKind::File,
+            saved: SavedConfigState::Available,
+            running: RunningConfigState::Mixed,
+            reload_required_fields: Vec::new(),
+            restart_required_fields: Vec::new(),
+            named_policy: AuxiliaryConfigState::InSync,
+            access_policies: AuxiliaryConfigState::InSync,
+            last_reload: None,
+            mixed_state_history: vec![ReloadReport {
+                server_instance_id: "fixture-instance".into(),
+                generation: 3,
+                outcome: ReloadOutcome::PartiallyApplied,
+                participants: Vec::new(),
+                restart_required_fields: Vec::new(),
+                started_at: "2026-09-15T00:00:00Z".into(),
+                completed_at: "2026-09-15T00:00:01Z".into(),
+            }],
+        }));
+
+        let value = serde_json::to_value(&report)?;
+        assert_eq!(
+            value["config_state"]["mixed_state_history"][0]["outcome"],
+            "partially_applied"
+        );
+        let human = String::from_utf8(Output::new(Format::Human).render_to_vec(&report))?;
+        assert!(
+            human.contains(
+                "mixed reload history  1 retained; latest generation 3 partially applied"
+            ),
+            "{human}"
+        );
+        assert!(
+            human.contains("inspect JSON participant results"),
+            "{human}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn in_sync_human_label_is_scoped_to_saved_configuration_inputs() -> anyhow::Result<()> {
+        let report: StatusReport = serde_json::from_value(serde_json::json!({
+            "running": true,
+            "providers": [],
+            "config_state": {
+                "source": "file",
+                "saved": "available",
+                "running": "in_sync",
+                "named_policy": "in_sync",
+                "access_policies": "in_sync"
+            }
+        }))?;
+
+        let human = String::from_utf8(Output::new(Format::Human).render_to_vec(&report))?;
+        assert!(
+            human.contains("config running  saved configuration inputs in sync"),
+            "{human}"
+        );
+        Ok(())
     }
 
     #[test]

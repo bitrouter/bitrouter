@@ -3020,21 +3020,22 @@ fn mcp_registry_report(
 
 /// Resolve the control-socket path for a *daemon-control* subcommand
 /// (`stop`, `reload`, `status`). An explicit `--socket` override wins;
-/// otherwise we resolve the config path via the standard chain, try to
-/// load the YAML to read `server.control_socket`, and join the value
-/// onto the config file's directory.
+/// otherwise a verified runtime locator wins over the currently saved
+/// `server.control_socket`. This keeps a daemon reachable after its saved
+/// socket changes or its source becomes invalid or missing.
 ///
-/// Loading the YAML is **best-effort**: a broken or env-var-incomplete
-/// config falls back to the default socket name in the same directory.
-/// That keeps `bro status` answerable in exactly the state where
-/// the user most wants to ask (config can't load → daemon can't be
-/// running → "stopped"). The "real" config error still surfaces the
-/// next time the user runs `serve` / `start`.
+/// With no verified running locator, loading YAML remains best-effort: an
+/// unreadable source falls back to the default socket beside its logical
+/// config path so passive status can still report `running: false`. Commands
+/// that need to start a daemon continue to load and validate the source.
 async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> Result<PathBuf> {
     if let Some(s) = socket {
         return Ok(s.to_path_buf());
     }
-    let source = bitrouter::paths::resolve_config(config)?;
+    if let Some(located) = bitrouter::daemon_locator::locate(config).await? {
+        return Ok(located.socket().to_path_buf());
+    }
+    let source = bitrouter::daemon_locator::selected_source(config)?;
     match &source {
         bitrouter::paths::ConfigSource::File(path) => {
             let socket_str = match config::load(path).await {
@@ -3285,15 +3286,18 @@ fn resolve_log_path(home: &Path, log: Option<&Path>) -> PathBuf {
     home.join("bitrouter.log")
 }
 
-/// Variant of [`resolve_client_socket`] for subcommands (`restart`,
-/// `route`) that load the config for other reasons anyway, so a config
-/// failure is a real error worth surfacing.
+/// Variant of [`resolve_client_socket`] for subcommands that already resolved
+/// a source. A verified runtime locator still wins; otherwise these commands
+/// load saved config and surface errors because they need its contents.
 async fn resolve_client_socket_from(
     source: &bitrouter::paths::ConfigSource,
     socket: Option<&Path>,
 ) -> Result<PathBuf> {
     if let Some(s) = socket {
         return Ok(s.to_path_buf());
+    }
+    if let Some(located) = bitrouter::daemon_locator::locate_source(source).await? {
+        return Ok(located.socket().to_path_buf());
     }
     match source {
         bitrouter::paths::ConfigSource::File(path) => {
@@ -3457,6 +3461,12 @@ fn remote_target_flags(command: &Command) -> Option<(Option<&Path>, Option<&Path
 }
 
 async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
+    if let Some(located) = bitrouter::daemon_locator::locate_source(source).await? {
+        anyhow::bail!(
+            "bitrouter is already running (pid {}); use `restart` or `stop` first",
+            located.pid()
+        );
+    }
     // Ensure the bitrouter home directory exists (zero-config first-run
     // creates `~/.bitrouter` on demand) and chdir into it. Every
     // relative path in the config — `database.url`,
@@ -3469,7 +3479,8 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     std::env::set_current_dir(home)
         .with_context(|| format!("chdir to bitrouter home {}", home.display()))?;
 
-    let mut cfg = bitrouter::paths::load_config(source).await?;
+    let startup_configuration = bitrouter::reload::load_configuration_baseline(source).await?;
+    let mut cfg = startup_configuration.config().clone();
     // Auto-enable the `claude-code` subscription provider when the user has
     // signed in (a `claude-code` credential is in the OAuth store). Runs before
     // the registry merge so the merge fills the inserted provider's
@@ -3547,16 +3558,19 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         observe: observe_provider.clone(),
     };
     let acp_runtime_for_control = assembled.acp_runtime.clone();
-    let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(
-        bitrouter::reload::AppReloader::new(
-            policy_store.clone(),
-            assembled.routing_table,
-            assembled.upstream_executor,
-            reload_source,
-        )
-        .with_policy_runtime(assembled.policy_runtime)
-        .with_policy_table_router(assembled.policy_table_router),
-    );
+    let reloader = bitrouter::reload::AppReloader::new(
+        policy_store.clone(),
+        assembled.routing_table,
+        assembled.upstream_executor,
+        reload_source,
+    )
+    .with_startup_configuration(startup_configuration)
+    .with_policy_runtime(assembled.policy_runtime)
+    .with_policy_table_router(assembled.policy_table_router);
+    let server_instance_id = daemon::DaemonReloader::reload_state(&reloader)
+        .ok_or_else(|| anyhow::anyhow!("daemon reload state is unavailable at startup"))?
+        .server_instance_id;
+    let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(reloader);
 
     let remote_control = match remote_control {
         Some(server) => Some(
@@ -3675,6 +3689,9 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
             }
         }
     };
+    let locator_socket = socket_path.clone();
+    let locator_source = source.clone();
+    let locator_instance = server_instance_id;
     let control = daemon::run_control_socket_with_acp_runtime_and_administration(
         socket_path,
         app.clone(),
@@ -3689,6 +3706,33 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         },
         Some(administration),
     );
+    let control = async move {
+        let mut control = Box::pin(control);
+        loop {
+            let probe = bitrouter::daemon_locator::endpoint_matches(
+                &locator_socket,
+                std::process::id(),
+                &locator_instance,
+            );
+            tokio::pin!(probe);
+            let matches = tokio::select! {
+                result = &mut control => return result,
+                matches = &mut probe => matches,
+            };
+            if matches {
+                let _locator = bitrouter::daemon_locator::publish(
+                    &locator_source,
+                    &locator_socket,
+                    &locator_instance,
+                )?;
+                return control.await;
+            }
+            tokio::select! {
+                result = &mut control => return result,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+            }
+        }
+    };
 
     // SIGHUP triggers a config reload — reload should be available via either
     // `bro reload` (the control endpoint) *or* a HUP signal. Same fan-out
@@ -3823,6 +3867,13 @@ async fn start(
     // file inside it. (Zero-config first-run lands here with the home
     // not yet created on disk.)
     bitrouter::paths::ensure_home_directory(source.home())?;
+
+    if let Some(located) = bitrouter::daemon_locator::locate_source(source).await? {
+        anyhow::bail!(
+            "bitrouter is already running (pid {}); use `restart` or `stop` first",
+            located.pid()
+        );
+    }
 
     // Refuse to start a second daemon on top of a live one — silent overlap
     // would race two `serve`s for the same socket and one would die into the
@@ -4497,9 +4548,11 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                     anyhow::bail!("--router and --preset are mutually exclusive")
                 }
             };
-            output.emit(
-                &routing_policy_report(config_path, "init", true, update.changes, None).await?,
-            )?;
+            let mut report =
+                routing_policy_report(config_path, "init", true, update.changes, None).await?;
+            report.config_activation =
+                Some(bitrouter::output::reports::config::ConfigActivation::SavedOnly);
+            output.emit(&report)?;
         }
         PolicyAction::Check { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -4530,6 +4583,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                 )],
                 policy: Some(serde_json::to_value(verification)?),
                 applied: false,
+                config_activation: None,
             })?;
         }
         PolicyAction::Status { config, .. } => {
@@ -4604,6 +4658,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                 changes,
                 policy: None,
                 applied: false,
+                config_activation: None,
             })?;
         }
         PolicyAction::Publish {
@@ -5533,6 +5588,7 @@ async fn routing_policy_report(
         changes,
         policy,
         applied,
+        config_activation: None,
     })
 }
 
@@ -6918,8 +6974,10 @@ mod tests {
                         listen: "127.0.0.1:4356".to_string(),
                         models: 0,
                         providers: Vec::new(),
+                        saved_routers: None,
                         running_routers: None,
                         router_restart_required: None,
+                        config_state: None,
                     }),
                 ),
                 (RestartCommandKind::Stop, Ok(DaemonResponse::Ok)),
@@ -6955,8 +7013,10 @@ mod tests {
                         listen: "127.0.0.1:4356".to_string(),
                         models: 0,
                         providers: Vec::new(),
+                        saved_routers: None,
                         running_routers: None,
                         router_restart_required: None,
+                        config_state: None,
                     }),
                 ),
                 (RestartCommandKind::Stop, Ok(DaemonResponse::Ok)),
@@ -6983,8 +7043,10 @@ mod tests {
                     listen: "127.0.0.1:4356".to_string(),
                     models: 0,
                     providers: Vec::new(),
+                    saved_routers: None,
                     running_routers: None,
                     router_restart_required: None,
+                    config_state: None,
                 }),
             ),
             (

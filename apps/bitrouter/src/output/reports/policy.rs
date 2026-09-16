@@ -29,6 +29,10 @@ pub struct PolicyReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policy: Option<serde_json::Value>,
     pub applied: bool,
+    /// Present when this command changed `bitrouter.yaml`. `saved_only` avoids
+    /// implying that a running daemon consumed the edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_activation: Option<super::config::ConfigActivation>,
 }
 
 impl CliReport for PolicyReport {
@@ -66,6 +70,16 @@ impl CliReport for PolicyReport {
         if self.applied {
             h.line("  applied: yes")?;
         }
+        if matches!(
+            self.config_activation,
+            Some(super::config::ConfigActivation::SavedOnly)
+        ) {
+            h.line("  configuration: saved only")?;
+            h.line(&format!(
+                "  inspect `{} status` before assuming the running daemon changed",
+                bitrouter_sdk::invocation::name()
+            ))?;
+        }
         Ok(())
     }
 }
@@ -73,6 +87,7 @@ impl CliReport for PolicyReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output::{Format, Output};
 
     #[test]
     fn legacy_disk_show_keeps_its_json_shape_and_marks_the_source() -> anyhow::Result<()> {
@@ -88,6 +103,7 @@ mod tests {
             changes: Vec::new(),
             policy: Some(serde_json::json!({"tiers": {"fast": "openai/gpt-5"}})),
             applied: false,
+            config_activation: None,
         };
 
         let value = serde_json::to_value(report)?;
@@ -96,6 +112,35 @@ mod tests {
         assert_eq!(value["policy"]["tiers"]["fast"], "openai/gpt-5");
         assert_eq!(value["applied"], false);
         assert_eq!(value["source"], "disk");
+        Ok(())
+    }
+
+    #[test]
+    fn init_marks_config_edits_as_saved_only() -> anyhow::Result<()> {
+        let report = PolicyReport {
+            action: "init".to_string(),
+            path: Some("/tmp/policy-lock.yaml".to_string()),
+            candidate_path: None,
+            digest: Some("digest".to_string()),
+            source: Some("disk".to_string()),
+            mode: "frozen".to_string(),
+            policies: vec!["default".to_string()],
+            bindings: BTreeMap::from([("coding".to_string(), "default".to_string())]),
+            changes: vec!["saved named policy binding".to_string()],
+            policy: None,
+            applied: true,
+            config_activation: Some(super::super::config::ConfigActivation::SavedOnly),
+        };
+
+        let value = serde_json::to_value(&report)?;
+        assert_eq!(value["config_activation"], "saved_only");
+        let human = String::from_utf8(Output::new(Format::Human).render_to_vec(&report))?;
+        assert!(human.contains("configuration: saved only"), "{human}");
+        assert!(human.contains("status"), "{human}");
+        assert!(
+            human.contains("before assuming the running daemon changed"),
+            "{human}"
+        );
         Ok(())
     }
 }

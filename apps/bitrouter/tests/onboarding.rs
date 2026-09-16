@@ -60,6 +60,7 @@ fn bare_unconfigured_emits_inert_envelope_and_exits_zero() {
     assert_eq!(v["action"], "onboarding");
     assert_eq!(v["providers_configured"], serde_json::json!([]));
     assert_eq!(v["after"], "exit");
+    assert!(v.get("config_activation").is_none());
 }
 
 #[test]

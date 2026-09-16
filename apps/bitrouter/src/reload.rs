@@ -13,10 +13,10 @@
 //! provider with an empty `api_base`, and an `auto_discover` provider
 //! would then silently drop every model.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -31,6 +31,79 @@ const MAX_MIXED_STATE_HISTORY: usize = 32;
 /// Maximum time a reload may spend reading and validating all replacement
 /// inputs before it changes any live participant.
 pub const PREPARATION_TIMEOUT_SECONDS: u64 = 60;
+
+/// Where the daemon's primary configuration comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigSourceKind {
+    File,
+    Default,
+}
+
+/// Whether the currently saved primary configuration can be inspected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SavedConfigState {
+    Available,
+    Generated,
+    Missing,
+    Invalid,
+    Unavailable,
+}
+
+/// Relationship between inspected configuration inputs and the running daemon.
+/// Startup-owned settings and separate policy sources participate; external
+/// OAuth, registry, and discovery services are not probed by this comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RunningConfigState {
+    InSync,
+    ReloadRequired,
+    RestartRequired,
+    Mixed,
+    Unknown,
+}
+
+/// State of a configuration source loaded separately from `bitrouter.yaml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AuxiliaryConfigState {
+    InSync,
+    ReloadRequired,
+    NotConfigured,
+    Missing,
+    Invalid,
+    Unavailable,
+    Unknown,
+}
+
+/// Redaction-safe saved/running configuration contract.
+///
+/// Field names are fixed schema categories. Configuration values, source
+/// bytes, credentials, and value-derived hashes never leave the process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigurationState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_instance_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u64>,
+    pub source: ConfigSourceKind,
+    pub saved: SavedConfigState,
+    pub running: RunningConfigState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reload_required_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub restart_required_fields: Vec<String>,
+    pub named_policy: AuxiliaryConfigState,
+    pub access_policies: AuxiliaryConfigState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reload: Option<ReloadReport>,
+    /// Bounded mixed/unknown outcomes retained for this daemon boot, oldest
+    /// first. A later preparation failure cannot erase the report that made
+    /// the running configuration mixed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mixed_state_history: Vec<ReloadReport>,
+}
 
 /// Consistency of the runtime configuration after the last completed reload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -555,6 +628,9 @@ fn restart_required_fields(
     if current.trajectory != candidate.trajectory {
         fields.insert("trajectory".to_string());
     }
+    if current.acp_recording != candidate.acp_recording {
+        fields.insert("acp_recording".to_string());
+    }
     if current.continuation != candidate.continuation {
         fields.insert("continuation".to_string());
     }
@@ -615,12 +691,26 @@ fn restart_required_fields(
 /// be conservative: an ignored nested field is not proof that a live consumer
 /// can apply it. Dynamic maps remain open only where their schema explicitly
 /// says what their values are (for example `providers.<id>`).
+#[cfg(test)]
 fn unclassified_config_paths(value: &serde_json::Value) -> BTreeSet<String> {
+    unclassified_config(value).0
+}
+
+#[derive(Clone)]
+struct UnclassifiedConfigValue {
+    path: String,
+    value: serde_json::Value,
+}
+
+type UnclassifiedConfigValues = BTreeMap<String, UnclassifiedConfigValue>;
+
+fn unclassified_config(value: &serde_json::Value) -> (BTreeSet<String>, UnclassifiedConfigValues) {
     let schema = schemars::schema_for!(bitrouter_sdk::config::Config);
     let root = schema.as_value();
     let mut fields = BTreeSet::new();
-    collect_unclassified_schema_paths(value, root, root, "", &mut fields);
-    fields
+    let mut values = BTreeMap::new();
+    collect_unclassified_schema_paths(value, root, root, "", "", &mut fields, &mut values);
+    (fields, values)
 }
 
 fn collect_unclassified_schema_paths(
@@ -628,48 +718,54 @@ fn collect_unclassified_schema_paths(
     schema: &serde_json::Value,
     root: &serde_json::Value,
     path: &str,
+    location: &str,
     fields: &mut BTreeSet<String>,
+    unclassified_values: &mut UnclassifiedConfigValues,
 ) {
     let Some(schema) = resolve_schema(schema, root) else {
-        if !path.is_empty() {
-            fields.insert(path.to_string());
-        }
+        record_unclassified_value(value, path, location, fields, unclassified_values);
         return;
     };
     if schema.as_bool() == Some(false) {
-        if !path.is_empty() {
-            fields.insert(path.to_string());
-        }
+        record_unclassified_value(value, path, location, fields, unclassified_values);
         return;
     }
     if schema.as_bool() == Some(true) {
         return;
     }
     if !schema_accepts_value_kind(schema, value) {
-        if !path.is_empty() {
-            fields.insert(path.to_string());
-        }
+        record_unclassified_value(value, path, location, fields, unclassified_values);
         return;
     }
 
     for union in ["anyOf", "oneOf"] {
         if let Some(variants) = schema.get(union).and_then(serde_json::Value::as_array) {
-            let mut best: Option<BTreeSet<String>> = None;
+            let mut best: Option<(BTreeSet<String>, UnclassifiedConfigValues)> = None;
             for variant in variants {
                 let mut candidate = BTreeSet::new();
-                collect_unclassified_schema_paths(value, variant, root, path, &mut candidate);
+                let mut candidate_values = BTreeMap::new();
+                collect_unclassified_schema_paths(
+                    value,
+                    variant,
+                    root,
+                    path,
+                    location,
+                    &mut candidate,
+                    &mut candidate_values,
+                );
                 if candidate.is_empty() {
                     return;
                 }
                 if best
                     .as_ref()
-                    .is_none_or(|current| candidate.len() < current.len())
+                    .is_none_or(|(current, _)| candidate.len() < current.len())
                 {
-                    best = Some(candidate);
+                    best = Some((candidate, candidate_values));
                 }
             }
-            if let Some(best) = best {
-                fields.extend(best);
+            if let Some((best_fields, best_values)) = best {
+                fields.extend(best_fields);
+                unclassified_values.extend(best_values);
             }
             return;
         }
@@ -692,28 +788,47 @@ fn collect_unclassified_schema_paths(
                     .or_else(|| schema.get("unevaluatedProperties"));
                 for (name, child) in values {
                     let child_path = schema_child_path(path, name);
+                    let child_location = schema_child_location(location, name);
                     if let Some(property) = schema_property(properties, path, name) {
                         collect_unclassified_schema_paths(
                             child,
                             property,
                             root,
                             &child_path,
+                            &child_location,
                             fields,
+                            unclassified_values,
                         );
                     } else if let Some(additional) = additional {
                         if additional.as_bool() == Some(false) {
                             fields.insert(child_path);
+                            unclassified_values.insert(
+                                child_location,
+                                UnclassifiedConfigValue {
+                                    path: schema_child_path(path, name),
+                                    value: child.clone(),
+                                },
+                            );
                         } else if additional.as_bool() != Some(true) {
                             collect_unclassified_schema_paths(
                                 child,
                                 additional,
                                 root,
                                 &child_path,
+                                &child_location,
                                 fields,
+                                unclassified_values,
                             );
                         }
                     } else {
-                        fields.insert(child_path);
+                        fields.insert(child_path.clone());
+                        unclassified_values.insert(
+                            child_location,
+                            UnclassifiedConfigValue {
+                                path: child_path,
+                                value: child.clone(),
+                            },
+                        );
                     }
                 }
             }
@@ -721,7 +836,16 @@ fn collect_unclassified_schema_paths(
                 if let Some(items) = schema.get("items") {
                     for (index, child) in values.iter().enumerate() {
                         let child_path = format!("{path}[{index}]");
-                        collect_unclassified_schema_paths(child, items, root, &child_path, fields);
+                        let child_location = format!("{location}/{index}");
+                        collect_unclassified_schema_paths(
+                            child,
+                            items,
+                            root,
+                            &child_path,
+                            &child_location,
+                            fields,
+                            unclassified_values,
+                        );
                     }
                 }
             }
@@ -731,8 +855,70 @@ fn collect_unclassified_schema_paths(
 
     if let Some(all_of) = all_of {
         for part in all_of {
-            collect_unclassified_schema_paths(value, part, root, path, fields);
+            collect_unclassified_schema_paths(
+                value,
+                part,
+                root,
+                path,
+                location,
+                fields,
+                unclassified_values,
+            );
         }
+    }
+}
+
+fn record_unclassified_value(
+    value: &serde_json::Value,
+    path: &str,
+    location: &str,
+    fields: &mut BTreeSet<String>,
+    values: &mut UnclassifiedConfigValues,
+) {
+    if path.is_empty() {
+        return;
+    }
+    fields.insert(path.to_string());
+    values.insert(
+        location.to_string(),
+        UnclassifiedConfigValue {
+            path: path.to_string(),
+            value: value.clone(),
+        },
+    );
+}
+
+fn schema_child_location(parent: &str, child: &str) -> String {
+    let escaped = child.replace('~', "~0").replace('/', "~1");
+    format!("{parent}/{escaped}")
+}
+
+fn changed_unclassified_config_paths(
+    startup: Option<&UnclassifiedConfigValues>,
+    candidate: Option<&UnclassifiedConfigValues>,
+    candidate_fields: Option<&BTreeSet<String>>,
+) -> BTreeSet<String> {
+    match (startup, candidate) {
+        (Some(startup), Some(candidate)) => startup
+            .keys()
+            .chain(candidate.keys())
+            .filter(|location| {
+                startup.get(*location).map(|entry| &entry.value)
+                    != candidate.get(*location).map(|entry| &entry.value)
+            })
+            .filter_map(|location| {
+                candidate
+                    .get(location)
+                    .or_else(|| startup.get(location))
+                    .map(|entry| entry.path.clone())
+            })
+            .collect(),
+        // Embeddings that omit the exact startup source baseline retain the
+        // conservative legacy behavior: every unknown candidate field needs a
+        // restart because equality with the running source cannot be proved.
+        (None, Some(_)) => candidate_fields.cloned().unwrap_or_default(),
+        (Some(startup), None) => startup.values().map(|entry| entry.path.clone()).collect(),
+        (None, None) => BTreeSet::new(),
     }
 }
 
@@ -927,6 +1113,303 @@ pub enum ReloadSource {
     Default,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+enum ConfigurationRevision {
+    Document(serde_json::Value),
+    Generated(u64),
+}
+
+/// The exact primary source input used to assemble a daemon configuration,
+/// captured before registry/default enrichment changes the routing snapshot.
+/// The source document stays process-private and is used only for equality and
+/// fixed-category change classification.
+#[derive(Clone)]
+pub struct ConfigurationBaseline {
+    /// Source selected by resolution for this process/request.
+    source: crate::paths::ConfigSource,
+    /// Source actually read. A Default source can observe a newly created
+    /// `<home>/bitrouter.yaml` without treating it as applied to the daemon.
+    loaded_source: crate::paths::ConfigSource,
+    config: bitrouter_sdk::config::Config,
+    revision: ConfigurationRevision,
+    unclassified_fields: Option<BTreeSet<String>>,
+    unclassified_values: Option<UnclassifiedConfigValues>,
+}
+
+impl ConfigurationBaseline {
+    pub fn config(&self) -> &bitrouter_sdk::config::Config {
+        &self.config
+    }
+}
+
+fn config_source_kind(source: &crate::paths::ConfigSource) -> ConfigSourceKind {
+    match source {
+        crate::paths::ConfigSource::File(_) => ConfigSourceKind::File,
+        crate::paths::ConfigSource::Default { .. } => ConfigSourceKind::Default,
+    }
+}
+
+/// Inspect a saved source when there is no reachable daemon. No running or
+/// auxiliary state is inferred from the caller's machine.
+pub async fn configuration_state_without_runtime(
+    source: &crate::paths::ConfigSource,
+) -> ConfigurationState {
+    let saved = match load_configuration_baseline_at(source, 0, true).await {
+        Ok(baseline)
+            if matches!(
+                baseline.loaded_source,
+                crate::paths::ConfigSource::Default { .. }
+            ) =>
+        {
+            SavedConfigState::Generated
+        }
+        Ok(_) => SavedConfigState::Available,
+        Err(failure) => failure.saved,
+    };
+    ConfigurationState {
+        server_instance_id: None,
+        generation: None,
+        source: config_source_kind(source),
+        saved,
+        running: RunningConfigState::Unknown,
+        reload_required_fields: Vec::new(),
+        restart_required_fields: Vec::new(),
+        named_policy: AuxiliaryConfigState::Unknown,
+        access_policies: AuxiliaryConfigState::Unknown,
+        last_reload: None,
+        mixed_state_history: Vec::new(),
+    }
+}
+
+fn fixed_top_level_field(name: &str) -> &'static str {
+    match name {
+        "server" => "server",
+        "control" => "control",
+        "chat" => "chat",
+        "upstream" => "upstream",
+        "database" => "database",
+        "eval" => "eval",
+        "trajectory" => "trajectory",
+        "acp_recording" => "acp_recording",
+        "continuation" => "continuation",
+        "providers" => "providers",
+        "models" => "models",
+        "routers" => "routers",
+        "presets" => "presets",
+        "variants" => "variants",
+        "plugins" => "plugins",
+        "mcp" => "mcp",
+        "mcp_servers" => "mcp_servers",
+        "server_tools" => "server_tools",
+        "agents" => "agents",
+        "inherit_defaults" => "inherit_defaults",
+        "registry" => "registry",
+        "policy" => "policy",
+        "policy_table" => "policy_table",
+        "configuration_source" => "configuration_source",
+        _ => "unclassified",
+    }
+}
+
+fn changed_configuration_fields(
+    running: &ConfigurationRevision,
+    saved: &ConfigurationRevision,
+) -> BTreeSet<String> {
+    match (running, saved) {
+        (ConfigurationRevision::Generated(left), ConfigurationRevision::Generated(right)) => {
+            if left == right {
+                BTreeSet::new()
+            } else {
+                BTreeSet::from(["environment".to_string()])
+            }
+        }
+        (ConfigurationRevision::Document(left), ConfigurationRevision::Document(right)) => {
+            let (Some(left), Some(right)) = (left.as_object(), right.as_object()) else {
+                return BTreeSet::from(["unclassified".to_string()]);
+            };
+            left.keys()
+                .chain(right.keys())
+                .filter(|key| left.get(*key) != right.get(*key))
+                .map(|key| fixed_top_level_field(key).to_string())
+                .collect()
+        }
+        _ => BTreeSet::from(["configuration_source".to_string()]),
+    }
+}
+
+fn fixed_restart_field(path: &str) -> String {
+    match path {
+        "server.listen" | "server.control_socket" | "server.log_level" | "server.skip_auth" => {
+            path.to_string()
+        }
+        "inherit_defaults"
+        | "control"
+        | "chat"
+        | "database.url"
+        | "eval"
+        | "trajectory"
+        | "acp_recording"
+        | "continuation"
+        | "routers"
+        | "plugins"
+        | "mcp"
+        | "mcp_servers"
+        | "server_tools"
+        | "agents"
+        | "upstream.fallback_backoff_ms"
+        | "providers.*.models.*.pricing"
+        | "policy_table"
+        | "configuration_source" => path.to_string(),
+        _ if path.starts_with("providers.") => "providers".to_string(),
+        _ => "unclassified".to_string(),
+    }
+}
+
+fn fixed_restart_fields(fields: Vec<String>) -> Vec<String> {
+    fields
+        .into_iter()
+        .map(|field| fixed_restart_field(&field))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn externally_safe_reload_report(mut report: ReloadReport) -> ReloadReport {
+    report.restart_required_fields = fixed_restart_fields(report.restart_required_fields);
+    report
+}
+
+fn restart_field_category(path: &str) -> &'static str {
+    if path.starts_with("server.") {
+        "server"
+    } else if path.starts_with("database.") {
+        "database"
+    } else if path.starts_with("upstream.") {
+        "upstream"
+    } else if path.starts_with("providers") {
+        "providers"
+    } else {
+        fixed_top_level_field(path)
+    }
+}
+
+struct ConfigurationLoadError {
+    saved: SavedConfigState,
+    error: anyhow::Error,
+}
+
+/// Read the daemon's primary source with the same environment resolver reload
+/// uses. `serve` uses this once before enrichment and passes the returned
+/// baseline to [`AppReloader::with_startup_configuration`].
+pub async fn load_configuration_baseline(
+    source: &crate::paths::ConfigSource,
+) -> anyhow::Result<ConfigurationBaseline> {
+    load_configuration_baseline_at(source, 0, false)
+        .await
+        .map_err(|failure| failure.error)
+}
+
+/// Inspect the logical saved source for an already running daemon. A process
+/// that started from Default keeps running zero-config, while a newly created
+/// `<home>/bitrouter.yaml` is returned here as pending saved input.
+pub(crate) async fn inspect_configuration_baseline(
+    source: &crate::paths::ConfigSource,
+) -> anyhow::Result<ConfigurationBaseline> {
+    load_configuration_baseline_at(source, 0, true)
+        .await
+        .map_err(|failure| failure.error)
+}
+
+async fn load_configuration_baseline_at(
+    source: &crate::paths::ConfigSource,
+    generated_revision: u64,
+    inspect_default_file: bool,
+) -> Result<ConfigurationBaseline, ConfigurationLoadError> {
+    let effective_source = match source {
+        crate::paths::ConfigSource::Default { home }
+            if inspect_default_file && !home.as_os_str().is_empty() =>
+        {
+            let candidate = home.join("bitrouter.yaml");
+            match tokio::fs::metadata(&candidate).await {
+                Ok(_) => crate::paths::ConfigSource::File(candidate),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => source.clone(),
+                Err(error) => {
+                    return Err(ConfigurationLoadError {
+                        saved: SavedConfigState::Unavailable,
+                        error: anyhow::anyhow!(
+                            "inspecting configuration {}: {error}",
+                            candidate.display()
+                        ),
+                    });
+                }
+            }
+        }
+        crate::paths::ConfigSource::Default { .. } | crate::paths::ConfigSource::File(_) => {
+            source.clone()
+        }
+    };
+    match &effective_source {
+        crate::paths::ConfigSource::File(path) => {
+            let raw = tokio::fs::read_to_string(path).await.map_err(|error| {
+                let saved = if error.kind() == std::io::ErrorKind::NotFound {
+                    SavedConfigState::Missing
+                } else {
+                    SavedConfigState::Unavailable
+                };
+                ConfigurationLoadError {
+                    saved,
+                    error: anyhow::anyhow!("reading configuration {}: {error}", path.display()),
+                }
+            })?;
+            let config = bitrouter_sdk::config::parse_with(&raw, bitrouter_sdk::config::env_lookup)
+                .map_err(|error| ConfigurationLoadError {
+                    saved: SavedConfigState::Invalid,
+                    error: anyhow::Error::new(error),
+                })?;
+            let substituted = bitrouter_sdk::config::substitute_env(&raw).map_err(|error| {
+                ConfigurationLoadError {
+                    saved: SavedConfigState::Invalid,
+                    error: anyhow::Error::new(error),
+                }
+            })?;
+            let document =
+                serde_saphyr::from_str::<serde_json::Value>(&substituted).map_err(|error| {
+                    ConfigurationLoadError {
+                        saved: SavedConfigState::Invalid,
+                        error: anyhow::Error::new(error),
+                    }
+                })?;
+            if !document.is_object() {
+                return Err(ConfigurationLoadError {
+                    saved: SavedConfigState::Invalid,
+                    error: anyhow::anyhow!("configuration must be a mapping"),
+                });
+            }
+            let (unclassified_fields, unclassified_values) = unclassified_config(&document);
+            Ok(ConfigurationBaseline {
+                source: source.clone(),
+                loaded_source: effective_source.clone(),
+                config,
+                revision: ConfigurationRevision::Document(document),
+                unclassified_fields: Some(unclassified_fields),
+                unclassified_values: Some(unclassified_values),
+            })
+        }
+        crate::paths::ConfigSource::Default { .. } => {
+            let mut config = bitrouter_providers::zero_config();
+            crate::cloud::enable_in_zero_config(&mut config);
+            Ok(ConfigurationBaseline {
+                source: source.clone(),
+                loaded_source: effective_source.clone(),
+                config,
+                revision: ConfigurationRevision::Generated(generated_revision),
+                unclassified_fields: None,
+                unclassified_values: None,
+            })
+        }
+    }
+}
+
 /// Fan out a daemon `Reload` (and SIGHUP) to every reloadable subsystem the
 /// running daemon owns. Failures from any single subsystem are accumulated and
 /// reported together so an unrelated subsystem (e.g. a missing policy dir)
@@ -938,12 +1421,23 @@ pub struct AppReloader {
     /// built-in catalog can be applied above the SDK — and swap it in
     /// via `ConfigRoutingTable::replace_config`.
     routing_table: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
-    /// The fully assembled configuration at daemon startup. Local reloads may
-    /// refresh the routing snapshot with fields whose actual consumers were
-    /// wired only at startup; remote admission must keep comparing those
-    /// fields to this immutable baseline rather than accepting that stale
-    /// local snapshot as evidence that they became live-reloadable.
+    /// The fully assembled configuration at daemon startup. Every reload
+    /// entrypoint compares startup-owned fields to this immutable baseline and
+    /// rejects drift before any live participant changes.
     startup_config: bitrouter_sdk::config::Config,
+    /// Primary source parsed before registry/default/discovery enrichment.
+    startup_source_config: Option<bitrouter_sdk::config::Config>,
+    /// Exact source selected when the daemon started, including the home for a
+    /// zero-config process that may later gain `bitrouter.yaml`.
+    startup_configuration_source: Option<crate::paths::ConfigSource>,
+    /// Unknown source values captured at startup, keyed by an escaped JSON
+    /// location so unchanged forward-compatible fields do not force restart.
+    startup_unclassified_values: Option<UnclassifiedConfigValues>,
+    /// Last primary source known to have reached every live participant. A
+    /// mixed attempt never advances this baseline.
+    running_baseline: Mutex<Option<ConfigurationBaseline>>,
+    /// Source revision for zero-config after local environment overrides.
+    environment_revision: AtomicU64,
     /// Concrete upstream HTTP executor. Timeout knobs are client-level, so a
     /// config reload must rebuild the live executor's client set too.
     upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
@@ -994,6 +1488,7 @@ impl TestPreparationPause {
 }
 
 struct PreparedReload {
+    baseline: ConfigurationBaseline,
     config: bitrouter_sdk::config::Config,
     timeout_clients: bitrouter_sdk::language_model::executor::PreparedProviderTimeouts,
     policy_table: PreparedPolicyTable,
@@ -1046,6 +1541,11 @@ impl AppReloader {
             policy_store,
             routing_table,
             startup_config,
+            startup_source_config: None,
+            startup_configuration_source: None,
+            startup_unclassified_values: None,
+            running_baseline: Mutex::new(None),
+            environment_revision: AtomicU64::new(0),
             upstream_executor,
             policy_runtime: None,
             policy_table_router: None,
@@ -1060,6 +1560,17 @@ impl AppReloader {
             #[cfg(test)]
             test_preparation_timeout: None,
         }
+    }
+
+    /// Attach the exact source input used for daemon assembly, before runtime
+    /// enrichment. Production `serve` installs this baseline; embeddings that
+    /// omit it report the saved/running relationship as unknown.
+    pub fn with_startup_configuration(mut self, baseline: ConfigurationBaseline) -> Self {
+        self.startup_source_config = Some(baseline.config.clone());
+        self.startup_configuration_source = Some(baseline.source.clone());
+        self.startup_unclassified_values = baseline.unclassified_values.clone();
+        self.running_baseline = Mutex::new(Some(baseline));
+        self
     }
 
     /// Attach the live `policy_table:` transform so a reload re-applies its
@@ -1158,93 +1669,58 @@ impl AppReloader {
         }
     }
 
-    async fn prepare_candidate(
-        &self,
-    ) -> Result<(bitrouter_sdk::config::Config, Option<BTreeSet<String>>), PreparationError> {
-        let (mut fresh, fields) = match &self.source {
-            ReloadSource::File(path) => {
-                let raw = tokio::fs::read_to_string(path).await.map_err(|error| {
-                    tracing::warn!(error = %error, "reload could not read configuration candidate");
-                    PreparationError::failed(
-                        ReloadParticipant::RoutingTable,
-                        "config_prepare_failed",
-                        "reload could not read the server configuration",
-                    )
-                })?;
-                let config = bitrouter_sdk::config::parse_with(
-                    &raw,
-                    bitrouter_sdk::config::env_lookup,
+    async fn prepare_candidate(&self) -> Result<ConfigurationBaseline, PreparationError> {
+        let source = self.source_for_inspection();
+        let revision = self.environment_revision.load(Ordering::Acquire);
+        load_configuration_baseline_at(&source, revision, true)
+            .await
+            .map_err(|failure| {
+                tracing::warn!(error = %failure.error, "reload could not prepare configuration candidate");
+                let message = match failure.saved {
+                    SavedConfigState::Missing | SavedConfigState::Unavailable => {
+                        "reload could not read the server configuration"
+                    }
+                    _ => "reload configuration is invalid",
+                };
+                PreparationError::failed(
+                    ReloadParticipant::RoutingTable,
+                    "config_prepare_failed",
+                    message,
                 )
-                .map_err(|error| {
-                    tracing::warn!(error = %error, "reload configuration candidate is invalid");
-                    PreparationError::failed(
-                        ReloadParticipant::RoutingTable,
-                        "config_prepare_failed",
-                        "reload configuration is invalid",
-                    )
-                })?;
-                let substituted = bitrouter_sdk::config::substitute_env(&raw).map_err(|error| {
-                    tracing::warn!(error = %error, "reload configuration substitution failed");
-                    PreparationError::failed(
-                        ReloadParticipant::RoutingTable,
-                        "config_prepare_failed",
-                        "reload configuration is invalid",
-                    )
-                })?;
-                let value =
-                    serde_saphyr::from_str::<serde_json::Value>(&substituted).map_err(|error| {
-                        tracing::warn!(error = %error, "reload configuration shape is invalid");
-                        PreparationError::failed(
-                            ReloadParticipant::RoutingTable,
-                            "config_prepare_failed",
-                            "reload configuration is invalid",
-                        )
-                    })?;
-                if !value.is_object() {
-                    return Err(PreparationError::failed(
-                        ReloadParticipant::RoutingTable,
-                        "config_prepare_failed",
-                        "reload configuration must be a mapping",
-                    ));
-                }
-                (config, Some(unclassified_config_paths(&value)))
-            }
-            ReloadSource::Default => {
-                let mut config = bitrouter_providers::zero_config();
-                crate::cloud::enable_in_zero_config(&mut config);
-                (config, None)
-            }
-        };
+            })
+    }
+
+    async fn prepare_resolved_candidate(&self) -> Result<ConfigurationBaseline, PreparationError> {
+        let mut baseline = self.prepare_candidate().await?;
+        if config_source_kind(&baseline.source) != config_source_kind(&baseline.loaded_source) {
+            return Err(PreparationError::restart_required(vec![
+                "configuration_source".to_string(),
+            ]));
+        }
 
         // Discovery is bounded by the SDK and runs here rather than during the
         // live routing-table swap. Every later participant consumes this exact
         // prepared candidate.
-        resolve_reloadable_config(&mut fresh).await;
-        Ok((fresh, fields))
+        resolve_reloadable_config(&mut baseline.config).await;
+        Ok(baseline)
     }
 
     async fn prepare(
         &self,
-        invocation: ReloadInvocation,
+        _invocation: ReloadInvocation,
     ) -> Result<PreparedReload, PreparationError> {
         self.wait_during_prepare().await;
-        let (config, unclassified_fields) = self.prepare_candidate().await?;
+        let baseline = self.prepare_resolved_candidate().await?;
+        let config = baseline.config.clone();
+        let changed_unclassified = changed_unclassified_config_paths(
+            self.startup_unclassified_values.as_ref(),
+            baseline.unclassified_values.as_ref(),
+            baseline.unclassified_fields.as_ref(),
+        );
         let restart_required =
-            restart_required_fields(&self.startup_config, &config, unclassified_fields.as_ref());
-        let rejected_fields = if matches!(invocation, ReloadInvocation::Remote) {
-            restart_required
-        } else {
-            // Local IPC and SIGHUP retain their established reload behavior for
-            // every other field. Named routers are the deliberate exception:
-            // this release classifies their definitions as restart-only on all
-            // entry points, while legacy presets keep their existing reload.
-            restart_required
-                .into_iter()
-                .filter(|field| field == "routers")
-                .collect()
-        };
-        if !rejected_fields.is_empty() {
-            return Err(PreparationError::restart_required(rejected_fields));
+            restart_required_fields(&self.startup_config, &config, Some(&changed_unclassified));
+        if !restart_required.is_empty() {
+            return Err(PreparationError::restart_required(restart_required));
         }
         let policy_table = self.prepare_policy_table(&config)?;
         let named_policy_runtime = match &self.policy_runtime {
@@ -1286,6 +1762,7 @@ impl AppReloader {
             )
         })?;
         Ok(PreparedReload {
+            baseline,
             config,
             timeout_clients,
             policy_table,
@@ -1329,6 +1806,11 @@ impl AppReloader {
         if matches!(invocation, ReloadInvocation::Local) && !env.is_empty() {
             let overrides = env.into_iter().collect();
             bitrouter_sdk::config::set_env_overrides(overrides);
+            let _ = self.environment_revision.fetch_update(
+                Ordering::AcqRel,
+                Ordering::Acquire,
+                |revision| Some(revision.saturating_add(1)),
+            );
             tracing::info!("env override map updated by local reload");
         }
 
@@ -1341,7 +1823,8 @@ impl AppReloader {
             Ok(Ok(prepared)) => prepared,
             Ok(Err(error)) => {
                 report.participant_failed(error.participant, error.failure);
-                report.restart_required_fields = error.restart_required_fields;
+                report.restart_required_fields =
+                    fixed_restart_fields(error.restart_required_fields);
                 report.finish(ReloadOutcome::Failed);
                 reservation.update_progress(&report);
                 self.coordinator.complete(&reservation, report.clone());
@@ -1365,6 +1848,7 @@ impl AppReloader {
         // Test-only seam verifies that every later participant consumes these
         // objects even if the source files change after preparation.
         self.wait_after_prepare().await;
+        let applied_baseline = prepared.baseline.clone();
         reservation.mark_mutation_started();
         if self.should_fail_apply(ReloadParticipant::RoutingTable) {
             report.participant_failed(
@@ -1479,10 +1963,246 @@ impl AppReloader {
         } else {
             ReloadOutcome::Failed
         };
+        if outcome == ReloadOutcome::Succeeded {
+            let mut running = match self.running_baseline.lock() {
+                Ok(running) => running,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *running = Some(applied_baseline);
+        }
         report.finish(outcome);
         reservation.update_progress(&report);
         self.coordinator.complete(&reservation, report.clone());
         report
+    }
+
+    fn source_for_inspection(&self) -> crate::paths::ConfigSource {
+        self.startup_configuration_source
+            .clone()
+            .unwrap_or_else(|| match &self.source {
+                ReloadSource::File(path) => crate::paths::ConfigSource::File(path.clone()),
+                ReloadSource::Default => crate::paths::ConfigSource::Default {
+                    home: PathBuf::new(),
+                },
+            })
+    }
+
+    async fn named_policy_configuration_state(
+        &self,
+        baseline: &ConfigurationBaseline,
+    ) -> AuxiliaryConfigState {
+        let Some(runtime) = &self.policy_runtime else {
+            return AuxiliaryConfigState::NotConfigured;
+        };
+        let path = match &baseline.loaded_source {
+            crate::paths::ConfigSource::File(path) => Some(path.as_path()),
+            crate::paths::ConfigSource::Default { .. } => None,
+        };
+        let loaded = match crate::policy_lock::load_for_config(&baseline.config, path).await {
+            Ok(loaded) => loaded,
+            Err(_) => {
+                let Some(policy_path) = crate::policy_lock::resolve_path(&baseline.config, path)
+                else {
+                    return AuxiliaryConfigState::Invalid;
+                };
+                return match tokio::fs::read_to_string(policy_path).await {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        AuxiliaryConfigState::Missing
+                    }
+                    Err(_) => AuxiliaryConfigState::Unavailable,
+                    Ok(_) => AuxiliaryConfigState::Invalid,
+                };
+            }
+        };
+        let active = runtime.administration_snapshot();
+        let disk = crate::actions::administration::PolicyReport::from_loaded(
+            &baseline.config,
+            loaded.as_ref(),
+            crate::actions::administration::PolicyView::Disk,
+        );
+        if active.availability == "not_configured" && disk.availability == "not_configured" {
+            AuxiliaryConfigState::NotConfigured
+        } else if active.availability == disk.availability && active.digest == disk.digest {
+            AuxiliaryConfigState::InSync
+        } else {
+            AuxiliaryConfigState::ReloadRequired
+        }
+    }
+
+    async fn access_policy_configuration_state(&self) -> AuxiliaryConfigState {
+        use crate::policy::store::PolicySourceState;
+        match self.policy_store.source_state().await {
+            PolicySourceState::NotConfigured => AuxiliaryConfigState::NotConfigured,
+            PolicySourceState::InSync => AuxiliaryConfigState::InSync,
+            PolicySourceState::Changed => AuxiliaryConfigState::ReloadRequired,
+            PolicySourceState::Missing => AuxiliaryConfigState::Missing,
+            PolicySourceState::Invalid => AuxiliaryConfigState::Invalid,
+            PolicySourceState::Unavailable => AuxiliaryConfigState::Unavailable,
+        }
+    }
+
+    async fn inspect_configuration_state(&self) -> ConfigurationState {
+        let before = self.coordinator.state();
+        let source = self.source_for_inspection();
+        let generated_revision = self.environment_revision.load(Ordering::Acquire);
+        let saved_baseline =
+            load_configuration_baseline_at(&source, generated_revision, true).await;
+
+        let (
+            saved,
+            mut running,
+            mut reload_fields,
+            mut restart_fields,
+            named_policy,
+            access_policies,
+        ) = match saved_baseline {
+            Err(failure) => (
+                failure.saved,
+                RunningConfigState::Unknown,
+                Vec::new(),
+                Vec::new(),
+                AuxiliaryConfigState::Unknown,
+                AuxiliaryConfigState::Unknown,
+            ),
+            Ok(saved_baseline) => {
+                let source_changed = config_source_kind(&source)
+                    != config_source_kind(&saved_baseline.loaded_source);
+                let saved = if matches!(
+                    &saved_baseline.loaded_source,
+                    crate::paths::ConfigSource::Default { .. }
+                ) {
+                    SavedConfigState::Generated
+                } else {
+                    SavedConfigState::Available
+                };
+                let named_policy = self.named_policy_configuration_state(&saved_baseline).await;
+                let access_policies = self.access_policy_configuration_state().await;
+                let running_baseline = match self.running_baseline.lock() {
+                    Ok(running) => running.clone(),
+                    Err(poisoned) => poisoned.into_inner().clone(),
+                };
+                let Some(running_baseline) = running_baseline else {
+                    return ConfigurationState {
+                        server_instance_id: Some(before.server_instance_id),
+                        generation: Some(before.generation),
+                        source: config_source_kind(&source),
+                        saved,
+                        running: RunningConfigState::Unknown,
+                        reload_required_fields: Vec::new(),
+                        restart_required_fields: Vec::new(),
+                        named_policy,
+                        access_policies,
+                        last_reload: before.last_outcome.map(externally_safe_reload_report),
+                        mixed_state_history: before
+                            .mixed_state_history
+                            .into_iter()
+                            .map(externally_safe_reload_report)
+                            .collect(),
+                    };
+                };
+                let mut changed = changed_configuration_fields(
+                    &running_baseline.revision,
+                    &saved_baseline.revision,
+                );
+                let mut raw_restart_fields = if source_changed {
+                    vec!["configuration_source".to_string()]
+                } else {
+                    let changed_unclassified = changed_unclassified_config_paths(
+                        self.startup_unclassified_values.as_ref(),
+                        saved_baseline.unclassified_values.as_ref(),
+                        saved_baseline.unclassified_fields.as_ref(),
+                    );
+                    self.startup_source_config
+                        .as_ref()
+                        .map(|startup| {
+                            restart_required_fields(
+                                startup,
+                                &saved_baseline.config,
+                                Some(&changed_unclassified),
+                            )
+                        })
+                        .unwrap_or_default()
+                };
+                if !source_changed
+                    && self.policy_table_router.is_none()
+                    && !saved_baseline.config.policy_table.tiers.is_empty()
+                {
+                    raw_restart_fields.push("policy_table".to_string());
+                }
+                for field in &raw_restart_fields {
+                    let _ = changed.remove(restart_field_category(field));
+                }
+                let restart_fields = fixed_restart_fields(raw_restart_fields);
+                let mut reload_fields = changed.into_iter().collect::<Vec<_>>();
+                if named_policy == AuxiliaryConfigState::ReloadRequired {
+                    reload_fields.push("policy_lock".to_string());
+                }
+                if access_policies == AuxiliaryConfigState::ReloadRequired {
+                    reload_fields.push("access_policies".to_string());
+                }
+                reload_fields.sort();
+                reload_fields.dedup();
+
+                let auxiliary_unknown = [named_policy, access_policies].into_iter().any(|state| {
+                    matches!(
+                        state,
+                        AuxiliaryConfigState::Missing
+                            | AuxiliaryConfigState::Invalid
+                            | AuxiliaryConfigState::Unavailable
+                            | AuxiliaryConfigState::Unknown
+                    )
+                });
+                let running = if !restart_fields.is_empty() {
+                    RunningConfigState::RestartRequired
+                } else if !reload_fields.is_empty() {
+                    RunningConfigState::ReloadRequired
+                } else if auxiliary_unknown {
+                    RunningConfigState::Unknown
+                } else {
+                    RunningConfigState::InSync
+                };
+                (
+                    saved,
+                    running,
+                    reload_fields,
+                    restart_fields,
+                    named_policy,
+                    access_policies,
+                )
+            }
+        };
+
+        let after = self.coordinator.state();
+        if before.consistency == ReloadConsistency::Mixed
+            || after.consistency == ReloadConsistency::Mixed
+        {
+            running = RunningConfigState::Mixed;
+        } else if before.running
+            || after.running
+            || before.server_instance_id != after.server_instance_id
+            || before.generation != after.generation
+        {
+            running = RunningConfigState::Unknown;
+            reload_fields.clear();
+            restart_fields.clear();
+        }
+        ConfigurationState {
+            server_instance_id: Some(after.server_instance_id),
+            generation: Some(after.generation),
+            source: config_source_kind(&source),
+            saved,
+            running,
+            reload_required_fields: reload_fields,
+            restart_required_fields: restart_fields,
+            named_policy,
+            access_policies,
+            last_reload: after.last_outcome.map(externally_safe_reload_report),
+            mixed_state_history: after
+                .mixed_state_history
+                .into_iter()
+                .map(externally_safe_reload_report)
+                .collect(),
+        }
     }
 
     /// Attach the app's named routing-policy registry to the same reload fanout.
@@ -1515,6 +2235,10 @@ impl DaemonReloader for AppReloader {
 
     fn reload_state(&self) -> Option<ReloadState> {
         Some(self.coordinator.state())
+    }
+
+    async fn configuration_state(&self) -> Option<ConfigurationState> {
+        Some(self.inspect_configuration_state().await)
     }
 
     fn reserve_remote(
@@ -1698,7 +2422,10 @@ policies:
         // that a reload later prepares. This keeps the remote classifier from
         // treating a host-local credential provider as a candidate-only
         // startup change in this fixture.
-        let mut initial = config::load(&config_path).await?;
+        let initial_baseline =
+            load_configuration_baseline(&crate::paths::ConfigSource::File(config_path.clone()))
+                .await?;
+        let mut initial = initial_baseline.config.clone();
         resolve_reloadable_config(&mut initial).await;
         let table = crate::policy_table_router::PolicyTable::from_config(&initial.policy_table)
             .ok_or_else(|| anyhow::anyhow!("initial policy table is unexpectedly inert"))?;
@@ -1745,6 +2472,7 @@ policies:
             executor,
             ReloadSource::File(config_path.clone()),
         )
+        .with_startup_configuration(initial_baseline)
         .with_policy_runtime(policy_runtime.clone())
         .with_policy_table_router(Some(policy_table.clone()));
         if let Some(failure) = failure {
@@ -1770,18 +2498,16 @@ policies:
     }
 
     #[tokio::test]
-    async fn reload_updates_live_upstream_timeout_clients() {
+    async fn reload_updates_live_upstream_timeout_clients() -> anyhow::Result<()> {
         let (path, dir) = temp_config_path();
-        std::fs::write(&path, config_yaml(30)).expect("write initial config");
-        let initial = config::parse(&config_yaml(30)).expect("parse initial config");
+        std::fs::write(&path, config_yaml(30))?;
+        let mut initial = config::parse(&config_yaml(30))?;
+        resolve_reloadable_config(&mut initial).await;
         let routing_table = Arc::new(ConfigRoutingTable::from_config(initial));
-        let executor = Arc::new(
-            HttpExecutor::new(HttpTimeouts {
-                read: Duration::from_secs(30),
-                ..HttpTimeouts::default()
-            })
-            .expect("build executor"),
-        );
+        let executor = Arc::new(HttpExecutor::new(HttpTimeouts {
+            read: Duration::from_secs(30),
+            ..HttpTimeouts::default()
+        })?);
         let reloader = AppReloader::new(
             Arc::new(PolicyStore::new()),
             routing_table,
@@ -1789,8 +2515,8 @@ policies:
             ReloadSource::File(path.clone()),
         );
 
-        std::fs::write(&path, config_yaml(1)).expect("write reloaded config");
-        reloader.reload().await.expect("reload config");
+        std::fs::write(&path, config_yaml(1))?;
+        reloader.reload().await?;
 
         let api_base = stalled_json_server().await;
         let target = RoutingTarget {
@@ -1816,18 +2542,17 @@ policies:
             prompt.clone(),
         ));
 
-        let err = tokio::time::timeout(
+        let result = tokio::time::timeout(
             Duration::from_secs(3),
             executor.execute(&target, &prompt, &ctx),
         )
-        .await
-        .expect("reloaded read_secs should bound the stalled body")
-        .expect_err("stalled body should timeout");
+        .await?;
         std::fs::remove_dir_all(dir).ok();
 
-        match err {
-            bitrouter_sdk::BitrouterError::UpstreamTimeout => {}
-            other => panic!("expected UpstreamTimeout, got {other:?}"),
+        match result {
+            Err(bitrouter_sdk::BitrouterError::UpstreamTimeout) => Ok(()),
+            Err(other) => Err(anyhow::anyhow!("expected UpstreamTimeout, got {other:?}")),
+            Ok(_) => Err(anyhow::anyhow!("stalled body unexpectedly completed")),
         }
     }
 
@@ -1871,7 +2596,8 @@ policy_table:
         };
 
         std::fs::write(&path, config_with_tier("alpha:m"))?;
-        let initial = config::parse(&config_with_tier("alpha:m"))?;
+        let mut initial = config::parse(&config_with_tier("alpha:m"))?;
+        resolve_reloadable_config(&mut initial).await;
 
         // The pieces the daemon holds: the routing table, and the live
         // transform built from the same config.
@@ -2054,6 +2780,12 @@ policies:
                 state.mixed_state_history[0].participants, report.participants,
                 "the retained mixed-state record must preserve the actual participant outcomes"
             );
+            let configuration = fixture
+                .reloader
+                .configuration_state()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+            assert_eq!(configuration.running, RunningConfigState::Mixed);
 
             let expected_routing_model = if failed_participant == ReloadParticipant::RoutingTable {
                 "alpha:m"
@@ -2107,6 +2839,41 @@ policies:
                 "the active policy report must describe the policy snapshot that actually committed"
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn later_preparation_failure_keeps_the_mixed_cause_in_configuration_state()
+    -> anyhow::Result<()> {
+        let fixture = fault_fixture(ReloadParticipant::PolicyTable).await?;
+        assert!(fixture.reloader.reload().await.is_err());
+        std::fs::write(&fixture.config_path, "providers: [invalid\n")?;
+        assert!(fixture.reloader.reload().await.is_err());
+
+        let state = fixture
+            .reloader
+            .configuration_state()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+        assert_eq!(state.running, RunningConfigState::Mixed);
+        assert_eq!(
+            state.last_reload.as_ref().map(|report| report.outcome),
+            Some(ReloadOutcome::Failed)
+        );
+        assert_eq!(state.mixed_state_history.len(), 1);
+        assert_eq!(
+            state.mixed_state_history[0].outcome,
+            ReloadOutcome::PartiallyApplied
+        );
+        assert!(
+            state.mixed_state_history[0]
+                .participants
+                .iter()
+                .any(|entry| {
+                    entry.participant == ReloadParticipant::PolicyTable
+                        && entry.outcome == ReloadParticipantOutcome::Failed
+                })
+        );
         Ok(())
     }
 
@@ -2198,6 +2965,12 @@ policies:
                 .reload_state()
                 .is_some_and(|state| state.running)
         );
+        let configuration = fixture
+            .reloader
+            .configuration_state()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+        assert_eq!(configuration.running, RunningConfigState::Unknown);
 
         // `DaemonCommand::Reload` calls this entry point. The coordinator must
         // reject it before `set_env_overrides` can alter process-global state.
@@ -2244,7 +3017,7 @@ policies:
     }
 
     #[tokio::test]
-    async fn remote_rejects_startup_change_applied_by_local_reload() -> anyhow::Result<()> {
+    async fn every_entrypoint_rejects_startup_change_before_mutation() -> anyhow::Result<()> {
         let (path, dir) = temp_config_path();
         let initial_yaml = r#"inherit_defaults: false
 server:
@@ -2271,14 +3044,14 @@ presets:
             ReloadSource::File(path.clone()),
         );
 
-        // Local IPC/SIGHUP retains its existing behavior: it can refresh the
-        // routing snapshot even though the listener itself remains the startup
-        // listener. That cannot make the field remotely reloadable later.
+        // Local IPC/SIGHUP and remote administration share one conservative
+        // classifier. A successful local reply must never put a startup-only
+        // value into the routing snapshot while the real listener stays old.
         std::fs::write(&path, candidate_yaml)?;
-        reloader.reload().await?;
+        assert!(reloader.reload().await.is_err());
         assert_eq!(
             routing_table.snapshot_config().server.listen,
-            "127.0.0.1:9999"
+            "127.0.0.1:4356"
         );
 
         let state = reloader
@@ -2307,7 +3080,7 @@ presets:
         );
         assert_eq!(
             routing_table.snapshot_config().server.listen,
-            "127.0.0.1:9999"
+            "127.0.0.1:4356"
         );
         let state = reloader
             .reload_state()
@@ -2491,6 +3264,189 @@ presets:
         Ok(())
     }
 
+    #[tokio::test]
+    async fn auxiliary_source_drift_and_invalidity_prevent_in_sync() -> anyhow::Result<()> {
+        let fixture = coordinated_fixture(None, None).await?;
+        fixture.reloader.reload().await?;
+        let synchronized = fixture
+            .reloader
+            .configuration_state()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+        assert_eq!(synchronized.running, RunningConfigState::InSync);
+
+        std::fs::write(&fixture.lock_path, coordinated_policy_lock_yaml("alpha:m"))?;
+        std::fs::write(
+            fixture.access_policy_dir.join("operator.yaml"),
+            "id: operator\nallowed_models: [alpha:m]\n",
+        )?;
+        let changed = fixture
+            .reloader
+            .configuration_state()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+        assert_eq!(changed.running, RunningConfigState::ReloadRequired);
+        assert_eq!(changed.named_policy, AuxiliaryConfigState::ReloadRequired);
+        assert_eq!(
+            changed.access_policies,
+            AuxiliaryConfigState::ReloadRequired
+        );
+        assert!(
+            changed
+                .reload_required_fields
+                .contains(&"policy_lock".into())
+        );
+        assert!(
+            changed
+                .reload_required_fields
+                .contains(&"access_policies".into())
+        );
+
+        std::fs::write(&fixture.lock_path, "lockfileVersion: broken\n")?;
+        let invalid = fixture
+            .reloader
+            .configuration_state()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+        assert_eq!(invalid.named_policy, AuxiliaryConfigState::Invalid);
+        assert_ne!(invalid.running, RunningConfigState::InSync);
+
+        std::fs::remove_file(&fixture.lock_path)?;
+        let missing = fixture
+            .reloader
+            .configuration_state()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+        assert_eq!(missing.named_policy, AuxiliaryConfigState::Missing);
+        assert_ne!(missing.running, RunningConfigState::InSync);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn default_source_requires_restart_when_a_config_file_appears() -> anyhow::Result<()> {
+        let home = tempfile::tempdir()?;
+        let source = crate::paths::ConfigSource::Default {
+            home: home.path().to_path_buf(),
+        };
+        let baseline = load_configuration_baseline(&source).await?;
+        let running_config = baseline.config.clone();
+        let reloader = AppReloader::new(
+            Arc::new(PolicyStore::new()),
+            Arc::new(ConfigRoutingTable::from_config(running_config)),
+            Arc::new(HttpExecutor::new(HttpTimeouts::default())?),
+            ReloadSource::Default,
+        )
+        .with_startup_configuration(baseline);
+
+        let initial = reloader
+            .configuration_state()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+        assert_eq!(initial.source, ConfigSourceKind::Default);
+        assert_eq!(initial.saved, SavedConfigState::Generated);
+        assert_eq!(initial.running, RunningConfigState::InSync);
+
+        let path = home.path().join("bitrouter.yaml");
+        std::fs::write(&path, "inherit_defaults: false\n")?;
+        let pending = reloader
+            .configuration_state()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+        assert_eq!(pending.source, ConfigSourceKind::Default);
+        assert_eq!(pending.saved, SavedConfigState::Available);
+        assert_eq!(pending.running, RunningConfigState::RestartRequired);
+        assert_eq!(pending.restart_required_fields, ["configuration_source"]);
+        assert!(reloader.reload().await.is_err());
+        let report = reloader
+            .reload_state()
+            .and_then(|state| state.last_outcome)
+            .ok_or_else(|| anyhow::anyhow!("reload report is unavailable"))?;
+        assert_eq!(report.restart_required_fields, ["configuration_source"]);
+
+        std::fs::write(&path, "providers: [invalid\n")?;
+        let invalid = reloader
+            .configuration_state()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+        assert_eq!(invalid.source, ConfigSourceKind::Default);
+        assert_eq!(invalid.saved, SavedConfigState::Invalid);
+        assert_eq!(invalid.running, RunningConfigState::Unknown);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn adding_policy_table_transform_requires_restart_in_status_and_reload()
+    -> anyhow::Result<()> {
+        let (path, dir) = temp_config_path();
+        let initial_yaml = config_yaml(30);
+        std::fs::write(&path, &initial_yaml)?;
+        let baseline =
+            load_configuration_baseline(&crate::paths::ConfigSource::File(path.clone())).await?;
+        let mut startup_config = baseline.config.clone();
+        resolve_reloadable_config(&mut startup_config).await;
+        let routing_table = Arc::new(ConfigRoutingTable::from_config(startup_config));
+        let reloader = AppReloader::new(
+            Arc::new(PolicyStore::new()),
+            routing_table,
+            Arc::new(HttpExecutor::new(HttpTimeouts::default())?),
+            ReloadSource::File(path.clone()),
+        )
+        .with_startup_configuration(baseline);
+        let candidate = format!(
+            "{initial_yaml}\npolicy_table:\n  tiers:\n    only: slow:m\n  default_tier: only\n"
+        );
+        std::fs::write(&path, candidate)?;
+
+        let state = reloader
+            .configuration_state()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+        assert_eq!(state.running, RunningConfigState::RestartRequired);
+        assert!(
+            state
+                .restart_required_fields
+                .contains(&"policy_table".into())
+        );
+        assert!(reloader.reload().await.is_err());
+        let report = reloader
+            .reload_state()
+            .and_then(|state| state.last_outcome)
+            .ok_or_else(|| anyhow::anyhow!("reload report is unavailable"))?;
+        assert_eq!(report.restart_required_fields, ["policy_table"]);
+        let _ = std::fs::remove_dir_all(dir);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn interrupted_mutation_makes_configuration_state_mixed() -> anyhow::Result<()> {
+        let baseline = load_configuration_baseline(&crate::paths::ConfigSource::Default {
+            home: PathBuf::new(),
+        })
+        .await?;
+        let config = baseline.config.clone();
+        let reloader = AppReloader::new(
+            Arc::new(PolicyStore::new()),
+            Arc::new(ConfigRoutingTable::from_config(config.clone())),
+            Arc::new(HttpExecutor::new(HttpTimeouts::default())?),
+            ReloadSource::Default,
+        )
+        .with_startup_configuration(baseline);
+        let reservation = reloader.coordinator.reserve_local()?;
+        reservation.mark_mutation_started();
+        drop(reservation);
+
+        let state = reloader
+            .configuration_state()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("configuration state is unavailable"))?;
+        assert_eq!(state.running, RunningConfigState::Mixed);
+        assert_eq!(
+            state.last_reload.as_ref().map(|report| report.outcome),
+            Some(ReloadOutcome::Unknown)
+        );
+        Ok(())
+    }
+
     #[test]
     fn remote_restart_classifier_rejects_startup_and_unknown_fields() -> anyhow::Result<()> {
         let current = config::parse("inherit_defaults: false\n")?;
@@ -2599,6 +3555,53 @@ providers:
         assert!(fields.contains(&"server.future_field".to_string()));
         assert!(fields.contains(&"upstream.future_field".to_string()));
         assert!(fields.contains(&"providers.alpha.future_field".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_restart_fields_only_report_drift_from_startup() -> anyhow::Result<()> {
+        let startup = serde_saphyr::from_str::<serde_json::Value>(
+            "inherit_defaults: false\nserver:\n  future_field: stable\nupstream:\n  timeouts:\n    read_secs: 30\n",
+        )?;
+        let known_edit = serde_saphyr::from_str::<serde_json::Value>(
+            "inherit_defaults: false\nserver:\n  future_field: stable\nupstream:\n  timeouts:\n    read_secs: 1\n",
+        )?;
+        let value_edit = serde_saphyr::from_str::<serde_json::Value>(
+            "inherit_defaults: false\nserver:\n  future_field: changed\nupstream:\n  timeouts:\n    read_secs: 1\n",
+        )?;
+        let removed = serde_saphyr::from_str::<serde_json::Value>(
+            "inherit_defaults: false\nupstream:\n  timeouts:\n    read_secs: 1\n",
+        )?;
+        let (_, startup_values) = unclassified_config(&startup);
+        let (known_fields, known_values) = unclassified_config(&known_edit);
+        let (value_fields, value_values) = unclassified_config(&value_edit);
+        let (removed_fields, removed_values) = unclassified_config(&removed);
+
+        assert!(
+            changed_unclassified_config_paths(
+                Some(&startup_values),
+                Some(&known_values),
+                Some(&known_fields),
+            )
+            .is_empty(),
+            "a known reloadable edit must not make an unchanged unknown field restart-only"
+        );
+        assert_eq!(
+            changed_unclassified_config_paths(
+                Some(&startup_values),
+                Some(&value_values),
+                Some(&value_fields),
+            ),
+            BTreeSet::from(["server.future_field".to_string()])
+        );
+        assert_eq!(
+            changed_unclassified_config_paths(
+                Some(&startup_values),
+                Some(&removed_values),
+                Some(&removed_fields),
+            ),
+            BTreeSet::from(["server.future_field".to_string()])
+        );
         Ok(())
     }
 
