@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.32](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.31...v1.0.0-alpha.32)
+
+
+### ⛰️ Features
+
+- *(router)* Add named routers and preset migration ([#916](https://github.com/bitrouter/bitrouter/pull/916)) - ([022f8aa](https://github.com/bitrouter/bitrouter/commit/022f8aa3de2d75d6567b55e08fee405f41ba93a5))
+
+### ⚙️ Miscellaneous Tasks
+
+- Sync registry catalog ([#915](https://github.com/bitrouter/bitrouter/pull/915)) - ([1521a60](https://github.com/bitrouter/bitrouter/commit/1521a6063afc79ef8ca534f6dec82936ac943196))
+
+
 ## [1.0.0-alpha.31](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.30...v1.0.0-alpha.31)
 
 
