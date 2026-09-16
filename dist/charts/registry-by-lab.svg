@@ -176,9 +176,9 @@
 <text class="model" x="922.0" y="247.0">deepseek-v4-pro-0813</text>
 <text class="routes" x="1162.0" y="247.0" text-anchor="end">8</text>
 <rect x="914.0" y="258.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
-<rect x="914.0" y="258.0" width="32.1" height="22.0" rx="4" fill="#d4d4d8"/>
+<rect x="914.0" y="258.0" width="42.8" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="922.0" y="273.0">deepseek-v4.1-flash</text>
-<text class="routes" x="1162.0" y="273.0" text-anchor="end">3</text>
+<text class="routes" x="1162.0" y="273.0" text-anchor="end">4</text>
 <rect x="28.0" y="488.0" width="268.0" height="30.0" rx="5" fill="#0a0a0a"/>
 <text class="lab" x="38.0" y="507.0">XAI</text>
 <text class="lab-count" x="286.0" y="507.0" text-anchor="end">6</text>
@@ -285,5 +285,5 @@
 <rect x="330.0" y="768.0" width="74.9" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="338.0" y="783.0">mimo-v2.5-pro</text>
 <text class="routes" x="578.0" y="783.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="824.0">61 models · 47 providers · 474 model→provider routes · 12 providers billed by subscription</text>
+<text class="caption" x="28.0" y="824.0">61 models · 47 providers · 475 model→provider routes · 12 providers billed by subscription</text>
 </svg>
