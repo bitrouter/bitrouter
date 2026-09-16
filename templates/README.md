@@ -1,14 +1,16 @@
 # Routing templates
 
-Ready-made **policy specs** for adaptive routing. Each template ships a
-`bitrouter.yaml` and frozen `policy-lock.yaml` that you can evaluate against
-your own traffic before tuning it further.
+Ready-made **policy specs** for routing. Signed examples ship a frozen
+`policy-lock.yaml`; initialization examples create one from models selected by
+the operator.
 
 Available templates:
 
-- [`auto-router`](./auto-router/) — generic `bitrouter/auto` / `bitrouter/auto:cost` routing
-  with GPT-5.6 as the strong default and DeepSeek V4 Pro for normal mechanical
-  trace projections.
+- [`coding-router`](./coding-router/) — initialize the minimal
+  `bitrouter/coding` router with models chosen by the operator.
+- [`auto-router`](./auto-router/) — a legacy compatibility example for
+  `bitrouter/auto` / `bitrouter/auto:cost`, with explicitly configured GPT-5.6
+  and DeepSeek V4 Pro targets. It is not installed by default.
 
 Want one for another workflow? Open an issue or email
 [kelsenliu@bitrouter.ai](mailto:kelsenliu@bitrouter.ai).

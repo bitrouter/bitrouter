@@ -870,8 +870,10 @@ compatibility forms keep stdout reserved for ACP frames.
 ### `bro policy`
 
 ```text
+bro policy init NAME [--router ROUTER] --economy MODEL \
+  [--economy-effort LEVEL] [--strong MODEL] [--strong-effort LEVEL]
 bro policy init NAME --preset PRESET --economy MODEL [--economy-effort LEVEL] \
-  [--strong MODEL] [--strong-effort LEVEL]
+  [--strong MODEL] [--strong-effort LEVEL] # legacy compatibility
 bro policy check|status|show [--config PATH]
 bro policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS]
 bro policy diff ACTIVE CANDIDATE
@@ -890,15 +892,31 @@ policy:
   mode: frozen # or adaptive
 ```
 
-`policy init` creates the named policy in `adaptive` mode so an explicit
-`optimize run` can publish its controller decision. Live routes still use only
-the signed lock; Eval rows never change request routing on their own. Operators
-can set `mode: frozen` to prohibit low-level or direct publication while
-continuing to record observations and evaluator results. Invoking `optimize
-run` is explicit authorization to activate adaptive mode and autonomously
-publish its successor when the controller decides to do so. Dry-run compilation
-and candidate export remain available. The mode controls write authority, not
-request-time learning.
+```bash
+bro policy init coding \
+  --strong provider:strong-model \
+  --economy provider:economy-model
+```
+
+This creates the `coding` policy and router, addressed as `bitrouter/coding`.
+Omitting both binding flags defaults `--router` to `coding`; another router
+requires `--router ID`. The command never chooses either model or provider. A
+new router requires both model arguments, while a compatible existing policy
+router supplies its recorded strong base model when `--strong` is omitted.
+
+Router initialization preserves the existing `policy.mode` and all chat or
+harness settings. With no explicit mode, the configuration remains `frozen`.
+Live routes use only the signed lock; Eval rows never change request routing on
+their own. Operators can set `mode: adaptive` when explicit publication is
+allowed. Invoking `optimize run` is explicit authorization to activate adaptive
+mode and autonomously publish its successor when the controller decides to do
+so. Dry-run compilation and candidate export remain available. The mode
+controls write authority, not request-time learning.
+
+`--preset PRESET` is the compatibility initializer for legacy `@preset`
+configuration. It remains mutually exclusive with `--router`, can infer the
+strong model from an existing preset, and retains its historical behavior of
+setting `policy.mode: adaptive`.
 
 `policy publish` promotes the exact compiled v3 candidate after validating its
 parent digest, certificates, and current config. A stale candidate or frozen

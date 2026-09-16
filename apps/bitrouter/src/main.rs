@@ -1139,14 +1139,18 @@ enum PolicyAction {
         #[arg(long, default_value = "./policies")]
         dir: PathBuf,
     },
-    /// Create a routing policy lock and bind it to a preset.
+    /// Create a routing policy lock and bind it to a router.
     Init {
         /// Policy name written under `policies:`.
         name: String,
-        /// Preset users select as `@preset` or `@preset:variant`.
-        #[arg(long)]
-        preset: String,
-        /// Strong base model. Inferred from an existing preset when omitted.
+        /// Router users select as `bitrouter/<id>`. Defaults to `coding` when
+        /// neither binding flag is supplied.
+        #[arg(long, conflicts_with = "preset")]
+        router: Option<String>,
+        /// Legacy preset binding kept for compatibility.
+        #[arg(long, conflicts_with = "router")]
+        preset: Option<String>,
+        /// Strong base model. Inferred from an existing router or preset when omitted.
         #[arg(long)]
         strong: Option<String>,
         /// Exact reasoning effort owned by the strong target.
@@ -4391,6 +4395,7 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
         }
         PolicyAction::Init {
             name,
+            router,
             preset,
             strong,
             strong_effort,
@@ -4419,16 +4424,47 @@ async fn policy(action: PolicyAction, output: &Output) -> Result<()> {
                 economy_effort,
             )
             .await?;
-            let update = bitrouter::policy_lock::initialize_files_with_efforts(
-                config_path,
-                &name,
-                &preset,
-                strong.as_deref(),
-                strong_effort,
-                &economy,
-                economy_effort,
-            )
-            .await?;
+            let update = match (router.as_deref(), preset.as_deref()) {
+                (Some(router), None) => {
+                    bitrouter::policy_lock::initialize_router_files_with_efforts(
+                        config_path,
+                        &name,
+                        router,
+                        strong.as_deref(),
+                        strong_effort,
+                        &economy,
+                        economy_effort,
+                    )
+                    .await?
+                }
+                (None, Some(preset)) => {
+                    bitrouter::policy_lock::initialize_files_with_efforts(
+                        config_path,
+                        &name,
+                        preset,
+                        strong.as_deref(),
+                        strong_effort,
+                        &economy,
+                        economy_effort,
+                    )
+                    .await?
+                }
+                (None, None) => {
+                    bitrouter::policy_lock::initialize_router_files_with_efforts(
+                        config_path,
+                        &name,
+                        "coding",
+                        strong.as_deref(),
+                        strong_effort,
+                        &economy,
+                        economy_effort,
+                    )
+                    .await?
+                }
+                (Some(_), Some(_)) => {
+                    anyhow::bail!("--router and --preset are mutually exclusive")
+                }
+            };
             output.emit(
                 &routing_policy_report(config_path, "init", true, update.changes, None).await?,
             )?;
@@ -5438,14 +5474,8 @@ async fn routing_policy_report(
         None => None,
     };
     let bindings = cfg
-        .presets
-        .iter()
-        .filter_map(|(name, preset)| {
-            preset
-                .policy
-                .as_ref()
-                .map(|policy| (name.clone(), policy.clone()))
-        })
+        .router_policy_bindings()
+        .map(|(name, policy, _)| (name.to_owned(), policy.to_owned()))
         .collect();
     let path = loaded
         .as_ref()
@@ -8160,7 +8190,7 @@ mod tests {
             "policy",
             "init",
             "terminal-bench",
-            "--preset",
+            "--router",
             "coding",
             "--strong",
             "openai-codex:gpt-5.6-sol",
@@ -8179,6 +8209,7 @@ mod tests {
                 action:
                     PolicyAction::Init {
                         name,
+                        router,
                         preset,
                         strong,
                         strong_effort,
@@ -8188,7 +8219,8 @@ mod tests {
                     },
             }) => {
                 assert_eq!(name, "terminal-bench");
-                assert_eq!(preset, "coding");
+                assert_eq!(router.as_deref(), Some("coding"));
+                assert_eq!(preset, None);
                 assert_eq!(strong.as_deref(), Some("openai-codex:gpt-5.6-sol"));
                 assert_eq!(
                     strong_effort,
@@ -8203,6 +8235,71 @@ mod tests {
             }
             _ => panic!("expected policy init"),
         }
+
+        let default_coding = Cli::try_parse_from([
+            "bitrouter",
+            "policy",
+            "init",
+            "coding",
+            "--strong",
+            "openai-codex:gpt-5.6-sol",
+            "--economy",
+            "openai-codex:gpt-5.6-luna",
+        ]);
+        assert!(matches!(
+            default_coding,
+            Ok(Cli {
+                command: Some(Command::Policy {
+                    action: PolicyAction::Init {
+                        router: None,
+                        preset: None,
+                        ..
+                    }
+                }),
+                ..
+            })
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "policy",
+                "init",
+                "coding",
+                "--router",
+                "coding",
+                "--preset",
+                "coding",
+                "--economy",
+                "openai-codex:gpt-5.6-luna",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "policy",
+                "init",
+                "coding",
+                "--strong",
+                "openai-codex:gpt-5.6-sol",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "policy",
+                "init",
+                "auto",
+                "--preset",
+                "auto",
+                "--strong",
+                "openai-codex:gpt-5.6-sol",
+                "--economy",
+                "openai-codex:gpt-5.6-luna",
+            ])
+            .is_ok()
+        );
 
         let evolve = Cli::try_parse_from(["bitrouter", "policy", "evolve", "--apply"])
             .expect("parse evolve");
