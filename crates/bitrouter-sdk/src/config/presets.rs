@@ -33,6 +33,7 @@
 
 use std::collections::HashMap;
 
+use crate::config::router::EffectiveRouterDefinition;
 use crate::config::{PresetConfig, RoutingConfig, VariantConfig};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::routing::RoutingPrefs;
@@ -186,7 +187,7 @@ pub fn resolve_presets(
     // 3. An unknown preset is a hard error: 400. A reserved slug resolves to a
     //    preset the operator has to have configured, so its miss reports the
     //    missing binding rather than an unknown name the caller never typed.
-    let preset: Option<&PresetConfig> = match preset_name {
+    let router: Option<EffectiveRouterDefinition<'_>> = match preset_name {
         Some(name) => {
             let preset = presets.get(name).ok_or_else(|| {
                 if reserved {
@@ -195,17 +196,20 @@ pub fn resolve_presets(
                     BitrouterError::bad_request(format!("unknown preset '@{name}'"))
                 }
             })?;
-            if reserved && preset.policy.is_none() {
+            let router = EffectiveRouterDefinition::from_legacy_preset(preset);
+            if reserved && router.policy().is_none() {
                 return Err(missing_reserved_binding(name));
             }
-            Some(preset)
+            Some(router)
         }
         None => None,
     };
 
     // 4. The clean model: a preset's `model:` wins, else the literal base.
-    let clean_model = preset
-        .and_then(|p| p.model.clone())
+    let clean_model = router
+        .as_ref()
+        .and_then(EffectiveRouterDefinition::base_model)
+        .map(ToOwned::to_owned)
         .or_else(|| base_from_head.map(|s| s.to_string()))
         .ok_or_else(|| {
             BitrouterError::bad_request(format!(
@@ -219,26 +223,24 @@ pub fn resolve_presets(
 
     // 5. Routing prefs: preset first, then variant refines.
     let mut prefs = RoutingPrefs::default();
-    if let Some(p) = preset {
-        apply_routing(&mut prefs, &p.routing);
+    if let Some(router) = &router {
+        apply_routing(&mut prefs, router.routing);
     }
     if let Some(name) = variant_name {
         apply_routing(&mut prefs, &variants[name].routing);
     }
 
     // 6. Prompt overrides — preset only.
-    let overrides = preset
-        .map(|p| PromptOverrides {
-            system_prompt: p.system_prompt.clone(),
-            params: p.params.clone(),
-        })
+    let overrides = router
+        .as_ref()
+        .map(|router| router.defaults.to_prompt_overrides())
         .unwrap_or_default();
 
     Ok(PresetResolution {
         clean_model,
         prefs,
         overrides,
-        policy: preset.and_then(|p| p.policy.clone()),
+        policy: router.and_then(|router| router.policy().map(ToOwned::to_owned)),
         variant: variant_name.map(ToString::to_string),
     })
 }

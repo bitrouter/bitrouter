@@ -363,9 +363,8 @@ pub fn resolve_path(config: &Config, config_path: Option<&Path>) -> Option<PathB
 
 pub fn bound_policy_names(config: &Config) -> BTreeSet<String> {
     config
-        .presets
-        .values()
-        .filter_map(|preset| preset.policy.clone())
+        .router_policy_bindings()
+        .map(|(_, policy, _)| policy.to_owned())
         .collect()
 }
 
@@ -951,21 +950,14 @@ pub fn validate_for_config(config: &Config, document: &PolicyLock) -> Result<()>
                 )
             })?;
     }
-    for (preset_name, preset) in &config.presets {
-        let Some(policy_name) = &preset.policy else {
-            continue;
-        };
-        if preset
-            .model
-            .as_deref()
-            .is_none_or(|model| model.trim().is_empty())
-        {
+    for (router_id, policy_name, base_model) in config.router_policy_bindings() {
+        if base_model.is_none_or(|model| model.trim().is_empty()) {
             anyhow::bail!(
-                "preset '@{preset_name}' must define a base model before binding policy '{policy_name}'"
+                "preset '@{router_id}' must define a base model before binding policy '{policy_name}'"
             );
         }
         if !document.policies.contains_key(policy_name) {
-            anyhow::bail!("preset '@{preset_name}' references missing policy '{policy_name}'");
+            anyhow::bail!("preset '@{router_id}' references missing policy '{policy_name}'");
         }
     }
     Ok(())
@@ -5258,7 +5250,7 @@ policies:
     }
 
     #[test]
-    fn validation_rejects_a_bound_preset_without_a_base_model() {
+    fn validation_rejects_a_bound_preset_without_a_base_model() -> anyhow::Result<()> {
         let mut config = Config::default();
         config.presets.insert(
             "coding".into(),
@@ -5267,17 +5259,31 @@ policies:
                 ..Default::default()
             },
         );
-        let error = validate_for_config(
-            &config,
-            &PolicyLock {
-                lockfile_version: 1,
-                artifact: None,
-                policies: BTreeMap::from([("coding".into(), definition())]),
-                certificates: BTreeMap::new(),
-            },
-        )
-        .unwrap_err();
+        assert_eq!(
+            bound_policy_names(&config),
+            BTreeSet::from(["coding".into()])
+        );
+        let lock = PolicyLock {
+            lockfile_version: 1,
+            artifact: None,
+            policies: BTreeMap::from([("coding".into(), definition())]),
+            certificates: BTreeMap::new(),
+        };
+        let error = validate_for_config(&config, &lock)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("policy binding without a base model was accepted"))?;
         assert!(error.to_string().contains("must define a base model"));
+
+        config.presets.insert(
+            "coding".into(),
+            bitrouter_sdk::config::PresetConfig {
+                model: Some("vendor:strong".into()),
+                policy: Some("coding".into()),
+                ..Default::default()
+            },
+        );
+        validate_for_config(&config, &lock)?;
+        Ok(())
     }
 
     #[cfg(unix)]

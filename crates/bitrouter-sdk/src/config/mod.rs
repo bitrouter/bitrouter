@@ -33,6 +33,7 @@ use crate::language_model::types::{
 
 pub mod pattern;
 pub mod presets;
+mod router;
 pub mod routing_table;
 
 #[cfg(test)]
@@ -169,6 +170,23 @@ impl Default for Config {
             policy: PolicyConfig::default(),
             policy_table: PolicyTableConfig::default(),
         }
+    }
+}
+
+impl Config {
+    /// Policy bindings from normalized router definitions.
+    ///
+    /// R1 normalizes the legacy `presets:` input only. The optional base model
+    /// deliberately preserves legacy parsing behavior so read and validation
+    /// consumers can distinguish a valid binding from one whose missing model
+    /// must be reported at their existing boundary.
+    pub fn router_policy_bindings(&self) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
+        self.presets.iter().filter_map(|(id, preset)| {
+            let router = router::EffectiveRouterDefinition::from_legacy_preset(preset);
+            router
+                .into_policy_binding()
+                .map(|(policy, base_model)| (id.as_str(), policy, base_model))
+        })
     }
 }
 
