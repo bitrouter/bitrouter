@@ -6,6 +6,16 @@ use serde::Serialize;
 use crate::output::CliReport;
 use crate::output::human::Human;
 
+/// What a command that writes `bitrouter.yaml` can prove about activation.
+///
+/// The write itself proves only that the file was saved. The status action is
+/// responsible for comparing it with the configuration held by a daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigActivation {
+    SavedOnly,
+}
+
 /// One unset `${VAR}` substituted with a placeholder during validation.
 #[derive(Serialize)]
 pub struct UnsetVar {

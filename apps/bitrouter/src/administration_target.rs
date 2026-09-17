@@ -82,13 +82,29 @@ impl InspectionTarget {
                 })
             }
             None => {
-                let source = crate::paths::resolve_config(config)?;
+                let located = if socket.is_none() {
+                    crate::daemon_locator::locate(config).await?
+                } else {
+                    None
+                };
+                if let Some(located) = located {
+                    return Ok(Self::Local {
+                        source: located.source().clone(),
+                        socket: located.socket().to_path_buf(),
+                    });
+                }
+                let source = crate::daemon_locator::selected_source(config)?;
                 let socket = match socket {
                     Some(socket) => socket.to_path_buf(),
-                    None => {
-                        let config = crate::paths::load_config(&source).await?;
-                        daemon::socket_path_for(&source, &config)
-                    }
+                    None => match crate::paths::load_config(&source).await {
+                        Ok(config) => daemon::socket_path_for(&source, &config),
+                        Err(_) => match &source {
+                            ConfigSource::File(path) => {
+                                daemon::resolve_socket_path(path, daemon::DEFAULT_CONTROL_SOCKET)
+                            }
+                            ConfigSource::Default { home } => home.join("bitrouter.sock"),
+                        },
+                    },
                 };
                 Ok(Self::Local { source, socket })
             }

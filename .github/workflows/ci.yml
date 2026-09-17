@@ -144,7 +144,8 @@ jobs:
             retries: "0"
             targets: >-
               --test acp --test acp_checkpoints --test cloud_api --test daemon --test e2e
-              --test full_stack
+              --test full_stack --test configuration_state
+              --test router_continuation --test router_migration_cli
           - shard: observability
             retries: "0"
             targets: >-

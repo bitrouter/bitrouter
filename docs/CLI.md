@@ -225,9 +225,9 @@ bro reload [-c <path>] [--socket <path>]
 bro --context <name> reload
 ```
 
-Hot-reloads the running daemon's config and routing table without dropping connections. Also triggered by `SIGHUP`.
+Hot-reloads supported configuration participants without dropping connections. Local IPC, `SIGHUP`, and remote reload use the same restart-required classification: changes to startup-owned settings (such as listen/control, plugins, or named routers) are rejected before any live participant changes. Restart the daemon to apply them.
 
-Any provider API keys present in the current environment are forwarded to the daemon so `export OPENAI_API_KEY=…; bro reload` takes effect immediately.
+Provider API keys in the current local environment are forwarded into reload preparation. `export OPENAI_API_KEY=…; bro reload` applies supported credential changes when the coordinated reload succeeds; startup-owned changes still require restart.
 
 With `--context`, reload submits a guarded operation against the server's own
 current configuration. It does not forward client environment variables. The
@@ -247,6 +247,25 @@ Prints pid, listen address, number of routable models, the distinct providers be
 
 The same app-owned report used by Code sessions and typed remote control, so
 each retained surface preserves one JSON shape.
+
+**Configuration state.** `config_state` is an optional, target-owned report shared by local status, remote control, and Code inspectors. It includes:
+
+| Field | Meaning |
+|---|---|
+| `source` / `saved` | file or generated defaults; available, generated, missing, invalid, or unavailable saved input |
+| `running` | `in_sync`, `reload_required`, `restart_required`, `mixed`, or `unknown` for the inspected configuration sources |
+| `reload_required_fields` / `restart_required_fields` | safe field categories that differ; no configuration values or secret-derived digests |
+| `named_policy` / `access_policies` | separate evidence for policy-lock and access-policy files; unchanged YAML alone does not establish synchronization |
+| `server_instance_id` / `generation` / `last_reload` | serving process and coordinated reload evidence, when available |
+| `mixed_state_history` | retained partial/interrupted outcomes that explain a mixed runtime, even after a later preparation failure |
+
+An active daemon supplies both saved and running evidence from its own configuration source. An alternate client `--config` cannot replace the saved half of another socket's reply. A stopped daemon can expose saved-only evidence, with running state unknown. An older daemon that omits the field remains unknown. Invalid or missing saved configuration does not erase a reachable runtime.
+
+If a daemon started with generated defaults and a `bitrouter.yaml` is then created in its home, `source` still identifies the running default source while `saved` describes the new file. `restart_required_fields: ["configuration_source"]` requires restart to adopt it; reload cannot silently ignore the file or switch sources.
+
+For local administration, the daemon records its actual endpoint beside the configuration under a private, source-specific locator. Status validates the process instance before using it, so editing the saved control socket or damaging/deleting YAML does not make the still-running daemon disappear. An explicit `--socket` remains authoritative. Remote clients use only the selected server's evidence.
+
+`in_sync` describes inspected configuration inputs; it is not a provider connectivity probe or a claim that external OAuth/registry services have not changed. Initialization and policy initialization report `config_activation: saved_only`: saving files does not prove a running daemon applied them. Inspect status, then reload or restart as indicated.
 
 **`spend` — what has gone, and what is left.** Two independent facts, each present only where the deployment can answer it:
 

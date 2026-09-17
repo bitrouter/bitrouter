@@ -145,6 +145,11 @@ pub struct StatusReport {
     /// become active. Unknown unless both views were observed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub router_restart_required: Option<bool>,
+    /// Redaction-safe state of the daemon's complete primary and auxiliary
+    /// configuration sources. `None` means runtime evidence is unavailable; it
+    /// never means the saved and running configurations match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_state: Option<crate::reload::ConfigurationState>,
 }
 
 impl StatusReport {
@@ -166,6 +171,7 @@ impl StatusReport {
             saved_routers: None,
             running_routers: None,
             router_restart_required: None,
+            config_state: None,
         }
     }
 
@@ -189,6 +195,7 @@ impl StatusReport {
             saved_routers: None,
             running_routers: None,
             router_restart_required: None,
+            config_state: None,
         }
     }
 
@@ -207,6 +214,7 @@ impl StatusReport {
             saved_routers: None,
             running_routers: None,
             router_restart_required: None,
+            config_state: None,
         }
     }
 
@@ -219,6 +227,11 @@ impl StatusReport {
         self.router_restart_required = restart_required;
         self.saved_routers = saved;
         self.running_routers = running;
+        self
+    }
+
+    pub fn with_config_state(mut self, state: Option<crate::reload::ConfigurationState>) -> Self {
+        self.config_state = state;
         self
     }
 }
@@ -284,18 +297,16 @@ impl DaemonStatus {
 /// CLI path without constructing a port.
 async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Result<StatusReport> {
     let spend = local_spend(source).await;
-    let saved_routers = match source {
-        Some(source) => crate::actions::models::disk_router_statuses(source).await,
-        None => None,
-    };
     match daemon::send_command(socket, &DaemonCommand::Status).await {
         Ok(DaemonResponse::Status {
             pid,
             listen,
             models,
             providers,
+            saved_routers,
             running_routers,
             router_restart_required,
+            config_state,
         }) => Ok(StatusReport::running(
             pid,
             listen,
@@ -304,17 +315,28 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
             socket.display().to_string(),
             spend,
         )
-        .with_router_views(saved_routers, running_routers, router_restart_required)),
+        .with_router_views(saved_routers, running_routers, router_restart_required)
+        .with_config_state(config_state)),
         Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
         Ok(other) => Err(anyhow::anyhow!("unexpected response: {other:?}")),
         // No daemon listening on the socket → report stopped, not error. The
         // spend half still rides along: what a past daemon spent is recorded
         // on disk and does not stop being true when it exits.
-        Err(e) if daemon::is_not_reachable(&e) => Ok(StatusReport::stopped(
-            socket.display().to_string(),
-            spend,
-        )
-        .with_router_views(saved_routers, None, None)),
+        Err(e) if daemon::is_not_reachable(&e) => {
+            let saved_routers = match source {
+                Some(source) => crate::actions::models::disk_router_statuses(source).await,
+                None => None,
+            };
+            let config_state = match source {
+                Some(source) => {
+                    Some(crate::reload::configuration_state_without_runtime(source).await)
+                }
+                None => None,
+            };
+            Ok(StatusReport::stopped(socket.display().to_string(), spend)
+                .with_router_views(saved_routers, None, None)
+                .with_config_state(config_state))
+        }
         Err(e) => Err(e),
     }
 }

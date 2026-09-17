@@ -17,6 +17,24 @@ tail -n 80 ~/.bitrouter/bitrouter.log         # 6. recent daemon output
 
 `bro status` prints `bro is stopped` (exit 0) when no daemon answers the control socket — that's the answer to the question, not a failure. Look at the log next.
 
+## Symptom: saved settings do not match runtime
+
+Read `bro status` → `config_state`. `reload_required` means a supported saved
+change has not been applied; `restart_required` means startup-owned components
+must be rebuilt. All reload entrypoints reject restart-only changes before
+application. `mixed` means a prior reload partially changed the runtime; inspect
+`mixed_state_history` and `last_reload` participants. `unknown`, invalid/missing saved input, or absent
+fields from an older daemon must not be interpreted as synchronized.
+
+The local runtime locator preserves the actual control endpoint after saved
+socket edits or YAML damage. Use an explicit `--socket` when inspecting an
+older daemon without this capability. Do not infer activation from `init` or
+`policy init`: their `saved_only` result confirms file publication.
+
+Creating YAML after a daemon started in zero-config mode requires restart:
+`restart_required_fields` includes `configuration_source`. Reload keeps the
+original source and refuses to silently ignore the new file.
+
 ## Symptom: "command not found" after install
 
 ```bash

@@ -61,6 +61,13 @@ pub trait DaemonReloader: Send + Sync {
         None
     }
 
+    /// Redaction-safe saved/running configuration state. The read is async
+    /// because the server must inspect its own source files; callers must not
+    /// substitute a client-local config.
+    async fn configuration_state(&self) -> Option<crate::reload::ConfigurationState> {
+        None
+    }
+
     /// Atomically fence a remote operation against the current boot and
     /// generation. The reservation must be passed to [`Self::reload_reserved`]
     /// exactly once or dropped so its coordinator can clear the admission.
@@ -248,6 +255,10 @@ pub enum DaemonResponse {
         /// failing the whole exchange.
         #[serde(default)]
         providers: Vec<String>,
+        /// Router inventory from the configuration source owned by this
+        /// daemon. A caller-local `--config` is never mixed into a live reply.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        saved_routers: Option<Vec<crate::actions::models::RouterStatus>>,
         /// Router inventory from the same running config. `None` means the
         /// daemon predates this field or has no inspectable app routing config.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,6 +268,9 @@ pub enum DaemonResponse {
         /// not cross the control boundary.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         router_restart_required: Option<bool>,
+        /// Whole saved/running configuration state computed by the daemon.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_state: Option<crate::reload::ConfigurationState>,
     },
     /// The live routing table's catalog.
     Models {
@@ -777,20 +791,25 @@ async fn dispatch(
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
-            let router_state = running_router_state(administration).await;
+            let router_state = router_state(administration).await;
+            let config_state = reloader.configuration_state().await;
             DaemonResponse::Status {
                 pid: std::process::id(),
                 listen: listen.to_string(),
                 models: routable.len(),
                 providers,
-                running_routers: router_state.as_ref().map(|state| state.statuses.clone()),
+                saved_routers: router_state.as_ref().and_then(|state| state.saved.clone()),
+                running_routers: router_state
+                    .as_ref()
+                    .and_then(|state| state.running.clone()),
                 router_restart_required: router_state.and_then(|state| state.restart_required),
+                config_state,
             }
         }
         DaemonCommand::Models => {
-            let routers = running_router_state(administration)
+            let routers = router_state(administration)
                 .await
-                .map(|state| state.statuses);
+                .and_then(|state| state.running);
             DaemonResponse::Models {
                 // The same read `Status` counts, returned whole. A daemon with no
                 // language-model pipeline routes nothing, which is an empty
@@ -1029,8 +1048,9 @@ async fn dispatch(
     }
 }
 
-struct RunningRouterState {
-    statuses: Vec<crate::actions::models::RouterStatus>,
+struct RouterState {
+    saved: Option<Vec<crate::actions::models::RouterStatus>>,
+    running: Option<Vec<crate::actions::models::RouterStatus>>,
     restart_required: Option<bool>,
 }
 
@@ -1041,24 +1061,35 @@ fn router_configuration_restart_required(
     saved.routers != running.routers
 }
 
-async fn running_router_state(
-    administration: &Option<Administration>,
-) -> Option<RunningRouterState> {
+async fn router_state(administration: &Option<Administration>) -> Option<RouterState> {
     let administration = administration.as_ref()?;
     let running = administration.routing.snapshot_config();
     let policy_report = administration.policy.administration_snapshot();
-    let statuses = crate::actions::models::router_statuses(
+    let running_statuses = crate::actions::models::router_statuses(
         &running,
         crate::actions::models::PolicyReadiness::Known(&policy_report),
     )
     .await
-    .ok()?;
-    let restart_required = crate::paths::load_config(&administration.source)
+    .ok();
+    let saved = crate::reload::inspect_configuration_baseline(&administration.source)
         .await
-        .ok()
-        .map(|saved| router_configuration_restart_required(&saved, &running));
-    Some(RunningRouterState {
-        statuses,
+        .ok();
+    let saved_statuses = match &saved {
+        Some(saved) => {
+            crate::actions::models::disk_router_statuses_for_config(
+                saved.config(),
+                &administration.source,
+            )
+            .await
+        }
+        None => None,
+    };
+    let restart_required = saved
+        .as_ref()
+        .map(|saved| router_configuration_restart_required(saved.config(), &running));
+    Some(RouterState {
+        saved: saved_statuses,
+        running: running_statuses,
         restart_required,
     })
 }
@@ -1721,8 +1752,10 @@ mod tests {
             listen: "0.0.0.0:4356".to_string(),
             models: 3,
             providers: vec!["openai".to_string()],
+            saved_routers: None,
             running_routers: None,
             router_restart_required: None,
+            config_state: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: DaemonResponse = serde_json::from_str(&json).unwrap();
@@ -1739,6 +1772,34 @@ mod tests {
             }
             other => panic!("expected Status, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn legacy_status_response_keeps_configuration_evidence_unknown() -> anyhow::Result<()> {
+        let response: DaemonResponse = serde_json::from_str(
+            r#"{
+                "resp":"status",
+                "pid":42,
+                "listen":"127.0.0.1:4356",
+                "models":3,
+                "providers":["openai"]
+            }"#,
+        )?;
+        let DaemonResponse::Status {
+            saved_routers,
+            running_routers,
+            router_restart_required,
+            config_state,
+            ..
+        } = response
+        else {
+            anyhow::bail!("legacy status payload decoded as the wrong response variant");
+        };
+        assert!(saved_routers.is_none());
+        assert!(running_routers.is_none());
+        assert!(router_restart_required.is_none());
+        assert!(config_state.is_none());
+        Ok(())
     }
 
     #[test]

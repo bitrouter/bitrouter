@@ -210,11 +210,19 @@ pub struct OnboardingReport {
     pub after: String,
     /// The paste-in snippet for `after: serve`; `null` otherwise.
     pub snippet: Option<Snippet>,
+    /// Present only when this invocation saved the file. Saving does not
+    /// establish that an existing daemon consumed it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_activation: Option<crate::output::reports::config::ConfigActivation>,
 }
 
 impl CliReport for OnboardingReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
-        h.line("onboarding complete")?;
+        if self.config_activation.is_some() {
+            h.line("onboarding configuration saved")?;
+        } else {
+            h.line("onboarding configuration not saved")?;
+        }
         h.field(
             "providers",
             if self.providers_configured.is_empty() {
@@ -252,7 +260,14 @@ impl CliReport for OnboardingReport {
                 h.line(&format!("    {l}"))?;
             }
         }
-        Ok(())
+        if self.config_activation.is_some() {
+            h.note(&format!(
+                "Run `{} status` to inspect whether the saved configuration is active or requires reload/restart.",
+                invocation::name()
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -499,6 +514,7 @@ fn empty_report() -> OnboardingReport {
         harnesses_installed: Vec::new(),
         after: AfterAction::Exit.as_str().to_string(),
         snippet: None,
+        config_activation: None,
     }
 }
 
@@ -553,6 +569,7 @@ async fn run_headless(
             .collect(),
         after: after.as_str().to_string(),
         snippet: None,
+        config_activation: Some(crate::output::reports::config::ConfigActivation::SavedOnly),
     };
     match after {
         AfterAction::Launch => finish_launch(&path, report, output).await,
@@ -726,6 +743,7 @@ async fn run_interactive(
         harnesses_installed: installed,
         after: after.as_str().to_string(),
         snippet: None,
+        config_activation: Some(crate::output::reports::config::ConfigActivation::SavedOnly),
     };
     match after {
         AfterAction::Launch => finish_launch(&path, report, output).await,
@@ -1255,7 +1273,7 @@ mod tests {
     }
 
     #[test]
-    fn envelope_shape_includes_skipped_interactive() {
+    fn envelope_shape_includes_saved_only_activation_and_inspect_cue() -> Result<()> {
         let report = OnboardingReport {
             action: "onboarding",
             providers_configured: vec!["bitrouter".to_string(), "openai".to_string()],
@@ -1263,8 +1281,9 @@ mod tests {
             harnesses_installed: vec!["claude".to_string()],
             after: "launch".to_string(),
             snippet: None,
+            config_activation: Some(crate::output::reports::config::ConfigActivation::SavedOnly),
         };
-        let v = serde_json::to_value(&report).unwrap();
+        let v = serde_json::to_value(&report)?;
         assert_eq!(v["action"], "onboarding");
         assert_eq!(
             v["providers_configured"],
@@ -1276,6 +1295,7 @@ mod tests {
         );
         assert_eq!(v["harnesses_installed"], serde_json::json!(["claude"]));
         assert_eq!(v["after"], "launch");
+        assert_eq!(v["config_activation"], "saved_only");
         // `snippet` is present-but-null when there is nothing to paste.
         assert!(v.get("snippet").is_some());
         assert!(v["snippet"].is_null());
@@ -1283,6 +1303,27 @@ mod tests {
             v.get("optimization").is_none(),
             "onboarding must not expose the removed optimization workflow"
         );
+        let human =
+            String::from_utf8(Output::new(crate::output::Format::Human).render_to_vec(&report))?;
+        assert!(human.contains("onboarding configuration saved"), "{human}");
+        assert!(human.contains("status"), "{human}");
+        assert!(
+            human.contains("active or requires reload/restart"),
+            "{human}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inert_envelope_does_not_claim_a_saved_configuration() -> Result<()> {
+        let report = empty_report();
+        let value = serde_json::to_value(&report)?;
+        assert!(value.get("config_activation").is_none());
+        let human =
+            String::from_utf8(Output::new(crate::output::Format::Human).render_to_vec(&report))?;
+        assert!(human.contains("configuration not saved"), "{human}");
+        assert!(!human.contains("requires reload/restart"), "{human}");
+        Ok(())
     }
 
     #[tokio::test]

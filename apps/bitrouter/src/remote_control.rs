@@ -86,9 +86,17 @@ pub struct ResourceDescriptor {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct StateReport {
+    /// Reload-coordinator state sampled after `config_state`. The nested
+    /// configuration evidence carries its own instance and generation; callers
+    /// must use those fields when a concurrent reload separates the samples.
     #[serde(flatten)]
     pub reload: crate::reload::ReloadState,
     pub live_policy_digest: Option<String>,
+    /// Redaction-safe evidence from this server's own saved and running
+    /// configuration. Absent when an older or limited reloader cannot inspect
+    /// both sides; absence never implies that they match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_state: Option<crate::reload::ConfigurationState>,
 }
 
 impl CapabilitiesReport {
@@ -499,7 +507,9 @@ fn operation_service(state: &ControlState) -> Result<&Arc<OperationService>, Con
 async fn control_state(
     State(state): State<ControlState>,
 ) -> Result<Json<StateReport>, ControlError> {
-    let reload = operation_service(&state)?.state()?;
+    let operations = operation_service(&state)?;
+    let config_state = operations.configuration_state().await;
+    let reload = operations.state()?;
     let live_policy_digest = if let Some(administration) = &state.administration {
         administration
             .policy(PolicyInput {
@@ -515,6 +525,7 @@ async fn control_state(
     Ok(Json(StateReport {
         reload,
         live_policy_digest,
+        config_state,
     }))
 }
 
@@ -1268,6 +1279,22 @@ providers:
         fn reload_state(&self) -> Option<crate::reload::ReloadState> {
             Some(self.0.state())
         }
+        async fn configuration_state(&self) -> Option<crate::reload::ConfigurationState> {
+            let reload = self.0.state();
+            Some(crate::reload::ConfigurationState {
+                server_instance_id: Some(reload.server_instance_id),
+                generation: Some(reload.generation),
+                source: crate::reload::ConfigSourceKind::File,
+                saved: crate::reload::SavedConfigState::Available,
+                running: crate::reload::RunningConfigState::InSync,
+                reload_required_fields: Vec::new(),
+                restart_required_fields: Vec::new(),
+                named_policy: crate::reload::AuxiliaryConfigState::NotConfigured,
+                access_policies: crate::reload::AuxiliaryConfigState::NotConfigured,
+                last_reload: reload.last_outcome,
+                mixed_state_history: reload.mixed_state_history,
+            })
+        }
         fn reserve_remote(
             &self,
             instance: &str,
@@ -1301,6 +1328,20 @@ providers:
             self.0.complete(&reservation, report.clone());
             report
         }
+    }
+
+    #[test]
+    fn legacy_remote_state_keeps_configuration_evidence_unknown() -> anyhow::Result<()> {
+        let coordinator = crate::reload::ReloadCoordinator::new();
+        let mut value = serde_json::to_value(coordinator.state())?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("reload state did not serialize as an object"))?;
+        object.insert("live_policy_digest".to_string(), serde_json::Value::Null);
+
+        let report: StateReport = serde_json::from_value(value)?;
+        assert!(report.config_state.is_none());
+        Ok(())
     }
 
     /// Separate test executable used only by Docker acceptance. This exercises
@@ -1739,6 +1780,69 @@ providers:
         let report: StatusReport = serde_json::from_slice(&bytes)?;
         assert!(!report.running);
         assert!(report.socket.is_none());
+        let config_state = report
+            .config_state
+            .ok_or_else(|| anyhow::anyhow!("remote status omitted server-side saved state"))?;
+        assert_eq!(
+            config_state.source,
+            crate::reload::ConfigSourceKind::Default
+        );
+        assert_eq!(
+            config_state.saved,
+            crate::reload::SavedConfigState::Generated
+        );
+        assert_eq!(
+            config_state.running,
+            crate::reload::RunningConfigState::Unknown
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remote_state_uses_daemon_reloader_configuration_evidence() -> anyhow::Result<()> {
+        use bitrouter_sdk::config::ControlCredentialConfig;
+
+        let (_directory, source) = default_source()?;
+        let reloader = Arc::new(ImmediateReloader(
+            crate::reload::ReloadCoordinator::new(),
+            false,
+        ));
+        let config = ControlConfig {
+            credentials: vec![ControlCredentialConfig {
+                id: "reader".into(),
+                token_env: "TOKEN".into(),
+                scopes: vec![ControlScope::Read],
+            }],
+            ..ControlConfig::default()
+        };
+        let auth = ControlAuth::from_lookup(&config, |_| Some(TOKEN.into()))?;
+        let router = control_router_with(
+            ControlState {
+                source,
+                socket: PathBuf::from("missing.sock"),
+                administration: None,
+                instance: reloader.0.state().server_instance_id,
+                operations: Some(Arc::new(OperationService::new(reloader))),
+            },
+            auth,
+        );
+
+        let response = router.oneshot(authorized("/control/v1/state")?).await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+        let report: StateReport = serde_json::from_slice(&bytes)?;
+        let config_state = report
+            .config_state
+            .ok_or_else(|| anyhow::anyhow!("remote state omitted daemon evidence"))?;
+        assert_eq!(config_state.source, crate::reload::ConfigSourceKind::File);
+        assert_eq!(
+            config_state.saved,
+            crate::reload::SavedConfigState::Available
+        );
+        assert_eq!(
+            config_state.running,
+            crate::reload::RunningConfigState::InSync
+        );
         Ok(())
     }
 
@@ -1765,6 +1869,18 @@ providers:
         let report = client.status().await?;
         assert!(!report.running);
         assert!(report.socket.is_none());
+        let config_state = report
+            .config_state
+            .ok_or_else(|| anyhow::anyhow!("HTTP status omitted server-side saved state"))?;
+        assert_eq!(config_state.source, crate::reload::ConfigSourceKind::File);
+        assert_eq!(
+            config_state.saved,
+            crate::reload::SavedConfigState::Available
+        );
+        assert_eq!(
+            config_state.running,
+            crate::reload::RunningConfigState::Unknown
+        );
         let models = client.models(None).await?;
         assert!(models.models.iter().any(|model| model.id == "test-model"));
         let route = client

@@ -1,10 +1,12 @@
-# Router 替代 Preset：第一批设计与实施计划
+# Router 替代 Preset：配置与身份迁移子批次
 
 状态：**R1–R6 已实现，本地批次验收通过；尚未执行远端 CI 和真实外部 harness 互操作验收。**
 
 日期：2026-09-15。源码基线：`f1f29db0`，`1.0.0-alpha.30`。
 
-本文是当前 alpha 的增量迁移计划，不代表 beta 架构已经落地。
+本文记录原始 M0–M1 第一批中的路由配置与身份迁移子批次，不代表原始六项已全部完成。
+整体配置状态契约另见 [CONFIGURATION_STATE_CONTRACT_SPEC.md](CONFIGURATION_STATE_CONTRACT_SPEC.md)。
+检查回执、HTTP checker、checker 诊断和 guardrails 独立制品仍待实现。
 首批目标是：用户直接配置、调用、诊断一个 router，而不必同时理解 preset。
 默认 coding router 复用现有 policy-lock；本批不开发新的模型选择算法。
 

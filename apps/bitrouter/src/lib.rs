@@ -31,6 +31,7 @@ pub mod conformance;
 pub mod contexts;
 pub mod continuation;
 pub mod daemon;
+pub mod daemon_locator;
 pub mod dashboard;
 pub mod db;
 pub mod error_report;
