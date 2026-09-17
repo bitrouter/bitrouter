@@ -757,7 +757,22 @@ impl CodeState {
         ) {
             let content = self.transcript_content();
             if let Surface::Inspector(inspector) = &mut self.surface {
+                let follow_end = inspector.scroll
+                    >= inspector
+                        .inspector
+                        .content
+                        .lines()
+                        .count()
+                        .saturating_sub(1);
                 inspector.inspector.content = content;
+                if follow_end {
+                    inspector.scroll = inspector
+                        .inspector
+                        .content
+                        .lines()
+                        .count()
+                        .saturating_sub(1);
+                }
             }
         }
         self.refresh_open_palettes();
@@ -5098,6 +5113,35 @@ mod tests {
             &copied[..],
             [CodeEffect::Copy { text }] if text.contains("arrived while detached")
         ));
+    }
+
+    #[test]
+    fn live_transcript_keeps_following_the_end_as_chunks_arrive() {
+        let mut state = active_state();
+        state.apply(SessionUpdate::AgentMessageChunk(
+            ContentChunk::new(ContentBlock::Text(TextContent::new("first\nsecond")))
+                .message_id(MessageId::new("m1")),
+        ));
+        let _ = state.step(ctrl('o'));
+        let _ = state.step(press(KeyCode::End));
+
+        state.apply(SessionUpdate::AgentMessageChunk(
+            ContentChunk::new(ContentBlock::Text(TextContent::new("\nthird\nfourth")))
+                .message_id(MessageId::new("m1")),
+        ));
+
+        assert!(matches!(&state.surface, Surface::Inspector(_)));
+        if let Surface::Inspector(inspector) = &state.surface {
+            assert_eq!(
+                inspector.scroll,
+                inspector
+                    .inspector
+                    .content
+                    .lines()
+                    .count()
+                    .saturating_sub(1)
+            );
+        }
     }
 
     #[test]
