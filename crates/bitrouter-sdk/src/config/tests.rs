@@ -4,6 +4,152 @@ use super::*;
 use crate::language_model::types::{ApiProtocol, ReasoningEffort};
 
 #[test]
+fn request_checker_config_applies_binding_defaults() -> crate::Result<()> {
+    let config = parse_with(
+        r#"
+inherit_defaults: false
+checkers:
+  safety:
+    endpoint: https://checker.example/v1/check
+    credential_env: BITROUTER_SAFETY_CHECKER_TOKEN
+    contract_version: 1
+routers:
+  guarded:
+    selection:
+      kind: model
+      model: vendor:model
+    checks:
+      request:
+        - checker: safety
+"#,
+        |_| None,
+    )?;
+
+    let binding = config.routers["guarded"]
+        .checks
+        .request
+        .first()
+        .ok_or_else(|| BitrouterError::internal("checker binding was not parsed"))?;
+    assert_eq!(binding.timeout_ms, router::DEFAULT_CHECKER_TIMEOUT_MS);
+    assert_eq!(
+        binding.max_input_bytes,
+        router::DEFAULT_CHECKER_MAX_INPUT_BYTES
+    );
+    let identity = config
+        .resolve_router("bitrouter/guarded")?
+        .router
+        .ok_or_else(|| BitrouterError::internal("router identity was not resolved"))?;
+    assert!(identity.binding_digest.starts_with("router-v2:sha256:"));
+    assert!(!identity.binding_digest.contains("checker.example"));
+    assert!(
+        !identity
+            .binding_digest
+            .contains("BITROUTER_SAFETY_CHECKER_TOKEN")
+    );
+    Ok(())
+}
+
+#[test]
+fn request_checker_config_rejects_invalid_static_bindings() -> crate::Result<()> {
+    let invalid = [
+        (
+            "endpoint: relative/path\n    contract_version: 1",
+            "absolute HTTP URL",
+        ),
+        (
+            "endpoint: https://user:secret@checker.example/check\n    contract_version: 1",
+            "user information",
+        ),
+        (
+            "endpoint: https://checker.example/check#fragment\n    contract_version: 1",
+            "fragment",
+        ),
+        (
+            "endpoint: https://checker.example/check\n    contract_version: 2",
+            "contract_version",
+        ),
+    ];
+    for (checker_fields, expected) in invalid {
+        let yaml = format!("inherit_defaults: false\ncheckers:\n  safety:\n    {checker_fields}\n");
+        let error = parse_with(&yaml, |_| None)
+            .err()
+            .ok_or_else(|| BitrouterError::internal("invalid checker config was accepted"))?;
+        assert!(error.to_string().contains(expected), "got: {error}");
+    }
+    Ok(())
+}
+
+#[test]
+fn request_checker_config_rejects_unknown_refs_and_invalid_limits() -> crate::Result<()> {
+    let invalid = [
+        ("checker: missing", "unknown checker"),
+        ("checker: safety\n          timeout_ms: 0", "timeout_ms"),
+        (
+            "checker: safety\n          max_input_bytes: 4194305",
+            "max_input_bytes",
+        ),
+    ];
+    for (binding, expected) in invalid {
+        let yaml = format!(
+            r#"
+inherit_defaults: false
+checkers:
+  safety:
+    endpoint: https://checker.example/check
+    contract_version: 1
+routers:
+  guarded:
+    selection:
+      kind: model
+      model: vendor:model
+    checks:
+      request:
+        - {binding}
+"#
+        );
+        let error = parse_with(&yaml, |_| None)
+            .err()
+            .ok_or_else(|| BitrouterError::internal("invalid checker binding was accepted"))?;
+        assert!(error.to_string().contains(expected), "got: {error}");
+    }
+    Ok(())
+}
+
+#[test]
+fn request_checker_endpoint_changes_router_binding_digest() -> crate::Result<()> {
+    fn digest(endpoint: &str) -> crate::Result<String> {
+        let yaml = format!(
+            r#"
+inherit_defaults: false
+checkers:
+  safety:
+    endpoint: {endpoint}
+    contract_version: 1
+routers:
+  guarded:
+    selection:
+      kind: model
+      model: vendor:model
+    checks:
+      request:
+        - checker: safety
+"#
+        );
+        parse_with(&yaml, |_| None)?
+            .resolve_router("bitrouter/guarded")?
+            .router
+            .map(|identity| identity.binding_digest)
+            .ok_or_else(|| BitrouterError::internal("router identity was not resolved"))
+    }
+
+    assert_ne!(
+        digest("https://first.example/check")?,
+        digest("https://second.example/check")?
+    );
+    Ok(())
+}
+
+#[test]
 fn provider_headers_accept_static_and_passthrough_forms() -> crate::Result<()> {
     let config = parse_with(
         r#"

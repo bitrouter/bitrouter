@@ -409,3 +409,24 @@ The daemon `chdir`s to the directory holding the resolved config on startup, so 
 | SIGHUP | Hot-reload daemon-side config + routing table. It does not forward provider keys from the invoking shell; use `bro reload` for env-var rotation. |
 | SIGINT / SIGTERM | Graceful shutdown: flush OTel exporter, remove pid file, exit 0. |
 | SIGKILL | No cleanup — pid file will be stale and `bro status` will report it. `bro start` cleans up stale pid files automatically before launching. |
+
+## Router request-check diagnostics
+
+| Command | Meaning |
+| --- | --- |
+| `bro checks` | Target-daemon checker inventory, running router bindings, probe/usage evidence and saved/running configuration status. |
+| `bro checks probe <checker>` | Bounded synthetic protocol probe from the target daemon; does not count as real request usage. |
+| `bro checks receipts [--limit N]` | Bounded list of process-local request-check receipts, independent of telemetry export. |
+| `bro checks receipt <request-id-or-receipt-id> [--incarnation ID]` | One receipt or an explicit unknown/unavailable result; never infers success from missing evidence. |
+
+These commands support the existing local/remote target selection and JSON or
+`--human` output. They require a reachable daemon. Receipts are current-process
+only (4,096-record capacity, completed-record TTL 15 minutes, possible earlier
+capacity eviction); settled token/cost history remains under `bro requests`.
+Checker and router check-binding edits require restart. See `diagnose.md` for
+coverage and how to distinguish a successful probe from a real check.
+
+Actual-use inventory is derived from the latest started invocation's retained
+receipt. When that receipt expires or is evicted, the view reports no retained
+evidence; it does not substitute an older allow or claim the checker was never
+used. Synthetic probe history is separate from receipt retention.

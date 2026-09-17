@@ -65,9 +65,16 @@ impl From<DenyReason> for BitrouterError {
     }
 }
 
-/// Stage 1 — pre-request checks (auth, policy, rate limit, balance, guardrails).
+/// A local entry-preparation decision hook.
 ///
-/// Hooks run in registration order; the first `Deny` stops the pipeline.
+/// [`PipelineBuilder`](crate::language_model::PipelineBuilder) registers this
+/// trait in three ordered groups: pre-resolution, router preparation, and
+/// ordinary pre-request checks. The first `Deny` in a group stops the pipeline.
+/// Mutation semantics depend on that registration point: pre-resolution hooks
+/// may normalize the ingress selector, router-preparation hooks may select an
+/// effective route before defaults, and ordinary hooks may rewrite selectors
+/// only for requests without checks. Ordinary hooks for a checked router see
+/// its effective defaults and must leave its selector unchanged.
 #[async_trait]
 pub trait PreRequestHook: Send + Sync {
     /// Inspect the request and either allow it or deny it.

@@ -328,6 +328,35 @@
         }
       ]
     },
+    "CheckerConfig": {
+      "additionalProperties": false,
+      "description": "One remotely hosted request checker.",
+      "properties": {
+        "contract_version": {
+          "description": "Version of the checker request and response contract.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "credential_env": {
+          "description": "Dedicated bearer credential environment variable, if authentication is required.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "endpoint": {
+          "description": "Exact HTTP endpoint receiving versioned checker invocations.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "endpoint",
+        "contract_version"
+      ],
+      "type": "object"
+    },
     "ContinuationConfig": {
       "description": "Always-active durable provider continuation lifecycle settings.",
       "properties": {
@@ -1494,10 +1523,32 @@
       },
       "type": "object"
     },
+    "RouterChecks": {
+      "additionalProperties": false,
+      "description": "Request checks attached to a named router.",
+      "properties": {
+        "request": {
+          "default": [],
+          "description": "Ordered remote checks. Every checker must allow the request.",
+          "items": {
+            "$ref": "#/$defs/RouterRequestCheck"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "RouterConfig": {
       "additionalProperties": false,
       "description": "One named router definition.",
       "properties": {
+        "checks": {
+          "$ref": "#/$defs/RouterChecks",
+          "default": {
+            "request": []
+          },
+          "description": "Fail-closed checks run before this router may contact an upstream."
+        },
         "defaults": {
           "$ref": "#/$defs/RouterDefaults",
           "default": {
@@ -1535,6 +1586,34 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "RouterRequestCheck": {
+      "additionalProperties": false,
+      "description": "One router-to-checker binding.",
+      "properties": {
+        "checker": {
+          "description": "Checker id under the top-level `checkers` map.",
+          "type": "string"
+        },
+        "max_input_bytes": {
+          "default": 262144,
+          "description": "Maximum projected text bytes. Oversize input is rejected, never truncated.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "default": 500,
+          "description": "Total checker deadline, including queue admission and response body reads.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "checker"
+      ],
       "type": "object"
     },
     "RouterRoutingConfig": {
@@ -2292,6 +2371,14 @@
     "chat": {
       "$ref": "#/$defs/ChatConfig",
       "description": "The interactive session's own configuration."
+    },
+    "checkers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CheckerConfig"
+      },
+      "default": {},
+      "description": "Remote request checkers, keyed by the ids referenced from named routers.",
+      "type": "object"
     },
     "continuation": {
       "$ref": "#/$defs/ContinuationConfig",

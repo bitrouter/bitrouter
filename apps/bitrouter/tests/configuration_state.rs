@@ -54,6 +54,7 @@ impl RunningFixture {
             .with_policy_table_router(assembled.policy_table_router.clone()),
         );
         let administration = Administration {
+            request_checks: Some(assembled.request_checks.clone()),
             source: ConfigSource::File(source.clone()),
             routing: assembled.routing_table.clone(),
             policy: assembled.policy_runtime.clone(),

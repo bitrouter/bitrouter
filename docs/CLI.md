@@ -1814,3 +1814,35 @@ publication semantics. Local coding TUI sessions expose mode controls, manual
 rubric editing and existing-block reconciliation through `/evolution` as
 described above. These controls do not establish that automatic promotion is
 safe on real coding tasks.
+
+## Request-check inspection
+
+`bro checks` inspects checker configuration, running bindings and actual use on
+the selected daemon. `bro checks probe <checker>` sends a fixed synthetic input
+using that daemon's configured credential. Connectivity/protocol success does
+not count as a real request invocation. Both local IPC and remote control query
+the same runtime; remote probes require `control:read` and cannot specify an
+arbitrary URL or input.
+
+`bro checks receipts` lists bounded process-local receipts.
+`bro checks receipt <request-id-or-receipt-id>` looks up an exact receipt id, or
+the newest retained attempt for a request id with its retained-match count. HTTP gateway responses
+expose `x-bitrouter-request-id` for correlation, including checker rejections.
+The receipt separates check decisions, upstream dispatch, execution outcome and
+server-observable delivery. It does not prove that the client consumed a reply.
+
+The default retention is 4,096 records and 15 minutes after completion, with
+completed entries eligible for earlier capacity eviction. Active entries are
+reserved until termination. Receipts disappear on restart and do not depend on
+an exporter. Unknown/old-process lookup must not be interpreted as non-execution
+or success. Existing `bro requests` remains the settled cost/usage interface.
+
+Checkers and router check bindings require restart after changes. Static
+validation and runtime credential readiness are distinct from connectivity.
+See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for the HTTP contract,
+coverage boundary and acceptance ledger.
+
+Actual-use inventory is derived from the latest started invocation's retained
+receipt. When that receipt expires or is evicted, the view reports no retained
+evidence; it does not substitute an older allow or claim the checker was never
+used. Synthetic probe history is separate from receipt retention.

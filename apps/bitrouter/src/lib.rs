@@ -53,6 +53,7 @@ pub mod policy_table_router;
 mod prompt;
 pub mod reload;
 pub mod remote_control;
+pub mod request_checks;
 pub mod result_contract;
 pub mod router_migration;
 pub mod session_identity;

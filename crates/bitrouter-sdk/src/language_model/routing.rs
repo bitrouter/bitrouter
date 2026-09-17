@@ -15,6 +15,7 @@ use crate::error::{BitrouterError, Result};
 use crate::event::PipelineEvent;
 use crate::language_model::context::PipelineContext;
 use crate::language_model::hooks::FallbackDecision;
+use crate::language_model::request_checks::RequestCheckBinding;
 use crate::language_model::stream::UsagePricing;
 use crate::language_model::types::{ApiProtocol, Capability, RoutingTarget};
 
@@ -120,6 +121,9 @@ pub struct ModelResolution {
     pub variant: Option<String>,
     /// Named router identity, absent for bare and provider-pinned model routes.
     pub router: Option<RouterRequestIdentity>,
+    /// Ordered entry-request checkers frozen with this named-router binding.
+    /// Empty for bare routes and named routers without request checks.
+    pub request_checks: Vec<RequestCheckBinding>,
 }
 
 impl ModelResolution {
@@ -132,6 +136,7 @@ impl ModelResolution {
             policy: None,
             variant: None,
             router: None,
+            request_checks: Vec::new(),
         }
     }
 }

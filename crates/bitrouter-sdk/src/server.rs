@@ -1378,7 +1378,7 @@ async fn handle(
         CallerContext::anonymous()
     };
     let mut req = PipelineRequest::new(prompt.model.clone(), caller, prompt.clone());
-    req.request_id = request_id;
+    req.request_id = request_id.clone();
     req.original_model = original_model;
     req.headers = headers;
     // Carry the inbound wire protocol so route resolution can prefer a native,
@@ -1386,7 +1386,7 @@ async fn handle(
     // cross-protocol translation.
     req.inbound_protocol = Some(inbound.clone());
 
-    if prompt.stream {
+    let mut response = if prompt.stream {
         stream_response(state.language_model.clone(), req, inbound.clone()).await
     } else {
         // `execute_detached`, not `execute`: a non-streaming request must run to
@@ -1419,7 +1419,15 @@ async fn handle(
             }
             Err(e) => e.into_response(),
         }
+    };
+    // Every admitted pipeline result, including a pre-request rejection, must
+    // expose the correlation ID used by the daemon's process-local receipts.
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response
+            .headers_mut()
+            .insert(BITROUTER_REQUEST_ID_HEADER, value);
     }
+    response
 }
 
 fn add_inbound_protocol_hint(headers: &mut HeaderMap, inbound: &ApiProtocol) {
