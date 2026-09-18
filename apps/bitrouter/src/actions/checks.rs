@@ -48,36 +48,14 @@ pub struct ChecksReport {
     pub config_state: Option<crate::reload::ConfigurationState>,
     /// Current-process receipt scope and retention.
     pub receipt_retention: ReceiptRetention,
-    /// Redaction-safe checker endpoints and the running router bindings that
+    /// Compiled capability registrations and the running router bindings that
     /// currently use them.
     pub checkers: Vec<crate::request_checks::CheckerInfo>,
-}
-
-/// A fixed synthetic diagnostic. It is intentionally distinct from a request
-/// receipt: no model request or caller content was checked and no usage ran.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CheckerProbeReport {
-    pub synthetic: bool,
-    pub counts_as_usage: bool,
-    pub result: crate::request_checks::ProbeResult,
-}
-
-impl CheckerProbeReport {
-    pub fn new(result: crate::request_checks::ProbeResult) -> Self {
-        Self {
-            synthetic: true,
-            counts_as_usage: false,
-            result,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::request_checks::{
-        CheckerProbeDecision, ProbeProtocolStatus, ProbeReachability, ProbeResult,
-    };
 
     #[test]
     fn receipt_queries_are_bounded_before_transport() {
@@ -87,21 +65,5 @@ mod tests {
         assert!(validate_receipt_limit(MAX_RECEIPT_LIMIT + 1).is_err());
         assert!(validate_receipt_lookup("request-1", Some("incarnation-1")).is_ok());
         assert!(validate_receipt_lookup("request\n1", None).is_err());
-    }
-
-    #[test]
-    fn synthetic_probe_cannot_claim_actual_usage() {
-        let report = CheckerProbeReport::new(ProbeResult {
-            checker_id: "company".into(),
-            reachability: ProbeReachability::Reachable,
-            protocol: ProbeProtocolStatus::Valid,
-            latency_ms: Some(4),
-            implementation_version: Some("fixture-v1".into()),
-            decision: Some(CheckerProbeDecision::Allow),
-            error_code: None,
-            observed_at_unix_ms: 1,
-        });
-        assert!(report.synthetic);
-        assert!(!report.counts_as_usage);
     }
 }

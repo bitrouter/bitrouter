@@ -207,11 +207,9 @@ bro observe status --json     # machine-readable
 
 ## Router request checks
 
-Use `bro checks` to inspect the selected daemon's running checker bindings and
-configuration state. `bro checks probe <checker>` sends a fixed synthetic input
-from that daemon; it does not prove that a real request used the checker. A probe
-failure is separate from a content deny. Remote contexts run the same probe on
-the remote daemon using its credentials, not the client's environment.
+Use `bro checks` to inspect the selected daemon's registered compiled checks,
+running bindings, revisions and configuration state. No network probe is needed:
+registration is startup readiness; a retained receipt supplies actual-use evidence.
 
 Use `bro checks receipts` to list retained entry-request receipts and
 `bro checks receipt <request-id-or-receipt-id>` to inspect one. The gateway returns
@@ -226,8 +224,8 @@ not prove a request was never executed. No prompt or answer is retained. A trans
 lookup returns the newest retained attempt and its retained-match count. Each
 attempt has a separate receipt id in the list.
 
-Checker connection and router check-binding edits require restart. Missing
-required credentials prevent activation; timeout, incompatible response and
+Checker declarations and router check-binding edits require restart. Missing or
+mismatched compiled registrations prevent activation; timeout, invalid results and
 oversize input fail closed before model dispatch. The initial checker covers
 entry-request text only, including router defaults and existing tool text. It
 does not inspect file bytes, generated output or later tools inside a harness.
@@ -235,4 +233,4 @@ does not inspect file bytes, generated output or later tools inside a harness.
 Actual-use inventory is derived from the latest started invocation's retained
 receipt. When that receipt expires or is evicted, the view reports no retained
 evidence; it does not substitute an older allow or claim the checker was never
-used. Synthetic probe history is separate from receipt retention.
+used.

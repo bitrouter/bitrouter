@@ -18,7 +18,6 @@ pub enum Action {
     PolicyShow,
     Agents,
     Checks,
-    CheckProbe,
     CheckReceipts,
     CheckReceipt,
     Reload,
@@ -258,19 +257,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         crate::actions::checks::ChecksReport
     ),
     action!(
-        CheckProbe,
-        "checks_probe",
-        "checks_probe",
-        None,
-        "POST",
-        "/checks/{checker}/probe",
-        "checks probe",
-        "checks",
-        true,
-        EmptyInput,
-        crate::actions::checks::CheckerProbeReport
-    ),
-    action!(
         CheckReceipts,
         "checks_receipts",
         "checks_receipts",
@@ -367,7 +353,6 @@ mod tests {
     fn checker_diagnostics_are_bounded_read_actions() -> anyhow::Result<()> {
         let expected = [
             ("checks", "GET"),
-            ("checks_probe", "POST"),
             ("checks_receipts", "GET"),
             ("checks_receipt", "GET"),
         ];

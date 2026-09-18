@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
+use crate::extension::request_check::RequestCheckCoverage;
 use crate::language_model::auth::ContinuationAuthority;
 use crate::language_model::protocol::responses::{
     AssistantTurnCommitment, CausalPrefixPlan, StreamingAssistantTurnCommitment,
@@ -20,7 +21,7 @@ use crate::language_model::receipts::{
     RequestCheckReporter, RequestCheckStatus, RequestDeliveryStatus, RequestFailureStage,
     RequestReceiptHandle, RequestReceiptOutcome,
 };
-use crate::language_model::request_checks::{CheckerFailureKind, RequestCheckCoverage};
+use crate::language_model::request_checks::CheckerFailureKind;
 use crate::language_model::routing::RouterRequestIdentity;
 use crate::language_model::settlement::RequiredFinalizationContext;
 use crate::language_model::settlement::SettlementContext;

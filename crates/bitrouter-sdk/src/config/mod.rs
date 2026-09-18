@@ -108,7 +108,7 @@ pub struct Config {
     pub models: HashMap<String, VirtualModel>,
     /// Named request routers, addressed as `bitrouter/<id>`.
     pub routers: HashMap<String, router::RouterConfig>,
-    /// Remote request checkers, keyed by the ids referenced from named routers.
+    /// Compiled request-check extensions, keyed by the ids referenced from named routers.
     pub checkers: HashMap<String, checker::CheckerConfig>,
     /// `@preset` definitions.
     pub presets: HashMap<String, PresetConfig>,

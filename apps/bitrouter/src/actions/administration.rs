@@ -290,16 +290,6 @@ impl Administration {
         })
     }
 
-    pub async fn checks_probe(
-        &self,
-        checker: &str,
-    ) -> Result<crate::actions::checks::CheckerProbeReport> {
-        validate_identifier(checker)?;
-        Ok(crate::actions::checks::CheckerProbeReport::new(
-            self.request_checks()?.probe(checker).await,
-        ))
-    }
-
     pub fn check_receipts(
         &self,
         limit: usize,

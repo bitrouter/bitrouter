@@ -4,18 +4,18 @@ This document is the workspace-level guide for BitRouter internals. Start with [
 
 ## Workspace Architecture
 
-BitRouter is a Cargo workspace with two tiers — `crates/` (the SDK and the library crates built on it) and `apps/` (the shipped binary):
+BitRouter is a Cargo workspace organized into `crates/` for shared libraries and contracts, `apps/` for product hosts, and `extensions/` for independently delivered capabilities. Each extension groups its related Cargo packages in one directory; `helpers/` contains contributor tooling.
 
 | Crate                            | Tier    | Responsibility                                                                                                          |
 | -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, the four wire-protocol adapters, the ACP thin proxy (`acp` feature), config loading, the axum HTTP server, and the observability contract (`observe`) |
 | `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
-| `crates/bitrouter-guardrails`    | crate   | `GuardrailPreHook` (upstream inspection) + `GuardrailStreamHook` (downstream redaction / abort)                           |
+| `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback; optional `sdk` retains legacy hooks |
 | `crates/bitrouter-telemetry`     | crate   | Optional telemetry egress: the OTLP exporter (traces + metrics, multi-tenant attribution), the inbound ingress span, and the `tracing` ↔ OTel bridge — all default-off |
 | `crates/bitrouter-tui`           | crate   | Full-screen unified Code shell (`bro code [<agent>]`) — ACP transcript, multiline composer, temporary inspectors, and explicit permission choices |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App` and owns the management commands |
 
-The "plugin" concept lives in the SDK — the `Plugin` trait and the hook traits — not in the directory layout: a hook crate like guardrails is an ordinary library that implements those traits.
+The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `bitrouter_sdk::extension::ExtensionApi` inside `assemble::build_app_with_extensions`; the SDK also retains legacy `Plugin`/hook interfaces for host assembly. See [the extension directory guide](../extensions/README.md) and [guardrails](../extensions/regex-checker/README.md).
 
 ### External interfaces
 
@@ -122,12 +122,44 @@ Because the schema is the contract, it is written down rather than inferred from
      - `mcp` — Model Context Protocol routing (pure routing, no settlement).
      - `acp` — Agent Client Protocol routing (pure routing, no settlement).
    - **Four wire-protocol adapters** — Chat Completions, Responses, Messages, Generate Content — each with an inbound side (parse a client request / encode a client response + SSE) and an outbound side (render a provider request / decode a provider response + SSE). Any inbound protocol can be served by any outbound protocol.
-   - **Hook traits** — `PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook` — the extension points every plugin and the binary's builtin hooks implement.
+   - **Hook traits** — `PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook` — trusted host assembly interfaces used by builtins and legacy packages. New request-check extensions use the restricted author API rather than mutable pipeline hooks.
    - **Config + routing** — YAML parsing, `${VAR}` substitution, the `ConfigRoutingTable`.
    - The **axum HTTP server** and the `App` builder.
 2. **`bitrouter-providers`** — depends on `bitrouter-sdk`. Provider integration glue. The only compiled-in provider entry is the hosted `bitrouter` cloud gateway (`providers/bitrouter.toml`, embedded via `include_str!`); every other provider comes from the runtime-fetched registry and is merged by `registry::apply`. Owns the `AuthApplier` impls (copilot, anthropic, claude-code, openai-codex) and `zero_config()` — the in-memory `Config` used when the binary runs with no config file.
-3. **`bitrouter-guardrails`** / **`bitrouter-telemetry`** — depend on `bitrouter-sdk` only. Hook libraries: they implement the SDK's hook traits and keep their default builds lean. Guardrails never pulls the axum HTTP stack; telemetry's whole OpenTelemetry stack sits behind `otel-*` and its ingress span behind `server`, so `cargo add bitrouter-telemetry` on its own pulls neither. The `feature-isolation` CI job enforces all of it, plus the invariant that gives the split its point: **no `opentelemetry*` crate is in `bitrouter-sdk`'s tree at any feature combination**, and the two OTLP transports stay isolated from each other.
-4. **`apps/bitrouter`** — depends on everything. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, guardrails, observability) onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
+3. **`bitrouter-guardrails`** provides the regex matcher and the SDK request-check callback; its explicit `sdk` feature enables legacy global/stream hooks. It depends on `bitrouter-sdk` with default features disabled. The default host still has no normal/build dependency on the matcher. **`bitrouter-telemetry`** implements SDK hooks; telemetry's whole OpenTelemetry stack sits behind `otel-*` and its ingress span behind `server`, so `cargo add bitrouter-telemetry` on its own pulls neither. The `feature-isolation` CI job enforces all of it, plus the invariant that gives the split its point: **no `opentelemetry*` crate is in `bitrouter-sdk`'s tree at any feature combination**, and the two OTLP transports stay isolated from each other.
+4. **`apps/bitrouter`** — assembles the default host without a guardrails matcher dependency. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, observability) and router-bound external request checks onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
+
+### Extension authors and host assembly
+
+New request-check authors use an ordinary function accepting
+`bitrouter_sdk::extension::ExtensionApi` and call
+`request_check(id, revision, callback)`. Business inputs and decisions live in
+`extension::request_check`, without a wire envelope. The custom host passes the
+registration function to `host::serve_with_extensions` for the shared foreground
+daemon lifecycle, or `assemble::build_app_with_extensions` for low-level embedding.
+Fragment and coverage types also live in `extension::request_check`.
+Router bindings
+control execution scope and order; registration is not global activation.
+Beta supports compiled extensions only: no HTTP checker service, wire crate,
+probe command, runtime installation or extra extension API crate.
+
+Valid unconfigured registrations are inactive with sorted startup diagnostics;
+configured instances require a matching registration even without bindings.
+The regex example uses the same inference, local/remote management, reload and
+shutdown path as `bro serve`. Restart custom hosts with their own executable;
+the example does not implement the default CLI's background-launch protocol.
+
+The SDK entry does not expose host builders, migrations, credentials, mutable
+pipeline context or receipt writers. The host retains resource bounds, fixed
+binding identity and process-local receipts. Synchronous callbacks cannot be
+forcibly terminated by deadlines; they are trusted in-process code.
+
+Legacy `Plugin` / `AppBuilder::plugin` and optional `GuardrailsPlugin` retain
+custom-host global, stream/output and migration semantics. Input-only checks do
+not replace those capabilities. The recently introduced app ExtensionApi and
+Native map assembly entry migrate to the SDK entry. `PluginId`, existing
+`Config::plugins` consumers, Context extensions and external agent-plugin
+manifests retain their separate meanings. See [migration](GUARDRAILS_EXTENSION.md).
 
 ### SDK feature flags
 
@@ -167,7 +199,7 @@ A streaming LLM request moves through the workspace like this:
 1. The `bitrouter` binary resolves the config source (see *Configuration*), loads or synthesises a `Config`, and `assemble.rs` builds an `App` — the `language_model` pipeline with the builtin hooks wired on.
 2. The SDK's axum server receives the inbound HTTP request on one of the protocol routes and the matching **inbound adapter** parses it into a canonical `PipelineRequest` (model name, messages, tools, params).
 3. The `language_model` pipeline runs its stages:
-   - **Pre-request** — every `PreRequestHook` in order: auth, policy, guardrail inspection.
+   - **Pre-request** — local policy hooks, followed by explicitly bound external request checks. Authentication and normalization occur before router admission.
    - **Route** — the `RoutingTable` resolves the model name to a fallback chain of `RoutingTarget`s (provider + upstream model id + protocol); `RouteHook`s may rewrite the chain.
    - **Execute** — the executor dials the first target; on failure the `FallbackPolicy` decides whether to try the next. The **outbound adapter** for the target's protocol renders the provider request and decodes the provider response (and its SSE stream).
    - **Settlement** — every `SettlementRecorder` runs (metering, etc.), success or failure.
@@ -257,7 +289,7 @@ Rare — no current registry provider needs this. The big clouds (Bedrock, Azure
 
 ### Add a hook (auth, policy, metering, guardrail, observability)
 
-Implement one of the SDK hook traits (`PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook`) and wire it onto the pipeline in `apps/bitrouter/src/assemble.rs`. A hook that brings real dependency weight belongs in its own `crates/` library behind a default-off feature — the guardrails and telemetry pattern. What goes in the SDK is the *contract* such a hook binds to, not the hook: `observe::schema` is in the SDK, its OTLP renderer is not. A lightweight hook can live in the binary.
+Implement one of the SDK hook traits (`PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook`) and wire it onto the pipeline in `apps/bitrouter/src/assemble.rs`. A hook that brings real dependency weight belongs in its own `crates/` library behind a default-off feature — the telemetry pattern. Guardrails run as an independently deployed input checker in the default product; the library's optional SDK hooks are for explicit trusted-host assembly. What goes in the SDK is the *contract* such a hook binds to, not the hook: `observe::schema` is in the SDK, its OTLP renderer is not. A lightweight hook can live in the binary.
 
 ### Embed the SDK in your own service
 
@@ -297,7 +329,7 @@ Append the output under the comment header in `public-api-deps.txt` — the head
 
 Named-router entry checks use the SDK's typed `language_model::request_checks`
 contract and process-local `language_model::receipts` store. The app assembles
-startup-owned HTTP clients in `request_checks` and shares that runtime with
+startup-owned compiled registrations in `request_checks` and shares that runtime with
 local IPC and remote administration. Receipt storage is mandatory for a
 configured check and independent of the optional observability exporter.
 
@@ -307,12 +339,14 @@ model selection and fallback. One preparation path serves both response modes.
 Checked routers apply effective defaults before content checks; ordinary local
 hooks cannot change their selector afterward. Unguarded requests preserve the
 legacy pre-request rewrite/defaults timing. The existing model selector and
-executor run after required checks allow. Local policy rejection never sends the request to an external checker. SDK receipt
+executor run after required checks allow. Local policy rejection never invokes a registered checker. SDK receipt
 lifecycle handling also covers early failures, cancellation and streaming
-termination. Real-use inventory is derived from retained receipts; the HTTP
-runtime only contributes transport progress, while probes remain separate.
+termination. Real-use inventory is derived from retained receipts; the callback runtime
+reports execution progress and registration readiness is separate evidence.
 It does not turn these requests into durable workflow tasks.
 
 See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for coverage, resource limits,
-retention, activation and the acceptance ledger. Existing in-process guardrails
-remain during this increment; independent matcher packaging is a later change.
+retention, activation and the acceptance ledger. The default host no longer links
+the matcher and rejects legacy `plugins.bitrouter-guardrails` configuration. See
+[GUARDRAILS_EXTENSION.md](GUARDRAILS_EXTENSION.md) for custom-host assembly,
+input-only scope, explicit migration blockers, and process-level verification.

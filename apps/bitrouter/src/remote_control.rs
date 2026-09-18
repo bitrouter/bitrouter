@@ -365,7 +365,6 @@ fn control_router_with(state: ControlState, expected: ControlAuth) -> Router {
             inventory::Action::PolicyShow => get(policy_show),
             inventory::Action::Agents => get(agents),
             inventory::Action::Checks => get(checks),
-            inventory::Action::CheckProbe => post(checks_probe),
             inventory::Action::CheckReceipts => get(check_receipts),
             inventory::Action::CheckReceipt => get(check_receipt),
             inventory::Action::Reload => post(reload).layer(DefaultBodyLimit::max(16 * 1024)),
@@ -713,20 +712,6 @@ async fn checks(
         .map_err(ControlError::internal)
 }
 
-async fn checks_probe(
-    State(state): State<ControlState>,
-    Path(checker): Path<String>,
-) -> Result<Json<crate::actions::checks::CheckerProbeReport>, ControlError> {
-    crate::actions::administration::validate_identifier(&checker)
-        .map_err(ControlError::bad_request)?;
-    state
-        .administration()?
-        .checks_probe(&checker)
-        .await
-        .map(Json)
-        .map_err(ControlError::bad_request)
-}
-
 async fn check_receipts(
     State(state): State<ControlState>,
     query: Result<Query<inventory::ReceiptListInput>, QueryRejection>,
@@ -1054,17 +1039,6 @@ impl HttpControlClient {
     pub async fn checks(&self) -> Result<crate::actions::checks::ChecksReport> {
         self.require_action("checks").await?;
         self.get("checks", None).await
-    }
-
-    pub async fn checks_probe(
-        &self,
-        checker: &str,
-    ) -> Result<crate::actions::checks::CheckerProbeReport> {
-        crate::actions::administration::validate_identifier(checker)?;
-        self.require_action("checks_probe").await?;
-        let url = self.action_url_segments(&["checks", checker, "probe"])?;
-        self.send(self.http.post(url).bearer_auth(&self.token))
-            .await
     }
 
     pub async fn check_receipts(

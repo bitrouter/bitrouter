@@ -260,7 +260,7 @@ selection; a physical-model-only allowlist does not authorize the alias.
 | Command | Effect |
 |---|---|
 | `bro init [--yes] [--force] [--reset] [-c PATH] [credential flags] [--harness claude\|codex] [--after launch\|serve\|exit] [--model ID]` | Save the default ACP harness and model in the resolved configuration, or BitRouter home when absent. Credential flags: `--cloud-login`, `--api-key`, `--provider`, `--provider-api-key`, `--use-detected`. Headless setup reports-and-skips interactive logins. `--after launch` opens BitRouter ACP TUI; `--force` resets existing configuration. |
-| `bro config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, the upstream-URL (SSRF) gate, and any referenced `policy-lock.yaml`. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. Also reports `ignored_config` — `plugins.<id>` blocks the binary does not read and therefore ignores, which is otherwise silent (`bitrouter-guardrails`, `bitrouter-policy` and `bitrouter-telemetry` are the ids it reads). That does **not** fail validation: it is a misconfiguration, not a malformed config. The daemon, `bro acp serve`, `bro run`, and `bro code <agent>` log the same set on every start. |
+| `bro config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, the upstream-URL (SSRF) gate, and any referenced `policy-lock.yaml`. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. Also reports `ignored_config` — `plugins.<id>` blocks the binary does not read and therefore ignores, which is otherwise silent (`bitrouter-policy` and `bitrouter-telemetry` are the supported ids). Unknown ids do **not** fail validation. The removed `plugins.bitrouter-guardrails` key is different: any presence fails validation and activation; see `references/guardrails.md` for migration and input-only coverage. The daemon, `bro acp serve`, `bro run`, and `bro code <agent>` log the same set on every start. |
 | `bro skills list [--global] [--json\|--human]` | List skills. Reads the project root by default; `--global` reads `~/.claude/`. Covers all three conventional layouts of that root (`<root>/SKILL.md`, `<root>/skills/<name>/`, `<root>/.claude/skills/<name>/`) — it used to read only the last. Each row carries `name`, `description`, `dir`, `skill_md`, `valid`, and a `problem` when `valid` is false (bad frontmatter, a directory name that does not match `frontmatter.name`, an out-of-bounds name/description). Invalid skills are listed *marked* here and in `skills_search`, and omitted from SEP-2640 `skills/list`, which requires a verifiable entry — so this is where you learn why a skill on disk will not load. Same report type as the `skills_search` tool. |
 | `bro skills init <NAME> [--output PATH] [--json\|--human]` | Scaffold a spec-valid skill directory — writes `<NAME>/SKILL.md` unless `--output` names a path. `<NAME>` is written into the generated frontmatter. |
 | `bro policy create <id> [--dir DIR]` | Write a starter access-control policy file under `--dir` (default `./policies`). Bind to a key with `bro key sign --user <id> --policy <id>`. |
@@ -414,8 +414,7 @@ The daemon `chdir`s to the directory holding the resolved config on startup, so 
 
 | Command | Meaning |
 | --- | --- |
-| `bro checks` | Target-daemon checker inventory, running router bindings, probe/usage evidence and saved/running configuration status. |
-| `bro checks probe <checker>` | Bounded synthetic protocol probe from the target daemon; does not count as real request usage. |
+| `bro checks` | Target-daemon checker inventory, running router bindings, registration/usage evidence and saved/running configuration status. |
 | `bro checks receipts [--limit N]` | Bounded list of process-local request-check receipts, independent of telemetry export. |
 | `bro checks receipt <request-id-or-receipt-id> [--incarnation ID]` | One receipt or an explicit unknown/unavailable result; never infers success from missing evidence. |
 
@@ -424,9 +423,9 @@ These commands support the existing local/remote target selection and JSON or
 only (4,096-record capacity, completed-record TTL 15 minutes, possible earlier
 capacity eviction); settled token/cost history remains under `bro requests`.
 Checker and router check-binding edits require restart. See `diagnose.md` for
-coverage and how to distinguish a successful probe from a real check.
+coverage and how to distinguish registration readiness from actual use.
 
 Actual-use inventory is derived from the latest started invocation's retained
 receipt. When that receipt expires or is evicted, the view reports no retained
 evidence; it does not substitute an older allow or claim the checker was never
-used. Synthetic probe history is separate from receipt retention.
+used.

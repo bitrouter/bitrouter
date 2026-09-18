@@ -9,6 +9,10 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::extension::request_check::{
+    ContentFragment, ContentFragmentKind, ContentRole, Decision, Input, RequestCheckCoverage,
+    RequestCheckCoverageScope, RequestCheckCoverageStatus,
+};
 use crate::language_model::receipts::RequestCheckReporter;
 use crate::language_model::types::{
     Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
@@ -21,24 +25,10 @@ pub struct RequestCheckBinding {
     pub checker_id: String,
     /// Redaction-safe digest of the effective checker binding.
     pub binding_digest: String,
-    /// Maximum serialized text bytes sent to the checker.
+    /// Maximum projected text bytes passed to the checker.
     pub max_input_bytes: u64,
     /// Per-invocation deadline enforced by the host runtime.
     pub timeout_ms: u64,
-}
-
-/// Role attached to a canonical checker fragment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ContentRole {
-    /// Out-of-band system instructions.
-    System,
-    /// End-user content.
-    User,
-    /// Prior assistant content.
-    Assistant,
-    /// Tool results or approval responses.
-    Tool,
 }
 
 impl From<Role> for ContentRole {
@@ -52,110 +42,17 @@ impl From<Role> for ContentRole {
     }
 }
 
-/// The canonical kind of one checker input fragment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ContentFragmentKind {
-    /// Plain message or system text.
-    Text,
-    /// Prior assistant reasoning text.
-    Reasoning,
-    /// Tool-call arguments.
-    ToolCall,
-    /// A tool result.
-    ToolResult,
-    /// A tool-approval decision.
-    ToolApproval,
+/// A business decision with the registered implementation revision supplied by the host.
+/// The pipeline validates the decision before recording it or proceeding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckerResult {
+    /// Decision returned by the extension callback.
+    pub decision: Decision,
+    /// Registered revision supplied by the host, never by the callback.
+    pub revision: String,
 }
 
-/// Coverage scope for the first request-check contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RequestCheckCoverageScope {
-    /// Textual fragments on the entry request only. Media payloads, server-tool
-    /// turns, and other nested requests are outside the scope.
-    EntryRequestText,
-}
-
-/// Whether the checker input was complete within its declared scope.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RequestCheckCoverageStatus {
-    /// Every entry-request text fragment fit within the byte and count bounds.
-    CompleteWithinScope,
-    /// Entry-request text exceeded a byte or fragment bound; no checker was
-    /// invoked.
-    InputTooLarge,
-}
-
-/// Typed evidence for what an invocation covered.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct RequestCheckCoverage {
-    /// Fixed v1 coverage scope.
-    pub scope: RequestCheckCoverageScope,
-    /// Total text bytes projected for the checker.
-    pub text_bytes: u64,
-    /// Number of projected text fragments.
-    pub text_fragments: u64,
-    /// Entry-request media fragments intentionally excluded from payloads.
-    pub excluded_media_fragments: u64,
-    /// Completeness within the fixed scope.
-    pub status: RequestCheckCoverageStatus,
-}
-
-/// One typed fragment sent to an external request checker.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ContentFragment {
-    /// Conversation role of this fragment.
-    pub role: ContentRole,
-    /// Canonical content kind.
-    pub kind: ContentFragmentKind,
-    /// Textual content, when this kind has a text representation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-}
-
-/// A single, frozen invocation of a configured checker.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct CheckerInvocation {
-    /// Unique invocation identity for correlation and idempotency.
-    pub invocation_id: String,
-    /// Gateway request identity visible to the caller.
-    pub request_id: String,
-    /// Canonical named-router id.
-    pub router_id: String,
-    /// Redaction-safe digest of the effective router binding.
-    pub router_binding_digest: String,
-    /// Checker binding frozen with the router.
-    pub checker: RequestCheckBinding,
-    /// Effective canonical prompt after named-router defaults.
-    pub content: Vec<ContentFragment>,
-    /// Explicit evidence for the covered entry-request scope.
-    pub coverage: RequestCheckCoverage,
-}
-
-/// A checker decision.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "decision", rename_all = "snake_case")]
-pub enum CheckerDecision {
-    /// The request may proceed.
-    Allow {
-        /// Checker implementation version, when supplied.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        implementation_version: Option<String>,
-    },
-    /// The request must stop before model selection and provider dispatch.
-    Deny {
-        /// Bounded ASCII machine-readable reason code, when supplied.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reason_code: Option<String>,
-        /// Checker implementation version, when supplied.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        implementation_version: Option<String>,
-    },
-}
-
-/// Stable checker failure classification. Raw transport errors are deliberately
+/// Stable checker failure classification. Raw implementation errors are deliberately
 /// excluded from the receipt contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -164,13 +61,13 @@ pub enum CheckerFailureKind {
     InputTooLarge,
     /// The invocation deadline elapsed.
     Timeout,
-    /// The checker could not be reached.
+    /// The checker could not be scheduled.
     Unavailable,
-    /// The checker returned an invalid protocol response.
+    /// The checker returned an invalid business decision.
     InvalidResponse,
     /// The host runtime could not resolve the configured checker.
     NotConfigured,
-    /// A non-transport internal failure occurred.
+    /// An internal execution failure occurred.
     Internal,
 }
 
@@ -184,20 +81,23 @@ pub struct CheckerFailure {
     pub detail: Option<String>,
 }
 
-/// Host implementation of an external request checker.
+/// Host runner for statically linked request-check extensions.
 #[async_trait]
 pub trait RequestCheckerRunner: Send + Sync {
     /// Evaluate one configured entry-request invocation. The host reports only
-    /// transport progress through `reporter`; the pipeline owns checker
-    /// outcomes and cancellation transitions in the request receipt.
+    /// execution progress through `reporter`; the pipeline owns checker
+    /// outcomes and cancellation transitions in the request receipt. Request,
+    /// router and invocation identities stay in that receipt, not the runner input.
+    /// The pipeline validates the returned business decision before recording it.
     async fn check(
         &self,
-        invocation: CheckerInvocation,
+        binding: RequestCheckBinding,
+        input: Input,
         reporter: RequestCheckReporter,
-    ) -> std::result::Result<CheckerDecision, CheckerFailure>;
+    ) -> std::result::Result<CheckerResult, CheckerFailure>;
 }
 
-const MAX_PROJECTED_FRAGMENTS: u64 = 4096;
+const MAX_PROJECTED_FRAGMENTS: u64 = crate::extension::request_check::MAX_CONTENT_FRAGMENTS as u64;
 
 struct ContentProjection {
     fragments: Vec<ContentFragment>,

@@ -1303,6 +1303,7 @@ fn restart_field_category(path: &str) -> &'static str {
 struct ConfigurationLoadError {
     saved: SavedConfigState,
     error: anyhow::Error,
+    guardrails_migration_required: bool,
 }
 
 /// Read the daemon's primary source with the same environment resolver reload
@@ -1347,6 +1348,7 @@ async fn load_configuration_baseline_at(
                             "inspecting configuration {}: {error}",
                             candidate.display()
                         ),
+                        guardrails_migration_required: false,
                     });
                 }
             }
@@ -1366,17 +1368,28 @@ async fn load_configuration_baseline_at(
                 ConfigurationLoadError {
                     saved,
                     error: anyhow::anyhow!("reading configuration {}: {error}", path.display()),
+                    guardrails_migration_required: false,
                 }
             })?;
             let config = bitrouter_sdk::config::parse_with(&raw, bitrouter_sdk::config::env_lookup)
                 .map_err(|error| ConfigurationLoadError {
                     saved: SavedConfigState::Invalid,
                     error: anyhow::Error::new(error),
+                    guardrails_migration_required: false,
                 })?;
+            let guardrails_migration_required = config.plugins.contains_key("bitrouter-guardrails");
+            crate::assemble::validate_host_configuration(&config).map_err(|error| {
+                ConfigurationLoadError {
+                    saved: SavedConfigState::Invalid,
+                    error,
+                    guardrails_migration_required,
+                }
+            })?;
             let substituted = bitrouter_sdk::config::substitute_env(&raw).map_err(|error| {
                 ConfigurationLoadError {
                     saved: SavedConfigState::Invalid,
                     error: anyhow::Error::new(error),
+                    guardrails_migration_required: false,
                 }
             })?;
             let document =
@@ -1384,12 +1397,14 @@ async fn load_configuration_baseline_at(
                     ConfigurationLoadError {
                         saved: SavedConfigState::Invalid,
                         error: anyhow::Error::new(error),
+                        guardrails_migration_required: false,
                     }
                 })?;
             if !document.is_object() {
                 return Err(ConfigurationLoadError {
                     saved: SavedConfigState::Invalid,
                     error: anyhow::anyhow!("configuration must be a mapping"),
+                    guardrails_migration_required: false,
                 });
             }
             let (unclassified_fields, unclassified_values) = unclassified_config(&document);
@@ -1683,6 +1698,13 @@ impl AppReloader {
             .await
             .map_err(|failure| {
                 tracing::warn!(error = %failure.error, "reload could not prepare configuration candidate");
+                if failure.guardrails_migration_required {
+                    return PreparationError::failed(
+                        ReloadParticipant::RoutingTable,
+                        "guardrails_migration_required",
+                        "saved configuration contains plugins.bitrouter-guardrails; migration is required before reload because router-bound request checkers cover input only and do not replace global or output protection",
+                    );
+                }
                 let message = match failure.saved {
                     SavedConfigState::Missing | SavedConfigState::Unavailable => {
                         "reload could not read the server configuration"
@@ -3482,13 +3504,13 @@ presets:
     }
 
     #[tokio::test]
-    async fn checker_connection_edits_require_restart_before_any_reload_mutation()
+    async fn checker_revision_edits_require_restart_before_any_reload_mutation()
     -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("bitrouter.yaml");
-        let document = |port: u16| {
+        let document = |revision: u16| {
             format!(
-                "inherit_defaults: false\ncheckers:\n  company:\n    endpoint: http://127.0.0.1:{port}/check\n    contract_version: 1\n"
+                "inherit_defaults: false\ncheckers:\n  company:\n    native:\n      revision: rules-{revision}\n"
             )
         };
         std::fs::write(&path, document(18081))?;
@@ -3512,8 +3534,11 @@ presets:
             running
                 .checkers
                 .get("company")
-                .map(|checker| checker.endpoint.as_str()),
-            Some("http://127.0.0.1:18081/check")
+                .map(|checker| match checker {
+                    bitrouter_sdk::config::checker::CheckerConfig::Native { native } =>
+                        native.revision.as_str(),
+                }),
+            Some("rules-18081")
         );
         let state = reloader
             .reload_state()

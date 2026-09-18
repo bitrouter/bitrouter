@@ -65,8 +65,10 @@ process starts anyway. Two places report it:
   daemon's `App` but all of which read the same config. This is the path that
   matters: validation is opt-in, the runtime always runs.
 
-The ids the binary reads are `bitrouter-guardrails`, `bitrouter-policy` and
-`bitrouter-telemetry`. A dead sub-key under a live id is reported too, so a
+The supported ids the binary reads are `bitrouter-policy` and
+`bitrouter-telemetry`. The removed `plugins.bitrouter-guardrails` key instead
+fails validation and activation, including empty/null values; see
+[the explicit migration guide](GUARDRAILS_EXTENSION.md). A dead sub-key under a live id is reported too, so a
 rename that carries an obsolete setting along with it is not silent either.
 
 **Renamed in this release** — the old names are ignored, and the daemon warns
@@ -1817,12 +1819,10 @@ safe on real coding tasks.
 
 ## Request-check inspection
 
-`bro checks` inspects checker configuration, running bindings and actual use on
-the selected daemon. `bro checks probe <checker>` sends a fixed synthetic input
-using that daemon's configured credential. Connectivity/protocol success does
-not count as a real request invocation. Both local IPC and remote control query
-the same runtime; remote probes require `control:read` and cannot specify an
-arbitrary URL or input.
+`bro checks` inspects registered compiled checks, revisions, running bindings and
+actual use on the selected daemon. Local IPC and remote control query the same
+runtime. There is no `bro checks probe`; successful registration is startup
+readiness, not evidence that a real request used the check.
 
 `bro checks receipts` lists bounded process-local receipts.
 `bro checks receipt <request-id-or-receipt-id>` looks up an exact receipt id, or
@@ -1838,11 +1838,11 @@ an exporter. Unknown/old-process lookup must not be interpreted as non-execution
 or success. Existing `bro requests` remains the settled cost/usage interface.
 
 Checkers and router check bindings require restart after changes. Static
-validation and runtime credential readiness are distinct from connectivity.
-See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for the HTTP contract,
+validation checks declarations; activation also verifies compiled registrations.
+See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for the capability contract,
 coverage boundary and acceptance ledger.
 
 Actual-use inventory is derived from the latest started invocation's retained
 receipt. When that receipt expires or is evicted, the view reports no retained
 evidence; it does not substitute an older allow or claim the checker was never
-used. Synthetic probe history is separate from receipt retention.
+used.

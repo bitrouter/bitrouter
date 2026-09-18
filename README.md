@@ -264,7 +264,7 @@ Beyond the gateways above, the production controls for running agents unattended
 - **Multi-account failover + load-balancing** — reroute mid-run; a rate-limit at file 140 never re-pays for files 1–139
 - **Virtual keys (`brvk_`)** scoped per agent or user — no agent holds an upstream key
 - **Per-agent spend caps + loop guards** to contain runaway cost
-- **Injection + output guardrails** at the router, before requests leave your network
+- **Router-bound input checks** through an [independent guardrails service](docs/GUARDRAILS_EXTENSION.md); output inspection and redaction are outside this service
 - **Zero-config auto-detection** + custom OpenAI-/Anthropic-compatible providers
 
 ## Talk to founders

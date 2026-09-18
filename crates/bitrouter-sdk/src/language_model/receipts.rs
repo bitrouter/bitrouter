@@ -1,6 +1,5 @@
 //! Process-local, bounded request receipts for named-router check workflows.
 
-use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,9 +9,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::language_model::request_checks::{
-    CheckerFailureKind, RequestCheckBinding, RequestCheckCoverage,
-};
+use crate::extension::request_check::RequestCheckCoverage;
+use crate::language_model::request_checks::{CheckerFailureKind, RequestCheckBinding};
 use crate::language_model::routing::RouterRequestIdentity;
 
 /// Maximum checker results retained on one receipt.
@@ -58,8 +56,6 @@ pub struct RequestReceiptIdentity {
 /// Result of one configured request checker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RequestCheckReceipt {
-    /// Receipt contract version.
-    pub contract_version: u16,
     /// Checker name, absent for the synthetic `not_enabled` result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checker_id: Option<String>,
@@ -120,15 +116,15 @@ pub enum RequestCheckStatus {
     Skipped,
 }
 
-/// How far a real checker invocation progressed toward its remote service.
+/// How far a compiled request-check invocation progressed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestCheckDispatchStatus {
-    /// The invocation was queued or rejected locally before an HTTP attempt.
+    /// The invocation was queued or rejected before dispatch.
     NotAttempted,
-    /// An HTTP attempt began but no response headers were received.
+    /// Native work was submitted to the blocking pool.
     Attempted,
-    /// Response headers were received from the checker.
+    /// A native callback returned a decision.
     ResponseReceived,
 }
 
@@ -317,7 +313,6 @@ impl std::error::Error for RequestReceiptAdmissionError {}
 #[derive(Debug)]
 struct StoredReceipt {
     receipt: RequestReceipt,
-    sequence: u64,
     completed_at: Option<Instant>,
 }
 
@@ -325,7 +320,6 @@ struct StoredReceipt {
 struct StoreState {
     records: HashMap<String, StoredReceipt>,
     order: VecDeque<String>,
-    next_sequence: u64,
     latest_started: HashMap<String, LatestStartedCheck>,
 }
 
@@ -436,7 +430,6 @@ impl RequestReceiptStore {
             accepted_at_unix_ms: unix_millis(),
             checks: if bindings.is_empty() {
                 vec![RequestCheckReceipt {
-                    contract_version: 1,
                     checker_id: None,
                     binding_digest: None,
                     invocation_id: None,
@@ -454,7 +447,6 @@ impl RequestReceiptStore {
                 bindings
                     .iter()
                     .map(|binding| RequestCheckReceipt {
-                        contract_version: 1,
                         checker_id: Some(binding.checker_id.clone()),
                         binding_digest: Some(binding.binding_digest.clone()),
                         invocation_id: None,
@@ -476,14 +468,11 @@ impl RequestReceiptStore {
             failure_stage: None,
             completed_at_unix_ms: None,
         };
-        let sequence = state.next_sequence;
-        state.next_sequence = state.next_sequence.wrapping_add(1);
         state.order.push_back(receipt_id.clone());
         state.records.insert(
             receipt_id.clone(),
             StoredReceipt {
                 receipt,
-                sequence,
                 completed_at: None,
             },
         );
@@ -520,15 +509,15 @@ impl RequestReceiptStore {
                 };
             }
             let mut matches = state
-                .records
-                .values()
-                .filter(|record| record.receipt.identity.request_id == id)
-                .collect::<Vec<_>>();
-            matches.sort_unstable_by_key(|record| Reverse(record.sequence));
-            if let Some(receipt) = matches.first() {
+                .order
+                .iter()
+                .rev()
+                .filter_map(|receipt_id| state.records.get(receipt_id))
+                .filter(|record| record.receipt.identity.request_id == id);
+            if let Some(record) = matches.next() {
                 return RequestReceiptLookup::Found {
-                    receipt: receipt.receipt.clone(),
-                    retained_matches: matches.len(),
+                    receipt: record.receipt.clone(),
+                    retained_matches: 1 + matches.count(),
                 };
             }
         }
@@ -555,15 +544,16 @@ impl RequestReceiptStore {
             return self.unavailable_list();
         };
         prune_expired(&mut state, Instant::now(), self.inner.config.completed_ttl);
-        let mut records = state.records.values().collect::<Vec<_>>();
-        records.sort_unstable_by_key(|record| Reverse(record.sequence));
         RequestReceiptList {
             incarnation_id: self.inner.incarnation_id.clone(),
             capacity: self.inner.config.capacity,
             completed_ttl_secs: self.inner.config.completed_ttl.as_secs(),
             health: RequestReceiptStoreHealth::Healthy,
-            receipts: records
-                .into_iter()
+            receipts: state
+                .order
+                .iter()
+                .rev()
+                .filter_map(|receipt_id| state.records.get(receipt_id))
                 .take(limit.min(self.inner.config.capacity))
                 .map(|record| record.receipt.clone())
                 .collect(),
@@ -763,12 +753,12 @@ pub struct RequestCheckReporter {
 }
 
 impl RequestCheckReporter {
-    /// Record that the HTTP attempt began.
+    /// Record that native work was submitted.
     pub fn mark_dispatched(&self) {
         self.advance(RequestCheckDispatchStatus::Attempted);
     }
 
-    /// Record that response headers arrived from the checker.
+    /// Record that a native callback returned.
     pub fn mark_response_received(&self) {
         self.advance(RequestCheckDispatchStatus::ResponseReceived);
     }
@@ -893,11 +883,12 @@ mod tests {
 
     fn coverage() -> RequestCheckCoverage {
         RequestCheckCoverage {
-            scope: crate::language_model::request_checks::RequestCheckCoverageScope::EntryRequestText,
+            scope: crate::extension::request_check::RequestCheckCoverageScope::EntryRequestText,
             text_bytes: 4,
             text_fragments: 1,
             excluded_media_fragments: 0,
-            status: crate::language_model::request_checks::RequestCheckCoverageStatus::CompleteWithinScope,
+            status:
+                crate::extension::request_check::RequestCheckCoverageStatus::CompleteWithinScope,
         }
     }
 
@@ -1039,16 +1030,17 @@ mod tests {
             "process-1",
         );
         let first = store.admit("request-1", &router("coding"), &[])?;
-        first.finish(
-            RequestReceiptOutcome::Completed,
-            RequestDeliveryStatus::ServerCommitted,
-            None,
-        );
         let second = store.admit("request-1", &router("restricted"), &[])?;
         second.finish(
             RequestReceiptOutcome::Denied,
             RequestDeliveryStatus::NotApplicable,
             Some(RequestFailureStage::PreRequest),
+        );
+        // Completion order must not change admission order or latest matching attempt.
+        first.finish(
+            RequestReceiptOutcome::Completed,
+            RequestDeliveryStatus::ServerCommitted,
+            None,
         );
         let RequestReceiptLookup::Found {
             receipt,
@@ -1061,6 +1053,10 @@ mod tests {
         assert_eq!(receipt.identity.router_id, "restricted");
         let retained = store.list(10).receipts;
         assert_eq!(retained.len(), 2);
+        assert_eq!(retained[0].identity.router_id, "restricted");
+        assert_eq!(retained[1].identity.router_id, "coding");
+        assert_eq!(store.list(1).receipts, retained[..1]);
+        assert!(store.list(0).receipts.is_empty());
         let older = retained
             .iter()
             .find(|candidate| candidate.identity.router_id == "coding")

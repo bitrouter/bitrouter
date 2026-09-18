@@ -252,25 +252,6 @@ impl InspectionTarget {
         }
     }
 
-    pub async fn checks_probe(
-        &self,
-        checker: &str,
-    ) -> Result<crate::actions::checks::CheckerProbeReport> {
-        crate::actions::administration::validate_identifier(checker)?;
-        match self {
-            Self::Local { .. } => match self
-                .inspect(DaemonInspection::ChecksProbe {
-                    checker: checker.to_string(),
-                })
-                .await?
-            {
-                DaemonInspectionReport::ChecksProbe(report) => Ok(report),
-                other => unexpected_inspection("checks probe", other),
-            },
-            Self::Remote { client, .. } => client.checks_probe(checker).await,
-        }
-    }
-
     pub async fn check_receipts(
         &self,
         limit: usize,

@@ -15,7 +15,11 @@
 //! name for a future integration without shipping a non-functional command.
 
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::sync::Arc;
+
+mod tracing_filter;
+use tracing_filter::resolve_env_filter;
 
 use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
@@ -25,7 +29,7 @@ use bitrouter::actions::requests::RequestFilters;
 use bitrouter::actions::route::RouteInput;
 use bitrouter::administration_target::{InspectionTarget, ReloadSubmission};
 use bitrouter::commands;
-use bitrouter::daemon::{self, DaemonCommand, DaemonResponse};
+use bitrouter::daemon::{self, DaemonCommand, DaemonResponse, process_is_alive};
 use bitrouter::output::reports::admin::{
     KeySignReport, PolicyCreateReport, ProviderLoginReport, ProviderLogoutReport,
 };
@@ -56,57 +60,6 @@ use bitrouter::output::reports::trajectory::{
 use bitrouter::output::{CliReport, Output};
 use bitrouter::remote_control::operations::{OperationReport, OperationStatus};
 use bitrouter_sdk::config;
-
-async fn supervise_http_shutdown<Http, Control, Hup, Term>(
-    http: Http,
-    control: Control,
-    hup: Hup,
-    term: Term,
-    shutdown: tokio::sync::oneshot::Sender<()>,
-) -> Result<()>
-where
-    Http: std::future::Future<Output = Result<()>> + Send,
-    Control: std::future::Future<Output = Result<()>> + Send,
-    Hup: std::future::Future<Output = Result<()>> + Send,
-    Term: std::future::Future<Output = Result<()>> + Send,
-{
-    let mut http = Box::pin(http);
-    let mut control = Box::pin(control);
-    let mut hup = Box::pin(hup);
-    let mut term = Box::pin(term);
-    let mut hup_open = true;
-    let trigger_result = loop {
-        tokio::select! {
-            result = &mut http => return result,
-            result = &mut control => break result,
-            result = &mut term => {
-                if result.is_err() {
-                    tracing::warn!(
-                        reason = "termination_signal_listener_unavailable",
-                        "termination-signal listener unavailable"
-                    );
-                }
-                break Ok(());
-            }
-            result = &mut hup, if hup_open => {
-                if result.is_err() {
-                    tracing::warn!(
-                        reason = "sighup_listener_unavailable",
-                        "SIGHUP listener unavailable"
-                    );
-                }
-                hup_open = false;
-            }
-        }
-    };
-
-    drop(control);
-    drop(hup);
-    drop(term);
-    let _ = shutdown.send(());
-    http.await?;
-    trigger_result
-}
 
 /// BitRouter — an LLM API router.
 #[derive(Parser)]
@@ -1157,11 +1110,6 @@ enum OperationsAction {
 
 #[derive(Subcommand)]
 enum ChecksAction {
-    /// Run a fixed synthetic daemon-side reachability and protocol probe.
-    Probe {
-        /// Configured checker id.
-        checker: String,
-    },
     /// List retained receipts from the current daemon process.
     Receipts {
         /// Maximum number of newest receipts to return.
@@ -1955,7 +1903,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     match command {
         Command::Serve { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            serve(&source).await
+            bitrouter::host::serve_with_extensions(&source, |_| Ok(())).await
         }
         Command::Start { config, log } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -2084,9 +2032,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             .await?;
             match action {
                 None => output.emit(&target.checks().await?)?,
-                Some(ChecksAction::Probe { checker }) => {
-                    output.emit(&target.checks_probe(&checker).await?)?
-                }
                 Some(ChecksAction::Receipts { limit }) => {
                     output.emit(&target.check_receipts(limit).await?)?
                 }
@@ -2947,6 +2892,10 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
             "https://env-placeholder.invalid".to_string()
         }))
     });
+    let parsed = parsed.map_err(anyhow::Error::new).and_then(|config| {
+        bitrouter::assemble::validate_host_configuration(&config)?;
+        Ok(config)
+    });
     let missing = missing.into_inner();
 
     match parsed {
@@ -3116,89 +3065,9 @@ async fn resolve_client_socket(config: Option<&Path>, socket: Option<&Path>) -> 
 
 // ===== tracing subscriber init =====
 
-/// The filter used when neither `RUST_LOG` nor `server.log_level` supplies a
-/// usable one.
-const DEFAULT_LOG_FILTER: &str = "info";
-
-/// Resolve the tracing filter. Precedence, highest first:
-///
-/// 1. **`RUST_LOG`** — the Rust convention, and the escape hatch an operator
-///    reaches for during an incident without editing (and reloading) config.
-/// 2. **`server.log_level`** from `bitrouter.yaml`. Only `serve` has a config
-///    loaded this early; every other command passes `None`, because its
-///    subscriber is installed before any config is read.
-/// 3. **`info`**.
-///
-/// Returns the filter plus an optional warning. Nothing can be logged before
-/// the subscriber this feeds is installed, so an unparseable filter string is
-/// handed back for the caller to emit *after* `init()` rather than silently
-/// swallowed — the same deferred-diagnostic shape `serve` already uses for
-/// OTel init errors.
-fn resolve_env_filter(
-    config_log_level: Option<&str>,
-) -> (tracing_subscriber::EnvFilter, Option<String>) {
-    // `EnvFilter::try_from_default_env` collapses "unset" and "set but
-    // invalid" into one `Err`, which is exactly the distinction that decides
-    // whether the config value gets a turn — so read the variable directly.
-    let rust_log = std::env::var(tracing_subscriber::EnvFilter::DEFAULT_ENV).ok();
-    resolve_env_filter_from(rust_log.as_deref(), config_log_level)
-}
-
-/// The precedence logic behind [`resolve_env_filter`], with the environment
-/// passed in so it is testable without mutating process-global state.
-fn resolve_env_filter_from(
-    rust_log: Option<&str>,
-    config_log_level: Option<&str>,
-) -> (tracing_subscriber::EnvFilter, Option<String>) {
-    let non_blank = |s: &&str| !s.trim().is_empty();
-    let (source, raw) = match (
-        rust_log.filter(non_blank),
-        config_log_level.filter(non_blank),
-    ) {
-        (Some(raw), _) => (tracing_subscriber::EnvFilter::DEFAULT_ENV, raw),
-        (None, Some(level)) => ("server.log_level", level),
-        (None, None) => return (tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER), None),
-    };
-    match parse_log_filter(raw) {
-        Ok(filter) => (filter, None),
-        Err(reason) => (
-            tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER),
-            Some(format!(
-                "invalid {source} value {raw:?}: {reason} — falling back to `{DEFAULT_LOG_FILTER}`"
-            )),
-        ),
-    }
-}
-
-/// Parse one filter string, rejecting the failure mode `EnvFilter` itself
-/// won't.
-///
-/// `EnvFilter::try_new("dbug")` **succeeds**: with no directive syntax present
-/// it reads the word as a *target* named `dbug` at trace level. The resulting
-/// filter matches nothing, so a one-character typo in `log_level` silently
-/// mutes the daemon instead of erroring — the worst possible outcome for a
-/// logging setting. So a bare word (no `=`, no `,`) must parse as a level;
-/// anything carrying directive syntax is handed to `EnvFilter` as-is.
-fn parse_log_filter(raw: &str) -> std::result::Result<tracing_subscriber::EnvFilter, String> {
-    let raw = raw.trim();
-    if !raw.contains('=')
-        && !raw.contains(',')
-        && raw
-            .parse::<tracing_subscriber::filter::LevelFilter>()
-            .is_err()
-    {
-        return Err(
-            "expected a level (`trace`, `debug`, `info`, `warn`, `error`, `off`) or an \
-             `EnvFilter` directive list such as `info,bitrouter=debug`"
-                .to_string(),
-        );
-    }
-    tracing_subscriber::EnvFilter::try_new(raw).map_err(|e| e.to_string())
-}
-
 /// Install a basic fmt-only tracing subscriber. Used for every command
 /// except `serve` and the `acp` subcommands — see
-/// [`init_serve_tracing_subscriber`] and [`init_stderr_tracing_subscriber`].
+/// `bitrouter::host` and [`init_stderr_tracing_subscriber`].
 ///
 /// Runs before any config is read, so `RUST_LOG` is the only input.
 fn init_basic_tracing_subscriber() {
@@ -3249,7 +3118,7 @@ fn session_log_path() -> anyhow::Result<PathBuf> {
 /// file**. Used for the `acp` subcommands.
 ///
 /// The fourth initializer, alongside [`init_basic_tracing_subscriber`],
-/// [`init_stderr_tracing_subscriber`], and [`init_serve_tracing_subscriber`].
+/// [`init_stderr_tracing_subscriber`], and `bitrouter::host`.
 /// It exists because an ACP session has *two* diagnostic streams — the
 /// substrate's own and the agent child's, which `spawn_agent_process` now
 /// captures and re-emits through `tracing` — and reading them means reading
@@ -3302,40 +3171,6 @@ fn init_session_log_tracing_subscriber(also_stderr: bool) -> Option<PathBuf> {
             tracing::warn!("no session log ({e}); logging to stderr only");
             None
         }
-    }
-}
-
-/// Install the full tracing subscriber for the `serve` command: fmt plus
-/// — when OTel is configured — the bridge layer that mirrors `tracing`
-/// spans into OTel via the supplied exporter's SDK tracer.
-///
-/// `tracing-opentelemetry`'s bridge layer captures its tracer eagerly,
-/// so this MUST be called after [`bitrouter_telemetry::otel::OtelExporter::new`]
-/// has built the real exporter; passing `None` (OTel disabled in config)
-/// installs the fmt-only registry.
-///
-/// This is the one path with a config in hand, so it is where
-/// `server.log_level` takes effect. Resolution happens once here — a later
-/// `bro reload` re-reads the config but cannot re-install the
-/// subscriber, so a changed `log_level` needs a restart.
-fn init_serve_tracing_subscriber(
-    exporter: Option<&bitrouter_telemetry::otel::OtelExporter>,
-    config_log_level: &str,
-) {
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-    let (env_filter, warning) = resolve_env_filter(Some(config_log_level));
-    let registry = tracing_subscriber::registry()
-        .with(env_filter)
-        .with(tracing_subscriber::fmt::layer());
-    match exporter {
-        Some(exp) => registry
-            .with(bitrouter_telemetry::otel::subscriber::tracing_subscriber_layer(exp))
-            .init(),
-        None => registry.init(),
-    }
-    if let Some(warning) = warning {
-        tracing::warn!("{warning}");
     }
 }
 
@@ -3491,10 +3326,6 @@ fn remote_cli_leaf(command: &Command) -> Option<&'static str> {
         } => Some("agents list"),
         Command::Checks { action: None, .. } => Some("checks"),
         Command::Checks {
-            action: Some(ChecksAction::Probe { .. }),
-            ..
-        } => Some("checks probe"),
-        Command::Checks {
             action: Some(ChecksAction::Receipts { .. }),
             ..
         } => Some("checks receipts"),
@@ -3538,405 +3369,6 @@ fn remote_target_flags(command: &Command) -> Option<(Option<&Path>, Option<&Path
         Command::Models { config, .. } => Some((config.as_deref(), None)),
         _ => None,
     }
-}
-
-async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
-    if let Some(located) = bitrouter::daemon_locator::locate_source(source).await? {
-        anyhow::bail!(
-            "bitrouter is already running (pid {}); use `restart` or `stop` first",
-            located.pid()
-        );
-    }
-    // Ensure the bitrouter home directory exists (zero-config first-run
-    // creates `~/.bitrouter` on demand) and chdir into it. Every
-    // relative path in the config — `database.url`,
-    // `server.control_socket`, policy / agent / mcp file references —
-    // then interprets relative to one stable location instead of
-    // whichever CWD the launcher happened to be in. The daemon's
-    // runtime artefacts (db, socket, pid, log) all land in the home.
-    let home = source.home();
-    bitrouter::paths::ensure_home_directory(home)?;
-    std::env::set_current_dir(home)
-        .with_context(|| format!("chdir to bitrouter home {}", home.display()))?;
-
-    let startup_configuration = bitrouter::reload::load_configuration_baseline(source).await?;
-    let mut cfg = startup_configuration.config().clone();
-    // Auto-enable the `claude-code` subscription provider when the user has
-    // signed in (a `claude-code` credential is in the OAuth store). Runs before
-    // the registry merge so the merge fills the inserted provider's
-    // `api_base` / `api_protocol` / auth from the fetched registry entry.
-    bitrouter::claude_code::enable_if_logged_in(&mut cfg);
-    // Fetch + merge the public provider registry before assembly, so the daemon
-    // routes every credentialed provider's registered models. Best-effort and
-    // cache-backed; a no-op when disabled or unreachable with no cache.
-    bitrouter::merge_registry_into(&mut cfg).await;
-    announce_zero_config(source, &cfg);
-    maybe_announce_telemetry(home);
-    let listen = cfg.server.listen.clone();
-    // For a `File` source the socket is resolved against the config file's
-    // directory (preserves any user override); for `Default` it lives at
-    // `<home>/bitrouter.sock`. Shared with `start`/`spawn` via `socket_path_for`.
-    let socket_path = daemon::socket_path_for(source, &cfg);
-    let pid_path = pid_path_for(&socket_path);
-    let remote_control = bitrouter::remote_control::ControlServer::from_config(
-        &cfg.control,
-        source.clone(),
-        socket_path.clone(),
-    )?;
-
-    let config_path_for_reload = match source {
-        bitrouter::paths::ConfigSource::File(path) => Some(path.as_path()),
-        bitrouter::paths::ConfigSource::Default { .. } => None,
-    };
-    let assembled = bitrouter::build_app_with_path(&cfg, config_path_for_reload).await?;
-    // The OTel exporter was just constructed (inside `build_app_with_path`).
-    // Hand its SDK tracer to the `tracing-opentelemetry` bridge layer now
-    // — the bridge captures its tracer at construction, so this can only
-    // happen after the exporter exists.
-    init_serve_tracing_subscriber(assembled.otel_exporter.as_deref(), &cfg.server.log_level);
-    // Surface any deferred OTel-init failure now that the subscriber is up.
-    if let Some(msg) = &assembled.otel_init_error {
-        tracing::error!("{msg}");
-    }
-    // Same deferral, same reason: assembly runs before the subscriber, so
-    // these are collected there and emitted here. Without this the guard is
-    // silent on exactly the path it exists for.
-    for msg in &assembled.ignored_config {
-        tracing::warn!("{msg}");
-    }
-    let workflow_trace_capture =
-        bitrouter::workflow_state::real_trace::capture_from_env().map_err(anyhow::Error::from)?;
-    if workflow_trace_capture.is_some() {
-        tracing::info!(
-            env = bitrouter::workflow_state::real_trace::WORKFLOW_TRACE_JSONL_ENV,
-            "workflow trace capture enabled"
-        );
-    }
-    let app = Arc::new(assembled.app);
-    let eval_router = bitrouter::eval::api::router(
-        assembled.eval_service.clone(),
-        assembled.db.clone(),
-        cfg.server.skip_auth,
-    );
-    let policy_store = assembled.policy_store;
-    let trajectory_outbox_for_shutdown = assembled.trajectory_outbox_publisher.clone();
-    // Clone before moving the original into `run_control_socket` — we
-    // need a handle here too so the shutdown path below can drive the
-    // exporter flush before the runtime tears down.
-    let observe_provider = assembled.observe;
-    let observe_for_shutdown = observe_provider.clone();
-    let reload_source = match source {
-        bitrouter::paths::ConfigSource::File(path) => {
-            bitrouter::reload::ReloadSource::File(path.clone())
-        }
-        bitrouter::paths::ConfigSource::Default { .. } => bitrouter::reload::ReloadSource::Default,
-    };
-    let administration = bitrouter::actions::administration::Administration {
-        source: source.clone(),
-        routing: assembled.routing_table.clone(),
-        policy: assembled.policy_runtime.clone(),
-        observe: observe_provider.clone(),
-        request_checks: Some(assembled.request_checks.clone()),
-    };
-    let acp_runtime_for_control = assembled.acp_runtime.clone();
-    let reloader = bitrouter::reload::AppReloader::new(
-        policy_store.clone(),
-        assembled.routing_table,
-        assembled.upstream_executor,
-        reload_source,
-    )
-    .with_startup_configuration(startup_configuration)
-    .with_policy_runtime(assembled.policy_runtime)
-    .with_policy_table_router(assembled.policy_table_router);
-    let server_instance_id = daemon::DaemonReloader::reload_state(&reloader)
-        .ok_or_else(|| anyhow::anyhow!("daemon reload state is unavailable at startup"))?
-        .server_instance_id;
-    let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(reloader);
-
-    let remote_control = match remote_control {
-        Some(server) => Some(
-            server
-                .with_administration(administration.clone())
-                .with_reloader(reloader.clone())
-                .bind()
-                .await?,
-        ),
-        None => None,
-    };
-
-    daemon::write_pid_file(&pid_path).await?;
-    println!(
-        "bitrouter {} — serving on {listen} (control: {})",
-        bitrouter::VERSION,
-        socket_path.display()
-    );
-    if let Some(server) = &remote_control {
-        println!(
-            "bitrouter {} — remote control on {}",
-            bitrouter::VERSION,
-            server.listen()
-        );
-    }
-
-    let http_app = app.clone();
-    let http_listen = listen.clone();
-    // The ingress SERVER span is created from the exporter's own tracer — the
-    // SDK installs no global `TracerProvider`, so there is nothing to reach
-    // for implicitly. With OTel disabled there is no ingress span at all,
-    // which is the honest behaviour: the previous `TraceLayer` ran regardless
-    // and built `tracing` spans that went nowhere.
-    let otel_router_wrapper = assembled
-        .otel_exporter
-        .as_deref()
-        .map(bitrouter_telemetry::otel::http_layer::router_wrapper);
-    let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
-    let http = async move {
-        let (inference_shutdown_tx, inference_shutdown_rx) = tokio::sync::oneshot::channel();
-        let (remote_shutdown_tx, remote_shutdown_rx) = tokio::sync::oneshot::channel();
-        // Open an OTel SERVER span per inbound request and publish it on the
-        // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
-        let otel_wrapper = move |router: axum::Router| match &otel_router_wrapper {
-            Some(wrapper) => wrapper(router),
-            None => router,
-        };
-        let inference_shutdown = async move {
-            let _ = inference_shutdown_rx.await;
-        };
-        let inference = async move {
-            match workflow_trace_capture {
-                Some(capture) => {
-                    let workflow_wrapper = capture.router_wrapper();
-                    let eval_router = eval_router.clone();
-                    http_app
-                        .serve_with_router_wrapper_and_shutdown(
-                            &http_listen,
-                            move |router| {
-                                workflow_wrapper(otel_wrapper(router.merge(eval_router.clone())))
-                            },
-                            inference_shutdown,
-                        )
-                        .await
-                }
-                None => {
-                    http_app
-                        .serve_with_router_wrapper_and_shutdown(
-                            &http_listen,
-                            move |router| otel_wrapper(router.merge(eval_router.clone())),
-                            inference_shutdown,
-                        )
-                        .await
-                }
-            }
-            .map_err(anyhow::Error::from)
-        };
-        let remote = async move {
-            match remote_control {
-                Some(server) => {
-                    server
-                        .serve_with_shutdown(async move {
-                            let _ = remote_shutdown_rx.await;
-                        })
-                        .await
-                }
-                None => {
-                    let _ = remote_shutdown_rx.await;
-                    Ok(())
-                }
-            }
-        };
-        let mut inference = Box::pin(inference);
-        let mut remote = Box::pin(remote);
-        let mut shutdown = Box::pin(async move {
-            let _ = http_shutdown_rx.await;
-        });
-
-        tokio::select! {
-            result = &mut inference => {
-                let _ = remote_shutdown_tx.send(());
-                remote.await?;
-                result
-            }
-            result = &mut remote => {
-                let _ = inference_shutdown_tx.send(());
-                inference.await?;
-                result
-            }
-            _ = &mut shutdown => {
-                let _ = inference_shutdown_tx.send(());
-                let _ = remote_shutdown_tx.send(());
-                let (inference_result, remote_result) = tokio::join!(inference, remote);
-                inference_result?;
-                remote_result
-            }
-        }
-    };
-    let locator_socket = socket_path.clone();
-    let locator_source = source.clone();
-    let locator_instance = server_instance_id;
-    let control = daemon::run_control_socket_with_acp_runtime_and_administration(
-        socket_path,
-        app.clone(),
-        listen,
-        reloader.clone(),
-        observe_provider,
-        daemon::AcpControlPlane {
-            runtime: acp_runtime_for_control,
-            metering: bitrouter::metering::MeteringStore::new(assembled.db.clone()),
-            inventory: Some(assembled.evolution.inventory()),
-            evolution: Some(assembled.evolution.clone()),
-        },
-        Some(administration),
-    );
-    let control = async move {
-        let mut control = Box::pin(control);
-        loop {
-            let probe = bitrouter::daemon_locator::endpoint_matches(
-                &locator_socket,
-                std::process::id(),
-                &locator_instance,
-            );
-            tokio::pin!(probe);
-            let matches = tokio::select! {
-                result = &mut control => return result,
-                matches = &mut probe => matches,
-            };
-            if matches {
-                let _locator = bitrouter::daemon_locator::publish(
-                    &locator_source,
-                    &locator_socket,
-                    &locator_instance,
-                )?;
-                return control.await;
-            }
-            tokio::select! {
-                result = &mut control => return result,
-                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
-            }
-        }
-    };
-
-    // SIGHUP triggers a config reload — reload should be available via either
-    // `bro reload` (the control endpoint) *or* a HUP signal. Same fan-out
-    // as the Reload command — every reloadable subsystem. SIGHUP is Unix-only;
-    // on Windows there is no equivalent, so the HUP future stays pending and
-    // reload is reached exclusively through `bro reload`.
-    let hup_reloader = reloader.clone();
-    let hup = async move {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut hup = match signal(SignalKind::hangup()) {
-                Ok(s) => s,
-                Err(e) => return Err::<(), anyhow::Error>(anyhow::Error::from(e)),
-            };
-            loop {
-                if hup.recv().await.is_none() {
-                    return Ok(());
-                }
-                match hup_reloader.reload().await {
-                    Ok(()) => tracing::info!("SIGHUP — reload succeeded"),
-                    Err(e) => tracing::warn!(error = %e, "SIGHUP reload failed"),
-                }
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            // No SIGHUP on this platform — keep the reloader handle alive and
-            // park forever so the `select!` arm below never fires.
-            let _keep = &hup_reloader;
-            std::future::pending::<()>().await;
-            Ok::<(), anyhow::Error>(())
-        }
-    };
-
-    // Termination signals end the loop the same way `bro stop` does — so
-    // the shutdown path below (observe flush, pid-file cleanup) runs in every
-    // graceful termination mode. On Unix that's SIGINT (ctrl-C) and SIGTERM
-    // (systemd / `kill`); on Windows it's the console control events
-    // (Ctrl-C / Ctrl-Break / window close / system shutdown).
-    let term = async {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut sigint = signal(SignalKind::interrupt()).map_err(anyhow::Error::from)?;
-            let mut sigterm = signal(SignalKind::terminate()).map_err(anyhow::Error::from)?;
-            tokio::select! {
-                _ = sigint.recv() => tracing::info!("SIGINT — shutting down"),
-                _ = sigterm.recv() => tracing::info!("SIGTERM — shutting down"),
-            }
-            Ok::<(), anyhow::Error>(())
-        }
-        #[cfg(windows)]
-        {
-            use tokio::signal::windows;
-            let mut ctrl_c = windows::ctrl_c().map_err(anyhow::Error::from)?;
-            let mut ctrl_break = windows::ctrl_break().map_err(anyhow::Error::from)?;
-            let mut ctrl_close = windows::ctrl_close().map_err(anyhow::Error::from)?;
-            let mut ctrl_shutdown = windows::ctrl_shutdown().map_err(anyhow::Error::from)?;
-            tokio::select! {
-                _ = ctrl_c.recv() => tracing::info!("Ctrl-C — shutting down"),
-                _ = ctrl_break.recv() => tracing::info!("Ctrl-Break — shutting down"),
-                _ = ctrl_close.recv() => tracing::info!("console close — shutting down"),
-                _ = ctrl_shutdown.recv() => tracing::info!("system shutdown — shutting down"),
-            }
-            Ok::<(), anyhow::Error>(())
-        }
-    };
-
-    // Control/termination requests signal the SDK server and then keep polling
-    // that same future until axum and every required finalizer finish. An HTTP
-    // failure still returns directly; a HUP listener failure only disables
-    // reload signaling and leaves the server running.
-    let evolution_stop = tokio_util::sync::CancellationToken::new();
-    let evolution_worker = app.language_model().cloned().map(|pipeline| {
-        let worker =
-            bitrouter::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone());
-        let stop = evolution_stop.clone();
-        tokio::spawn(async move { worker.run(pipeline, stop).await })
-    });
-    let control = async {
-        let result = control.await;
-        evolution_stop.cancel();
-        result
-    };
-    let term = async {
-        let result = term.await;
-        evolution_stop.cancel();
-        result
-    };
-    let result = supervise_http_shutdown(http, control, hup, term, http_shutdown_tx).await;
-    evolution_stop.cancel();
-    if let Some(worker) = evolution_worker
-        && worker.await.is_err()
-    {
-        tracing::warn!("checkpoint evolution worker ended unexpectedly");
-    }
-
-    if let Some(publisher) = trajectory_outbox_for_shutdown {
-        match publisher.drain_after_active_worker().await {
-            Ok(summary) if summary.failed > 0 => tracing::warn!(
-                attempted = summary.attempted,
-                delivered = summary.delivered,
-                failed = summary.failed,
-                "trajectory outbox drain completed with poison items still pending"
-            ),
-            Ok(_) => {}
-            Err(_) => tracing::warn!(
-                reason = "shutdown_drain_failed",
-                "trajectory outbox shutdown drain failed"
-            ),
-        }
-    }
-
-    // Drive the OTel exporter's flush before anything else drops — its
-    // `rt-tokio` background tasks need a live async runtime to drain,
-    // and `spawn_blocking` (inside the provider's `shutdown`) parks on
-    // a dedicated thread so the runtime is free to keep ticking. The
-    // impl is idempotent: a follow-up Drop is a no-op.
-    observe_for_shutdown.shutdown().await;
-
-    daemon::remove_pid_file(&pid_path).await;
-    result
 }
 
 async fn start(
@@ -4030,120 +3462,6 @@ async fn start(
 /// Tell the operator they're running zero-config — and exactly which
 /// providers auto-enabled from the environment, so the absence of a
 /// model later doesn't read as a bug. No-op for a `File` source.
-fn announce_zero_config(
-    source: &bitrouter::paths::ConfigSource,
-    cfg: &bitrouter_sdk::config::Config,
-) {
-    if !source.is_default() {
-        return;
-    }
-    let enabled: Vec<&str> = cfg.providers.keys().map(String::as_str).collect();
-    if enabled.is_empty() {
-        print_onboarding_hint();
-    } else {
-        bitrouter::error_report::info(format_args!(
-            "zero-config mode — auto-enabled providers: {}",
-            enabled.join(", ")
-        ));
-    }
-}
-
-/// Multi-line guidance shown when zero-config detects no credential of any
-/// kind. The recommendation chain is intentional:
-///
-///   1. `bro cloud login` — one OAuth account, every supported model.
-///   2. `BITROUTER_API_KEY` — long-lived `brk_…` key, same coverage.
-///   3. Any upstream provider the user already pays for, locally.
-///
-/// Rendered directly (not through `error_report::info`) because that helper
-/// is single-line by design.
-/// First-run telemetry notice, shown exactly once per install (guarded by a
-/// sentinel in the home). BitRouter ships telemetry **off by default**; this
-/// notice exists so opting in is an informed, one-time choice. Failure to write
-/// the sentinel is non-fatal — telemetry is never blocked on the notice.
-fn maybe_announce_telemetry(home: &std::path::Path) {
-    match bitrouter::paths::mark_telemetry_notice_shown(home) {
-        Ok(true) => {}
-        Ok(false) => return,
-        Err(e) => {
-            tracing::debug!("telemetry notice sentinel: {e:#}");
-            return;
-        }
-    }
-    let p = bitrouter::style::Palette::for_stderr();
-    eprintln!(
-        "{cyan}{bold}info:{reset} optional usage telemetry is available — and OFF by default.",
-        cyan = p.cyan,
-        bold = p.bold,
-        reset = p.reset,
-    );
-    eprintln!();
-    eprintln!("  Nothing is sent unless you opt in. Two levels are offered:");
-    eprintln!(
-        "    • metadata — model, tokens, latency, finish reason, routing (no message content)"
-    );
-    eprintln!("    • full     — the above plus request + response message content");
-    eprintln!();
-    eprintln!("  Enable it under plugins.bitrouter-telemetry.telemetry in your config:");
-    eprintln!();
-    eprintln!("       plugins:");
-    eprintln!("         bitrouter-telemetry:");
-    eprintln!("           telemetry:");
-    eprintln!("             enabled: true");
-    eprintln!("             level: metadata   # or: full");
-    eprintln!();
-    eprintln!("  Remove the block (or set enabled: false) to turn it off again.");
-    eprintln!();
-}
-
-fn print_onboarding_hint() {
-    let p = bitrouter::style::Palette::for_stderr();
-    let cli = bitrouter_sdk::invocation::name();
-    eprintln!(
-        "{cyan}{bold}info:{reset} no providers are configured yet. Choose one:",
-        cyan = p.cyan,
-        bold = p.bold,
-        reset = p.reset,
-    );
-    eprintln!();
-    eprintln!("  1. Sign in to BitRouter Cloud — one account covers every model:");
-    eprintln!();
-    eprintln!("       {cli} cloud login");
-    eprintln!("       {cli} cloud --help        # manage keys, usage, policies, billing");
-    eprintln!();
-    eprintln!("  2. Or paste a BitRouter API key:");
-    eprintln!();
-    eprintln!("       export BITROUTER_API_KEY=brk_…");
-    eprintln!();
-    eprintln!("  3. Or use a provider you already pay for, locally:");
-    eprintln!();
-    eprintln!("       {cli} providers login claude-code     # Claude Pro/Max subscription");
-    eprintln!("       {cli} providers login github-copilot  # GitHub Copilot subscription");
-    eprintln!("       {cli} providers login openai-codex    # ChatGPT subscription");
-    eprintln!();
-    eprintln!("     …or set an API-key env var:");
-    eprintln!();
-    let env_vars = other_provider_env_var_hints();
-    for var in &env_vars {
-        eprintln!("       export {var}=…");
-    }
-    eprintln!();
-}
-
-/// Deduplicated, sorted env-var names for every built-in provider except
-/// `BITROUTER_API_KEY` (rendered separately as step 2). Used by the
-/// onboarding hint.
-fn other_provider_env_var_hints() -> Vec<String> {
-    let mut vars: Vec<String> = bitrouter_providers::zero_config_env_var_providers()
-        .into_iter()
-        .map(|(_, env)| env)
-        .filter(|v| v != "BITROUTER_API_KEY")
-        .collect();
-    vars.sort();
-    vars.dedup();
-    vars
-}
-
 async fn stop(socket: &Path) -> Result<DaemonActionReport> {
     match daemon::send_command(socket, &DaemonCommand::Stop).await? {
         DaemonResponse::Ok => Ok(DaemonActionReport::simple("stop", "stopped")),
@@ -6593,41 +5911,6 @@ fn pid_path_for(socket: &Path) -> PathBuf {
     p
 }
 
-/// Liveness check: on Unix `kill -0 <pid>` returns success iff the pid is
-/// reachable (i.e. exists and we have permission to signal it). No actual
-/// signal is sent. We shell out to keep `apps/bitrouter` `#![forbid(unsafe_code)]`.
-#[cfg(unix)]
-fn process_is_alive(pid: u32) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-/// Liveness check on Windows: `tasklist` filtered to the pid. `tasklist` ships
-/// on every Windows install, so we shell out (rather than calling the Win32
-/// API) to keep `apps/bitrouter` free of `unsafe`. When no process matches,
-/// `tasklist` prints an informational line instead of a CSV row — so we look
-/// for the quoted pid the CSV format emits (`"<pid>"`).
-#[cfg(windows)]
-fn process_is_alive(pid: u32) -> bool {
-    let output = std::process::Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output();
-    match output {
-        Ok(out) => {
-            let text = String::from_utf8_lossy(&out.stdout);
-            text.contains(&format!("\"{pid}\""))
-        }
-        Err(_) => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6785,109 +6068,6 @@ mod tests {
             .map(|help| help.to_string())
             .unwrap_or_default();
         assert!(alias_launch.contains("bitrouter launch <AGENT>"));
-    }
-
-    // ===== tracing filter resolution =====
-
-    #[test]
-    fn config_log_level_is_used_when_rust_log_is_unset() {
-        let (filter, warning) = resolve_env_filter_from(None, Some("debug"));
-        assert_eq!(filter.to_string(), "debug");
-        assert!(warning.is_none());
-    }
-
-    #[test]
-    fn config_log_level_accepts_per_target_filter_syntax() {
-        let (filter, warning) = resolve_env_filter_from(None, Some("warn,bitrouter=trace"));
-        // `EnvFilter`'s `Display` does not preserve directive order.
-        let rendered = filter.to_string();
-        assert!(rendered.contains("warn"), "{rendered}");
-        assert!(rendered.contains("bitrouter=trace"), "{rendered}");
-        assert!(warning.is_none());
-    }
-
-    #[test]
-    fn rust_log_wins_over_config_log_level() {
-        let (filter, warning) = resolve_env_filter_from(Some("trace"), Some("error"));
-        assert_eq!(filter.to_string(), "trace");
-        assert!(warning.is_none());
-    }
-
-    #[test]
-    fn defaults_to_info_when_neither_source_is_set() {
-        let (filter, warning) = resolve_env_filter_from(None, None);
-        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
-        assert!(warning.is_none());
-    }
-
-    #[test]
-    fn blank_sources_fall_through_rather_than_erroring() {
-        // An empty `RUST_LOG=` must not shadow a real config value, and a
-        // blank `log_level: ""` must not be treated as a filter.
-        let (filter, warning) = resolve_env_filter_from(Some("  "), Some("debug"));
-        assert_eq!(filter.to_string(), "debug");
-        assert!(warning.is_none());
-
-        let (filter, warning) = resolve_env_filter_from(None, Some(""));
-        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
-        assert!(warning.is_none());
-    }
-
-    #[test]
-    fn invalid_config_log_level_warns_and_falls_back() {
-        let (filter, warning) = resolve_env_filter_from(None, Some("not-a-level"));
-        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
-        let warning = warning.expect("an unparseable log_level must be reported");
-        assert!(warning.contains("server.log_level"), "{warning}");
-        assert!(warning.contains("not-a-level"), "{warning}");
-    }
-
-    #[test]
-    fn typo_level_does_not_silently_mute_the_daemon() {
-        // Regression guard: `EnvFilter::try_new("dbug")` succeeds, reading the
-        // word as a *target* at trace level — a filter that matches nothing.
-        // Left unchecked, `log_level: dbug` would silence the daemon with no
-        // diagnostic at all.
-        assert_eq!(
-            tracing_subscriber::EnvFilter::try_new("dbug")
-                .expect("EnvFilter accepts a bare word as a target")
-                .to_string(),
-            "dbug=trace",
-        );
-
-        let (filter, warning) = resolve_env_filter_from(None, Some("dbug"));
-        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
-        assert!(warning.is_some(), "a typo'd level must warn, not mute");
-    }
-
-    #[test]
-    fn every_level_name_is_accepted() {
-        for level in ["trace", "debug", "info", "warn", "error", "off"] {
-            let (filter, warning) = resolve_env_filter_from(None, Some(level));
-            assert!(warning.is_none(), "{level} should be valid: {warning:?}");
-            assert_eq!(filter.to_string(), level);
-        }
-    }
-
-    #[test]
-    fn invalid_rust_log_warns_and_does_not_fall_back_to_config() {
-        // `RUST_LOG` is an explicit operator override; a typo in it should be
-        // reported rather than silently resolved from config behind the
-        // operator's back.
-        let (filter, warning) = resolve_env_filter_from(Some("not-a-level"), Some("debug"));
-        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
-        let warning = warning.expect("an unparseable RUST_LOG must be reported");
-        assert!(warning.contains("RUST_LOG"), "{warning}");
-    }
-
-    #[test]
-    fn server_config_default_log_level_is_a_valid_filter() {
-        // The default that ships in `ServerConfig` (and the JSON Schema) must
-        // survive the same parse path a user-supplied value takes.
-        let default_level = config::ServerConfig::default().log_level;
-        let (filter, warning) = resolve_env_filter_from(None, Some(&default_level));
-        assert_eq!(filter.to_string(), DEFAULT_LOG_FILTER);
-        assert!(warning.is_none());
     }
 
     enum RestartCommandKind {
@@ -7204,116 +6384,6 @@ mod tests {
         tokio::task::yield_now().await;
         let release = timed_out.await?;
         assert!(!release.ready);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn outer_shutdown_keeps_http_future_until_required_drain_recovers() -> anyhow::Result<()>
-    {
-        for control_trigger in [true, false] {
-            let accepting = Arc::new(std::sync::atomic::AtomicBool::new(true));
-            let drain_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let recovery = Arc::new(tokio::sync::Notify::new());
-            let inflight_release = Arc::new(tokio::sync::Notify::new());
-            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-            let (control_tx, control_rx) = tokio::sync::oneshot::channel();
-            let (term_tx, term_rx) = tokio::sync::oneshot::channel();
-
-            let http_accepting = accepting.clone();
-            let http_attempts = drain_attempts.clone();
-            let http_recovery = recovery.clone();
-            let http_inflight_release = inflight_release.clone();
-            let http = async move {
-                shutdown_rx
-                    .await
-                    .map_err(|_| anyhow::anyhow!("outer shutdown sender disappeared"))?;
-                http_accepting.store(false, std::sync::atomic::Ordering::SeqCst);
-                http_inflight_release.notified().await;
-                http_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                http_recovery.notified().await;
-                http_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(())
-            };
-            let control = async move {
-                control_rx
-                    .await
-                    .map_err(|_| anyhow::anyhow!("test control sender disappeared"))?;
-                Ok(())
-            };
-            let term = async move {
-                term_rx
-                    .await
-                    .map_err(|_| anyhow::anyhow!("test term sender disappeared"))?;
-                Ok(())
-            };
-            let hup = async move {
-                if control_trigger {
-                    return Err(anyhow::anyhow!("test HUP setup unavailable"));
-                }
-                std::future::pending::<anyhow::Result<()>>().await
-            };
-            let supervision = tokio::spawn(supervise_http_shutdown(
-                http,
-                control,
-                hup,
-                term,
-                shutdown_tx,
-            ));
-
-            tokio::task::yield_now().await;
-            assert!(
-                !supervision.is_finished(),
-                "a HUP setup error must not drop the HTTP server"
-            );
-            assert!(accepting.load(std::sync::atomic::Ordering::SeqCst));
-            if control_trigger {
-                control_tx
-                    .send(())
-                    .map_err(|_| anyhow::anyhow!("test control receiver disappeared"))?;
-            } else {
-                term_tx
-                    .send(())
-                    .map_err(|_| anyhow::anyhow!("test term receiver disappeared"))?;
-            }
-            tokio::task::yield_now().await;
-            assert!(!accepting.load(std::sync::atomic::Ordering::SeqCst));
-            assert_eq!(drain_attempts.load(std::sync::atomic::Ordering::SeqCst), 0);
-            assert!(
-                !supervision.is_finished(),
-                "in-flight HTTP work must finish before required drain"
-            );
-
-            inflight_release.notify_one();
-            tokio::task::yield_now().await;
-            assert_eq!(drain_attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
-            assert!(
-                !supervision.is_finished(),
-                "the outer supervisor dropped a server waiting on required drain"
-            );
-            recovery.notify_one();
-            tokio::task::yield_now().await;
-            assert_eq!(drain_attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
-            supervision.await??;
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn outer_shutdown_returns_http_errors_without_waiting_for_a_trigger() -> anyhow::Result<()>
-    {
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-        let error = supervise_http_shutdown(
-            async { Err(anyhow::anyhow!("test HTTP failure")) },
-            std::future::pending::<anyhow::Result<()>>(),
-            std::future::pending::<anyhow::Result<()>>(),
-            std::future::pending::<anyhow::Result<()>>(),
-            shutdown_tx,
-        )
-        .await
-        .err()
-        .ok_or_else(|| anyhow::anyhow!("HTTP failure unexpectedly succeeded"))?;
-        assert_eq!(error.to_string(), "test HTTP failure");
-        assert!(shutdown_rx.await.is_err());
         Ok(())
     }
 
@@ -7728,14 +6798,6 @@ mod tests {
             ],
             "agents list" => vec!["bitrouter", "--context", "workstation", "agents", "list"],
             "checks" => vec!["bitrouter", "--context", "workstation", "checks"],
-            "checks probe" => vec![
-                "bitrouter",
-                "--context",
-                "workstation",
-                "checks",
-                "probe",
-                "company",
-            ],
             "checks receipts" => vec![
                 "bitrouter",
                 "--context",

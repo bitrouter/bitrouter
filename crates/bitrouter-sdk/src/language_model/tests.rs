@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::event::PipelineEvent;
+use crate::extension::request_check::{ContentRole, Decision, Input};
 use crate::language_model::executor::MockResponse;
 use crate::language_model::routing::{PromptOverrides, RouterRequestIdentity};
 use crate::language_model::*;
@@ -518,9 +519,10 @@ struct PendingRequestChecker {
 impl request_checks::RequestCheckerRunner for PendingRequestChecker {
     async fn check(
         &self,
-        _invocation: request_checks::CheckerInvocation,
+        _binding: request_checks::RequestCheckBinding,
+        _input: Input,
         _reporter: receipts::RequestCheckReporter,
-    ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
+    ) -> std::result::Result<request_checks::CheckerResult, request_checks::CheckerFailure> {
         self.entered.notify_one();
         futures::future::pending().await
     }
@@ -532,11 +534,13 @@ struct AllowingRequestChecker;
 impl request_checks::RequestCheckerRunner for AllowingRequestChecker {
     async fn check(
         &self,
-        _invocation: request_checks::CheckerInvocation,
+        _binding: request_checks::RequestCheckBinding,
+        _input: Input,
         _reporter: receipts::RequestCheckReporter,
-    ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
-        Ok(request_checks::CheckerDecision::Allow {
-            implementation_version: Some("fixture-v1".to_owned()),
+    ) -> std::result::Result<request_checks::CheckerResult, request_checks::CheckerFailure> {
+        Ok(request_checks::CheckerResult {
+            decision: Decision::Allow,
+            revision: "fixture-v1".to_owned(),
         })
     }
 }
@@ -717,6 +721,7 @@ impl PreRequestHook for EffectiveDefaultsHook {
 enum CheckerOutcome {
     Allow,
     Deny,
+    Malformed,
     Error,
 }
 
@@ -730,21 +735,20 @@ struct RecordingOriginalChecker {
 impl request_checks::RequestCheckerRunner for RecordingOriginalChecker {
     async fn check(
         &self,
-        invocation: request_checks::CheckerInvocation,
+        binding: request_checks::RequestCheckBinding,
+        input: Input,
         _reporter: receipts::RequestCheckReporter,
-    ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
-        let saw_candidate_default = invocation.content.iter().any(|fragment| {
-            fragment.role == request_checks::ContentRole::System
+    ) -> std::result::Result<request_checks::CheckerResult, request_checks::CheckerFailure> {
+        let saw_candidate_default = input.content.iter().any(|fragment| {
+            fragment.role == ContentRole::System
                 && fragment.text.as_deref() == Some("candidate default")
         });
-        let saw_checked_default = invocation.content.iter().any(|fragment| {
-            fragment.role == request_checks::ContentRole::System
+        let saw_checked_default = input.content.iter().any(|fragment| {
+            fragment.role == ContentRole::System
                 && fragment.text.as_deref() == Some("checked-a default")
         });
-        if invocation.router_id != "checked-a"
-            || invocation.router_binding_digest != "router-v1:checked-a"
-            || invocation.checker.checker_id != "original-checker"
-            || invocation.checker.binding_digest != "checker-v1:original"
+        if binding.checker_id != "original-checker"
+            || binding.binding_digest != "checker-v1:original"
             || !saw_candidate_default
             || saw_checked_default
             || self.selector_calls.load(Ordering::SeqCst) != 0
@@ -756,12 +760,21 @@ impl request_checks::RequestCheckerRunner for RecordingOriginalChecker {
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
         match self.outcome {
-            CheckerOutcome::Allow => Ok(request_checks::CheckerDecision::Allow {
-                implementation_version: Some("fixture-v1".to_owned()),
+            CheckerOutcome::Allow => Ok(request_checks::CheckerResult {
+                decision: Decision::Allow,
+                revision: "fixture-v1".to_owned(),
             }),
-            CheckerOutcome::Deny => Ok(request_checks::CheckerDecision::Deny {
-                reason_code: Some("blocked".to_owned()),
-                implementation_version: Some("fixture-v1".to_owned()),
+            CheckerOutcome::Deny => Ok(request_checks::CheckerResult {
+                decision: Decision::Deny {
+                    reason_code: "blocked".to_owned(),
+                },
+                revision: "fixture-v1".to_owned(),
+            }),
+            CheckerOutcome::Malformed => Ok(request_checks::CheckerResult {
+                decision: Decision::Deny {
+                    reason_code: "x".repeat(65),
+                },
+                revision: "fixture-v1".to_owned(),
             }),
             CheckerOutcome::Error => Err(request_checks::CheckerFailure {
                 kind: request_checks::CheckerFailureKind::InvalidResponse,
@@ -1232,6 +1245,7 @@ async fn checked_preparation_contract(streamed: bool) -> Result<()> {
     for outcome in [
         CheckerOutcome::Allow,
         CheckerOutcome::Deny,
+        CheckerOutcome::Malformed,
         CheckerOutcome::Error,
     ] {
         let local_policy_calls = Arc::new(AtomicUsize::new(0));
@@ -1240,7 +1254,7 @@ async fn checked_preparation_contract(streamed: bool) -> Result<()> {
         let executor_calls = Arc::new(AtomicUsize::new(0));
         let executor: Arc<dyn Executor> = match outcome {
             CheckerOutcome::Allow => convergence_executor(streamed),
-            CheckerOutcome::Deny | CheckerOutcome::Error => {
+            CheckerOutcome::Deny | CheckerOutcome::Malformed | CheckerOutcome::Error => {
                 Arc::new(NeverCalledExecutor(executor_calls.clone()))
             }
         };
@@ -1262,23 +1276,50 @@ async fn checked_preparation_contract(streamed: bool) -> Result<()> {
                 calls: checker_calls.clone(),
                 selector_calls: selector_calls.clone(),
             }))
-            .request_receipt_store(store)
+            .request_receipt_store(store.clone())
             .model_selector(Arc::new(CandidateModelSelector(selector_calls.clone())));
         let result =
             run_convergence_request(Arc::new(builder.build()?), "@checked-a", streamed).await;
 
         assert_eq!(local_policy_calls.load(Ordering::SeqCst), 1);
         assert_eq!(checker_calls.load(Ordering::SeqCst), 1);
+        let retained = store.list(1);
+        let receipt = retained
+            .receipts
+            .first()
+            .ok_or_else(|| BitrouterError::internal("missing preparation receipt"))?;
+        assert_eq!(receipt.identity.router_id, "checked-a");
+        assert_eq!(
+            receipt.identity.router_binding_digest,
+            "router-v1:checked-a"
+        );
+        let check = receipt
+            .checks
+            .first()
+            .ok_or_else(|| BitrouterError::internal("missing checker receipt"))?;
+        assert_eq!(check.binding_digest.as_deref(), Some("checker-v1:original"));
+        assert!(check.invocation_id.is_some());
         match outcome {
             CheckerOutcome::Allow => {
                 assert!(result.is_ok());
                 assert_eq!(selector_calls.load(Ordering::SeqCst), 1);
+                assert_eq!(check.implementation_version.as_deref(), Some("fixture-v1"));
             }
-            CheckerOutcome::Deny | CheckerOutcome::Error => {
+            CheckerOutcome::Deny | CheckerOutcome::Malformed | CheckerOutcome::Error => {
                 assert!(result.is_err());
                 assert_eq!(selector_calls.load(Ordering::SeqCst), 0);
                 assert_eq!(executor_calls.load(Ordering::SeqCst), 0);
             }
+        }
+        if matches!(outcome, CheckerOutcome::Malformed) {
+            assert_eq!(check.status, receipts::RequestCheckStatus::Failed);
+            assert_eq!(
+                check.failure_kind,
+                Some(request_checks::CheckerFailureKind::InvalidResponse)
+            );
+            assert!(check.reason_code.is_none());
+            assert!(check.implementation_version.is_none());
+            assert!(!receipt.upstream_started);
         }
     }
     Ok(())
@@ -1290,12 +1331,14 @@ struct CountingAllowingRequestChecker(Arc<AtomicUsize>);
 impl request_checks::RequestCheckerRunner for CountingAllowingRequestChecker {
     async fn check(
         &self,
-        _invocation: request_checks::CheckerInvocation,
+        _binding: request_checks::RequestCheckBinding,
+        _input: Input,
         _reporter: receipts::RequestCheckReporter,
-    ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
+    ) -> std::result::Result<request_checks::CheckerResult, request_checks::CheckerFailure> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(request_checks::CheckerDecision::Allow {
-            implementation_version: None,
+        Ok(request_checks::CheckerResult {
+            decision: Decision::Allow,
+            revision: "fixture-v1".to_owned(),
         })
     }
 }

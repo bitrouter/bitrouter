@@ -214,9 +214,6 @@ pub enum DaemonInspection {
         input: PolicyInput,
     },
     Checks,
-    ChecksProbe {
-        checker: String,
-    },
     CheckReceipts {
         limit: usize,
     },
@@ -235,7 +232,6 @@ pub enum DaemonInspectionReport {
     Observe(ObserveReport),
     Policy(PolicyReport),
     Checks(crate::actions::checks::ChecksReport),
-    ChecksProbe(crate::actions::checks::CheckerProbeReport),
     CheckReceipts(bitrouter_sdk::language_model::receipts::RequestReceiptList),
     CheckReceipt(bitrouter_sdk::language_model::receipts::RequestReceiptLookup),
 }
@@ -656,7 +652,40 @@ pub async fn run_control_socket_with_acp_runtime_and_administration(
     acp: AcpControlPlane,
     administration: Option<Administration>,
 ) -> Result<()> {
-    let mut listener = transport::bind(&socket_path).await?;
+    let listener = bind_control_socket(&socket_path).await?;
+    run_bound_control_socket(
+        listener,
+        app,
+        listen,
+        reloader,
+        observe,
+        acp,
+        administration,
+    )
+    .await
+}
+
+/// Bound local endpoint owned by one foreground startup attempt.
+pub(crate) struct BoundControlSocket {
+    listener: transport::ControlListener,
+}
+
+pub(crate) async fn bind_control_socket(path: &Path) -> Result<BoundControlSocket> {
+    Ok(BoundControlSocket {
+        listener: transport::bind(path).await?,
+    })
+}
+
+pub(crate) async fn run_bound_control_socket(
+    bound: BoundControlSocket,
+    app: Arc<App>,
+    listen: String,
+    reloader: Arc<dyn DaemonReloader>,
+    observe: Arc<dyn ObserveStatusProvider>,
+    acp: AcpControlPlane,
+    administration: Option<Administration>,
+) -> Result<()> {
+    let mut listener = bound.listener;
     let result = accept_loop(
         &mut listener,
         &app,
@@ -1149,16 +1178,6 @@ async fn inspection_response(
                 },
             }
         }
-        DaemonInspection::ChecksProbe { checker } => {
-            match administration.checks_probe(&checker).await {
-                Ok(report) => DaemonResponse::Inspection {
-                    report: DaemonInspectionReport::ChecksProbe(report),
-                },
-                Err(error) => DaemonResponse::Error {
-                    message: format!("request-check probe failed: {error}"),
-                },
-            }
-        }
         DaemonInspection::CheckReceipts { limit } => match administration.check_receipts(limit) {
             Ok(report) => DaemonResponse::Inspection {
                 report: DaemonInspectionReport::CheckReceipts(report),
@@ -1260,28 +1279,79 @@ mod transport {
     pub struct ControlListener {
         listener: UnixListener,
         path: PathBuf,
+        identity: (u64, u64),
+        _lock: std::fs::File,
     }
 
-    /// Bind the control socket, removing any stale file first and tightening
-    /// permissions to owner-only.
+    /// Bind one owner-only endpoint, preserving active endpoints and unrelated files.
     pub async fn bind(path: &Path) -> Result<ControlListener> {
-        // A stale socket file from a crashed daemon would block the bind.
-        let _ = tokio::fs::remove_file(path).await;
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+
+        // Keep the lock file in place: unlinking it would let a new process lock
+        // a different inode while another startup still owns the old one.
+        let lock_path = path.with_extension("sock.lock");
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(&lock_path)
+            .with_context(|| format!("opening control lock {}", lock_path.display()))?;
+        lock.try_lock()
+            .with_context(|| format!("control socket {} is already owned", path.display()))?;
+        match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata) => {
+                anyhow::ensure!(
+                    metadata.file_type().is_socket(),
+                    "refusing to replace non-socket path {}",
+                    path.display()
+                );
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(250),
+                    UnixStream::connect(path),
+                )
+                .await
+                {
+                    Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
+                    _ => anyhow::bail!("control socket {} is already in use", path.display()),
+                }
+                let current = tokio::fs::symlink_metadata(path).await?;
+                anyhow::ensure!(
+                    (current.dev(), current.ino()) == (metadata.dev(), metadata.ino()),
+                    "control socket changed during startup: {}",
+                    path.display()
+                );
+                tokio::fs::remove_file(path).await?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("inspecting control endpoint"),
+        }
         let listener = UnixListener::bind(path)
             .with_context(|| format!("binding control socket {}", path.display()))?;
-        // The control surface includes Stop / Reload — only the daemon owner
-        // may reach it. `UnixListener::bind` respects the process umask
-        // (typically 022 → 0755); tighten to 0600 explicitly so any other
-        // local user is excluded.
-        use std::os::unix::fs::PermissionsExt;
+        let metadata = std::fs::symlink_metadata(path)?;
+        let bound = ControlListener {
+            listener,
+            path: path.to_path_buf(),
+            identity: (metadata.dev(), metadata.ino()),
+            _lock: lock,
+        };
         tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .await
             .with_context(|| format!("chmod 0600 {}", path.display()))?;
         tracing::info!(socket = %path.display(), "control socket listening (mode 0600)");
-        Ok(ControlListener {
-            listener,
-            path: path.to_path_buf(),
-        })
+        Ok(bound)
+    }
+
+    impl Drop for ControlListener {
+        fn drop(&mut self) {
+            use std::os::unix::fs::MetadataExt;
+            if let Ok(metadata) = std::fs::symlink_metadata(&self.path)
+                && (metadata.dev(), metadata.ino()) == self.identity
+            {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
     }
 
     impl ControlListener {
@@ -1297,7 +1367,7 @@ mod transport {
 
         /// Remove the socket file on shutdown.
         pub async fn cleanup(self) {
-            let _ = tokio::fs::remove_file(&self.path).await;
+            drop(self);
         }
     }
 
@@ -1493,6 +1563,46 @@ mod transport {
     }
 }
 
+/// Check one positive Unix PID without sending a signal.
+///
+/// Only a missing process (`ESRCH`) or an unrepresentable PID is considered
+/// dead. Permission errors retain the PID as live, so startup does not reclaim
+/// another user's PID file merely because this process cannot signal it.
+#[cfg(unix)]
+pub fn process_is_alive(pid: u32) -> bool {
+    let Some(pid) = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return false;
+    };
+    !matches!(
+        rustix::process::test_kill_process(pid),
+        Err(rustix::io::Errno::SRCH)
+    )
+}
+
+/// Liveness check on Windows: `tasklist` filtered to the pid. `tasklist` ships
+/// on every Windows install, so we shell out (rather than calling the Win32
+/// API) to keep `apps/bitrouter` free of `unsafe`. When no process matches,
+/// `tasklist` prints an informational line instead of a CSV row — so we look
+/// for the quoted pid the CSV format emits (`"<pid>"`).
+#[cfg(windows)]
+pub fn process_is_alive(pid: u32) -> bool {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output();
+    match output {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.contains(&format!("\"{pid}\""))
+        }
+        Err(_) => false,
+    }
+}
+
 // ===== PID file =====
 
 /// Write the current process id to `path`.
@@ -1683,6 +1793,60 @@ pub async fn start_and_wait(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn process_liveness_checks_one_representable_positive_pid() {
+        assert!(super::process_is_alive(std::process::id()));
+        assert!(!super::process_is_alive(0));
+        assert!(!super::process_is_alive(u32::MAX));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bound_control_socket_preserves_other_owners_and_cleans_its_own_path()
+    -> anyhow::Result<()> {
+        let home = tempfile::tempdir_in("/tmp")?;
+        let socket = home.path().join("control.sock");
+        let first = super::bind_control_socket(&socket).await?;
+        assert!(super::bind_control_socket(&socket).await.is_err());
+        assert!(socket.exists());
+        drop(first);
+        assert!(!socket.exists());
+
+        // A foreign listener that does not use our lock must also survive.
+        let foreign = tokio::net::UnixListener::bind(&socket)?;
+        assert!(super::bind_control_socket(&socket).await.is_err());
+        assert!(socket.exists());
+        drop(foreign);
+        // The now-stale socket can be reclaimed by the next host startup.
+        let recovered = super::bind_control_socket(&socket).await?;
+        drop(recovered);
+        assert!(!socket.exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bound_control_socket_does_not_remove_replacements_or_regular_files()
+    -> anyhow::Result<()> {
+        let home = tempfile::tempdir_in("/tmp")?;
+        let socket = home.path().join("control.sock");
+        let bound = super::bind_control_socket(&socket).await?;
+        std::fs::remove_file(&socket)?;
+        let replacement = tokio::net::UnixListener::bind(&socket)?;
+        drop(bound);
+        assert!(
+            socket.exists(),
+            "cleanup must not unlink another listener's inode"
+        );
+        drop(replacement);
+        std::fs::remove_file(&socket)?;
+        std::fs::write(&socket, "keep this file")?;
+        assert!(super::bind_control_socket(&socket).await.is_err());
+        assert_eq!(std::fs::read_to_string(&socket)?, "keep this file");
+        Ok(())
+    }
+
     use super::*;
 
     struct InvalidSavedConfigReloader;
@@ -1712,7 +1876,7 @@ mod tests {
 
     async fn checker_administration() -> anyhow::Result<Administration> {
         let config = bitrouter_sdk::config::parse(
-            "inherit_defaults: false\ncheckers:\n  company:\n    endpoint: http://127.0.0.1:9/check\n    contract_version: 1\n    credential_env: BITROUTER_TEST_MISSING_CHECKER_PARITY_TOKEN\n",
+            "inherit_defaults: false\ncheckers:\n  company:\n    native:\n      revision: rules-v1\n",
         )?;
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
@@ -1725,9 +1889,18 @@ mod tests {
             None,
         )
         .await?;
-        let request_checks = Arc::new(crate::request_checks::RequestCheckRuntime::activate(
-            &config,
-        )?);
+        let request_checks = Arc::new(
+            crate::request_checks::RequestCheckRuntime::activate_with_registrations(
+                &config,
+                std::collections::HashMap::from([(
+                    "company".to_owned(),
+                    bitrouter_sdk::extension::request_check::Registration::new(
+                        "rules-v1",
+                        Arc::new(|_| bitrouter_sdk::extension::request_check::Decision::Allow),
+                    ),
+                )]),
+            )?,
+        );
         let receipts = request_checks.receipts();
         let binding = bitrouter_sdk::language_model::request_checks::RequestCheckBinding {
             checker_id: "company".into(),
@@ -1783,11 +1956,6 @@ mod tests {
                 inspection: DaemonInspection::Checks,
             },
             DaemonCommand::Inspect {
-                inspection: DaemonInspection::ChecksProbe {
-                    checker: "company".into(),
-                },
-            },
-            DaemonCommand::Inspect {
                 inspection: DaemonInspection::CheckReceipts { limit: 10 },
             },
             DaemonCommand::Inspect {
@@ -1835,23 +2003,6 @@ mod tests {
         }
 
         let before = administration.check_receipts(10)?;
-        let probe = inspection_response(
-            DaemonInspection::ChecksProbe {
-                checker: "company".into(),
-            },
-            &Some(administration.clone()),
-            &reloader,
-        )
-        .await;
-        assert!(matches!(
-            probe,
-            DaemonResponse::Inspection {
-                report: DaemonInspectionReport::ChecksProbe(_)
-            }
-        ));
-        let after = administration.check_receipts(10)?;
-        assert_eq!(after.receipts, before.receipts);
-
         let local = inspection_response(
             DaemonInspection::CheckReceipt {
                 request_id: "request-1".into(),
