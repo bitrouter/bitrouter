@@ -1,5 +1,11 @@
 # Guardrails extension: implementation and acceptance
 
+> Current scope: compiled-only SDK extensions (ROUTER_EXTENSION_SPEC v0.7).
+> All HTTP/service/probe results below are historical evidence for superseded
+> implementations. They do not validate the current change. Current verification
+> is recorded in the latest sections below; remote CI/release is separate.
+
+
 Date: 2026-09-17. Scope: local 6A–6C changes in this worktree. This is not a
 claim that the branch is merged, hosted CI has passed, or artifacts are published.
 
@@ -282,3 +288,183 @@ extension SDK, evaluator/selector entry, universal registry or remote process
 manager is part of this increment. Legacy API removal remains a future explicit
 breaking change; the current delivery is one recommended author entry with a
 bounded compatibility path.
+
+## Compile-only SDK extension consolidation (2026-09-18)
+
+This section supersedes the Native/HTTP deployment and protocol expectations in
+prior sections. The current contract is ROUTER_EXTENSION_SPEC v0.6.
+
+Delivered changes:
+
+- SDK `extension::ExtensionApi` is the actual author entry; no extra API crate.
+- Callback Input/Decision contain business data, not a wire request/response.
+- HTTP checker service, checker-protocol crate, probe CLI/management routes and
+  dedicated service release artifacts are removed.
+- Existing `native.revision` config is preserved; former HTTP fields explicitly
+  block migration, including null or mixed Native/HTTP declarations.
+- Router binding, process-local receipts, resource limits and fail-closed behavior
+  remain host-owned. Timeout/cancellation cannot terminate started synchronous
+  code or free its concurrency slot early.
+- Legacy SDK Plugin/global/output/stream/migration semantics remain available;
+  they are not falsely described as replaced by an input-only capability.
+- Default host excludes the matcher; a custom host explicitly links and registers
+  it. Agent skill, CLI references and all three agent-plugin manifests agree.
+
+Independent SDK and host reviews found no blocking correctness regression. The
+host tests additionally verify ignored registration errors and missing/mismatched/
+extra registrations fail before database creation.
+
+Validation logs: `/tmp/compile-only-extension-validation/`. Process artifacts:
+`/tmp/native-extension-e2e/`. These paths are local evidence, not release artifacts.
+
+| Check | Current result |
+| --- | --- |
+| Host all-feature, all-target check | Passed |
+| SDK no-default + config_file focused tests | 15 passed (before final receipt-field cleanup; full suite below covers final behavior) |
+| Workspace all-feature nextest | 3,472 passed, 22 skipped; no failed or leaky tests |
+| Formatting | Passed |
+| Strict clippy (all targets/features, warnings denied) | Passed |
+| Doctests / strict rustdoc | 5 passed, 1 ignored / passed |
+| SDK minimal + config_file, matcher minimal | Passed |
+| Generated schema / distribution consistency | Passed |
+| Default host dependency tree | Matcher and removed protocol/service absent |
+| Native real-process scenarios | 6 passed with freshly built example; exactly 3 counted mock upstream calls |
+
+The full test build reported macOS linker compact-unwind size warnings and a
+third-party `proc-macro-error2` future-compatibility warning. Tests completed
+successfully. No live provider, production rollout, remote CI or release claim
+is implied by local verification.
+
+The completed local process run covered allow, deny without added upstream calls, an unbound
+router, streaming allow, revision mismatch and rejected HTTP configuration.
+It did not start the daemon management socket; local/remote management and
+receipts are covered by Rust integration tests. The temporary Python driver and
+its CI job were removed at the user's request; these results remain historical
+local evidence, not a maintained process-test job. Remote CI has not been run
+for this unpushed change.
+
+## Internal state and runner simplification (2026-09-18)
+
+The next slice preserves the five configuration/execution/evidence distinctions
+while removing duplicate internal representations:
+
+- Receipt admission order now drives newest-first listing and request-id lookup
+  directly; redundant sequence counters and sorting are removed. Exact receipt
+  lookup, retained-match counts, active-record retention and latest-started
+  evidence semantics are unchanged.
+- Each active checker owns its running bindings once. Management inventory is
+  projected from those bindings and current receipts, including repeated bindings
+  and configured-but-unbound registrations.
+- The host runner accepts the frozen binding, business `Input` and progress
+  reporter. `CheckerInvocation` is removed; request/router/invocation identity
+  remains in the receipt. `CheckerResult { decision, revision }` replaces the
+  duplicated `CheckerDecision` enum. The pipeline applies the business decision
+  validation once; callbacks cannot attach revisions or mutate receipts.
+- Custom `RequestCheckerRunner` implementations require a Rust API migration.
+  Extension callbacks, configuration and management JSON remain unchanged.
+  Legacy hook ordering and reload contracts are outside this slice.
+
+Validation on the final source state (logs in
+`/tmp/extension-simplification-validation/`):
+
+| Check | Result |
+| --- | --- |
+| Workspace all-feature nextest | 3,472 passed, 22 skipped |
+| Strict clippy, all targets/features | Passed |
+| Formatting / diff whitespace | Passed |
+| SDK minimal / config_file / matcher minimal | Passed |
+| Workspace doctests | 5 passed, 1 ignored |
+| Strict workspace rustdoc | Passed |
+
+Expanded existing regressions cover reversed completion order with duplicate
+request IDs, bounded newest-first lists, duplicate bindings shared across routers,
+receipt-owned original identity, and malformed runner decisions stopping selection
+and upstream execution in streaming and non-streaming paths. Existing cancellation,
+permit ownership, eviction and no-stale-allow tests remain passing. These are local
+checks; no new standalone process smoke run or remote CI result is claimed here.
+
+## Shared foreground host and author API (2026-09-18)
+
+This implements S1–S3 of `HOST_EXTENSION_DX_SPEC.md` v0.2 in the local worktree:
+
+S3 supersedes the earlier extra-registration rejection reported above; those
+earlier test results describe their own source snapshots.
+
+- `bitrouter::host::serve_with_extensions` owns the existing foreground lifecycle.
+  Official `bro serve` passes an empty registry; the regex example registers its
+  implementation and calls the same host. Low-level assembly remains available.
+- Six fragment/coverage author types now live in SDK `extension::request_check`.
+  Old `language_model::request_checks` paths have no aliases; JSON stays unchanged.
+- Valid unconfigured registrations produce sorted inactive-ID diagnostics, with
+  no runtime entry, execution slots or inventory row. Configured instances still
+  require a matching registration even without bindings. Registration errors
+  remain sticky and fail before database assembly.
+
+Extraction exposed two startup defects: readiness could precede listener binding,
+and partial startup failure could leave PID/socket artifacts. The shared host now
+binds every required listener before readiness and uses ownership-aware cleanup.
+Existing telemetry/outbox shutdown also runs after post-assembly startup failures.
+Unix socket ownership uses a stable `.sock.lock` file; the OS lock releases on
+exit, while the file intentionally remains. It is not daemon-status evidence.
+
+Independent review additionally caught unsafe PID-file truncation and Unix
+cleanup tests under a Windows-only module. Both were fixed: PID creation rejects
+foreign nonregular/invalid/live records and symlinks, creates exclusively, and
+reclaims only a stale numeric PID; cleanup checks the owned record. Unix liveness
+uses the existing rustix dependency and treats permission errors as live. Tests
+now compile under the intended platform.
+
+Maintained real-process tests are Rust-only in
+`apps/bitrouter/tests/extension_host.rs`. They launch an isolated custom host test
+binary and genuine `bro` subprocesses, use real TCP/Unix sockets and a counted
+local mock provider, and cover:
+
+- H01–H03: eight stream/nonstream allow, deny, timeout and invalid-result requests;
+  exactly two upstream calls, matching local/remote receipts and incarnation,
+  unused-registration exclusion, no initial actual usage, remote authentication.
+- H04: saved revision changes reject reload, report restart-required and retain
+  the running revision.
+- H05: missing/duplicate/mismatched registrations precede DB creation; inference
+  and remote-control port conflicts release owned endpoints. Unit tests also
+  preserve foreign socket/PID files and exercise stale/replaced paths.
+- H06: management stop, same-custom-binary restart with a new receipt incarnation,
+  and SIGTERM cleanup. Existing shutdown tests cover pending settlement drain.
+- H07: official `bro serve` with no checks, direct inference, `bro checks` and
+  `bro stop` over the same shared host.
+
+This is local macOS Unix process validation with mock inference, not paid/live
+model validation or cross-platform execution. No Python harness was added.
+Custom hosts remain foreground-only unless they implement their own launcher;
+official `bro restart` must not replace their executable.
+
+Reproduce process acceptance with:
+
+```sh
+cargo test -p bitrouter --test extension_host --all-features -- --nocapture
+```
+
+Validation logs for this slice live in `/tmp/host-extension-dx-validation/`.
+
+| Check | Result |
+| --- | --- |
+| Workspace nextest, all features | 3,494 passed; 22 skipped |
+| Rust real-process suite | 4 passed: three acceptance tests plus the subprocess entry test |
+| Strict workspace clippy, all targets/features | Passed |
+| Formatting / diff whitespace | Passed |
+| SDK minimal / config_file / matcher minimal | Passed |
+| Workspace doctests | 5 passed; 1 ignored |
+| Strict workspace rustdoc | Passed |
+| Generated config schema / registry consistency | Passed |
+| Default host normal/build dependency tree | Matcher and removed protocol/service/API crates absent |
+
+After the full suite, collision tests were tightened to require the specific bind
+error and absence of readiness output. The process suite, its strict clippy and
+workspace formatting were rerun successfully; production source did not change.
+The suite includes the S2 author-input tests and S3 unused-registration,
+sorted-diagnostic, sticky-error and configured-unbound regressions. Existing
+identity, receipt, permit, reload and legacy-hook tests remain passing.
+
+The build emitted the existing macOS compact-unwind size and third-party
+`proc-macro-error2` future-compatibility notices. No check suppression was added.
+These results do not represent remote CI, a merge, cross-platform process tests
+or a published release.

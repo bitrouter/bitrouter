@@ -7,7 +7,7 @@
 //!
 //! - `crate::auth::AuthHook` (binary module: `brvk_` validation)
 //! - `crate::policy::PolicyHook` (binary module: model + tool + spend)
-//! - the named-router HTTP request-check runtime (input allow/deny)
+//! - the named-router compiled request-check runtime (input allow/deny)
 //! - `bitrouter_telemetry::otel::OtelObserveHook` (SDK `otel` feature: per-request
 //!   OTLP trace + metric export)
 //! - `crate::metering::MeteringRecorder` (binary module: SettlementRecorder)
@@ -21,11 +21,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum_test::TestServer;
-use bitrouter_checker_protocol::v1 as checker_protocol;
 use bitrouter_sdk::config;
+use bitrouter_sdk::extension::request_check::Decision;
 use bitrouter_sdk::server::{AppState, build_router};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{method, path as wm_path};
-use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use bitrouter::auth::{NewApiKey, db as auth_db, generate};
 use bitrouter::daemon::ObserveStatusProvider;
@@ -40,7 +41,7 @@ struct FullStack {
     db: DatabaseConnection,
     brvk_secret: String,
     upstream: MockServer,
-    input_checker: MockServer,
+    input_checker: Arc<AtomicUsize>,
     otlp_collector: MockServer,
     /// Same provider production assembles. Held here so each test can
     /// call `teardown()` and drive the OTel SDK's flush via
@@ -69,44 +70,6 @@ struct PolicyDir(std::path::PathBuf);
 impl Drop for PolicyDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-#[derive(Clone, Copy)]
-struct InputChecker;
-
-impl Respond for InputChecker {
-    fn respond(&self, request: &Request) -> ResponseTemplate {
-        let Ok(invocation) = checker_protocol::decode_request(&request.body) else {
-            return ResponseTemplate::new(400);
-        };
-        let denied = invocation.content.iter().any(|fragment| {
-            fragment
-                .text
-                .as_deref()
-                .is_some_and(|text| text.to_ascii_lowercase().contains("forbidden"))
-        });
-        let response = if denied {
-            checker_protocol::Response::deny(
-                invocation.invocation_id,
-                Some("guardrail:block".to_owned()),
-                Some("full-stack-fixture-v1".to_owned()),
-            )
-        } else {
-            checker_protocol::Response::allow(
-                invocation.invocation_id,
-                Some("full-stack-fixture-v1".to_owned()),
-            )
-        };
-        let Ok(response) = response else {
-            return ResponseTemplate::new(500);
-        };
-        let Ok(body) = checker_protocol::encode_response(&response) else {
-            return ResponseTemplate::new(500);
-        };
-        ResponseTemplate::new(200)
-            .insert_header("content-type", "application/json")
-            .set_body_bytes(body)
     }
 }
 
@@ -165,13 +128,7 @@ async fn assemble_full_stack_inner(metrics_enabled: bool) -> FullStack {
         .mount(&upstream)
         .await;
 
-    // ── input checker: strict v1 decode, deterministic allow/deny. ──
-    let input_checker = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(wm_path("/check"))
-        .respond_with(InputChecker)
-        .mount(&input_checker)
-        .await;
+    let input_checker = Arc::new(AtomicUsize::new(0));
 
     // ── OTLP collector — accepts every `POST /v1/traces` for assertion ──
     let otlp_collector = MockServer::start().await;
@@ -210,8 +167,8 @@ providers:
           output_micro_usd_per_token: 10.0
 checkers:
   full-stack-input:
-    endpoint: {checker}/check
-    contract_version: 1
+    native:
+      revision: full-stack-fixture-v1
 routers:
   full-stack:
     selection:
@@ -232,11 +189,33 @@ plugins:
 {observe_block}
 "#,
         upstream = upstream.uri(),
-        checker = input_checker.uri(),
         policy_path = policy_dir.display(),
     );
     let cfg: config::Config = config::parse_with(&yaml, |_| None).expect("config parses");
-    let assembled = bitrouter::build_app(&cfg).await.expect("app assembles");
+    let calls = input_checker.clone();
+    let assembled = bitrouter::assemble::build_app_with_extensions(&cfg, None, |api| {
+        Ok(api.request_check(
+            "full-stack-input",
+            "full-stack-fixture-v1",
+            Arc::new(move |input| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                if input.content.iter().any(|fragment| {
+                    fragment
+                        .text
+                        .as_deref()
+                        .is_some_and(|text| text.to_ascii_lowercase().contains("forbidden"))
+                }) {
+                    Decision::Deny {
+                        reason_code: "guardrail.block".to_owned(),
+                    }
+                } else {
+                    Decision::Allow
+                }
+            }),
+        )?)
+    })
+    .await
+    .expect("app assembles");
     let observe = assembled.observe.clone();
 
     // ── mint a brvk_ key bound to pol_main ──
@@ -352,22 +331,14 @@ async fn e2e_full_stack_streaming_preserves_output_and_meters() {
     let body = resp.text();
     assert!(
         body.contains("123-45-6789"),
-        "request-check v1 is input-only and must leave upstream output unchanged; got:\n{body}"
+        "request-check capability is input-only and must leave upstream output unchanged; got:\n{body}"
     );
     assert!(
         !body.contains("[REDACTED]"),
         "the default host must not retain legacy output redaction; got:\n{body}"
     );
-    let checker_requests = fs
-        .input_checker
-        .received_requests()
-        .await
-        .unwrap_or_default();
-    assert_eq!(
-        checker_requests.len(),
-        1,
-        "named router must run its checker"
-    );
+    let checker_requests = fs.input_checker.load(Ordering::SeqCst);
+    assert_eq!(checker_requests, 1, "named router must run its checker");
 
     // The streaming pipeline finalises settlement asynchronously after
     // the last byte is sent; give the detached task a moment to land.
@@ -403,7 +374,7 @@ async fn e2e_full_stack_streaming_preserves_output_and_meters() {
     fs.teardown().await;
 }
 
-// ===== Test 2 — external input checker denial =====
+// ===== Test 2 — compiled input checker denial =====
 
 #[tokio::test]
 async fn e2e_full_stack_request_checker_blocks_before_upstream() {
@@ -441,16 +412,8 @@ async fn e2e_full_stack_request_checker_blocks_before_upstream() {
         row_count, 0,
         "blocked request must not produce a metering row",
     );
-    let checker_requests = fs
-        .input_checker
-        .received_requests()
-        .await
-        .unwrap_or_default();
-    assert_eq!(
-        checker_requests.len(),
-        1,
-        "denial must come from the checker"
-    );
+    let checker_requests = fs.input_checker.load(Ordering::SeqCst);
+    assert_eq!(checker_requests, 1, "denial must come from the checker");
 
     fs.teardown().await;
 }
@@ -463,7 +426,7 @@ async fn e2e_full_stack_policy_denies_disallowed_tool_before_request_checker() {
 
     // Allowed model but disallowed tool. The policy `allowed_tools` is
     // `[search]`; declaring `filesystem` violates it. PolicyHook runs before
-    // the external request checker, so no projected content may leave.
+    // the compiled request checker, so no callback should execute.
     let resp = fs
         .server
         .post("/v1/chat/completions")
@@ -486,14 +449,10 @@ async fn e2e_full_stack_policy_denies_disallowed_tool_before_request_checker() {
     // No upstream call, no metering row.
     let upstream_requests = fs.upstream.received_requests().await.unwrap_or_default();
     assert!(upstream_requests.is_empty());
-    let checker_requests = fs
-        .input_checker
-        .received_requests()
-        .await
-        .unwrap_or_default();
+    let checker_requests = fs.input_checker.load(Ordering::SeqCst);
     assert!(
-        checker_requests.is_empty(),
-        "policy rejection must run before external request checks"
+        checker_requests == 0,
+        "policy rejection must run before extension request checks"
     );
     let row_count = requests::Entity::find()
         .filter(requests::Column::ApiKeyId.eq("fullstack-key"))

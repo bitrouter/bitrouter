@@ -10,10 +10,12 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`GUARDRAILS_EXTENSION_ACCEPTANCE.md`](GUARDRAILS_EXTENSION_ACCEPTANCE.md) —
   Local implementation, test/artifact evidence and remaining release gates.
 
-- [`ROUTER_EXTENSION_SPEC.md`](ROUTER_EXTENSION_SPEC.md) — **v0.3, guardrails extraction implemented locally;
-  public release pending.** Rust-first extension authoring, current
-  router/checker contracts, and independently staged guardrails extraction with
-  explicit migration blockers; custom selector binding is a later increment.
+- [`ROUTER_EXTENSION_SPEC.md`](ROUTER_EXTENSION_SPEC.md) — **v0.7, compile-only
+  extensions implemented locally; public release pending.** Current router,
+  SDK author API, execution and migration contracts.
+- [`HOST_EXTENSION_DX_SPEC.md`](HOST_EXTENSION_DX_SPEC.md) — **v0.2, implementation
+  in this worktree; see acceptance evidence.** Shared foreground host startup, capability-owned
+  author types and inactive unused registrations, informed by Zed's extension design.
 - [`CONFIGURATION_STATE_CONTRACT_SPEC.md`](CONFIGURATION_STATE_CONTRACT_SPEC.md) —
   **implemented and locally verified.** Whole-configuration saved/running/restart
   evidence shared by local and remote status, CLI, and Code inspectors.

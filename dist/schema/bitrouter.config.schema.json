@@ -332,36 +332,7 @@
       "anyOf": [
         {
           "additionalProperties": false,
-          "description": "An external service implementing request-check v1.",
-          "properties": {
-            "contract_version": {
-              "description": "Version of the request and response contract.",
-              "format": "uint16",
-              "maximum": 65535,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "credential_env": {
-              "description": "Dedicated bearer credential environment variable.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "endpoint": {
-              "description": "Exact HTTP endpoint receiving versioned checker invocations.",
-              "type": "string"
-            }
-          },
-          "required": [
-            "endpoint",
-            "contract_version"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "A callback explicitly registered under this checker id by a custom host.",
+          "description": "A callback registered under this checker id by the host.",
           "properties": {
             "native": {
               "$ref": "#/$defs/NativeCheckerConfig",
@@ -374,7 +345,7 @@
           "type": "object"
         }
       ],
-      "description": "A request-check instance, supplied over HTTP or explicitly linked by a custom host.\nExisting HTTP configuration keeps its untagged wire shape."
+      "description": "A request-check implementation explicitly linked by a custom host.\n\nThe existing `native.revision` configuration shape remains supported. Former\nHTTP declarations are rejected with a migration diagnostic, never ignored."
     },
     "ContinuationConfig": {
       "description": "Always-active durable provider continuation lifecycle settings.",
@@ -1562,7 +1533,7 @@
       "properties": {
         "request": {
           "default": [],
-          "description": "Ordered remote checks. Every checker must allow the request.",
+          "description": "Ordered compiled checks. Every checker must allow the request.",
           "items": {
             "$ref": "#/$defs/RouterRequestCheck"
           },
@@ -1638,7 +1609,7 @@
         },
         "timeout_ms": {
           "default": 500,
-          "description": "Total checker deadline, including queue admission and response body reads.",
+          "description": "Total checker deadline, including queue admission and callback execution.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -2410,7 +2381,7 @@
         "$ref": "#/$defs/CheckerConfig"
       },
       "default": {},
-      "description": "Remote request checkers, keyed by the ids referenced from named routers.",
+      "description": "Compiled request-check extensions, keyed by the ids referenced from named routers.",
       "type": "object"
     },
     "continuation": {

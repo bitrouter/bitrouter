@@ -5,9 +5,6 @@ members = ["cargo:."]
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.31.0"
-# Keep the default host and independent checker feature/dependency closures
-# separate, including when both are archived under the same release tag.
-precise-builds = true
 # CI backends to support
 ci = "github"
 # The installers to generate for each app

@@ -1,19 +1,19 @@
 //! Human views for request-check inventory, probes, and process-local receipts.
 
+use bitrouter_sdk::extension::request_check::{
+    RequestCheckCoverageScope, RequestCheckCoverageStatus,
+};
 use bitrouter_sdk::language_model::receipts::{
     RequestCheckDispatchStatus, RequestCheckStatus, RequestDeliveryStatus, RequestFailureStage,
     RequestReceipt, RequestReceiptList, RequestReceiptLookup, RequestReceiptOutcome,
     RequestReceiptStoreHealth, RequestReceiptUnknownReason,
 };
-use bitrouter_sdk::language_model::request_checks::{
-    CheckerFailureKind, RequestCheckCoverageScope, RequestCheckCoverageStatus,
-};
+use bitrouter_sdk::language_model::request_checks::CheckerFailureKind;
 
-use crate::actions::checks::{CheckerProbeReport, ChecksReport};
+use crate::actions::checks::ChecksReport;
 use crate::output::CliReport;
 use crate::output::human::{Human, Table};
 use crate::reload::{RunningConfigState, SavedConfigState};
-use crate::request_checks::{CheckerProbeDecision, ProbeProtocolStatus, ProbeReachability};
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
@@ -301,57 +301,13 @@ impl CliReport for ChecksReport {
             return human.line("(no running request checkers)");
         }
         human.blank()?;
-        let mut checkers = Table::new([
-            "CHECKER",
-            "EXECUTION",
-            "ENDPOINT FINGERPRINT",
-            "CREDENTIAL",
-            "CONTRACT",
-            "BINDINGS",
-            "LAST PROBE",
-        ]);
+        let mut checkers = Table::new(["CHECKER", "REVISION", "REGISTERED", "BINDINGS"]);
         for checker in &self.checkers {
             checkers.push([
                 checker.checker_id.clone(),
-                match checker.execution {
-                    crate::request_checks::CheckerExecution::Http => "http",
-                    crate::request_checks::CheckerExecution::Native => "native",
-                }
-                .to_owned(),
-                checker
-                    .endpoint_fingerprint
-                    .clone()
-                    .unwrap_or_else(|| "not_applicable".to_owned()),
-                if checker.credential_ready {
-                    checker.credential_env.as_deref().unwrap_or("not_required")
-                } else {
-                    "missing"
-                }
-                .to_string(),
-                checker.contract_version.to_string(),
+                checker.revision.clone(),
+                yes_no(checker.registered).to_owned(),
                 checker.bindings.len().to_string(),
-                checker
-                    .last_probe
-                    .as_ref()
-                    .map(|probe| {
-                        format!(
-                            "{}/{} @{}",
-                            match probe.reachability {
-                                ProbeReachability::NotAttempted => "not_attempted",
-                                ProbeReachability::Unknown => "unknown",
-                                ProbeReachability::Reachable => "reachable",
-                                ProbeReachability::Unreachable => "unreachable",
-                            },
-                            match probe.protocol {
-                                ProbeProtocolStatus::NotChecked => "not_checked",
-                                ProbeProtocolStatus::Incomplete => "incomplete",
-                                ProbeProtocolStatus::Valid => "valid",
-                                ProbeProtocolStatus::Invalid => "invalid",
-                            },
-                            probe.observed_at_unix_ms
-                        )
-                    })
-                    .unwrap_or_else(|| "never".into()),
             ]);
         }
         human.table(&checkers)?;
@@ -417,58 +373,12 @@ impl CliReport for ChecksReport {
     }
 }
 
-impl CliReport for CheckerProbeReport {
-    fn render(&self, human: &mut Human<'_>) -> std::io::Result<()> {
-        human.line("synthetic request-check probe")?;
-        human.field("checker", &self.result.checker_id)?;
-        human.field("observed", self.result.observed_at_unix_ms)?;
-        human.field(
-            "reachability",
-            match self.result.reachability {
-                ProbeReachability::NotAttempted => "not_attempted",
-                ProbeReachability::Unknown => "unknown",
-                ProbeReachability::Reachable => "reachable",
-                ProbeReachability::Unreachable => "unreachable",
-            },
-        )?;
-        human.field(
-            "protocol",
-            match self.result.protocol {
-                ProbeProtocolStatus::NotChecked => "not_checked",
-                ProbeProtocolStatus::Incomplete => "incomplete",
-                ProbeProtocolStatus::Valid => "valid",
-                ProbeProtocolStatus::Invalid => "invalid",
-            },
-        )?;
-        if let Some(latency) = self.result.latency_ms {
-            human.field("latency", format!("{latency}ms"))?;
-        }
-        if let Some(version) = &self.result.implementation_version {
-            human.field("implementation", version)?;
-        }
-        if let Some(decision) = self.result.decision {
-            human.field(
-                "synthetic decision",
-                match decision {
-                    CheckerProbeDecision::Allow => "allow",
-                    CheckerProbeDecision::Deny => "deny",
-                },
-            )?;
-        }
-        if let Some(code) = &self.result.error_code {
-            human.field("error", code)?;
-        }
-        human.field("counts as usage", yes_no(self.counts_as_usage))?;
-        human.note("This fixed probe tests reachability and protocol only; actual usage appears only in request receipts.")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::output::{Format, Output};
+    use bitrouter_sdk::extension::request_check::RequestCheckCoverage;
     use bitrouter_sdk::language_model::receipts::{RequestCheckReceipt, RequestReceiptIdentity};
-    use bitrouter_sdk::language_model::request_checks::RequestCheckCoverage;
 
     #[test]
     fn unknown_receipt_never_implies_an_outcome() -> anyhow::Result<()> {
@@ -516,7 +426,6 @@ mod tests {
                 },
                 accepted_at_unix_ms: 1,
                 checks: vec![RequestCheckReceipt {
-                    contract_version: 1,
                     checker_id: Some("company".into()),
                     binding_digest: Some("sha256:checker-binding".into()),
                     invocation_id: Some("invocation-1".into()),

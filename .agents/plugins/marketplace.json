@@ -4,7 +4,7 @@
   "plugins": [
     {
       "name": "bitrouter",
-      "description": "Cost-optimize your agentic loops with the BitRouter setup and operations skill, including regex-checker HTTP setup, custom-host native checks and migration.",
+      "description": "Cost-optimize your agentic loops with the BitRouter setup and operations skill, including compiled request-check extensions, shared foreground custom-host setup and migration.",
       "source": "."
     }
   ]

@@ -20,7 +20,6 @@ name = "bro"
 path = "src/main.rs"
 
 [dependencies]
-bitrouter-checker-protocol.workspace = true
 bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp"] }
 # `server`: the inbound ingress SERVER span, which wraps the SDK router this
 # binary serves. A deployment that builds its own ingress span takes
@@ -84,7 +83,6 @@ serde_json.workspace = true
 
 [dev-dependencies]
 bitrouter-guardrails.workspace = true
-bitrouter-regex-checker = { path = "../../extensions/regex-checker/service", version = "=1.0.0-alpha.31" }
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock = "0.6"
 futures.workspace = true

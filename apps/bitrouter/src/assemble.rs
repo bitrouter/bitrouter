@@ -133,8 +133,9 @@ pub struct Assembled {
     /// the subscriber on the `serve` path, so logging directly here
     /// would be dropped.
     pub otel_init_error: Option<String>,
-    /// Configuration this binary read but will not act on — an unrecognised
-    /// `plugins.<id>` block, or an environment variable that has been renamed.
+    /// Startup diagnostics for ignored configuration or inactive registrations:
+    /// an unrecognised `plugins.<id>` block, a renamed environment variable,
+    /// or a compiled capability that configuration does not declare.
     ///
     /// Carried out rather than logged in place, for the same reason as
     /// [`Self::otel_init_error`]: on the `serve` path assembly runs *before*
@@ -239,8 +240,9 @@ pub fn validate_host_configuration(config: &Config) -> Result<()> {
     anyhow::ensure!(
         !config.plugins.contains_key("bitrouter-guardrails"),
         "plugins.bitrouter-guardrails requires migration: the default bro no longer \
-         includes the guardrails matcher. Deploy the independent bitrouter-regex-checker \
-         service and bind checkers through routers.<id>.checks.request. It checks input \
+         includes the guardrails matcher. Compile the regex extension into a custom host, \
+         register it through bitrouter_sdk::extension::ExtensionApi, and bind it through \
+         routers.<id>.checks.request. The request-check capability checks input \
          only and does not replace global or output block/redact protection. Review \
          every protected entry point and output requirement before explicitly removing \
          the old key, including empty/null configuration; see docs/GUARDRAILS_EXTENSION.md."
@@ -402,44 +404,38 @@ pub async fn build_app_with_path(
 pub async fn build_app_with_extensions(
     config: &Config,
     config_path: Option<&std::path::Path>,
-    register: impl FnOnce(&mut crate::extension::ExtensionApi) -> Result<()>,
+    register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
 ) -> Result<Assembled> {
-    let mut extensions = crate::extension::ExtensionApi::new();
+    let mut extensions = bitrouter_sdk::extension::ExtensionApi::new();
     register(&mut extensions).context("registering extensions")?;
-    let native = extensions.into_native().context("registering extensions")?;
-    assemble_app(config, config_path, native).await
-}
-
-/// Legacy compatibility entry for hosts that already collect [`NativeChecker`] values.
-///
-/// New custom hosts should use [`build_app_with_extensions`]. This wrapper
-/// feeds the same private assembly and request-check runtime; it does not
-/// create a parallel registration or execution path. It remains available for
-/// the current alpha API; removal requires an announced breaking SDK release
-/// with migration notes.
-///
-/// [`NativeChecker`]: crate::request_checks::NativeChecker
-///
-/// Registrations are inert until referenced by a router's `checks.request`.
-/// The default CLI never supplies native registrations.
-pub async fn build_app_with_checkers(
-    config: &Config,
-    config_path: Option<&std::path::Path>,
-    native: std::collections::HashMap<String, crate::request_checks::NativeChecker>,
-) -> Result<Assembled> {
+    let native = extensions
+        .into_registrations()
+        .context("registering extensions")?;
     assemble_app(config, config_path, native).await
 }
 
 async fn assemble_app(
     config: &Config,
     config_path: Option<&std::path::Path>,
-    native: std::collections::HashMap<String, crate::request_checks::NativeChecker>,
+    native: std::collections::HashMap<
+        String,
+        bitrouter_sdk::extension::request_check::Registration,
+    >,
 ) -> Result<Assembled> {
     validate_host_configuration(config)?;
     config.validate_router_config()?;
-    let request_checks =
-        Arc::new(crate::request_checks::RequestCheckRuntime::activate_with_native(config, native)?);
-    let ignored_config = ignored_config_warnings(config);
+    let mut inactive = native
+        .keys()
+        .filter(|id| !config.checkers.contains_key(*id))
+        .collect::<Vec<_>>();
+    inactive.sort();
+    let mut ignored_config = ignored_config_warnings(config);
+    ignored_config.extend(inactive.into_iter().map(|id| {
+        format!("request-check registration '{id}' is inactive: no checkers.{id} declaration")
+    }));
+    let request_checks = Arc::new(
+        crate::request_checks::RequestCheckRuntime::activate_with_registrations(config, native)?,
+    );
     // Validate and construct ingress aliases before opening the database or
     // performing any other startup work. A custom transform must not run ahead
     // of Stage 0 and shadow `@preset` or reserved `bitrouter/` addresses.

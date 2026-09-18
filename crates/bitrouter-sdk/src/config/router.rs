@@ -33,7 +33,7 @@ pub struct RouterConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct RouterChecks {
-    /// Ordered remote checks. Every checker must allow the request.
+    /// Ordered compiled checks. Every checker must allow the request.
     pub request: Vec<RouterRequestCheck>,
 }
 
@@ -43,7 +43,7 @@ pub struct RouterChecks {
 pub struct RouterRequestCheck {
     /// Checker id under the top-level `checkers` map.
     pub checker: String,
-    /// Total checker deadline, including queue admission and response body reads.
+    /// Total checker deadline, including queue admission and callback execution.
     #[serde(default = "default_checker_timeout_ms")]
     pub timeout_ms: u64,
     /// Maximum projected text bytes. Oversize input is rejected, never truncated.
@@ -54,11 +54,11 @@ pub struct RouterRequestCheck {
 /// Default total checker deadline.
 pub const DEFAULT_CHECKER_TIMEOUT_MS: u64 = 500;
 /// Longest configurable checker deadline.
-pub const MAX_CHECKER_TIMEOUT_MS: u64 = bitrouter_checker_protocol::v1::MAX_TIMEOUT_MS;
-/// Default serialized checker invocation limit.
+pub const MAX_CHECKER_TIMEOUT_MS: u64 = crate::extension::request_check::MAX_TIMEOUT_MS;
+/// Default projected-text byte limit.
 pub const DEFAULT_CHECKER_MAX_INPUT_BYTES: u64 = 256 * 1024;
-/// Largest configurable serialized checker invocation limit.
-pub const MAX_CHECKER_INPUT_BYTES: u64 = bitrouter_checker_protocol::v1::MAX_INPUT_BYTES;
+/// Largest configurable projected-text byte limit.
+pub const MAX_CHECKER_INPUT_BYTES: u64 = crate::extension::request_check::MAX_INPUT_BYTES;
 /// Maximum number of request checks on one router.
 pub const MAX_REQUEST_CHECKS_PER_ROUTER: usize = 16;
 

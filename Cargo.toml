@@ -30,7 +30,6 @@ keyring = { version = "3", default-features = false, features = [
 ] }
 
 # internal crates
-bitrouter-checker-protocol = { path = "crates/bitrouter-checker-protocol", version = "1.0.0-alpha.31" }
 bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.31", default-features = false }
 bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.31" }
 bitrouter-guardrails = { path = "extensions/regex-checker/matcher", version = "1.0.0-alpha.31" }

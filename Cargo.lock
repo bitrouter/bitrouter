@@ -664,10 +664,8 @@ dependencies = [
  "axum",
  "axum-test",
  "base64 0.22.1",
- "bitrouter-checker-protocol",
  "bitrouter-guardrails",
  "bitrouter-providers",
- "bitrouter-regex-checker",
  "bitrouter-sdk",
  "bitrouter-telemetry",
  "bitrouter-tui",
@@ -711,19 +709,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-checker-protocol"
-version = "1.0.0-alpha.31"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "bitrouter-guardrails"
 version = "1.0.0-alpha.31"
 dependencies = [
  "async-trait",
- "bitrouter-checker-protocol",
  "bitrouter-sdk",
  "futures",
  "regex",
@@ -758,23 +747,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitrouter-regex-checker"
-version = "1.0.0-alpha.31"
-dependencies = [
- "axum",
- "bitrouter-checker-protocol",
- "bitrouter-guardrails",
- "clap",
- "reqwest",
- "serde",
- "serde-saphyr",
- "serde_json",
- "subtle",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "bitrouter-sdk"
 version = "1.0.0-alpha.31"
 dependencies = [
@@ -786,7 +758,6 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
- "bitrouter-checker-protocol",
  "eventsource-stream",
  "futures",
  "futures-core",

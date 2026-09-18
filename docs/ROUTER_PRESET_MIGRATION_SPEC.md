@@ -6,7 +6,7 @@
 
 本文记录原始 M0–M1 第一批中的路由配置与身份迁移子批次，不代表原始六项已全部完成。
 整体配置状态契约另见 [CONFIGURATION_STATE_CONTRACT_SPEC.md](CONFIGURATION_STATE_CONTRACT_SPEC.md)。
-本文保留 R1–R6 的历史范围；后续检查回执、HTTP checker 和诊断的当前契约见
+本文保留 R1–R6 的历史范围；后续编译式 request-check、回执和诊断的当前契约见
 [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md)。Guardrails 独立制品仍未交付。
 首批目标是：用户直接配置、调用、诊断一个 router，而不必同时理解 preset。
 默认 coding router 复用现有 policy-lock；本批不开发新的模型选择算法。
@@ -33,7 +33,7 @@
 批次内：统一配置语义、直接寻址、policy 绑定、默认 coding 初始化、旧 preset
 兼容输入与迁移、CLI/远程诊断、既有成功与失败行为的回归。
 
-下一批才交付 HTTP checker 和覆盖提前拒绝路径的独立执行回执；它们依赖本批
+历史下一批交付 HTTP checker 和覆盖提前拒绝路径的独立执行回执（HTTP 路径现已收敛为编译式 extension）；它们依赖本批
 建立的 router 身份。本批的请求历史只声明现有 settlement 记录的覆盖范围，
 不能声称已完成原 M1 的完整回执保证。
 

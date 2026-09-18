@@ -2,7 +2,7 @@
   "name": "bitrouter",
   "displayName": "BitRouter",
   "version": "0.1.0",
-  "description": "Cost-optimize your agentic loops: route every model call through the cheapest viable path. Bundles the BitRouter setup and operations skill, including regex-checker HTTP setup, custom-host native checks and migration.",
+  "description": "Cost-optimize your agentic loops: route every model call through the cheapest viable path. Bundles the BitRouter setup and operations skill, including compiled request-check extensions, shared foreground custom-host setup and migration.",
   "homepage": "https://bitrouter.ai",
   "repository": "https://github.com/bitrouter/bitrouter",
   "license": "Apache-2.0",

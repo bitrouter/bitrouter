@@ -3,9 +3,12 @@
 //! Assembly layer: turns a [`bitrouter_sdk::config::Config`] into a running
 //! [`bitrouter_sdk::App`], and carries the management-command logic.
 //!
-//! Custom hosts register typed capabilities through [`extension::ExtensionApi`]
-//! and [`assemble::build_app_with_extensions`]. Router configuration explicitly
-//! binds those capabilities; host assembly retains execution and receipt ownership.
+//! Foreground custom hosts register typed capabilities through
+//! [`bitrouter_sdk::extension::ExtensionApi`] and [`host::serve_with_extensions`],
+//! sharing the product's complete service and management lifecycle. Embeddings
+//! that own their listeners can use [`assemble::build_app_with_extensions`].
+//! Router configuration explicitly binds capabilities; host assembly retains
+//! execution and receipt ownership.
 //! The default binary does not link concrete extension implementations. The SDK
 //! never depends back on this product host; `main.rs` is the CLI entry point.
 
@@ -38,9 +41,9 @@ pub mod db;
 pub mod error_report;
 pub mod eval;
 pub mod evolution;
-pub mod extension;
 pub mod gateways;
 pub mod harness;
+pub mod host;
 mod local_cli;
 pub mod mcp_registry;
 pub mod metering;
@@ -63,6 +66,7 @@ pub mod skills;
 pub mod spawn;
 pub mod style;
 pub mod tools;
+mod tracing_filter;
 pub mod trajectory;
 pub mod update;
 pub mod workflow_state;

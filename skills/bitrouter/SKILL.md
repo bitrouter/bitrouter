@@ -168,7 +168,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 
 ## Gotchas
 
-- HTTP uses `bitrouter-regex-checker`; native checks need a custom host. Legacy `plugins.bitrouter-guardrails` blocks startup; see `references/guardrails.md`.
+- Request-check extensions use SDK ExtensionApi and the shared foreground host. Restart the same custom binary, not official `bro restart`. No HTTP service or probe; legacy `plugins.bitrouter-guardrails` blocks startup. See `references/guardrails.md`.
 - **A Skill does not grant command execution.** If the host cannot run local
   processes, explain that this local integration is unavailable; do not suggest
   the removed OSS origin MCP server as a fallback.

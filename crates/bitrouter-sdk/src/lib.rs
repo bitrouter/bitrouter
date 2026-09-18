@@ -38,6 +38,7 @@
 //!     Ungated and dependency-free; rendering it onto a wire is
 //!     `bitrouter-telemetry`'s job.
 //!   - [`plugin`] — [`PluginId`] and SQL [`MigrationItem`]s.
+//!   - [`extension`] — registration and typed capabilities for compiled extensions.
 //!
 //! - **Optional features** (off by default):
 //!   - `server` — an [axum] HTTP front-end ([`server::build_router`],
@@ -103,12 +104,12 @@
 //! explicitly announced breaking SDK release with migration notes.
 //!
 //! New request-check extension authors use
-//! `bitrouter::extension::ExtensionApi::request_check` in the product host crate,
+//! [`extension::ExtensionApi::request_check`] in this SDK,
 //! called through `bitrouter::assemble::build_app_with_extensions`. This
 //! restricted registration path provides callbacks for explicit router bindings;
 //! it does not grant the builder, global hooks or migrations. It does not replace
 //! legacy global/output protection with input-only checks. See the extension
-//! guide in the repository for the runnable native and HTTP examples.
+//! guide in the repository for a runnable custom-host example.
 //!
 //! With the `server` feature on, `app.serve("0.0.0.0:4356")` wires the
 //! whole router and runs it until SIGTERM.
@@ -141,11 +142,10 @@
 //! - `bitrouter-telemetry` — optional telemetry egress: the OTLP exporter, the
 //!   inbound ingress span, and the `tracing` ↔ OpenTelemetry bridge.
 //! - `bitrouter-guardrails` — regex rules and the input request-check callback.
-//!   The default library has no SDK dependency; the optional `sdk` feature
+//!   It depends on this SDK's extension contract. Its optional `sdk` feature
 //!   retains legacy global/request-scoped and output block/redact hooks for
 //!   compatible custom hosts. These hooks are not the new request-check API.
-//! - `bitrouter-regex-checker` — independent HTTP delivery of that input checker.
-//!   Content policy is a deployment's own call, not a wire standard.
+//!   Content policy is a deployment's own call.
 //!
 //! Everything else in that category (auth, policy, charging, metering) is
 //! **deployment-specific business logic, not shared library code**. The OSS
@@ -163,6 +163,7 @@ pub mod app;
 pub mod caller;
 pub mod error;
 pub mod event;
+pub mod extension;
 // The CLI name a user-facing hint should tell the operator to type. Ungated:
 // every layer that renders a "run `… <subcommand>`" hint needs it.
 pub mod invocation;

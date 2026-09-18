@@ -4,45 +4,33 @@
 Configured rules decide its purpose: restricted text, secret-like patterns, or
 selected personal identifiers. This is not a comprehensive PII detector.
 
-| Directory | Cargo package | Purpose |
-| --- | --- | --- |
-| `matcher/` | `bitrouter-guardrails` | Reusable rules and `checker::callback`; old library name retained for compatibility |
-| `service/` | `bitrouter-regex-checker` | Optional HTTP delivery; executable also named `bitrouter-regex-checker` |
+The `matcher/` directory contains the `bitrouter-guardrails` Cargo package. Its
+existing package name is retained for compatibility. Beta extensions compile into
+a custom Rust host; there is no standalone checker service or remote extension
+protocol. The official `bro` binary does not link the regex implementation.
 
-Both delivery modes use the same ordinary function:
-`Fn(&v1::Request) -> CheckDecision + Send + Sync`. The bounded input and decision
-contract live in `bitrouter-checker-protocol`; there is no general extension
-registry, manifest or dynamically loaded Rust code.
+## Register in a custom Rust host
 
-## Default bro: HTTP delivery
-
-Create the [rules file](service/README.md), then run from the workspace root:
-
-```sh
-cargo run --release -p bitrouter-regex-checker -- --rules rules.yaml
-```
-
-Bind the endpoint through `checkers.<id>` and the intended router's
-`checks.request`. The official bro binary neither links the matcher nor starts
-this service. See the [operation and migration guide](../../docs/GUARDRAILS_EXTENSION.md).
-
-## Custom Rust host: native delivery
-
-Link the matcher with default features. New extension modules register
-`checker::callback(rules)` through the restricted `ExtensionApi`:
+Link `bitrouter-guardrails` with default features. Extension modules register
+`checker::callback(rules)` through the SDK's restricted `ExtensionApi`:
 
 ```rust
-use bitrouter::extension::ExtensionApi;
+use bitrouter_sdk::extension::ExtensionApi;
 use bitrouter_guardrails::{checker, rules::RuleSet};
 
 fn register(api: &mut ExtensionApi, rules: RuleSet) -> anyhow::Result<()> {
-    api.request_check("secret-check", "secret-rules-v1", checker::callback(rules))
+    api.request_check("secret-check", "secret-rules-v1", checker::callback(rules))?;
+    Ok(())
 }
 ```
 
 The custom host calls this function inside
-`assemble::build_app_with_extensions(config, config_path, |api| register(api, rules))`
-and awaits assembly. One module can register multiple instances with distinct IDs;
+`bitrouter::host::serve_with_extensions(&source, |api| register(api, rules))`
+and awaits shutdown. `source` is an existing `bitrouter::paths::ConfigSource`.
+This entry owns the process working directory, tracing subscriber and signal
+handlers. Run one host per process and let it initialize tracing.
+The low-level `assemble::build_app_with_extensions` remains available for embedding.
+One module can register multiple instances with distinct IDs;
 registration collects callbacks and does not run checks or install global hooks.
 The API does not expose the full builder, pipeline context, credentials, receipt
 writer or migrations. The configuration is explicit:
@@ -59,66 +47,95 @@ checkers:
 #       timeout_ms: 500
 ```
 
-The registration id, `secret-check`, is the same instance id used by configuration
-and router bindings. The registration revision must match configuration and must
-change when code or rules change. It is a declared identity, not cryptographic
-attestation. Duplicate IDs and invalid IDs/revisions fail registration; callback
-registration errors prevent activation. Missing, mismatched and extra registrations
-without matching Native configuration also fail activation. A configured registration
-without a router binding stays inert; a probe invokes it explicitly with
-synthetic text. A native declaration alone cannot install code into standard bro.
+The registration id is the instance id used by configuration and router bindings.
+Its revision must match configuration and must change when code or rules change.
+This is a declared identity, not cryptographic attestation. Duplicate IDs and
+invalid IDs/revisions fail registration; registration errors prevent activation.
+Missing or mismatched registrations for configured instances fail activation,
+including instances without router bindings. Valid registrations absent from
+configuration remain inactive with a sorted startup diagnostic; they do not
+appear in `bro checks` or allocate execution slots. A configured registration
+without a router binding appears in inventory without request evidence.
+A native declaration alone cannot install code into standard `bro`: adding or
+upgrading extension code requires rebuilding the custom host.
 
-See the [runnable custom-host example](../../apps/bitrouter/examples/native_regex_checker.rs):
+All author input, fragment, coverage and decision types live in
+`bitrouter_sdk::extension::request_check`. The callback receives `Input` and returns
+`Decision::Allow` or `Decision::Deny { reason_code }`. Input contains bounded entry
+text and coverage information, without an HTTP envelope. Fragment order and
+newline boundaries are preserved by the regex matcher. Denials return a fixed
+reason code; rule names and matched text are not exposed in the decision.
+
+Use a strict input rule document with the
+[runnable custom-host example](../../apps/bitrouter/examples/native_regex_checker.rs):
+
+```yaml
+scope: input
+rules:
+  - name: credential
+    pattern: 'token-[0-9]+'
+    action: block
+```
 
 ```sh
 cargo run -p bitrouter --example native_regex_checker -- bitrouter.yaml rules.yaml
 ```
 
 Set `server.listen: 127.0.0.1:4356` (or another free loopback port) in the
-example config. It serves model HTTP requests at that address and does not start
-the daemon control socket or implement the complete bro CLI lifecycle. In a
+example config. The shared host serves inference, the local daemon control socket,
+and the optional authenticated remote control listener. It reuses configuration
+baselines, reload, receipts, signals and shutdown from `bro serve`.
+In a
 separate project, explicitly depend on `bitrouter`, `bitrouter-guardrails`,
-`bitrouter-sdk`, `axum`, `tokio`, `serde-saphyr` and `anyhow` as used by the example.
-The normal bro dependency graph excludes the matcher; example/test dependencies
+`bitrouter-sdk`, `tokio`, `serde-saphyr` and `anyhow` as used by the example.
+The normal `bro` dependency graph excludes the matcher; example/test dependencies
 are development-only.
 
-Both modes share projection, frozen bindings, concurrency admission, deadlines,
-result validation, fail-closed execution and receipts. Native code runs in the
-blocking pool, is trusted process-local code, and is not a sandbox. Timeout or
-cancellation stops waiting; started CPU work retains its concurrency permit until
-completion. Neither mode inspects generated output or provides redaction.
+This is a foreground host, not the complete `bro` CLI. Use `bro --config
+bitrouter.yaml checks` (and `checks receipts` or `stop`) to target its management
+socket. Restart by invoking this same custom executable or its service manager.
+Do not use official `bro restart` to replace it: that binary has no registered
+extension, and the example does not implement the `serve` subcommand expected by
+the default background launcher. Changing bindings or startup-loaded rules
+requires restarting the custom host.
+
+The host owns projection, frozen bindings, concurrency admission, deadlines,
+result validation, fail-closed execution and receipts. Extension code runs in the
+blocking pool as trusted process-local code; it is not sandboxed. Timeout or
+cancellation stops waiting, but started work retains its concurrency permit until
+completion. The request-check capability does not inspect generated output or
+provide redaction. Extensions can call external services themselves, but the host
+does not provide a remote extension transport.
 
 ## Legacy SDK compatibility
 
 The matcher's optional `sdk` feature retains `GuardrailsPlugin` and old
 input/output hook APIs for legacy custom-host assembly. Those hooks have
 global/per-request rule deposits and stream block/redact semantics. They are
-distinct from the new router-bound native checker and do not inherit its receipts.
-New native request checks use `ExtensionApi` and do not require this feature.
+distinct from the router-bound request-check capability and do not inherit its
+receipts. New request checks use `ExtensionApi` and do not require this feature.
 
-The earlier `NativeChecker` / `build_app_with_checkers` map entry remains a
-low-level compatibility wrapper over the same host assembly and request-check runtime.
-It is not the recommended author entry for new code. Legacy `Plugin` /
+The alpha `NativeChecker` / `build_app_with_checkers` map entry and
+`bitrouter::extension` import are removed. Migrate registration to
+`bitrouter_sdk::extension::ExtensionApi` and host assembly to
+`build_app_with_extensions`. HTTP checker declarations are rejected during
+configuration loading; keep the router binding and replace the service with a
+compiled implementation and matching `native.revision`. Legacy `Plugin` /
 `AppBuilder::plugin` still permit host hooks and migrations; these privileges are
 not exposed by `ExtensionApi`.
 
-These APIs are retained during the current alpha SDK compatibility window.
+The legacy `Plugin` and hook APIs are retained during the current alpha SDK
+compatibility window.
 Removal requires an explicitly announced breaking SDK release and migration
 notes; no removal date is scheduled. Preserve a compatible custom host or prior
 deployment when global or output protection is required: binding an input check
 to a router does not reproduce those guarantees. See the
-[migration scope checklist](../../docs/GUARDRAILS_EXTENSION.md#migrate-the-former-built-in-plugin).
+[operation and migration guide](../../docs/GUARDRAILS_EXTENSION.md).
 
 ## Verification
 
 ```sh
 cargo check -p bitrouter-guardrails --no-default-features
 cargo test -p bitrouter-guardrails --all-features
-cargo test -p bitrouter-regex-checker
 cargo test -p bitrouter --test request_checks
 ```
-
-The old matcher package stays named `bitrouter-guardrails`. The newly introduced
-service package, executable and archives use `bitrouter-regex-checker`; this is a
-WIP naming change, not a rename of the legacy SDK plugin or its configuration key.
-HTTP v1 and existing HTTP checker configuration remain compatible.

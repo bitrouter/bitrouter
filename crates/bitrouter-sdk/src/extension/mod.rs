@@ -6,10 +6,10 @@
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
-use bitrouter_checker_protocol::capability::CheckCallback;
+use crate::error::{BitrouterError, Result};
+use request_check::{Callback, Registration};
 
-use crate::request_checks::NativeChecker;
+pub mod request_check;
 
 /// Collects trusted, statically linked capability implementations for a host.
 ///
@@ -18,7 +18,7 @@ use crate::request_checks::NativeChecker;
 /// application. Registration does not execute callbacks or bind them globally.
 #[derive(Default)]
 pub struct ExtensionApi {
-    request_checks: HashMap<String, NativeChecker>,
+    request_checks: HashMap<String, Registration>,
     invalid: Option<String>,
 }
 
@@ -31,9 +31,9 @@ impl ExtensionApi {
     /// Register one native request-check implementation.
     ///
     /// `id` uses the same grammar as checker ids in BitRouter configuration.
-    /// `revision` is returned as the v1 implementation version, so it must
-    /// satisfy that protocol field's bounds. Duplicate ids are rejected and
-    /// never replace the first registration.
+    /// `revision` identifies the code or rules used for execution and receipts.
+    /// It must satisfy the same bounds as configured native revisions. Duplicate
+    /// ids are rejected and never replace the first registration.
     ///
     /// Any registration error invalidates the whole collection. This prevents
     /// an extension that ignores the returned error from activating a partial
@@ -42,46 +42,46 @@ impl ExtensionApi {
         &mut self,
         id: &str,
         revision: &str,
-        callback: Arc<CheckCallback>,
+        callback: Arc<Callback>,
     ) -> Result<()> {
         if let Some(message) = &self.invalid {
-            return Err(anyhow!(message.clone()));
+            return Err(BitrouterError::bad_request(message.clone()));
         }
         if !valid_checker_id(id) {
             return self.reject(format!(
                 "invalid checker id '{id}' (use a lowercase letter followed by up to 63 lowercase letters, digits, '_' or '-')"
             ));
         }
-        if let Err(error) =
-            bitrouter_checker_protocol::v1::validate_implementation_version(Some(revision))
-        {
+        if let Err(error) = request_check::validate_revision(revision) {
             return self.reject(format!(
-                "checker '{id}' native revision is invalid for request-check v1: {error}"
+                "checker '{id}' native revision is invalid: {error}"
             ));
         }
         match self.request_checks.entry(id.to_owned()) {
             Entry::Occupied(_) => {
                 let message = format!("native request checker '{id}' is already registered");
                 self.invalid = Some(message.clone());
-                Err(anyhow!(message))
+                Err(BitrouterError::bad_request(message))
             }
             Entry::Vacant(entry) => {
-                entry.insert(NativeChecker::new(revision, callback));
+                entry.insert(Registration::new(revision, callback));
                 Ok(())
             }
         }
     }
 
-    pub(crate) fn into_native(self) -> Result<HashMap<String, NativeChecker>> {
+    /// Finish registration before activating the host. Any prior error prevents
+    /// consumption, even when the caller ignored that registration error.
+    pub fn into_registrations(self) -> Result<HashMap<String, Registration>> {
         match self.invalid {
-            Some(message) => Err(anyhow!(message)),
+            Some(message) => Err(BitrouterError::bad_request(message)),
             None => Ok(self.request_checks),
         }
     }
 
     fn reject(&mut self, message: String) -> Result<()> {
         self.invalid = Some(message.clone());
-        Err(anyhow!(message))
+        Err(BitrouterError::bad_request(message))
     }
 }
 
@@ -98,12 +98,27 @@ fn valid_checker_id(id: &str) -> bool {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use bitrouter_checker_protocol::capability::CheckDecision;
+    use super::request_check::Decision;
 
     use super::*;
 
-    fn allow_callback() -> Arc<CheckCallback> {
-        Arc::new(|_| CheckDecision::Allow)
+    fn allow_callback() -> Arc<Callback> {
+        Arc::new(|_| Decision::Allow)
+    }
+
+    #[test]
+    fn completed_registration_preserves_callback_and_revision() -> Result<()> {
+        let callback = allow_callback();
+        let mut api = ExtensionApi::new();
+        api.request_check("secrets", "rules-v1", callback.clone())?;
+
+        let registrations = api.into_registrations()?;
+        let registration = registrations
+            .get("secrets")
+            .ok_or_else(|| BitrouterError::internal("registration was lost"))?;
+        assert_eq!(registration.revision, "rules-v1");
+        assert!(Arc::ptr_eq(&registration.callback, &callback));
+        Ok(())
     }
 
     #[test]
@@ -114,24 +129,26 @@ mod tests {
         let error = api
             .request_check("secrets", "rules-v2", allow_callback())
             .err()
-            .ok_or_else(|| anyhow!("duplicate registration unexpectedly succeeded"))?;
+            .ok_or_else(|| {
+                BitrouterError::internal("duplicate registration unexpectedly succeeded")
+            })?;
 
         assert!(error.to_string().contains("already registered"));
         assert_eq!(api.request_checks.len(), 1);
         assert!(api.request_checks.contains_key("secrets"));
-        assert!(api.into_native().is_err());
+        assert!(api.into_registrations().is_err());
         Ok(())
     }
 
     #[test]
-    fn revision_must_be_valid_for_the_shared_protocol() {
+    fn revision_must_match_configuration_bounds() {
         let mut api = ExtensionApi::new();
 
         let result = api.request_check("secrets", "rules:v1", allow_callback());
 
         assert!(result.is_err());
         assert!(api.request_checks.is_empty());
-        assert!(api.into_native().is_err());
+        assert!(api.into_registrations().is_err());
     }
 
     #[test]
@@ -150,9 +167,9 @@ mod tests {
     fn ignored_error_keeps_partial_registry_inert() -> Result<()> {
         let calls = Arc::new(AtomicUsize::new(0));
         let callback_calls = calls.clone();
-        let callback: Arc<CheckCallback> = Arc::new(move |_| {
+        let callback: Arc<Callback> = Arc::new(move |_| {
             callback_calls.fetch_add(1, Ordering::Relaxed);
-            CheckDecision::Allow
+            Decision::Allow
         });
         let mut api = ExtensionApi::new();
         api.request_check("first", "rules-v1", callback)?;
@@ -163,7 +180,7 @@ mod tests {
         assert!(later.is_err());
         assert_eq!(calls.load(Ordering::Relaxed), 0);
         assert_eq!(api.request_checks.len(), 1);
-        assert!(api.into_native().is_err());
+        assert!(api.into_registrations().is_err());
         Ok(())
     }
 }

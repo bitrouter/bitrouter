@@ -3504,13 +3504,13 @@ presets:
     }
 
     #[tokio::test]
-    async fn checker_connection_edits_require_restart_before_any_reload_mutation()
+    async fn checker_revision_edits_require_restart_before_any_reload_mutation()
     -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("bitrouter.yaml");
-        let document = |port: u16| {
+        let document = |revision: u16| {
             format!(
-                "inherit_defaults: false\ncheckers:\n  company:\n    endpoint: http://127.0.0.1:{port}/check\n    contract_version: 1\n"
+                "inherit_defaults: false\ncheckers:\n  company:\n    native:\n      revision: rules-{revision}\n"
             )
         };
         std::fs::write(&path, document(18081))?;
@@ -3534,12 +3534,11 @@ presets:
             running
                 .checkers
                 .get("company")
-                .and_then(|checker| match checker {
-                    bitrouter_sdk::config::checker::CheckerConfig::Http { endpoint, .. } =>
-                        Some(endpoint.as_str()),
-                    _ => None,
+                .map(|checker| match checker {
+                    bitrouter_sdk::config::checker::CheckerConfig::Native { native } =>
+                        native.revision.as_str(),
                 }),
-            Some("http://127.0.0.1:18081/check")
+            Some("rules-18081")
         );
         let state = reloader
             .reload_state()

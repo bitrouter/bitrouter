@@ -8,28 +8,35 @@ stay in `apps/`.
 
 | Extension | Packages | Delivery |
 | --- | --- | --- |
-| [Regex checker](regex-checker/README.md) | `bitrouter-guardrails`, `bitrouter-regex-checker` | Explicit native callback or independent HTTP service; legacy SDK hooks remain optional |
+| [Regex checker](regex-checker/README.md) | `bitrouter-guardrails` | Compiled request-check callback; legacy SDK hooks remain optional |
 
-An extension may be linked explicitly into a trusted custom host or run as a
-separate service implementing a supported capability contract. Directory
-placement does not provide runtime isolation, automatic installation or dynamic
-loading. Each extension documents its actual supported integration paths.
+Beta extensions are linked explicitly into a trusted custom Rust host. Adding
+or updating extension code requires rebuilding that host. There is no remote
+extension protocol, independent extension process manager or dynamic loader.
+Directory placement does not provide runtime isolation or automatic installation.
 
 ## Author entry point
 
 For a compiled request-check extension, write an ordinary registration function
-that accepts `bitrouter::extension::ExtensionApi` and calls
+that accepts `bitrouter_sdk::extension::ExtensionApi` and calls
 `request_check(id, revision, callback)`. A custom host invokes it with
-`assemble::build_app_with_extensions`. The API collects implementations; router
+`host::serve_with_extensions` to run the shared foreground daemon, or
+`assemble::build_app_with_extensions` for low-level embedding. The API collects implementations; router
 `checks.request` bindings determine when they execute. Duplicate instance IDs,
 invalid revisions, registration failures and activation mismatches prevent the
 host from becoming ready. See the [regex example](regex-checker/README.md).
 
+Valid registrations absent from `checkers` stay inactive and produce a sorted
+startup diagnostic. They have no runtime entry or management inventory. Configured
+instances require matching registrations even when no router binds them.
+
 This is one typed author entry point, currently exposing only request-check.
 It is not a generic event handler, dynamic loader or permission sandbox, and
 it does not expose the host builder, global hooks, credentials or migrations.
-HTTP implementations use the existing versioned request-check protocol and do
-not need to call Rust registration code.
+Capability inputs and decisions live alongside this entry point in
+`bitrouter_sdk::extension::request_check`; they contain no HTTP envelope.
+Extensions may call external services internally, without a host-managed remote
+extension transport.
 
 `Plugin`, `AppBuilder::plugin`, and the matcher's optional `GuardrailsPlugin`
 remain legacy custom-host assembly APIs. They retain their global/output and

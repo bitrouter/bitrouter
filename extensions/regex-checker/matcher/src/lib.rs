@@ -1,8 +1,8 @@
 //! # bitrouter-guardrails
 //!
-//! Guardrail configuration and matching with an optional trusted BitRouter SDK
-//! adapter. The default build contains only the data contract and matcher, so
-//! independent checker services do not link the BitRouter host runtime.
+//! Compiled regex request-check extension using the BitRouter SDK capability
+//! contract. The default build includes rules and a request-check callback; the
+//! optional `sdk` feature adds the legacy input/output hook adapter.
 //!
 //! With the `sdk` feature, the compatibility hooks read the active [`RuleSet`]
 //! from the pipeline's typed extensions,

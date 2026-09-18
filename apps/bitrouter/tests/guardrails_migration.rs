@@ -14,7 +14,7 @@ fn configuration(legacy: Value) -> Value {
         "database": {"url": "sqlite://should-not-exist.db?mode=rwc"},
         "plugins": {"bitrouter-guardrails": legacy},
         "checkers": {"replacement": {
-            "endpoint": "http://127.0.0.1:1/check", "contract_version": 1
+            "native": {"revision": "rules-v1"}
         }},
         "routers": {"coding": {
             "selection": {"kind": "model", "model": "fixture:model"},

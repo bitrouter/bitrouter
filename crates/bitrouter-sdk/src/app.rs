@@ -15,7 +15,7 @@
 //! trusted custom hosts to install hooks and SQL [`crate::plugin::MigrationItem`]s.
 //! These APIs assemble a host; they are not the restricted extension author API.
 //! New request-check extensions register a callback through
-//! `bitrouter::extension::ExtensionApi::request_check`, using
+//! [`crate::extension::ExtensionApi::request_check`], using
 //! `bitrouter::assemble::build_app_with_extensions` in the product host crate.
 //! Router bindings determine which registered checks process requests.
 //!
@@ -53,7 +53,7 @@ use crate::plugin::{MigrationItem, PluginId};
 ///
 /// Retained for the current alpha SDK API; removal requires an explicitly
 /// announced breaking SDK release with migration notes. New request-check
-/// extensions use `bitrouter::extension::ExtensionApi` instead. This trait can
+/// extensions use [`crate::extension::ExtensionApi`] instead. This trait can
 /// install global hooks and migrations and is not equivalent to router-bound
 /// capability registration. Hooks remain individually registerable by hosts.
 pub trait Plugin {
@@ -251,7 +251,7 @@ impl AppBuilder {
     /// Install a legacy [`Plugin`] host package, including its migrations.
     ///
     /// Retains global hook registration semantics in the current alpha SDK.
-    /// New request-check extensions use `bitrouter::extension::ExtensionApi`;
+    /// New request-check extensions use [`crate::extension::ExtensionApi`];
     /// this method does not apply router bindings or request-check receipts to
     /// legacy hooks. Removal requires an explicitly announced breaking SDK
     /// release with migration notes.

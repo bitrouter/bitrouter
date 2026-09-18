@@ -1,23 +1,20 @@
 # Router request checks and process-local receipts
 
-This increment implements original batch items 3–5 on the named-router and
-configuration-state contracts. It retains the existing model/policy selection
-algorithms. Independent guardrails packaging (item 6) is a separate change;
-this document preserves its original 3–5 scope. The subsequent extraction is
-documented in [GUARDRAILS_EXTENSION.md](GUARDRAILS_EXTENSION.md); legacy host
-configuration now blocks activation rather than being silently ignored.
+Current contract: Beta uses compiled Rust extensions only. This supersedes the
+original batch 3–5 HTTP checker design. See [ROUTER_EXTENSION_SPEC.md](ROUTER_EXTENSION_SPEC.md)
+for scope, migration and acceptance gates; previous test runs remain historical
+in [the acceptance ledger](GUARDRAILS_EXTENSION_ACCEPTANCE.md).
 
-## Operator contract
-
-A user selects a router. The router supplies request defaults, performs its
-configured checks, and delegates model selection to its existing selection
-policy. HTTP checkers can return only allow/deny. They cannot change the request,
-select a model, invoke a tool, or override host authorization.
-
-The daemon resolves checker credentials on its own machine. Client environment
-variables never supply remote daemon credentials. Checker configuration and
-router bindings are startup-owned: saved changes require restart and cannot be
-activated by reload. All management transports query the selected daemon.
+A user selects a router; its configured input checks run before existing model
+selection. Checks return allow/deny, not model choices or rewritten requests.
+The SDK author API is `bitrouter_sdk::extension::ExtensionApi`; callbacks use
+`extension::request_check` business types without an HTTP request envelope.
+The custom host compiles, registers and activates implementations. Configuration
+and bindings are startup-owned; saved changes require restart. Local and remote
+management query the selected daemon's authority, not the client environment.
+Custom hosts use `bitrouter::host::serve_with_extensions` for that complete
+foreground lifecycle; low-level embedding remains available through
+`assemble::build_app_with_extensions`.
 
 ## Entry preparation and extension contract
 
@@ -27,7 +24,7 @@ branch by response mode.
 
 | Extension point | Selector/defaults contract |
 | --- | --- |
-| `pre_resolution_hook` | Local authentication and session normalization may change the ingress selector before its router/check binding is frozen. No external checker has run. |
+| `pre_resolution_hook` | Local authentication and session normalization may change the ingress selector before its router/check binding is frozen. No registered check has run. |
 | `router_preparation_hook` | A checked router may select a candidate recipe here, before effective defaults are applied. Its original logical identity and checks remain fixed. |
 | `pre_request_hook`, checked ingress | Receives the effective defaults. Deny/error stops execution; selector mutation is explicitly rejected before checker/model dispatch. |
 | `pre_request_hook`, unguarded ingress | Retains the legacy model-rewrite contract. Final selector resolution and defaults follow these hooks, so defaults from the original selector are not mixed into the replacement. A rewrite cannot introduce a checked router after admission. |
@@ -39,88 +36,78 @@ Use the checked-router preparation path when defaults must participate in the
 entry content-check contract. A denied/failed hook does not promise rollback
 of its request-local changes.
 
-## Check coverage and protocol
+### Host runner boundary
 
-Contract version 1 projects effective request text: system instructions, message
-text/reasoning, existing tool arguments and results, and human approval reasons.
-Non-text content is disclosed as uncovered; no file bytes, provider credentials,
-management credentials, or arbitrary internal metadata are sent. The coverage is
-entry-request text, not generated output, later tool results, nested requests,
-or all activity inside a native coding harness.
+`RequestCheckerRunner::check(binding, input, reporter)` receives a frozen
+`RequestCheckBinding`, the same `extension::request_check::Input` used by callbacks,
+and a receipt-owned progress reporter. Request, router and invocation identities
+stay in the pipeline/receipt; there is no serialized invocation envelope.
+The host returns `CheckerResult { decision, revision }`, reusing the callback's
+`Decision` and attaching the registered revision. The pipeline validates the
+decision once (denial codes: 1–64 ASCII letters, digits or `. _ - :`) before
+recording allow/deny. Invalid decisions fail closed without recording a revision
+as evidence of a valid decision. Callbacks cannot supply revisions or write receipts.
 
-Inputs exceeding the binding's limit or 4,096 text fragments are rejected rather
-than truncated. JSON tool results are serialized within the remaining byte
-budget before being copied into the checker projection. The
-HTTP deadline includes waiting for a concurrency slot, connection, and response
-body consumption. Redirects and automatic retries are disabled. Service errors,
-timeouts, malformed or incompatible responses fail closed before model dispatch.
-A checker deny remains distinct from a checker infrastructure/protocol error.
+This replaces the beta SDK's `CheckerInvocation` and `CheckerDecision` Rust API.
+Custom runner implementations must migrate; ordinary `ExtensionApi` callbacks,
+configuration and management JSON are unchanged. The checked/unguarded hook
+ordering and configuration reload contracts are unchanged.
 
-Each checker permits at most 32 concurrent calls. Responses are limited to
-16 KiB. A router supports at most 16 request-check bindings, executed in order;
-first rejection/error stops evaluation and later checks are not executed.
-Input limits default to 256 KiB and cannot exceed 4 MiB. Binding deadlines default
-to 500 ms and cannot exceed 30 seconds. These are resource limits, not promises
-that a checker will return within the default budget.
+## Coverage and execution limits
 
-## Configuration and wire examples
+Checks receive effective entry text and explicit coverage: system instructions,
+message text/reasoning, existing tool arguments/results and approval reasons.
+Media is reported as uncovered. Generated output, subsequent harness tool turns,
+file bytes and nested calls are outside this contract. Oversized inputs are
+rejected, never truncated. JSON tool results are serialized within the remaining
+projection budget. No wire serialization is required to invoke a callback.
+
+At most 16 ordered bindings per router and 32 concurrent callbacks per instance.
+Input defaults to 256 KiB, capped at 4 MiB and 4,096 fragments. Per-binding wait
+deadlines default to 500 ms and cap at 30 seconds, including semaphore wait and
+callback execution wait. Synchronous callbacks use the blocking pool. Timeout
+and cancellation cannot kill started work or release its permit before it ends.
+Deny, timeout, invalid decisions and execution failures stop model dispatch.
+This is trusted in-process code, not a sandbox or process-abort isolation layer.
+
+## Configuration
 
 ```yaml
 checkers:
   company:
-    endpoint: http://127.0.0.1:8081/check
-    credential_env: COMPANY_CHECKS_TOKEN
-    contract_version: 1
-routers:
-  coding:
-    selection:
-      kind: policy
-      policy: auto
-      base_model: coding-base
-    checks:
-      request:
-        - checker: company
-          timeout_ms: 500
-          max_input_bytes: 262144
+    native:
+      revision: company-rules-v1
 ```
 
-The example assumes `auto` and `coding-base` already exist. The existing
-policy-lock selection algorithm remains responsible for model selection.
-`credential_env` is optional for an unauthenticated checker. A configured but
-unbound checker can report a missing credential; a router-bound checker missing
-its required credential blocks activation.
+Bind the id through `routers.<id>.checks.request` and register the same id and
+revision through ExtensionApi. Missing or mismatched registrations block
+activation even for unbound configured instances; an ignored registration error
+invalidates the registry. Valid registrations absent from configuration remain
+inactive with sorted startup diagnostics, no execution state and no inventory
+entry. Configured unbound instances appear in inventory without usage. Default bro
+has no custom registrations. `bro config validate` verifies declarations, not
+which extension code a custom binary contains. Former HTTP connection fields
+fail explicitly with migration guidance, including when mixed with Native data.
 
-The host POSTs to the exact endpoint with JSON content type. The versioned
-request contains `contract_version`, `invocation_id`, `request_id`, `router_id`,
-`router_binding_digest`, `checker` (checker id, binding digest and limits),
-`content` (ordered role/kind/text fragments) and `coverage`. The service echoes
-the invocation id:
-
-```json
-{"contract_version":1,"invocation_id":"<received invocation_id>","decision":"allow","implementation_version":"1.0.0"}
-```
-
-A deny response changes `decision` to `deny` and can include a bounded ASCII
-`reason_code`. Arbitrary free-text explanations are not accepted as a substitute.
-`implementation_version` is optional; absent stays unknown. Unknown response
-fields, mismatched invocation id/version and other malformed responses reject
-rather than allowing the request. The serialized request envelope has an
-additional 8 MiB limit, even when its text is within the binding's input limit.
+Author types `ContentRole`, `ContentFragmentKind`, `ContentFragment`,
+`RequestCheckCoverageScope`, `RequestCheckCoverageStatus` and
+`RequestCheckCoverage` now live in `extension::request_check` alongside `Input`.
+Their former `language_model::request_checks` import paths are removed without
+aliases. Projection, host bindings and execution results remain in the language
+model module; serialized fields are unchanged.
 
 ## Receipts and failure guarantees
 
 A receipt is admitted after local authentication/session normalization and
-successful named-router binding, before local policy and external request
+successful named-router binding, before local policy and registered request
 checks. Those admitted early rejections are queryable. Malformed ingress,
 authentication failure, unresolved routers and direct model requests do not
 fabricate a named-router admission receipt.
 
 Receipts are independent of optional telemetry exporters and metering records.
-They record immutable router/binding identity, checker invocation and contract
-version, bounded coverage/results, whether upstream dispatch began, execution
+They record immutable router/binding identity, checker invocation and registered revision, bounded coverage/results, whether upstream dispatch began, execution
 outcome, and what the server knows about delivery. An allow result does not
-mean generation or delivery succeeded. Service-reported implementation versions
-are evidence supplied by that service, not attestation.
+mean generation or delivery succeeded. Implementation revisions are supplied by the custom host, not cryptographic attestation.
 
 Only the current daemon process is covered. The default store holds at most
 4,096 records and expires completed records after 15 minutes; capacity pressure
@@ -133,11 +120,18 @@ newest retained attempt with an explicit retained-match count; list queries
 retain the separate attempt records. Lookup by the unique receipt id returns
 that exact retained attempt.
 
+Admission order is the single source for newest-first listing and request-id
+matching. The latest-started-check index points into retained receipts; it is
+preserved separately so eviction cannot revive an older observation. Running
+checker bindings are stored once, with management inventory projected at query
+time rather than cached as a second configuration snapshot. Repeated bindings
+retain their declared order and remain distinct invocations.
+
 Queries report process incarnation and retention limits. Records from another
 process are unavailable. Missing records do not prove non-execution or success;
 when expiration cannot be established, the result remains unknown. Restart or
 crash discards these receipts. This is not durable workflow storage or recovery.
-Receipts do not retain prompts, answers, raw HTTP error bodies, or credentials.
+Receipts do not retain prompts, answers, or credentials.
 
 Cancellation and early exit must finish or mark an admitted receipt incomplete.
 If execution has already started, bookkeeping failure cannot undo the upstream
@@ -146,95 +140,18 @@ client application consumed the output.
 
 ## Diagnosis
 
-Configuration validity, saved/running/restart state, connectivity/protocol probe,
-and real request usage are separate evidence. A successful synthetic probe does
-not populate real usage or request receipts. Probe calls originate at the target
-daemon, use a fixed harmless input and the configured credential, and are subject
-to the same bounds as normal calls. They never accept an arbitrary caller URL or
-prompt. Remote probes require the existing `control:read` administrative scope.
+`bro checks` reports running instances, declared revision, bindings and actual
+use, alongside saved/running/restart state. There is no connectivity/protocol
+probe, endpoint fingerprint or credential readiness for compiled extensions.
+`bro checks receipts` and `bro checks receipt <request-id-or-receipt-id>` retain
+their process-local meaning and existing access controls.
 
-Usage evidence is derived from the receipt store for the running binding and
-the latest started invocation that is still retained. Real invocation state
-has one owner; the HTTP runtime reports transport progress and does not retain
-a second terminal-state machine. Synthetic probes remain separate.
-Queued/in-flight calls show pending; cancellation shows interrupted and does
-not claim that remote execution stopped. An older completion cannot replace a
-newer invocation's observation. Evicting or expiring that latest receipt removes
-its inventory evidence; an older retained allow is not substituted. Success for
-an earlier binding must not make a saved replacement appear active. Unconfigured checks are shown
-as not enabled, not as successful protection.
+Usage comes from the latest started invocation still represented in the receipt
+store for this binding. Queued/in-flight calls are pending; cancellation is
+interrupted and does not claim the callback stopped. An older completion cannot
+replace newer evidence; expiring the latest receipt cannot revive an older allow.
+No binding means no content check, not successful protection. Registration is
+startup readiness evidence; only an invocation receipt proves actual use.
 
-## Acceptance ledger
-
-The following tests provide the acceptance evidence. App integration tests are
-in `apps/bitrouter/tests/request_checks.rs`; the remaining tests live beside the
-SDK contracts, HTTP runtime and daemon management implementation.
-
-| ID | Acceptance | Automated evidence |
-| --- | --- | --- |
-| RC01 | Original router/checker identity survives candidate selection. | `routers_apply_distinct_checks_to_effective_text_before_model_dispatch`; `checked_preparation_freezes_checks_nonstream`; `checked_preparation_freezes_checks_stream` |
-| RC02 | Effective defaults are checked; media exclusions and resource limits are explicit. | `routers_apply_distinct_checks_to_effective_text_before_model_dispatch`; `projection_counts_top_level_and_tool_result_media`; `projection_caps_empty_fragments`; `projection_bounds_json_serialization_by_remaining_bytes` |
-| RC03 | Rejection or checker failure prevents model dispatch. | `timeout_and_protocol_failure_never_dispatch_a_model`; `oversize_text_is_rejected_without_checker_or_model_dispatch`; `hostile_response_body_is_bounded_and_never_exposed`; `total_deadline_covers_the_response_body` |
-| RC04 | Early rejection, cancellation and delivery failure remain queryable without an exporter. | `e2e_full_stack_policy_denies_disallowed_tool_before_request_checker`; `checker_denial_stops_later_checker_and_model_dispatch`; `cancelled_pending_checker_finalizes_receipt_without_executor_dispatch`; `stream_disconnect_and_error_finalize_truthful_receipts`; `failed_receipts_identify_route_upstream_and_delivery_stages` |
-| RC05 | Capacity, retry and process boundaries cannot fabricate success. | `active_receipts_are_never_evicted`; `unavailable_store_rejects_admission_and_never_reports_success`; `completed_receipt_is_evicted_for_new_admission`; `old_incarnation_is_unknown_even_when_request_id_matches`; `zero_ttl_expires_completed_but_not_active_receipts`; `transport_retries_keep_separate_receipts_under_one_request_id` |
-| RC06 | Invalid references/limits fail validation; missing required credentials block activation. | `request_checker_config_rejects_unknown_refs_and_invalid_limits`; `request_checker_config_rejects_invalid_static_bindings`; `required_missing_checker_credential_blocks_host_activation` |
-| RC07 | Checker changes require restart before reload mutates running state. | `checker_connection_edits_require_restart_before_any_reload_mutation` |
-| RC08 | Local/remote queries share daemon authority and access controls. | `local_and_remote_checker_receipts_share_one_runtime_authority`; `checker_management_uses_read_authorization` |
-| RC09 | Probe success is separate from real use and generation success. | `real_use_and_probe_are_observed_separately`; `cancelled_and_older_invocations_cannot_leave_stale_allow_evidence`; `probe_has_no_request_receipt_and_allow_does_not_mask_upstream_failure` |
-| RC10 | Existing router, policy and continuation behavior remains intact. | `named_router_migration_protocol_matrix`; `named_candidate_keeps_preset_defaults_and_tool_safety_selection`; `transport_retry_identity_is_idempotent_without_becoming_a_route_key`; existing continuation suite |
-
-| RC11 | Ordinary hooks retain unguarded rewrite semantics; checked mutations stop before checker/model dispatch in both response modes. | `unguarded_bare_and_legacy_rewrites_converge_nonstream`; `unguarded_bare_and_legacy_rewrites_converge_stream`; `checked_ordinary_mutation_stops_nonstream`; `checked_ordinary_mutation_stops_stream` |
-| RC12 | Real-use views share receipt lifecycle and never revive older evidence after eviction. | `reporter_is_monotonic_and_cannot_mutate_terminal_check`; `evicting_latest_started_check_does_not_revive_older_evidence`; `cancelled_and_older_invocations_cannot_leave_stale_allow_evidence` |
-
-## Local validation
-
-The converged implementation was validated on macOS on 2026-09-16:
-
-- Workspace all-feature nextest: 3,456 passed, 22 skipped.
-- Workspace all-feature clippy, including tests, with warnings denied: passed.
-- Workspace doctests: 5 passed, 1 ignored; strict rustdoc: passed.
-- SDK no-default-feature checks: minimal, `config_file`, `server`, and `acp` passed.
-- Formatting, diff whitespace, and generated distribution consistency: passed.
-- Pinned nightly SDK public-API check: dependency set unchanged; no OTel exposure.
-
-The config schema and shipped CLI/diagnosis references are updated. These are
-local results; GitHub CI validates the published PR head separately. Production
-deployment verification is outside this local suite. Regression coverage includes
-ordinary-hook rewrites, shared stream/non-stream preparation, receipt-owned
-transport progress, terminal immutability, and latest-evidence eviction.
-
-
-## Native execution follow-up
-
-The capability is `request-check`; `regex-checker` is an extension implementing it.
-`RequestCheckRuntime` now accepts explicit native registrations alongside HTTP
-services. See [the extension guide](../extensions/regex-checker/README.md) for
-`checkers.<id>.native.revision` and the recommended Rust author entry:
-`ExtensionApi::request_check(id, revision, callback)`, invoked by an ordinary
-registration function through `assemble::build_app_with_extensions`.
-The same id is used for registration, config and router binding. Duplicate IDs,
-invalid IDs/revisions and registration errors prevent assembly; missing, extra or
-mismatched Native registrations fail activation. Registration adds no global hooks
-and does not execute callbacks. Default bro does not register native code.
-
-`NativeChecker` / `build_app_with_checkers` remain a low-level compatibility entry
-using the same host assembly and request-check runtime. The current alpha API
-retains it; removal requires an explicitly announced breaking SDK release with
-migration notes. New request-check examples use `ExtensionApi`. This restricted
-API does not expose host migrations, credentials, mutable context or receipt
-writers. Legacy SDK `Plugin` hooks retain their own global/output semantics and
-are not equivalent to the router-bound input capability.
-HTTP config and wire v1 remain unchanged; native code does not use HTTP credentials.
-
-Projection, frozen bindings, concurrency admission, failure handling and receipts
-remain host-owned for both modes. Each native callback is synchronous and runs in
-the blocking pool; timeout/cancellation does not kill it and cannot free its slot
-until it finishes. Native returns use the same reason/version validation as HTTP.
-The 8 MiB encoded-envelope bound is HTTP-specific; both modes enforce the same
-text/fragment/identity bounds. Native avoids wire serialization.
-
-Inventory includes execution mode and native revision. Native endpoint fingerprint
-is null; probes report network not_attempted and protocol not_checked, with a
-synthetic decision or error. Receipt dispatch attempted means native work was
-submitted, response_received means it returned. Existing HTTP meanings are
-unchanged. Probe results remain separate from actual request evidence.
+Legacy SDK Plugin/global and stream/output hooks remain explicit custom-host
+assembly interfaces. This input capability does not replace their broader scope.

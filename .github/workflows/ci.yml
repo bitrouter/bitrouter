@@ -261,18 +261,12 @@ jobs:
       - run: cargo check -p bitrouter-sdk --no-default-features --features config_file
       - run: cargo check -p bitrouter-guardrails
       - run: cargo check -p bitrouter-guardrails --no-default-features --features sdk
-      - run: cargo check -p bitrouter-checker-protocol
-      - run: cargo check -p bitrouter-regex-checker
       - name: guardrails and the default host have separate dependency trees
         shell: bash
         run: |
           cargo tree --locked -p bitrouter -e normal,build --prefix none > host-tree.txt
-          if grep -Eq '^bitrouter-(guardrails|regex-checker) v' host-tree.txt; then
+          if grep -Eq '^bitrouter-guardrails v' host-tree.txt; then
             echo '::error::default bro links the guardrails implementation'; exit 1
-          fi
-          cargo tree --locked -p bitrouter-regex-checker -e normal,build --prefix none > checker-tree.txt
-          if grep -Eq '^bitrouter(-sdk)? v' checker-tree.txt; then
-            echo '::error::independent checker links the host or SDK'; exit 1
           fi
       - run: cargo check -p bitrouter-sdk --no-default-features --features server
       - run: cargo check -p bitrouter-sdk --no-default-features --features acp
@@ -394,24 +388,6 @@ jobs:
           fi
           printf '%s\n' "$out" | grep -qF 'the OpenTelemetry stack needs a transport' || {
             echo "::error::failed, but not with the transport compile_error"; printf '%s\n' "$out"; exit 1; }
-
-  guardrails-process-e2e:
-    name: guardrails process e2e
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo build --locked --jobs 2 -p bitrouter -p bitrouter-regex-checker --bins
-      - name: real daemon and checker processes with counted mock upstream
-        run: >-
-          python3 tools/guardrails_e2e.py --bro target/debug/bro
-          --checker target/debug/bitrouter-regex-checker --output /tmp/guardrails-e2e
-      - uses: actions/upload-artifact@v6
-        if: always()
-        with:
-          name: guardrails-e2e
-          path: /tmp/guardrails-e2e
 
   sdk-public-api:
     name: sdk-public-api

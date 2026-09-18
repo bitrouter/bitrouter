@@ -414,8 +414,7 @@ The daemon `chdir`s to the directory holding the resolved config on startup, so 
 
 | Command | Meaning |
 | --- | --- |
-| `bro checks` | Target-daemon checker inventory, running router bindings, probe/usage evidence and saved/running configuration status. |
-| `bro checks probe <checker>` | Bounded synthetic protocol probe from the target daemon; does not count as real request usage. |
+| `bro checks` | Target-daemon checker inventory, running router bindings, registration/usage evidence and saved/running configuration status. |
 | `bro checks receipts [--limit N]` | Bounded list of process-local request-check receipts, independent of telemetry export. |
 | `bro checks receipt <request-id-or-receipt-id> [--incarnation ID]` | One receipt or an explicit unknown/unavailable result; never infers success from missing evidence. |
 
@@ -424,9 +423,9 @@ These commands support the existing local/remote target selection and JSON or
 only (4,096-record capacity, completed-record TTL 15 minutes, possible earlier
 capacity eviction); settled token/cost history remains under `bro requests`.
 Checker and router check-binding edits require restart. See `diagnose.md` for
-coverage and how to distinguish a successful probe from a real check.
+coverage and how to distinguish registration readiness from actual use.
 
 Actual-use inventory is derived from the latest started invocation's retained
 receipt. When that receipt expires or is evicted, the view reports no retained
 evidence; it does not substitute an older allow or claim the checker was never
-used. Synthetic probe history is separate from receipt retention.
+used.

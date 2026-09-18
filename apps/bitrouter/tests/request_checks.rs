@@ -5,29 +5,58 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use axum_test::TestServer;
 use bitrouter_sdk::config;
+use bitrouter_sdk::extension::request_check::{Callback, Decision};
 use bitrouter_sdk::language_model::receipts::{
     RequestCheckStatus, RequestReceipt, RequestReceiptLookup, RequestReceiptOutcome,
 };
 use bitrouter_sdk::server::{AppState, build_router};
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[derive(Clone, Default)]
+struct Capture(Arc<std::sync::Mutex<Vec<Captured>>>);
 #[derive(Clone)]
-struct Verdict(&'static str);
-
-impl Respond for Verdict {
-    fn respond(&self, request: &Request) -> ResponseTemplate {
-        let Ok(body) = serde_json::from_slice::<Value>(&request.body) else {
-            return ResponseTemplate::new(400);
-        };
-        ResponseTemplate::new(200).set_body_json(json!({
-            "contract_version": 1,
-            "invocation_id": body["invocation_id"],
-            "decision": self.0,
-            "implementation_version": "fixture-v1"
-        }))
+struct Captured {
+    id: String,
+    body: String,
+}
+impl Capture {
+    async fn received_requests(&self) -> Option<Vec<Captured>> {
+        self.0.lock().ok().map(|rows| rows.clone())
     }
+    fn callback(&self, id: &'static str) -> Arc<Callback> {
+        let rows = self.0.clone();
+        Arc::new(move |input| {
+            let body = input
+                .content
+                .iter()
+                .filter_map(|part| part.text.as_deref())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if let Ok(mut rows) = rows.lock() {
+                rows.push(Captured {
+                    id: id.to_owned(),
+                    body,
+                });
+            }
+            if id == "second" {
+                Decision::Deny {
+                    reason_code: "fixture.denied".to_owned(),
+                }
+            } else {
+                Decision::Allow
+            }
+        })
+    }
+}
+async fn assemble(config: &config::Config, capture: &Capture) -> Result<bitrouter::Assembled> {
+    bitrouter::assemble::build_app_with_extensions(config, None, |api| {
+        api.request_check("first", "rules-v1", capture.callback("first"))?;
+        Ok(api.request_check("second", "rules-v1", capture.callback("second"))?)
+    })
+    .await
 }
 
 fn gateway(assembled: &bitrouter::Assembled) -> Result<TestServer> {
@@ -44,7 +73,7 @@ fn gateway(assembled: &bitrouter::Assembled) -> Result<TestServer> {
     })))
 }
 
-fn configuration(upstream: &str, checker: &str, timeout: u64) -> Result<config::Config> {
+fn configuration(upstream: &str, timeout: u64) -> Result<config::Config> {
     config::parse(&format!(
         r#"inherit_defaults: false
 server:
@@ -59,11 +88,11 @@ providers:
       - id: model
 checkers:
   first:
-    endpoint: {checker}/allow
-    contract_version: 1
+    native:
+      revision: rules-v1
   second:
-    endpoint: {checker}/deny
-    contract_version: 1
+    native:
+      revision: rules-v1
 routers:
   coding:
     selection:
@@ -116,18 +145,10 @@ fn request(router: &str) -> Value {
 #[tokio::test]
 async fn routers_apply_distinct_checks_to_effective_text_before_model_dispatch() -> Result<()> {
     let upstream = MockServer::start().await;
-    let checker = MockServer::start().await;
+    let checker = Capture::default();
     mount_upstream(&upstream).await;
-    Mock::given(path("/allow"))
-        .respond_with(Verdict("allow"))
-        .mount(&checker)
-        .await;
-    Mock::given(path("/deny"))
-        .respond_with(Verdict("deny"))
-        .mount(&checker)
-        .await;
-    let config = configuration(&upstream.uri(), &checker.uri(), 5_000)?;
-    let assembled = bitrouter::build_app(&config).await?;
+    let config = configuration(&upstream.uri(), 5_000)?;
+    let assembled = assemble(&config, &checker).await?;
     let server = gateway(&assembled)?;
 
     let allowed = server
@@ -164,13 +185,12 @@ async fn routers_apply_distinct_checks_to_effective_text_before_model_dispatch()
     ensure!(checked.len() == 2);
     let allowed_check = checked
         .iter()
-        .find(|call| call.url.path() == "/allow")
+        .find(|call| call.id == "first")
         .context("no allow check")?;
-    let body = String::from_utf8(allowed_check.body.clone())?;
+    let body = allowed_check.body.clone();
     ensure!(body.contains("router-default-must-be-checked"));
     ensure!(body.contains("same input"));
     ensure!(!body.contains("provider-secret-must-not-be-projected"));
-    ensure!(!allowed_check.headers.contains_key("authorization"));
     let allowed_receipt = receipt(&assembled, "check-allowed")?;
     let denied_receipt = receipt(&assembled, "check-denied")?;
     ensure!(allowed_receipt.identity.router_id == "coding");
@@ -199,73 +219,10 @@ async fn routers_apply_distinct_checks_to_effective_text_before_model_dispatch()
 }
 
 #[tokio::test]
-async fn timeout_and_protocol_failure_never_dispatch_a_model() -> Result<()> {
-    let upstream = MockServer::start().await;
-    let checker = MockServer::start().await;
-    Mock::given(path("/allow"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_millis(500))
-                .set_body_json(json!({})),
-        )
-        .mount(&checker)
-        .await;
-    Mock::given(path("/deny"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"decision": "allow"})))
-        .mount(&checker)
-        .await;
-    let assembled =
-        bitrouter::build_app(&configuration(&upstream.uri(), &checker.uri(), 40)?).await?;
-    let server = gateway(&assembled)?;
-    for (router, prefix) in [
-        ("coding", "check-timeout"),
-        ("restricted", "check-malformed"),
-    ] {
-        for stream in [false, true] {
-            let id = format!("{prefix}-{stream}");
-            let mut body = request(router);
-            body["stream"] = Value::Bool(stream);
-            let response = server
-                .post("/v1/chat/completions")
-                .add_header("x-bitrouter-request-id", id.clone())
-                .json(&body)
-                .await;
-            ensure!(!response.status_code().is_success());
-            ensure!(response.header("x-bitrouter-request-id") == id.as_str());
-            let retained = receipt(&assembled, &id)?;
-            ensure!(!retained.upstream_started);
-            ensure!(retained.outcome == Some(RequestReceiptOutcome::Failed));
-            ensure!(
-                retained
-                    .checks
-                    .first()
-                    .is_some_and(|check| check.status == RequestCheckStatus::Failed)
-            );
-        }
-    }
-    ensure!(
-        upstream
-            .received_requests()
-            .await
-            .context("upstream capture unavailable")?
-            .is_empty()
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn checker_denial_stops_later_checker_and_model_dispatch() -> Result<()> {
     let upstream = MockServer::start().await;
-    let checker = MockServer::start().await;
-    Mock::given(path("/allow"))
-        .respond_with(Verdict("allow"))
-        .mount(&checker)
-        .await;
-    Mock::given(path("/deny"))
-        .respond_with(Verdict("deny"))
-        .mount(&checker)
-        .await;
-    let mut config = configuration(&upstream.uri(), &checker.uri(), 5_000)?;
+    let checker = Capture::default();
+    let mut config = configuration(&upstream.uri(), 5_000)?;
     let restricted = config
         .routers
         .get_mut("restricted")
@@ -278,7 +235,7 @@ async fn checker_denial_stops_later_checker_and_model_dispatch() -> Result<()> {
             timeout_ms: 5_000,
             max_input_bytes: config::router::DEFAULT_CHECKER_MAX_INPUT_BYTES,
         });
-    let assembled = bitrouter::build_app(&config).await?;
+    let assembled = assemble(&config, &checker).await?;
     let server = gateway(&assembled)?;
     let response = server
         .post("/v1/chat/completions")
@@ -291,11 +248,7 @@ async fn checker_denial_stops_later_checker_and_model_dispatch() -> Result<()> {
         .await
         .context("checker capture unavailable")?;
     ensure!(checks.len() == 1, "later checker ran after denial");
-    ensure!(
-        checks
-            .first()
-            .is_some_and(|request| request.url.path() == "/deny")
-    );
+    ensure!(checks.first().is_some_and(|request| request.id == "second"));
     ensure!(
         upstream
             .received_requests()
@@ -307,40 +260,24 @@ async fn checker_denial_stops_later_checker_and_model_dispatch() -> Result<()> {
 }
 
 #[tokio::test]
-async fn required_missing_checker_credential_blocks_host_activation() -> Result<()> {
-    let mut config = configuration("http://127.0.0.1:1", "http://127.0.0.1:2", 500)?;
-    let config::checker::CheckerConfig::Http { credential_env, .. } = config
-        .checkers
-        .get_mut("first")
-        .context("missing checker")?
-    else {
-        anyhow::bail!("expected HTTP checker");
-    };
-    *credential_env = Some(format!(
-        "BITROUTER_TEST_MISSING_CHECKER_KEY_{}",
-        uuid::Uuid::new_v4().simple()
-    ));
-    ensure!(bitrouter::build_app(&config).await.is_err());
-    Ok(())
-}
-
-#[tokio::test]
-async fn probe_has_no_request_receipt_and_allow_does_not_mask_upstream_failure() -> Result<()> {
+async fn registration_does_not_claim_usage_and_allow_does_not_mask_upstream_failure() -> Result<()>
+{
     let upstream = MockServer::start().await;
-    let checker = MockServer::start().await;
-    Mock::given(path("/allow"))
-        .respond_with(Verdict("allow"))
-        .mount(&checker)
-        .await;
+    let checker = Capture::default();
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&upstream)
         .await;
-    let assembled =
-        bitrouter::build_app(&configuration(&upstream.uri(), &checker.uri(), 5_000)?).await?;
+    let assembled = assemble(&configuration(&upstream.uri(), 5_000)?, &checker).await?;
     let before = assembled.request_checks.receipts().list(20);
     ensure!(before.receipts.is_empty());
-    let _probe = assembled.request_checks.probe("first").await;
+    ensure!(assembled.request_checks.configured().iter().all(|item| {
+        item.registered
+            && item
+                .bindings
+                .iter()
+                .all(|binding| binding.last_actual.is_none())
+    }));
     ensure!(
         assembled
             .request_checks
@@ -361,8 +298,7 @@ async fn probe_has_no_request_receipt_and_allow_does_not_mask_upstream_failure()
             .received_requests()
             .await
             .context("checker capture unavailable")?
-            .len()
-            == 1
+            .is_empty()
     );
     let server = gateway(&assembled)?;
     let response = server
@@ -386,14 +322,14 @@ async fn probe_has_no_request_receipt_and_allow_does_not_mask_upstream_failure()
 #[tokio::test]
 async fn oversize_text_is_rejected_without_checker_or_model_dispatch() -> Result<()> {
     let upstream = MockServer::start().await;
-    let checker = MockServer::start().await;
-    let mut config = configuration(&upstream.uri(), &checker.uri(), 5_000)?;
+    let checker = Capture::default();
+    let mut config = configuration(&upstream.uri(), 5_000)?;
     let router = config
         .routers
         .get_mut("coding")
         .context("missing coding router")?;
     router.checks.request[0].max_input_bytes = 1024;
-    let assembled = bitrouter::build_app(&config).await?;
+    let assembled = assemble(&config, &checker).await?;
     let server = gateway(&assembled)?;
     let mut body = request("coding");
     body["messages"][0]["content"] = Value::String("x".repeat(2048));
@@ -427,10 +363,10 @@ async fn oversize_text_is_rejected_without_checker_or_model_dispatch() -> Result
 async fn unauthenticated_requests_do_not_invoke_a_checker_or_claim_router_admission() -> Result<()>
 {
     let upstream = MockServer::start().await;
-    let checker = MockServer::start().await;
-    let mut config = configuration(&upstream.uri(), &checker.uri(), 5_000)?;
+    let checker = Capture::default();
+    let mut config = configuration(&upstream.uri(), 5_000)?;
     config.server.skip_auth = false;
-    let assembled = bitrouter::build_app(&config).await?;
+    let assembled = assemble(&config, &checker).await?;
     let server = gateway(&assembled)?;
     let response = server
         .post("/v1/chat/completions")
@@ -466,11 +402,7 @@ async fn unauthenticated_requests_do_not_invoke_a_checker_or_claim_router_admiss
 #[tokio::test]
 async fn streaming_success_retains_check_and_server_delivery_evidence() -> Result<()> {
     let upstream = MockServer::start().await;
-    let checker = MockServer::start().await;
-    Mock::given(path("/allow"))
-        .respond_with(Verdict("allow"))
-        .mount(&checker)
-        .await;
+    let checker = Capture::default();
     let first = json!({"id":"stream-1","object":"chat.completion.chunk","model":"model","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]});
     let last = json!({"id":"stream-1","object":"chat.completion.chunk","model":"model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}});
     Mock::given(path("/chat/completions"))
@@ -480,8 +412,7 @@ async fn streaming_success_retains_check_and_server_delivery_evidence() -> Resul
         ))
         .mount(&upstream)
         .await;
-    let assembled =
-        bitrouter::build_app(&configuration(&upstream.uri(), &checker.uri(), 5_000)?).await?;
+    let assembled = assemble(&configuration(&upstream.uri(), 5_000)?, &checker).await?;
     let server = gateway(&assembled)?;
     let mut body = request("coding");
     body["stream"] = Value::Bool(true);
@@ -519,14 +450,9 @@ async fn streaming_success_retains_check_and_server_delivery_evidence() -> Resul
 #[tokio::test]
 async fn transport_retries_keep_separate_receipts_under_one_request_id() -> Result<()> {
     let upstream = MockServer::start().await;
-    let checker = MockServer::start().await;
+    let checker = Capture::default();
     mount_upstream(&upstream).await;
-    Mock::given(path("/allow"))
-        .respond_with(Verdict("allow"))
-        .mount(&checker)
-        .await;
-    let assembled =
-        bitrouter::build_app(&configuration(&upstream.uri(), &checker.uri(), 5_000)?).await?;
+    let assembled = assemble(&configuration(&upstream.uri(), 5_000)?, &checker).await?;
     let server = gateway(&assembled)?;
     for _ in 0..2 {
         let response = server
@@ -566,40 +492,20 @@ fn native_config(config: &mut config::Config, id: &str, revision: &str) {
 }
 
 #[tokio::test]
-async fn regex_native_and_http_share_decisions_bindings_and_receipts() -> Result<()> {
-    use bitrouter::request_checks::{CheckerExecution, ProbeProtocolStatus, ProbeReachability};
+async fn regex_extensions_preserve_decisions_bindings_and_receipts() -> Result<()> {
     use bitrouter_guardrails::{checker, config::InputGuardrailConfig};
 
     let rules: InputGuardrailConfig = serde_json::from_value(json!({
         "scope": "input", "rules": [{"name": "secret", "pattern": "secret-\\n[0-9]+", "action": "block"}]
     }))?;
     let callback = checker::callback(rules.compile()?);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let endpoint = format!("http://{}/check", listener.local_addr()?);
-    let http =
-        bitrouter_regex_checker::adapter::router(callback.clone(), None, "rules-v1".to_owned());
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let service = tokio::spawn(async move {
-        axum::serve(listener, http)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-            })
-            .await
-    });
     let upstream = MockServer::start().await;
     mount_upstream(&upstream).await;
-    let mut config = configuration(&upstream.uri(), "http://unused.invalid", 5_000)?;
+    let mut config = configuration(&upstream.uri(), 5_000)?;
     native_config(&mut config, "first", "rules-v1");
-    config.checkers.insert(
-        "second".to_owned(),
-        config::checker::CheckerConfig::Http {
-            endpoint,
-            credential_env: None,
-            contract_version: 1,
-        },
-    );
     let assembled = bitrouter::assemble::build_app_with_extensions(&config, None, |api| {
-        api.request_check("first", "rules-v1", callback)
+        api.request_check("first", "rules-v1", callback.clone())?;
+        Ok(api.request_check("second", "rules-v1", callback)?)
     })
     .await?;
     let server = gateway(&assembled)?;
@@ -653,44 +559,22 @@ async fn regex_native_and_http_share_decisions_bindings_and_receipts() -> Result
         .iter()
         .find(|item| item.checker_id == "first")
         .context("native inventory")?;
-    ensure!(native.execution == CheckerExecution::Native && native.endpoint_fingerprint.is_none());
-    let actual = native
-        .bindings
-        .first()
-        .context("binding")?
-        .last_actual
-        .clone();
-    let probe = assembled.request_checks.probe("first").await;
-    ensure!(probe.error_code.is_none());
-    ensure!(probe.reachability == ProbeReachability::NotAttempted);
-    ensure!(probe.protocol == ProbeProtocolStatus::NotChecked);
-    ensure!(
-        assembled
-            .request_checks
-            .configured()
-            .iter()
-            .find(|item| item.checker_id == "first")
-            .and_then(|item| item.bindings.first())
-            .and_then(|binding| binding.last_actual.clone())
-            == actual
-    );
-    drop(server);
-    drop(assembled);
-    let _ = shutdown_tx.send(());
-    service.await??;
+    ensure!(native.registered && native.revision == "rules-v1");
     Ok(())
 }
 
 #[tokio::test]
 async fn unified_entry_preserves_router_binding_order_and_leaves_unbound_checks_inert() -> Result<()>
 {
-    use bitrouter_checker_protocol::capability::{CheckCallback, CheckDecision};
     use bitrouter_sdk::config::router::RouterRequestCheck;
+    use bitrouter_sdk::extension::request_check::{
+        Callback as CheckCallback, Decision as CheckDecision,
+    };
     use std::sync::{Arc, mpsc};
 
     let upstream = MockServer::start().await;
     mount_upstream(&upstream).await;
-    let mut config = configuration(&upstream.uri(), "http://unused.invalid", 5_000)?;
+    let mut config = configuration(&upstream.uri(), 5_000)?;
     for id in ["first", "second", "unbound"] {
         native_config(&mut config, id, "rules-v1");
     }
@@ -706,6 +590,14 @@ async fn unified_entry_preserves_router_binding_order_and_leaves_unbound_checks_
             max_input_bytes: config::router::DEFAULT_CHECKER_MAX_INPUT_BYTES,
         },
     );
+    // Repeated bindings remain ordered invocations and visible inventory entries.
+    let repeated = coding
+        .checks
+        .request
+        .last()
+        .context("missing coding binding")?
+        .clone();
+    coding.checks.request.push(repeated);
     let restricted = config
         .routers
         .get_mut("restricted")
@@ -732,7 +624,7 @@ async fn unified_entry_preserves_router_binding_order_and_leaves_unbound_checks_
         // Registration order differs from the coding router's declared order.
         api.request_check("first", "rules-v1", first)?;
         api.request_check("unbound", "rules-v1", unbound)?;
-        api.request_check("second", "rules-v1", second)
+        Ok(api.request_check("second", "rules-v1", second)?)
     })
     .await?;
     let server = gateway(&assembled)?;
@@ -744,8 +636,34 @@ async fn unified_entry_preserves_router_binding_order_and_leaves_unbound_checks_
         ensure!(response.status_code().is_success(), "{}", response.text());
     }
     let calls = calls_rx.try_iter().collect::<Vec<_>>();
-    ensure!(calls == ["second", "first", "first"], "{calls:?}");
+    ensure!(calls == ["second", "first", "first", "first"], "{calls:?}");
     let inventory = assembled.request_checks.configured();
+    ensure!(
+        inventory
+            .iter()
+            .map(|item| item.checker_id.as_str())
+            .collect::<Vec<_>>()
+            == ["first", "second", "unbound"]
+    );
+    let first = inventory.first().context("missing first checker")?;
+    ensure!(
+        first
+            .bindings
+            .iter()
+            .map(|binding| binding.router_id.as_str())
+            .collect::<Vec<_>>()
+            == ["coding", "coding", "restricted"]
+    );
+    ensure!(first.bindings[0].binding_digest == first.bindings[1].binding_digest);
+    ensure!(first.bindings[0].binding_digest != first.bindings[2].binding_digest);
+    for binding in &first.bindings {
+        let actual = binding
+            .last_actual
+            .as_ref()
+            .context("missing real check evidence")?;
+        ensure!(actual.binding_digest == binding.binding_digest);
+        ensure!(actual.status == RequestCheckStatus::Allowed);
+    }
     ensure!(
         inventory
             .iter()
@@ -756,17 +674,89 @@ async fn unified_entry_preserves_router_binding_order_and_leaves_unbound_checks_
 }
 
 #[tokio::test]
+async fn undeclared_registrations_stay_inactive_with_sorted_startup_diagnostics() -> Result<()> {
+    let upstream = MockServer::start().await;
+    mount_upstream(&upstream).await;
+    let mut config = configuration(&upstream.uri(), 5_000)?;
+    config.checkers.remove("second");
+    config.routers.remove("restricted");
+    let capture = Capture::default();
+    let assembled = bitrouter::assemble::build_app_with_extensions(&config, None, |api| {
+        api.request_check("second", "rules-v1", capture.callback("second"))?;
+        api.request_check("first", "rules-v1", capture.callback("first"))?;
+        Ok(api.request_check("alpha", "rules-v1", capture.callback("alpha"))?)
+    })
+    .await?;
+    let diagnostics = assembled
+        .ignored_config
+        .iter()
+        .filter(|message| message.starts_with("request-check registration "))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    ensure!(
+        diagnostics
+            == [
+                "request-check registration 'alpha' is inactive: no checkers.alpha declaration",
+                "request-check registration 'second' is inactive: no checkers.second declaration",
+            ]
+    );
+    let inventory = assembled.request_checks.configured();
+    ensure!(inventory.len() == 1 && inventory[0].checker_id == "first");
+    ensure!(
+        inventory[0]
+            .bindings
+            .iter()
+            .all(|binding| binding.last_actual.is_none())
+    );
+    ensure!(
+        assembled
+            .request_checks
+            .receipts()
+            .list(20)
+            .receipts
+            .is_empty()
+    );
+    ensure!(
+        capture
+            .received_requests()
+            .await
+            .context("callback capture")?
+            .is_empty()
+    );
+
+    let response = gateway(&assembled)?
+        .post("/v1/chat/completions")
+        .add_header("x-bitrouter-request-id", "configured-only")
+        .json(&request("coding"))
+        .await;
+    ensure!(response.status_code().is_success(), "{}", response.text());
+    let calls = capture
+        .received_requests()
+        .await
+        .context("callback capture")?;
+    ensure!(calls.len() == 1 && calls[0].id == "first");
+    let retained = receipt(&assembled, "configured-only")?;
+    ensure!(retained.checks.len() == 1);
+    ensure!(retained.checks[0].checker_id.as_deref() == Some("first"));
+    ensure!(
+        upstream
+            .received_requests()
+            .await
+            .context("upstream capture")?
+            .len()
+            == 1
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn unified_entry_registration_failure_precedes_database_startup() -> Result<()> {
-    use bitrouter_checker_protocol::capability::CheckDecision;
+    use bitrouter_sdk::extension::request_check::Decision as CheckDecision;
     use std::sync::Arc;
 
     let directory = tempfile::tempdir()?;
     let database_path = directory.path().join("must-not-exist.db");
-    let mut config = configuration(
-        "https://unused-upstream.invalid",
-        "https://unused-checker.invalid",
-        5_000,
-    )?;
+    let mut config = configuration("https://unused-upstream.invalid", 5_000)?;
     config.database.url = format!("sqlite://{}?mode=rwc", database_path.display());
 
     let error = match bitrouter::assemble::build_app_with_extensions(&config, None, |_| {
@@ -801,29 +791,53 @@ async fn unified_entry_registration_failure_precedes_database_startup() -> Resul
         !database_path.exists(),
         "database opened after duplicate registration"
     );
+    for (id, revision, diagnostic) in [
+        ("invalid.id", "rules-v1", "invalid checker id"),
+        ("unused", "invalid:revision", "native revision is invalid"),
+    ] {
+        let invalid = bitrouter::assemble::build_app_with_extensions(&config, None, |api| {
+            // These instances are absent from configuration. Ignoring their
+            // registration errors must still invalidate the whole registry.
+            let _ = api.request_check(id, revision, Arc::new(|_| CheckDecision::Allow));
+            Ok(())
+        })
+        .await;
+        let error = match invalid {
+            Err(error) => error,
+            Ok(_) => anyhow::bail!("invalid unused registration activated the host"),
+        };
+        ensure!(format!("{error:#}").contains(diagnostic), "{error:#}");
+        ensure!(
+            !database_path.exists(),
+            "database opened after invalid registration"
+        );
+    }
     Ok(())
 }
 
 #[tokio::test]
 async fn unified_entry_binding_failures_precede_database_startup() -> Result<()> {
-    use bitrouter_checker_protocol::capability::CheckDecision;
+    use bitrouter_sdk::extension::request_check::Decision as CheckDecision;
     use std::sync::Arc;
 
-    for (case, diagnostic) in [
-        ("missing", "is not registered"),
-        ("mismatched", "revision does not match"),
-        ("extra", "no matching native configuration"),
+    for (case, diagnostic, bound) in [
+        ("missing", "is not registered", true),
+        ("missing", "is not registered", false),
+        ("mismatched", "revision does not match", true),
+        ("mismatched", "revision does not match", false),
     ] {
         let directory = tempfile::tempdir()?;
         let database_path = directory.path().join("must-not-exist.db");
-        let mut config = configuration(
-            "https://unused-upstream.invalid",
-            "https://unused-checker.invalid",
-            5_000,
-        )?;
+        let mut config = configuration("https://unused-upstream.invalid", 5_000)?;
         native_config(&mut config, "first", "rules-v1");
+        if !bound {
+            for router in config.routers.values_mut() {
+                router.checks.request.clear();
+            }
+        }
         config.database.url = format!("sqlite://{}?mode=rwc", database_path.display());
         let result = bitrouter::assemble::build_app_with_extensions(&config, None, |api| {
+            api.request_check("second", "rules-v1", Arc::new(|_| CheckDecision::Allow))?;
             if case != "missing" {
                 let revision = if case == "mismatched" {
                     "rules-v2"
@@ -831,9 +845,6 @@ async fn unified_entry_binding_failures_precede_database_startup() -> Result<()>
                     "rules-v1"
                 };
                 api.request_check("first", revision, Arc::new(|_| CheckDecision::Allow))?;
-            }
-            if case == "extra" {
-                api.request_check("extra", "rules-v1", Arc::new(|_| CheckDecision::Allow))?;
             }
             Ok(())
         })
@@ -856,19 +867,27 @@ async fn unified_entry_binding_failures_precede_database_startup() -> Result<()>
 
 #[tokio::test]
 async fn native_failures_and_unbound_registration_never_dispatch_unintended_work() -> Result<()> {
-    use bitrouter::request_checks::{NativeChecker, RequestCheckRuntime};
-    use bitrouter_checker_protocol::capability::{CheckCallback, CheckDecision};
+    use bitrouter::request_checks::RequestCheckRuntime;
+    use bitrouter_sdk::extension::request_check::{
+        Callback as CheckCallback, Decision as CheckDecision,
+    };
     use bitrouter_sdk::language_model::request_checks::CheckerFailureKind;
-    use std::{
-        collections::HashMap,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
     };
 
     let upstream = MockServer::start().await;
-    let mut config = configuration(&upstream.uri(), "http://unused.invalid", 20)?;
+    let mut config = configuration(&upstream.uri(), 20)?;
+    // Invalid-result validation is independent of the timeout scenario. Give
+    // its worker enough scheduling time under a loaded workspace test run.
+    config
+        .routers
+        .get_mut("restricted")
+        .context("restricted router")?
+        .checks
+        .request[0]
+        .timeout_ms = 5_000;
     for id in ["first", "second"] {
         native_config(&mut config, id, "rules-v1");
     }
@@ -876,29 +895,15 @@ async fn native_failures_and_unbound_registration_never_dispatch_unintended_work
     let malformed: Arc<CheckCallback> = Arc::new(|_| CheckDecision::Deny {
         reason_code: "invalid reason".to_owned(),
     });
-    ensure!(
-        RequestCheckRuntime::activate_with_native(
-            &config,
-            HashMap::from([(
-                "first".to_owned(),
-                NativeChecker::new("wrong-revision", malformed.clone())
-            ),])
-        )
-        .is_err()
-    );
     let slow: Arc<CheckCallback> = Arc::new(|_| {
         std::thread::sleep(Duration::from_millis(150));
         CheckDecision::Allow
     });
-    let registrations = HashMap::from([
-        ("first".to_owned(), NativeChecker::new("rules-v1", slow)),
-        (
-            "second".to_owned(),
-            NativeChecker::new("rules-v1", malformed),
-        ),
-    ]);
-    let assembled =
-        bitrouter::assemble::build_app_with_checkers(&config, None, registrations).await?;
+    let assembled = bitrouter::assemble::build_app_with_extensions(&config, None, |api| {
+        api.request_check("first", "rules-v1", slow)?;
+        Ok(api.request_check("second", "rules-v1", malformed)?)
+    })
+    .await?;
     let server = gateway(&assembled)?;
     for (router, kind) in [
         ("coding", CheckerFailureKind::Timeout),
@@ -943,9 +948,10 @@ async fn native_failures_and_unbound_registration_never_dispatch_unintended_work
     config.routers.remove("restricted");
     let calls = Arc::new(AtomicUsize::new(0));
     let captured = calls.clone();
-    let registrations = HashMap::from([(
-        "first".to_owned(),
-        NativeChecker::new(
+    mount_upstream(&upstream).await;
+    let assembled = bitrouter::assemble::build_app_with_extensions(&config, None, |api| {
+        Ok(api.request_check(
+            "first",
             "rules-v1",
             Arc::new(move |_| {
                 captured.fetch_add(1, Ordering::SeqCst);
@@ -953,11 +959,9 @@ async fn native_failures_and_unbound_registration_never_dispatch_unintended_work
                     reason_code: "unused".to_owned(),
                 }
             }),
-        ),
-    )]);
-    mount_upstream(&upstream).await;
-    let assembled =
-        bitrouter::assemble::build_app_with_checkers(&config, None, registrations).await?;
+        )?)
+    })
+    .await?;
     let server = gateway(&assembled)?;
     ensure!(
         server

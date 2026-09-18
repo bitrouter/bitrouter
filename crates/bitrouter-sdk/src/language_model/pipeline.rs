@@ -12,6 +12,7 @@ use futures_core::Stream;
 use tracing::Instrument;
 
 use crate::error::{BitrouterError, Result};
+use crate::extension::request_check::{Decision, Input};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::executor::{Executor, StreamPartStream};
 use crate::language_model::hooks::{
@@ -23,8 +24,8 @@ use crate::language_model::receipts::{
     RequestReceiptAdmissionError, RequestReceiptOutcome, RequestReceiptStore,
 };
 use crate::language_model::request_checks::{
-    CheckerDecision, CheckerFailureKind, CheckerInvocation, RequestCheckBinding,
-    RequestCheckerRunner, content_fragments,
+    CheckerFailure, CheckerFailureKind, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
+    content_fragments,
 };
 use crate::language_model::routing::ModelResolution;
 use crate::language_model::routing::{FallbackPolicy, RoutingTable};
@@ -1156,7 +1157,7 @@ impl Pipeline {
             return Ok(());
         }
         let runner = self.request_checker_runner.as_ref();
-        let router = ctx.router_identity().cloned().ok_or_else(|| {
+        ctx.router_identity().ok_or_else(|| {
             BitrouterError::internal("request checks lost their named-router binding")
         })?;
         for (index, binding) in bindings.iter().enumerate() {
@@ -1210,43 +1211,36 @@ impl Pipeline {
                     "configured request checker is unavailable",
                 ));
             };
-            let invocation = CheckerInvocation {
-                invocation_id: invocation_id.clone(),
-                request_id: ctx.request_id().to_owned(),
-                router_id: router.router_id.clone(),
-                router_binding_digest: router.binding_digest.clone(),
-                checker: binding.clone(),
-                content,
-                coverage,
-            };
-            match runner.check(invocation, reporter).await {
-                Ok(CheckerDecision::Allow {
-                    implementation_version,
+            let result = runner
+                .check(binding.clone(), Input { content, coverage }, reporter)
+                .await
+                .and_then(|result| {
+                    result.decision.validate().map_err(|_| CheckerFailure {
+                        kind: CheckerFailureKind::InvalidResponse,
+                        detail: Some("invalid_decision".to_owned()),
+                    })?;
+                    Ok(result)
+                });
+            match result {
+                Ok(CheckerResult {
+                    decision: Decision::Allow,
+                    revision,
                 }) => ctx.mark_request_check_finished(
                     index,
                     RequestCheckStatus::Allowed,
                     None,
-                    implementation_version,
+                    Some(revision),
                     None,
                 ),
-                Ok(CheckerDecision::Deny {
-                    reason_code,
-                    implementation_version,
+                Ok(CheckerResult {
+                    decision: Decision::Deny { reason_code },
+                    revision,
                 }) => {
-                    let reason_code = reason_code.filter(|value| {
-                        value.is_ascii()
-                            && !value.is_empty()
-                            && value.len() <= 128
-                            && value.bytes().all(|byte| {
-                                byte.is_ascii_alphanumeric()
-                                    || matches!(byte, b'_' | b'-' | b'.' | b':')
-                            })
-                    });
                     ctx.mark_request_check_finished(
                         index,
                         RequestCheckStatus::Denied,
-                        reason_code,
-                        implementation_version,
+                        Some(reason_code),
+                        Some(revision),
                         None,
                     );
                     ctx.finish_request_receipt(

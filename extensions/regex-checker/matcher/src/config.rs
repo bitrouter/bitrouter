@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::rules::{Action, GuardrailRule, RuleSet};
 
-/// Input surface supported by the standalone guardrail checker.
+/// Input surface supported by the compiled request-check extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum InputScope {
@@ -17,7 +17,7 @@ pub enum InputScope {
     Input,
 }
 
-/// Action supported by the standalone input checker.
+/// Action supported by the compiled request-check extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum InputAction {
@@ -25,22 +25,22 @@ pub enum InputAction {
     Block,
 }
 
-/// One strict rule for the standalone input checker.
+/// One strict rule for the compiled request-check extension.
 ///
 /// `action` is required even though only `block` is supported. This makes an
 /// attempted migration of a legacy `redact` rule fail during startup.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InputRuleSpec {
-    /// Operator-facing rule name. It is not returned over HTTP.
+    /// Operator-facing rule name. It is not included in request-check decisions.
     pub name: String,
     /// Rust `regex` expression matched against the newline-flattened input.
     pub pattern: String,
-    /// Required input action. The standalone service supports only `block`.
+    /// Required input action. The request-check callback supports only `block`.
     pub action: InputAction,
 }
 
-/// Strict startup configuration for the standalone input checker.
+/// Strict startup configuration for the compiled request-check extension.
 ///
 /// Both `scope` and each rule's `action` are required. Unknown fields, other
 /// scopes, and other actions are deserialization errors rather than ignored
@@ -50,11 +50,11 @@ pub struct InputRuleSpec {
 pub struct InputGuardrailConfig {
     /// Required checker scope. Only `input` is supported.
     pub scope: InputScope,
-    /// Fixed rules compiled once at service startup.
+    /// Fixed rules compiled once at host startup.
     pub rules: Vec<InputRuleSpec>,
 }
 
-/// Sanitized standalone-rule compilation failure.
+/// Sanitized input-rule compilation failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputConfigError {
     /// A rules document with no rules would silently allow every request.

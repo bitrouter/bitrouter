@@ -10,9 +10,8 @@ fn request_checker_config_applies_binding_defaults() -> crate::Result<()> {
 inherit_defaults: false
 checkers:
   safety:
-    endpoint: https://checker.example/v1/check
-    credential_env: BITROUTER_SAFETY_CHECKER_TOKEN
-    contract_version: 1
+    native:
+      revision: rules-v1
 routers:
   guarded:
     selection:
@@ -40,34 +39,32 @@ routers:
         .router
         .ok_or_else(|| BitrouterError::internal("router identity was not resolved"))?;
     assert!(identity.binding_digest.starts_with("router-v2:sha256:"));
-    assert!(!identity.binding_digest.contains("checker.example"));
-    assert!(
-        !identity
-            .binding_digest
-            .contains("BITROUTER_SAFETY_CHECKER_TOKEN")
-    );
+    assert!(!identity.binding_digest.contains("rules-v1"));
     Ok(())
 }
 
 #[test]
 fn request_checker_config_rejects_invalid_static_bindings() -> crate::Result<()> {
     let invalid = [
+        ("native: {revision: ''}", "native revision"),
+        ("native: {revision: 'has spaces'}", "native revision"),
         (
-            "endpoint: relative/path\n    contract_version: 1",
-            "absolute HTTP URL",
+            "endpoint: https://checker.example/check\n    contract_version: 1",
+            "HTTP request-check extensions are no longer supported",
         ),
         (
-            "endpoint: https://user:secret@checker.example/check\n    contract_version: 1",
-            "user information",
+            "native: {revision: v1}\n    endpoint: null",
+            "HTTP request-check extensions are no longer supported",
         ),
         (
-            "endpoint: https://checker.example/check#fragment\n    contract_version: 1",
-            "fragment",
+            "credential_env: TOKEN",
+            "HTTP request-check extensions are no longer supported",
         ),
         (
-            "endpoint: https://checker.example/check\n    contract_version: 2",
-            "contract_version",
+            "contract_version: 1",
+            "HTTP request-check extensions are no longer supported",
         ),
+        ("native: {revision: v1}\n    typo: true", "unknown field"),
     ];
     for (checker_fields, expected) in invalid {
         let yaml = format!("inherit_defaults: false\ncheckers:\n  safety:\n    {checker_fields}\n");
@@ -95,8 +92,8 @@ fn request_checker_config_rejects_unknown_refs_and_invalid_limits() -> crate::Re
 inherit_defaults: false
 checkers:
   safety:
-    endpoint: https://checker.example/check
-    contract_version: 1
+    native:
+      revision: rules-v1
 routers:
   guarded:
     selection:
@@ -116,15 +113,15 @@ routers:
 }
 
 #[test]
-fn request_checker_endpoint_changes_router_binding_digest() -> crate::Result<()> {
-    fn digest(endpoint: &str) -> crate::Result<String> {
+fn request_checker_revision_changes_router_binding_digest() -> crate::Result<()> {
+    fn digest(revision: &str) -> crate::Result<String> {
         let yaml = format!(
             r#"
 inherit_defaults: false
 checkers:
   safety:
-    endpoint: {endpoint}
-    contract_version: 1
+    native:
+      revision: {revision}
 routers:
   guarded:
     selection:
@@ -142,10 +139,7 @@ routers:
             .ok_or_else(|| BitrouterError::internal("router identity was not resolved"))
     }
 
-    assert_ne!(
-        digest("https://first.example/check")?,
-        digest("https://second.example/check")?
-    );
+    assert_ne!(digest("rules-v1")?, digest("rules-v2")?);
     Ok(())
 }
 
