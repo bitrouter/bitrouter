@@ -1960,7 +1960,7 @@ fn permission_arriving_in_inspector_needs_f2_and_fresh_selection() -> Result<()>
     code.pty.send(b"\x1b")?;
     let _ = code
         .pty
-        .wait_for_text("Permission needed · F2 focuses oldest pending request")?;
+        .wait_for_text("Permission needed · F2 focuses oldest pending request (2)")?;
     code.pty.send(b"\x1b[12~")?;
     let _ = code.pty.wait_for_text("Press a number to highlight")?;
     let no_selection = code.pty.checkpoint();
@@ -1973,7 +1973,11 @@ fn permission_arriving_in_inspector_needs_f2_and_fresh_selection() -> Result<()>
         "permission focus reused buffered selection input"
     );
 
+    let answered = code.pty.checkpoint();
     code.pty.send(b"1\r")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&answered, "F2 permission (1)")?;
     code.pty.send(b"\x1b[12~")?;
     let _ = code.pty.wait_for_text("Allow fixture 2")?;
     code.pty.send(b"1\r")?;
@@ -2245,7 +2249,7 @@ fn code_hidden_chat_shares_palette_permissions_and_terminal_restoration() -> Res
     code.pty.send(b"compatibility permission test\r")?;
     let _ = code
         .pty
-        .wait_for_text("Permission needed · F2 focuses oldest pending request")?;
+        .wait_for_text("Permission needed · F2 focuses oldest pending request (2)")?;
     let first_permission_checkpoint = code.pty.checkpoint();
     code.pty.send(b"\x1b[12~")?;
     let first_permission = code
@@ -2255,7 +2259,13 @@ fn code_hidden_chat_shares_palette_permissions_and_terminal_restoration() -> Res
         first_permission.contains("Deny fixture 1"),
         "hidden chat entry did not retain the first permission labels"
     );
+    // The ACP requests arrive asynchronously. Observe both arrivals above and
+    // the first answer here before sending F2 for the remaining request.
+    let answered = code.pty.checkpoint();
     code.pty.send(b"1\r")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&answered, "F2 permission (1)")?;
     let second_permission_checkpoint = code.pty.checkpoint();
     code.pty.send(b"\x1b[12~")?;
     let second_permission = code
@@ -2372,7 +2382,7 @@ fn code_overlapping_permissions_require_explicit_answers() -> Result<()> {
     code.pty.send(b"permission test\r")?;
     let _ = code
         .pty
-        .wait_for_text("Permission needed · F2 focuses oldest pending request")?;
+        .wait_for_text("Permission needed · F2 focuses oldest pending request (2)")?;
     let first_panel_checkpoint = code.pty.checkpoint();
     code.pty.send(b"\x1b[12~")?;
     let panel = code
@@ -2384,7 +2394,11 @@ fn code_overlapping_permissions_require_explicit_answers() -> Result<()> {
     );
     let _ = code.pty.wait_for_text("Press a number to highlight")?;
     let _ = code.pty.wait_for_text("Enter confirms")?;
+    let answered = code.pty.checkpoint();
     code.pty.send(b"1\r")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&answered, "F2 permission (1)")?;
     let second_panel_checkpoint = code.pty.checkpoint();
     code.pty.send(b"\x1b[12~")?;
     let second_panel = code
