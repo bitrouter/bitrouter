@@ -3,7 +3,9 @@
 This increment implements original batch items 3–5 on the named-router and
 configuration-state contracts. It retains the existing model/policy selection
 algorithms. Independent guardrails packaging (item 6) is a separate change;
-existing guardrails are not silently removed or migrated here.
+this document preserves its original 3–5 scope. The subsequent extraction is
+documented in [GUARDRAILS_EXTENSION.md](GUARDRAILS_EXTENSION.md); legacy host
+configuration now blocks activation rather than being silently ignored.
 
 ## Operator contract
 
@@ -173,7 +175,7 @@ SDK contracts, HTTP runtime and daemon management implementation.
 | RC01 | Original router/checker identity survives candidate selection. | `routers_apply_distinct_checks_to_effective_text_before_model_dispatch`; `checked_preparation_freezes_checks_nonstream`; `checked_preparation_freezes_checks_stream` |
 | RC02 | Effective defaults are checked; media exclusions and resource limits are explicit. | `routers_apply_distinct_checks_to_effective_text_before_model_dispatch`; `projection_counts_top_level_and_tool_result_media`; `projection_caps_empty_fragments`; `projection_bounds_json_serialization_by_remaining_bytes` |
 | RC03 | Rejection or checker failure prevents model dispatch. | `timeout_and_protocol_failure_never_dispatch_a_model`; `oversize_text_is_rejected_without_checker_or_model_dispatch`; `hostile_response_body_is_bounded_and_never_exposed`; `total_deadline_covers_the_response_body` |
-| RC04 | Early rejection, cancellation and delivery failure remain queryable without an exporter. | `host_rejection_prevents_content_from_reaching_external_checker`; `cancelled_pending_checker_finalizes_receipt_without_executor_dispatch`; `stream_disconnect_and_error_finalize_truthful_receipts`; `failed_receipts_identify_route_upstream_and_delivery_stages` |
+| RC04 | Early rejection, cancellation and delivery failure remain queryable without an exporter. | `e2e_full_stack_policy_denies_disallowed_tool_before_request_checker`; `checker_denial_stops_later_checker_and_model_dispatch`; `cancelled_pending_checker_finalizes_receipt_without_executor_dispatch`; `stream_disconnect_and_error_finalize_truthful_receipts`; `failed_receipts_identify_route_upstream_and_delivery_stages` |
 | RC05 | Capacity, retry and process boundaries cannot fabricate success. | `active_receipts_are_never_evicted`; `unavailable_store_rejects_admission_and_never_reports_success`; `completed_receipt_is_evicted_for_new_admission`; `old_incarnation_is_unknown_even_when_request_id_matches`; `zero_ttl_expires_completed_but_not_active_receipts`; `transport_retries_keep_separate_receipts_under_one_request_id` |
 | RC06 | Invalid references/limits fail validation; missing required credentials block activation. | `request_checker_config_rejects_unknown_refs_and_invalid_limits`; `request_checker_config_rejects_invalid_static_bindings`; `required_missing_checker_credential_blocks_host_activation` |
 | RC07 | Checker changes require restart before reload mutates running state. | `checker_connection_edits_require_restart_before_any_reload_mutation` |

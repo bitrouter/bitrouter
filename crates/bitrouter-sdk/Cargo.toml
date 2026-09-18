@@ -20,6 +20,7 @@ exclude = ["public-api-deps.txt", "public-api.pins"]
 
 [dependencies]
 async-trait.workspace = true
+bitrouter-checker-protocol.workspace = true
 serde.workspace = true
 sha2.workspace = true
 hex = { workspace = true, optional = true }

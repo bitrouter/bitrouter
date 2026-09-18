@@ -145,7 +145,7 @@ jobs:
             targets: >-
               --test acp --test acp_checkpoints --test cloud_api --test daemon --test e2e
               --test full_stack --test configuration_state
-              --test router_continuation --test router_migration_cli --test request_checks
+              --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration
           - shard: observability
             retries: "0"
             targets: >-
@@ -260,6 +260,20 @@ jobs:
       - run: cargo check -p bitrouter-sdk --no-default-features
       - run: cargo check -p bitrouter-sdk --no-default-features --features config_file
       - run: cargo check -p bitrouter-guardrails
+      - run: cargo check -p bitrouter-guardrails --no-default-features --features sdk
+      - run: cargo check -p bitrouter-checker-protocol
+      - run: cargo check -p bitrouter-guardrails-service
+      - name: guardrails and the default host have separate dependency trees
+        shell: bash
+        run: |
+          cargo tree --locked -p bitrouter -e normal,build --prefix none > host-tree.txt
+          if grep -Eq '^bitrouter-guardrails(-service)? v' host-tree.txt; then
+            echo '::error::default bro links the guardrails implementation'; exit 1
+          fi
+          cargo tree --locked -p bitrouter-guardrails-service -e normal,build --prefix none > checker-tree.txt
+          if grep -Eq '^bitrouter(-sdk)? v' checker-tree.txt; then
+            echo '::error::independent checker links the host or SDK'; exit 1
+          fi
       - run: cargo check -p bitrouter-sdk --no-default-features --features server
       - run: cargo check -p bitrouter-sdk --no-default-features --features acp
       - run: cargo check -p bitrouter-telemetry --no-default-features --features otel-http
@@ -344,15 +358,12 @@ jobs:
         # a real shipped promise and this step guards it: pull the hook crate
         # on its own and no axum, no OpenTelemetry.
         #
-        # It is NOT a claim about building this workspace. `apps/bitrouter`
-        # enables `bitrouter-telemetry/otel-http` unconditionally, and cargo
-        # unifies features across a workspace build, so `cargo build
-        # --workspace` DOES link the OTel stack into every crate here —
-        # `cargo tree --workspace -e normal -i opentelemetry` lists
-        # bitrouter-guardrails among its dependents. Both facts are true at
-        # once; they answer different questions. Do not "strengthen" this step
-        # to assert the workspace case, and do not read its green as evidence
-        # that the stack is absent from a local `cargo build`.
+        # It is NOT a claim that the workspace product has no OTel stack:
+        # `apps/bitrouter` enables `bitrouter-telemetry/otel-http` explicitly.
+        # Cargo unifies enabled features of shared dependencies in a workspace
+        # build. These checks describe each listed package resolved alone;
+        # the separate host/service tree checks above guard their actual
+        # product boundary, and cargo-dist builds each application separately.
         #
         # `bitrouter-sdk` is in the crate loop now that the OTel stack is not
         # its to carry: `cargo add bitrouter-sdk` must pull neither.
@@ -383,6 +394,24 @@ jobs:
           fi
           printf '%s\n' "$out" | grep -qF 'the OpenTelemetry stack needs a transport' || {
             echo "::error::failed, but not with the transport compile_error"; printf '%s\n' "$out"; exit 1; }
+
+  guardrails-process-e2e:
+    name: guardrails process e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo build --locked --jobs 2 -p bitrouter -p bitrouter-guardrails-service --bins
+      - name: real daemon and checker processes with counted mock upstream
+        run: >-
+          python3 tools/guardrails_e2e.py --bro target/debug/bro
+          --checker target/debug/bitrouter-guardrails --output /tmp/guardrails-e2e
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: guardrails-e2e
+          path: /tmp/guardrails-e2e
 
   sdk-public-api:
     name: sdk-public-api

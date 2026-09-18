@@ -65,8 +65,10 @@ process starts anyway. Two places report it:
   daemon's `App` but all of which read the same config. This is the path that
   matters: validation is opt-in, the runtime always runs.
 
-The ids the binary reads are `bitrouter-guardrails`, `bitrouter-policy` and
-`bitrouter-telemetry`. A dead sub-key under a live id is reported too, so a
+The supported ids the binary reads are `bitrouter-policy` and
+`bitrouter-telemetry`. The removed `plugins.bitrouter-guardrails` key instead
+fails validation and activation, including empty/null values; see
+[the explicit migration guide](GUARDRAILS_EXTENSION.md). A dead sub-key under a live id is reported too, so a
 rename that carries an obsolete setting along with it is not silent either.
 
 **Renamed in this release** — the old names are ignored, and the daemon warns

@@ -1,15 +1,14 @@
 //! Fail-closed HTTP runtime for named-router request checks.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use bitrouter_checker_protocol::v1 as checker_protocol;
 use bitrouter_sdk::config::Config;
-use bitrouter_sdk::config::checker::CONTRACT_VERSION;
 use bitrouter_sdk::config::router::{DEFAULT_CHECKER_MAX_INPUT_BYTES, MAX_CHECKER_TIMEOUT_MS};
 use bitrouter_sdk::language_model::receipts::{
     LatestRequestCheck, RequestCheckDispatchStatus, RequestCheckReporter, RequestCheckStatus,
@@ -30,13 +29,11 @@ use url::Url;
 /// Maximum concurrent HTTP invocations admitted for one checker.
 pub const MAX_CONCURRENT_INVOCATIONS_PER_CHECKER: usize = 32;
 /// Maximum checker response body accepted by the daemon.
-pub const MAX_CHECKER_RESPONSE_BYTES: usize = 16 * 1024;
+pub const MAX_CHECKER_RESPONSE_BYTES: usize = checker_protocol::MAX_RESPONSE_BYTES;
 /// Absolute bound for the encoded checker request envelope.
-pub const MAX_CHECKER_REQUEST_BYTES: u64 = 8 * 1024 * 1024;
+pub const MAX_CHECKER_REQUEST_BYTES: u64 = checker_protocol::MAX_REQUEST_BYTES as u64;
 
 const PROBE_TIMEOUT_MS: u64 = 500;
-const MAX_IMPLEMENTATION_VERSION_BYTES: usize = 128;
-const MAX_REASON_CODE_BYTES: usize = 64;
 
 struct ActiveChecker {
     endpoint: Url,
@@ -422,13 +419,10 @@ impl RequestCheckRuntime {
             ));
         }
 
-        let request = WireRequest {
-            contract_version: checker.contract_version,
-            invocation: &invocation,
-        };
-        let body = encode_request(&request)?;
-
         let deadline = Duration::from_millis(invocation.checker.timeout_ms);
+        let expected_invocation_id = invocation.invocation_id.clone();
+        let request = protocol_request(checker.contract_version, invocation);
+        let body = checker_protocol::encode_request(&request).map_err(encode_error)?;
         let operation = async move {
             let _permit = checker.semaphore.acquire().await.map_err(|_| {
                 InvokeError::failure(CheckerFailureKind::Internal, "runtime_closed", false)
@@ -490,7 +484,7 @@ impl RequestCheckRuntime {
                 }
                 response_body.extend_from_slice(&chunk);
             }
-            decode_response(&invocation.invocation_id, &response_body)
+            decode_response(&expected_invocation_id, &response_body)
         };
 
         tokio::time::timeout(deadline, operation)
@@ -606,79 +600,77 @@ impl RequestCheckerRunner for RequestCheckRuntime {
     }
 }
 
-#[derive(Serialize)]
-struct WireRequest<'a> {
+fn protocol_request(
     contract_version: u16,
-    #[serde(flatten)]
-    invocation: &'a CheckerInvocation,
-}
-
-struct BoundedRequestBuffer {
-    bytes: Vec<u8>,
-    limit: usize,
-    exceeded: bool,
-}
-
-impl BoundedRequestBuffer {
-    fn new(limit: usize) -> Self {
-        Self {
-            bytes: Vec::with_capacity(limit.min(16 * 1024)),
-            limit,
-            exceeded: false,
-        }
+    invocation: CheckerInvocation,
+) -> checker_protocol::Request {
+    checker_protocol::Request {
+        contract_version,
+        invocation_id: invocation.invocation_id,
+        request_id: invocation.request_id,
+        router_id: invocation.router_id,
+        router_binding_digest: invocation.router_binding_digest,
+        checker: checker_protocol::CheckerBinding {
+            checker_id: invocation.checker.checker_id,
+            binding_digest: invocation.checker.binding_digest,
+            max_input_bytes: invocation.checker.max_input_bytes,
+            timeout_ms: invocation.checker.timeout_ms,
+        },
+        content: invocation
+            .content
+            .into_iter()
+            .map(|fragment| checker_protocol::ContentFragment {
+                role: match fragment.role {
+                    ContentRole::System => checker_protocol::ContentRole::System,
+                    ContentRole::User => checker_protocol::ContentRole::User,
+                    ContentRole::Assistant => checker_protocol::ContentRole::Assistant,
+                    ContentRole::Tool => checker_protocol::ContentRole::Tool,
+                },
+                kind: match fragment.kind {
+                    ContentFragmentKind::Text => checker_protocol::ContentFragmentKind::Text,
+                    ContentFragmentKind::Reasoning => {
+                        checker_protocol::ContentFragmentKind::Reasoning
+                    }
+                    ContentFragmentKind::ToolCall => {
+                        checker_protocol::ContentFragmentKind::ToolCall
+                    }
+                    ContentFragmentKind::ToolResult => {
+                        checker_protocol::ContentFragmentKind::ToolResult
+                    }
+                    ContentFragmentKind::ToolApproval => {
+                        checker_protocol::ContentFragmentKind::ToolApproval
+                    }
+                },
+                text: fragment.text,
+            })
+            .collect(),
+        coverage: checker_protocol::Coverage {
+            scope: match invocation.coverage.scope {
+                RequestCheckCoverageScope::EntryRequestText => {
+                    checker_protocol::CoverageScope::EntryRequestText
+                }
+            },
+            text_bytes: invocation.coverage.text_bytes,
+            text_fragments: invocation.coverage.text_fragments,
+            excluded_media_fragments: invocation.coverage.excluded_media_fragments,
+            status: match invocation.coverage.status {
+                RequestCheckCoverageStatus::CompleteWithinScope => {
+                    checker_protocol::CoverageStatus::CompleteWithinScope
+                }
+                RequestCheckCoverageStatus::InputTooLarge => {
+                    checker_protocol::CoverageStatus::InputTooLarge
+                }
+            },
+        },
     }
 }
 
-impl Write for BoundedRequestBuffer {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if self.bytes.len().saturating_add(bytes.len()) > self.limit {
-            self.exceeded = true;
-            return Err(std::io::Error::other("request checker payload limit"));
-        }
-        self.bytes.extend_from_slice(bytes);
-        Ok(bytes.len())
+fn encode_error(error: checker_protocol::ProtocolError) -> InvokeError {
+    if error == checker_protocol::ProtocolError::RequestTooLarge {
+        InvokeError::failure(CheckerFailureKind::InputTooLarge, error.code(), false)
+    } else {
+        InvokeError::failure(CheckerFailureKind::Internal, error.code(), false)
     }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-fn encode_request(request: &WireRequest<'_>) -> Result<Vec<u8>, InvokeError> {
-    let limit = match usize::try_from(MAX_CHECKER_REQUEST_BYTES) {
-        Ok(limit) => limit,
-        Err(_) => usize::MAX,
-    };
-    let mut output = BoundedRequestBuffer::new(limit);
-    match serde_json::to_writer(&mut output, request) {
-        Ok(()) => Ok(output.bytes),
-        Err(_) if output.exceeded => Err(InvokeError::failure(
-            CheckerFailureKind::InputTooLarge,
-            "request_too_large",
-            false,
-        )),
-        Err(_) => Err(InvokeError::failure(
-            CheckerFailureKind::Internal,
-            "encode_failed",
-            false,
-        )),
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "decision", rename_all = "snake_case", deny_unknown_fields)]
-enum WireResponse {
-    Allow {
-        contract_version: u16,
-        invocation_id: String,
-        implementation_version: Option<String>,
-    },
-    Deny {
-        contract_version: u16,
-        invocation_id: String,
-        reason_code: Option<String>,
-        implementation_version: Option<String>,
-    },
 }
 
 struct WireOutcome {
@@ -737,94 +729,14 @@ impl InvokeError {
 }
 
 fn decode_response(invocation_id: &str, body: &[u8]) -> Result<WireOutcome, InvokeError> {
-    let response = serde_json::from_slice::<WireResponse>(body).map_err(|_| {
-        InvokeError::failure(
-            CheckerFailureKind::InvalidResponse,
-            "malformed_response",
-            true,
-        )
+    let response = checker_protocol::decode_response(invocation_id, body).map_err(|error| {
+        InvokeError::failure(CheckerFailureKind::InvalidResponse, error.code(), true)
     })?;
-    let (contract_version, response_invocation_id, allowed, reason_code, implementation_version) =
-        match response {
-            WireResponse::Allow {
-                contract_version,
-                invocation_id,
-                implementation_version,
-            } => (
-                contract_version,
-                invocation_id,
-                true,
-                None,
-                implementation_version,
-            ),
-            WireResponse::Deny {
-                contract_version,
-                invocation_id,
-                reason_code,
-                implementation_version,
-            } => (
-                contract_version,
-                invocation_id,
-                false,
-                reason_code,
-                implementation_version,
-            ),
-        };
-    if contract_version != CONTRACT_VERSION {
-        return Err(InvokeError::failure(
-            CheckerFailureKind::InvalidResponse,
-            "version_mismatch",
-            true,
-        ));
-    }
-    if response_invocation_id != invocation_id {
-        return Err(InvokeError::failure(
-            CheckerFailureKind::InvalidResponse,
-            "invocation_mismatch",
-            true,
-        ));
-    }
-    if implementation_version
-        .as_deref()
-        .is_some_and(|value| !valid_version(value))
-    {
-        return Err(InvokeError::failure(
-            CheckerFailureKind::InvalidResponse,
-            "invalid_implementation_version",
-            true,
-        ));
-    }
-    if reason_code
-        .as_deref()
-        .is_some_and(|value| !valid_reason_code(value))
-    {
-        return Err(InvokeError::failure(
-            CheckerFailureKind::InvalidResponse,
-            "invalid_reason_code",
-            true,
-        ));
-    }
     Ok(WireOutcome {
-        allowed,
-        reason_code,
-        implementation_version,
+        allowed: response.decision() == checker_protocol::Decision::Allow,
+        reason_code: response.reason_code().map(str::to_owned),
+        implementation_version: response.implementation_version().map(str::to_owned),
     })
-}
-
-fn valid_version(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_IMPLEMENTATION_VERSION_BYTES
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-' | b'/')
-        })
-}
-
-fn valid_reason_code(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_REASON_CODE_BYTES
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
 }
 
 fn elapsed_millis(started: Instant) -> u64 {
@@ -948,15 +860,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn request_json_encoding_stops_at_the_buffer_limit() {
-        let mut output = BoundedRequestBuffer::new(32);
-        let value = json!({"content": "x".repeat(1_024)});
-        assert!(serde_json::to_writer(&mut output, &value).is_err());
-        assert!(output.exceeded);
-        assert!(output.bytes.len() <= 32);
-    }
-
     fn config(
         endpoint: String,
         credential_env: Option<String>,
@@ -969,7 +872,7 @@ mod tests {
             CheckerConfig {
                 endpoint,
                 credential_env,
-                contract_version: CONTRACT_VERSION,
+                contract_version: checker_protocol::CONTRACT_VERSION,
             },
         );
         if bind {

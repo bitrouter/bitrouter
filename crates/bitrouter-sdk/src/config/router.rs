@@ -54,11 +54,11 @@ pub struct RouterRequestCheck {
 /// Default total checker deadline.
 pub const DEFAULT_CHECKER_TIMEOUT_MS: u64 = 500;
 /// Longest configurable checker deadline.
-pub const MAX_CHECKER_TIMEOUT_MS: u64 = 30_000;
+pub const MAX_CHECKER_TIMEOUT_MS: u64 = bitrouter_checker_protocol::v1::MAX_TIMEOUT_MS;
 /// Default serialized checker invocation limit.
 pub const DEFAULT_CHECKER_MAX_INPUT_BYTES: u64 = 256 * 1024;
 /// Largest configurable serialized checker invocation limit.
-pub const MAX_CHECKER_INPUT_BYTES: u64 = 4 * 1024 * 1024;
+pub const MAX_CHECKER_INPUT_BYTES: u64 = bitrouter_checker_protocol::v1::MAX_INPUT_BYTES;
 /// Maximum number of request checks on one router.
 pub const MAX_REQUEST_CHECKS_PER_ROUTER: usize = 16;
 

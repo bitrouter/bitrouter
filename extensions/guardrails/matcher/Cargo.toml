@@ -8,11 +8,18 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# Trusted in-process compatibility adapter for custom BitRouter hosts. The
+# independent guardrail service consumes only config + matcher code and leaves
+# this feature disabled, so it does not link the SDK or host runtime.
+sdk = ["dep:async-trait", "dep:bitrouter-sdk", "dep:serde_json"]
+
 [dependencies]
-bitrouter-sdk.workspace = true
-async-trait.workspace = true
+bitrouter-sdk = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, optional = true }
 regex.workspace = true
 # `JsonSchema` derives on the serializable config types (`RuleSpec`,
 # `GuardrailConfig`, `Action`) so a downstream host (e.g. bitrouter-cloud) can
@@ -24,3 +31,4 @@ schemars.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 futures.workspace = true
+serde_json.workspace = true

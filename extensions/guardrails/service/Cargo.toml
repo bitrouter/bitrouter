@@ -1,0 +1,36 @@
+[package]
+name = "bitrouter-guardrails-service"
+description = "Independent input-block request checker for BitRouter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.dist]
+dist = true
+installers = []
+
+[lib]
+name = "bitrouter_guardrails_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bitrouter-guardrails"
+path = "src/main.rs"
+
+[dependencies]
+bitrouter-checker-protocol.workspace = true
+bitrouter-guardrails = { path = "../matcher", version = "=1.0.0-alpha.31", default-features = false }
+axum.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde-saphyr.workspace = true
+subtle.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "sync", "time", "io-util"] }
+
+[dev-dependencies]
+reqwest.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

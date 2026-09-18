@@ -49,7 +49,6 @@ use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
 use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
 use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 
-use bitrouter_guardrails::{GuardrailConfig, GuardrailsPlugin};
 use bitrouter_sdk::MetricsRenderer;
 use bitrouter_telemetry::OTEL_ENABLED;
 use bitrouter_telemetry::otel::{
@@ -228,11 +227,26 @@ impl ObserveStatusProvider for OtelExporterStatus {
 /// It shipped wrong exactly once, for exactly that reason: `bitrouter-policy`
 /// is read through a line-wrapped `config` / `.plugins` / `.get(…)` chain that
 /// a single-line grep did not see. Hence the scan.
-pub const KNOWN_PLUGIN_IDS: &[&str] = &[
-    "bitrouter-guardrails",
-    "bitrouter-policy",
-    "bitrouter-telemetry",
-];
+pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry"];
+
+/// Reject removed built-in configuration before activating the default host.
+///
+/// Presence, not content, is the migration fence: even null/empty legacy config
+/// must be explicitly removed after the operator has reviewed protection scope.
+/// This belongs to the product host, not the SDK parser: trusted custom hosts
+/// may still explicitly install the compatibility guardrails plugin.
+pub fn validate_host_configuration(config: &Config) -> Result<()> {
+    anyhow::ensure!(
+        !config.plugins.contains_key("bitrouter-guardrails"),
+        "plugins.bitrouter-guardrails requires migration: the default bro no longer \
+         includes the guardrails matcher. Deploy the independent bitrouter-guardrails \
+         service and bind checkers through routers.<id>.checks.request. It checks input \
+         only and does not replace global or output block/redact protection. Review \
+         every protected entry point and output requirement before explicitly removing \
+         the old key, including empty/null configuration; see docs/GUARDRAILS_EXTENSION.md."
+    );
+    Ok(())
+}
 
 /// Sub-keys that were removed, and the block they sat under. Reported for the
 /// same reason as [`RENAMED_ENV_VARS`]: the guard below is id-level, so a
@@ -377,6 +391,7 @@ pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
+    validate_host_configuration(config)?;
     config.validate_router_config()?;
     let request_checks = Arc::new(crate::request_checks::RequestCheckRuntime::activate(
         config,
@@ -501,7 +516,7 @@ pub async fn build_app_with_path(
     );
     let executor_for_reload = executor.clone();
 
-    // ---- pricing, metering, policy, guardrails — all derived from config ----
+    // ---- pricing, metering, policy — all derived from config ----
     let pricing = Arc::new(build_pricing_table(config));
     let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
@@ -509,9 +524,6 @@ pub async fn build_app_with_path(
     let pricing_for_recorder = pricing.clone();
     let policy_store: Arc<PolicyStore> = Arc::new(load_policy_store(config).await?);
     let policy_store_for_reload = policy_store.clone();
-    let guardrail_rules = build_guardrail_config(config)?
-        .compile()
-        .context("compiling guardrail patterns")?;
 
     // Metrics are now pushed via OTLP, not pulled from /metrics
     // Keep metrics_renderer for compatibility but return empty response
@@ -833,8 +845,7 @@ pub async fn build_app_with_path(
             // binding and applying its defaults. Session normalization may apply a
             // API-principal-scoped route lease before Stage 2 model selection;
             // explicit routes and provider continuations retain precedence.
-            // The guardrail plugin appends its hooks after this closure (see
-            // `.plugin(...)` below), preserving the policy → guardrail order.
+            // The pipeline runs bound external checks after these local hooks.
             lm.pre_resolution_hook(AuthHook::new(db_for_hooks.clone()));
             lm.pre_resolution_hook(SessionContextHook::new(acp_runtime_for_session));
             lm.pre_resolution_hook(continuation_for_pre_request);
@@ -879,14 +890,6 @@ pub async fn build_app_with_path(
                 lm.server_tool_loop(server_loop);
             }
         });
-    // Stage-1 guardrail plugin, appended after the closure so its hooks land
-    // after auth + policy in registration order. Skipped when no rules are
-    // configured, so a guardrail-free deployment registers nothing.
-    let app = if guardrail_rules.is_empty() {
-        app
-    } else {
-        app.plugin(GuardrailsPlugin::with_static(guardrail_rules))
-    };
     // The bitrouter/fusion model alias: an ingress prompt transform that
     // rewrites the alias onto a real outer model and attaches the Fusion
     // declaration. Wired only when `server_tools.fusion` resolves an alias.
@@ -1419,16 +1422,6 @@ async fn load_policy_store(config: &Config) -> Result<PolicyStore> {
             .with_context(|| format!("loading policies from {dir}")),
         None => Ok(PolicyStore::new()),
     }
-}
-
-/// Parse the guardrail data contract from `plugins.bitrouter-guardrails`
-/// (its `custom_patterns` array of `{ name, pattern, action: "block" |
-/// "redact" }`). The plugin owns the shape; this just deserialises it.
-fn build_guardrail_config(config: &Config) -> Result<GuardrailConfig> {
-    let Some(value) = config.plugins.get("bitrouter-guardrails") else {
-        return Ok(GuardrailConfig::default());
-    };
-    serde_json::from_value(value.clone()).context("plugins.bitrouter-guardrails failed to parse")
 }
 
 /// Empty metrics renderer for /metrics endpoint compatibility.

@@ -2947,6 +2947,10 @@ async fn validate_config(source: &bitrouter::paths::ConfigSource) -> Result<Vali
             "https://env-placeholder.invalid".to_string()
         }))
     });
+    let parsed = parsed.map_err(anyhow::Error::new).and_then(|config| {
+        bitrouter::assemble::validate_host_configuration(&config)?;
+        Ok(config)
+    });
     let missing = missing.into_inner();
 
     match parsed {

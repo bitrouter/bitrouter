@@ -5,6 +5,15 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [`GUARDRAILS_EXTENSION.md`](GUARDRAILS_EXTENSION.md) — Independent input checker
+  setup, migration boundaries, distribution and process-level validation.
+- [`GUARDRAILS_EXTENSION_ACCEPTANCE.md`](GUARDRAILS_EXTENSION_ACCEPTANCE.md) —
+  Local implementation, test/artifact evidence and remaining release gates.
+
+- [`ROUTER_EXTENSION_SPEC.md`](ROUTER_EXTENSION_SPEC.md) — **v0.3, guardrails extraction implemented locally;
+  public release pending.** Rust-first extension authoring, current
+  router/checker contracts, and independently staged guardrails extraction with
+  explicit migration blockers; custom selector binding is a later increment.
 - [`CONFIGURATION_STATE_CONTRACT_SPEC.md`](CONFIGURATION_STATE_CONTRACT_SPEC.md) —
   **implemented and locally verified.** Whole-configuration saved/running/restart
   evidence shared by local and remote status, CLI, and Code inspectors.

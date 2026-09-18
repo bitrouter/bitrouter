@@ -254,31 +254,47 @@ async fn timeout_and_protocol_failure_never_dispatch_a_model() -> Result<()> {
 }
 
 #[tokio::test]
-async fn host_rejection_prevents_content_from_reaching_external_checker() -> Result<()> {
+async fn checker_denial_stops_later_checker_and_model_dispatch() -> Result<()> {
     let upstream = MockServer::start().await;
     let checker = MockServer::start().await;
     Mock::given(path("/allow"))
         .respond_with(Verdict("allow"))
         .mount(&checker)
         .await;
+    Mock::given(path("/deny"))
+        .respond_with(Verdict("deny"))
+        .mount(&checker)
+        .await;
     let mut config = configuration(&upstream.uri(), &checker.uri(), 5_000)?;
-    config.plugins.insert("bitrouter-guardrails".into(), json!({
-        "custom_patterns": [{"name": "host-block", "pattern": "router-default-must-be-checked", "action": "block"}]
-    }));
+    let restricted = config
+        .routers
+        .get_mut("restricted")
+        .context("missing restricted router")?;
+    restricted
+        .checks
+        .request
+        .push(config::router::RouterRequestCheck {
+            checker: "first".to_owned(),
+            timeout_ms: 5_000,
+            max_input_bytes: config::router::DEFAULT_CHECKER_MAX_INPUT_BYTES,
+        });
     let assembled = bitrouter::build_app(&config).await?;
     let server = gateway(&assembled)?;
     let response = server
         .post("/v1/chat/completions")
-        .add_header("x-bitrouter-request-id", "host-rejected")
-        .json(&request("coding"))
+        .add_header("x-bitrouter-request-id", "checker-rejected")
+        .json(&request("restricted"))
         .await;
     ensure!(!response.status_code().is_success());
+    let checks = checker
+        .received_requests()
+        .await
+        .context("checker capture unavailable")?;
+    ensure!(checks.len() == 1, "later checker ran after denial");
     ensure!(
-        checker
-            .received_requests()
-            .await
-            .context("checker capture unavailable")?
-            .is_empty()
+        checks
+            .first()
+            .is_some_and(|request| request.url.path() == "/deny")
     );
     ensure!(
         upstream

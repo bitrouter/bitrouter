@@ -6,7 +6,7 @@ use url::Url;
 use crate::error::{BitrouterError, Result};
 
 /// The only request-checker wire contract supported by this release.
-pub const CONTRACT_VERSION: u16 = 1;
+pub const CONTRACT_VERSION: u16 = bitrouter_checker_protocol::v1::CONTRACT_VERSION;
 
 /// One remotely hosted request checker.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

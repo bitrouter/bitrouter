@@ -7,8 +7,7 @@
 //!
 //! - `crate::auth::AuthHook` (binary module: `brvk_` validation)
 //! - `crate::policy::PolicyHook` (binary module: model + tool + spend)
-//! - `bitrouter_guardrails::*` (shared plugin: pre-request block +
-//!   stream-stage redact)
+//! - the named-router HTTP request-check runtime (input allow/deny)
 //! - `bitrouter_telemetry::otel::OtelObserveHook` (SDK `otel` feature: per-request
 //!   OTLP trace + metric export)
 //! - `crate::metering::MeteringRecorder` (binary module: SettlementRecorder)
@@ -22,10 +21,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum_test::TestServer;
+use bitrouter_checker_protocol::v1 as checker_protocol;
 use bitrouter_sdk::config;
 use bitrouter_sdk::server::{AppState, build_router};
 use wiremock::matchers::{method, path as wm_path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 use bitrouter::auth::{NewApiKey, db as auth_db, generate};
 use bitrouter::daemon::ObserveStatusProvider;
@@ -40,6 +40,7 @@ struct FullStack {
     db: DatabaseConnection,
     brvk_secret: String,
     upstream: MockServer,
+    input_checker: MockServer,
     otlp_collector: MockServer,
     /// Same provider production assembles. Held here so each test can
     /// call `teardown()` and drive the OTel SDK's flush via
@@ -68,6 +69,44 @@ struct PolicyDir(std::path::PathBuf);
 impl Drop for PolicyDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct InputChecker;
+
+impl Respond for InputChecker {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let Ok(invocation) = checker_protocol::decode_request(&request.body) else {
+            return ResponseTemplate::new(400);
+        };
+        let denied = invocation.content.iter().any(|fragment| {
+            fragment
+                .text
+                .as_deref()
+                .is_some_and(|text| text.to_ascii_lowercase().contains("forbidden"))
+        });
+        let response = if denied {
+            checker_protocol::Response::deny(
+                invocation.invocation_id,
+                Some("guardrail:block".to_owned()),
+                Some("full-stack-fixture-v1".to_owned()),
+            )
+        } else {
+            checker_protocol::Response::allow(
+                invocation.invocation_id,
+                Some("full-stack-fixture-v1".to_owned()),
+            )
+        };
+        let Ok(response) = response else {
+            return ResponseTemplate::new(500);
+        };
+        let Ok(body) = checker_protocol::encode_response(&response) else {
+            return ResponseTemplate::new(500);
+        };
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "application/json")
+            .set_body_bytes(body)
     }
 }
 
@@ -105,16 +144,15 @@ async fn assemble_full_stack_inner(metrics_enabled: bool) -> FullStack {
         // `allowed_tools` deliberately omits `filesystem` so Test 3 can
         // catch the deny.
         "id: pol_main\n\
-         allowed_models: [test-model]\n\
+         allowed_models: [bitrouter/full-stack]\n\
          allowed_tools: [search]\n\
          max_spend_micro_usd: 100000000\n",
     )
     .await
     .unwrap();
 
-    // ── upstream: SSE stream that carries one SSN-shaped span we expect
-    //    the guardrail stream-hook to redact, plus a non-streaming
-    //    branch with the same content for the block-test path ──
+    // ── upstream: SSE stream carrying one SSN-shaped span. Request-check v1
+    //    covers entry input only, so this output must remain unchanged. ──
     let upstream = MockServer::start().await;
     let sse_body = build_sse_stream_with_ssn();
     Mock::given(method("POST"))
@@ -125,6 +163,14 @@ async fn assemble_full_stack_inner(metrics_enabled: bool) -> FullStack {
                 .set_body_raw(sse_body, "text/event-stream"),
         )
         .mount(&upstream)
+        .await;
+
+    // ── input checker: strict v1 decode, deterministic allow/deny. ──
+    let input_checker = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(wm_path("/check"))
+        .respond_with(InputChecker)
+        .mount(&input_checker)
         .await;
 
     // ── OTLP collector — accepts every `POST /v1/traces` for assertion ──
@@ -162,20 +208,31 @@ providers:
         pricing:
           input_micro_usd_per_token: 2.0
           output_micro_usd_per_token: 10.0
+checkers:
+  full-stack-input:
+    endpoint: {checker}/check
+    contract_version: 1
+routers:
+  full-stack:
+    selection:
+      kind: model
+      model: test-model
+    checks:
+      request:
+        - checker: full-stack-input
+          timeout_ms: 5000
+          max_input_bytes: 262144
 plugins:
   bitrouter-policy:
     # Single-quoted scalar — double quotes would interpret the backslashes
     # in a Windows temp path (`C:\Users\…`) as escape sequences and trip
     # the parser on `\U`. Single quotes treat the value literally.
     policy_dir: '{policy_path}'
-  bitrouter-guardrails:
-    custom_patterns:
-      - {{ name: ssn,       pattern: '\d{{3}}-\d{{2}}-\d{{4}}', action: redact }}
-      - {{ name: forbidden, pattern: '(?i)forbidden',           action: block  }}
   bitrouter-telemetry:
 {observe_block}
 "#,
         upstream = upstream.uri(),
+        checker = input_checker.uri(),
         policy_path = policy_dir.display(),
     );
     let cfg: config::Config = config::parse_with(&yaml, |_| None).expect("config parses");
@@ -217,6 +274,7 @@ plugins:
         db: assembled.db,
         brvk_secret: key.secret,
         upstream,
+        input_checker,
         otlp_collector,
         observe,
         _policy_dir: PolicyDir(policy_dir),
@@ -259,11 +317,11 @@ fn build_sse_stream_with_ssn() -> String {
     out
 }
 
-/// A clean Chat Completions body the auth/policy/guardrails path
+/// A clean Chat Completions body the auth/policy/request-check path
 /// should let through.
 fn clean_body(stream: bool) -> serde_json::Value {
     serde_json::json!({
-        "model": "test-model",
+        "model": "bitrouter/full-stack",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"function": {"name": "search"}}],
         "stream": stream,
@@ -273,11 +331,11 @@ fn clean_body(stream: bool) -> serde_json::Value {
 // ===== Test 1 — full happy path =====
 
 #[tokio::test]
-async fn e2e_full_stack_streaming_redacts_and_meters() {
+async fn e2e_full_stack_streaming_preserves_output_and_meters() {
     let fs = assemble_full_stack().await;
 
-    // The HTTP call goes auth → policy → guardrails → executor → stream
-    // hook → observe → metering, in that registered order.
+    // The HTTP call goes auth → policy → request checker → executor →
+    // observe → metering.
     let resp = fs
         .server
         .post("/v1/chat/completions")
@@ -293,12 +351,22 @@ async fn e2e_full_stack_streaming_redacts_and_meters() {
     );
     let body = resp.text();
     assert!(
-        body.contains("[REDACTED]"),
-        "GuardrailStreamHook should have inserted [REDACTED] into the SSE body; got:\n{body}"
+        body.contains("123-45-6789"),
+        "request-check v1 is input-only and must leave upstream output unchanged; got:\n{body}"
     );
     assert!(
-        !body.contains("123-45-6789"),
-        "GuardrailStreamHook must have stripped the SSN-shaped span from the SSE body; got:\n{body}"
+        !body.contains("[REDACTED]"),
+        "the default host must not retain legacy output redaction; got:\n{body}"
+    );
+    let checker_requests = fs
+        .input_checker
+        .received_requests()
+        .await
+        .unwrap_or_default();
+    assert_eq!(
+        checker_requests.len(),
+        1,
+        "named router must run its checker"
     );
 
     // The streaming pipeline finalises settlement asynchronously after
@@ -335,26 +403,25 @@ async fn e2e_full_stack_streaming_redacts_and_meters() {
     fs.teardown().await;
 }
 
-// ===== Test 2 — guardrail block at pre-request =====
+// ===== Test 2 — external input checker denial =====
 
 #[tokio::test]
-async fn e2e_full_stack_guardrail_blocks_at_pre_request() {
+async fn e2e_full_stack_request_checker_blocks_before_upstream() {
     let fs = assemble_full_stack().await;
 
-    // The `forbidden` pattern is a Block rule — request denied before
-    // any upstream call, no metering row.
+    // The request checker denies `forbidden` input before any upstream call.
     let resp = fs
         .server
         .post("/v1/chat/completions")
         .add_header("authorization", format!("Bearer {}", fs.brvk_secret))
         .expect_failure()
         .json(&serde_json::json!({
-            "model": "test-model",
+            "model": "bitrouter/full-stack",
             "messages": [{"role": "user", "content": "please do the forbidden thing"}],
             "tools": [{"function": {"name": "search"}}],
         }))
         .await;
-    resp.assert_status_bad_request();
+    resp.assert_status_forbidden();
 
     // No upstream call.
     let upstream_requests = fs.upstream.received_requests().await.unwrap_or_default();
@@ -374,6 +441,16 @@ async fn e2e_full_stack_guardrail_blocks_at_pre_request() {
         row_count, 0,
         "blocked request must not produce a metering row",
     );
+    let checker_requests = fs
+        .input_checker
+        .received_requests()
+        .await
+        .unwrap_or_default();
+    assert_eq!(
+        checker_requests.len(),
+        1,
+        "denial must come from the checker"
+    );
 
     fs.teardown().await;
 }
@@ -381,20 +458,19 @@ async fn e2e_full_stack_guardrail_blocks_at_pre_request() {
 // ===== Test 3 — policy tool restriction (ordering proof) =====
 
 #[tokio::test]
-async fn e2e_full_stack_policy_denies_disallowed_tool_before_guardrails() {
+async fn e2e_full_stack_policy_denies_disallowed_tool_before_request_checker() {
     let fs = assemble_full_stack().await;
 
     // Allowed model but disallowed tool. The policy `allowed_tools` is
-    // `[search]`; declaring `filesystem` violates it. PolicyHook runs
-    // BEFORE GuardrailPreHook (per `assemble.rs` registration order),
-    // so the failure reason should be tool-policy, not guardrails.
+    // `[search]`; declaring `filesystem` violates it. PolicyHook runs before
+    // the external request checker, so no projected content may leave.
     let resp = fs
         .server
         .post("/v1/chat/completions")
         .add_header("authorization", format!("Bearer {}", fs.brvk_secret))
         .expect_failure()
         .json(&serde_json::json!({
-            "model": "test-model",
+            "model": "bitrouter/full-stack",
             "messages": [{"role": "user", "content": "clean prompt"}],
             "tools": [{"function": {"name": "filesystem"}}],
         }))
@@ -404,12 +480,21 @@ async fn e2e_full_stack_policy_denies_disallowed_tool_before_guardrails() {
     let msg = err["error"]["message"].as_str().unwrap_or("");
     assert!(
         msg.contains("tool") && msg.contains("filesystem"),
-        "deny reason must come from PolicyHook (tool restriction), not guardrails; got: {msg}",
+        "deny reason must come from PolicyHook (tool restriction); got: {msg}",
     );
 
     // No upstream call, no metering row.
     let upstream_requests = fs.upstream.received_requests().await.unwrap_or_default();
     assert!(upstream_requests.is_empty());
+    let checker_requests = fs
+        .input_checker
+        .received_requests()
+        .await
+        .unwrap_or_default();
+    assert!(
+        checker_requests.is_empty(),
+        "policy rejection must run before external request checks"
+    );
     let row_count = requests::Entity::find()
         .filter(requests::Column::ApiKeyId.eq("fullstack-key"))
         .count(&fs.db)
@@ -623,7 +708,7 @@ async fn e2e_full_stack_otel_span_hierarchy() {
     use opentelemetry_proto::tonic::trace::v1::span::SpanKind as ProtoKind;
     let root_chat = spans
         .iter()
-        .find(|s| s.name == "chat test-model" && s.kind == ProtoKind::Internal as i32)
+        .find(|s| s.name == "chat bitrouter/full-stack" && s.kind == ProtoKind::Internal as i32)
         .expect("root chat INTERNAL span present");
     let hop_chat = spans
         .iter()
@@ -671,7 +756,13 @@ async fn e2e_full_stack_otel_span_hierarchy() {
     );
     assert_eq!(
         span_str_attr(root_chat, "gen_ai.request.model"),
-        Some("test-model")
+        Some("bitrouter/full-stack"),
+        "the root generation retains the caller's named-router identity"
+    );
+    assert_eq!(
+        span_str_attr(root_chat, "gen_ai.response.model"),
+        Some("test-model"),
+        "the root generation records the physical upstream response model"
     );
 
     // The hop is a plain HTTP CLIENT span: no gen_ai generation markers, just
@@ -684,6 +775,11 @@ async fn e2e_full_stack_otel_span_hierarchy() {
     assert!(
         span_str_attr(hop_chat, "server.address").is_some(),
         "hop must carry `server.address` parsed from the target's api_base"
+    );
+    assert_eq!(
+        span_str_attr(hop_chat, "bitrouter.model_id"),
+        Some("test-model"),
+        "the client hop records the physical upstream model"
     );
 
     fs.teardown().await;

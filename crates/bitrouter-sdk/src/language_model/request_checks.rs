@@ -197,7 +197,7 @@ pub trait RequestCheckerRunner: Send + Sync {
     ) -> std::result::Result<CheckerDecision, CheckerFailure>;
 }
 
-const MAX_PROJECTED_FRAGMENTS: u64 = 4096;
+const MAX_PROJECTED_FRAGMENTS: u64 = bitrouter_checker_protocol::v1::MAX_CONTENT_FRAGMENTS as u64;
 
 struct ContentProjection {
     fragments: Vec<ContentFragment>,
