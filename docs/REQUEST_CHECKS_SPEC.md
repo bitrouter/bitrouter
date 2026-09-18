@@ -209,9 +209,21 @@ transport progress, terminal immutability, and latest-evidence eviction.
 The capability is `request-check`; `regex-checker` is an extension implementing it.
 `RequestCheckRuntime` now accepts explicit native registrations alongside HTTP
 services. See [the extension guide](../extensions/regex-checker/README.md) for
-`checkers.<id>.native.revision` and `assemble::build_app_with_checkers`.
-The same id is used for registration, config and router binding. Missing or
-mismatched registrations fail activation. Default bro does not register native code.
+`checkers.<id>.native.revision` and the recommended Rust author entry:
+`ExtensionApi::request_check(id, revision, callback)`, invoked by an ordinary
+registration function through `assemble::build_app_with_extensions`.
+The same id is used for registration, config and router binding. Duplicate IDs,
+invalid IDs/revisions and registration errors prevent assembly; missing, extra or
+mismatched Native registrations fail activation. Registration adds no global hooks
+and does not execute callbacks. Default bro does not register native code.
+
+`NativeChecker` / `build_app_with_checkers` remain a low-level compatibility entry
+using the same host assembly and request-check runtime. The current alpha API
+retains it; removal requires an explicitly announced breaking SDK release with
+migration notes. New request-check examples use `ExtensionApi`. This restricted
+API does not expose host migrations, credentials, mutable context or receipt
+writers. Legacy SDK `Plugin` hooks retain their own global/output semantics and
+are not equivalent to the router-bound input capability.
 HTTP config and wire v1 remain unchanged; native code does not use HTTP credentials.
 
 Projection, frozen bindings, concurrency admission, failure handling and receipts

@@ -211,3 +211,74 @@ custom-host source: `apps/bitrouter/examples/native_regex_checker.rs`.
 Cross-platform CI, public release and this follow-up's release archive build
 remain separate gates. Native revisions are declared identities, not attestations;
 trusted callbacks are not sandboxed or forcibly terminated by deadlines.
+
+## Unified Extension author entry (2026-09-18)
+
+The current worktree implements ROUTER_EXTENSION_SPEC v0.5 U1–U3 for the
+existing request-check capability. This is local implementation/validation,
+not a merge, CI or release claim.
+
+- `bitrouter::extension::ExtensionApi::request_check(id, revision, callback)`
+  collects typed native implementations. Duplicate/invalid registrations make
+  the collection unusable even if the author ignores the returned error.
+- `assemble::build_app_with_extensions` runs the registration function and
+  validates bindings before database startup. Default host assembly uses an
+  empty registration function; the legacy map entry shares the same private
+  host assembly and request-check runtime.
+- Native revision configuration, registration, legacy runtime activation and
+  wire responses share one validator. `rules:v1` is now rejected before startup;
+  the accepted grammar is 1–128 ASCII letters/digits or `. _ + - /`.
+- The runnable regex example and author guides use the new entry. Legacy
+  Plugin/global/output/redact/migration facilities remain explicitly documented
+  custom-host compatibility APIs; they are not silently converted into input checks.
+
+| Acceptance | Evidence |
+| --- | --- |
+| UE01 | Integration test registers multiple callbacks in a different order from router bindings; two routers execute their declared checks and leave the unbound instance inert. |
+| UE02 | Registration tests cover invalid IDs/revisions and duplicates. Host tests prove explicit errors, ignored duplicate errors, missing/extra registrations and revision mismatch fail before creating a database. Existing configuration tests reject unknown bindings. |
+| UE03 | Native/HTTP shared-decision and receipt integration coverage plus process runs below; existing timeout/cancellation admission tests continue to pass. Wire/config structure and schema remain unchanged. |
+| UE04 | Source review confirms the public facade exposes registration only, with a private collection; no builder/context/reporter/migrations/global-hook accessors. SDK compatibility and existing host tests pass. This is API scoping, not a Native sandbox. |
+| UE05 | Legacy SDK hooks are unchanged in behavior and retain their tests. Guides distinguish input-only, output block/redact and global/direct-model coverage; removal requires an announced breaking SDK release with migration notes. |
+| UE06 | Default bro and both delivery examples build. Normal/build dependency trees exclude matcher/service from bro and SDK from standalone matcher/service. No manifest/dependency or embedded-extension addition was made; no size reduction is claimed. |
+
+Validation on the final source:
+
+| Check | Result |
+| --- | --- |
+| Workspace nextest, all features | 3,491 passed; 22 skipped. One unchanged optimization test had a leaky-process flag; isolated rerun passed without that flag. |
+| Three unified-entry integration tests | Passed before the complete workspace rerun. |
+| Workspace clippy, all features and all targets, `-D warnings` | Passed. |
+| Workspace doctests | 5 passed; 1 ignored. |
+| Workspace rustdoc, all features, `-D warnings` | Passed. |
+| SDK without defaults; SDK config_file only; matcher without defaults | Passed. |
+| Formatting, patch whitespace, dist/schema check | Passed. |
+| Default bro, standalone regex checker and Native example builds | Passed. |
+| Real HTTP daemon + checker processes | Seven scenario groups passed; one allowed upstream call, zero additional calls on deny, timeout, malformed response or stopped service. |
+| Real Native example process | Allow returns 200; non-streaming and streaming deny return 403 without upstream dispatch; a router without the binding remains unguarded. Two total allowed upstream calls. |
+
+Both process tests used counted local mock model providers. No live model,
+production deployment, public release or cross-platform execution was tested.
+The existing macOS linker unwind warning and dependency future-compatibility
+notice remain; no suppression was introduced.
+
+The first full run found an invalid test fixture using plain HTTP for a
+non-loopback provider placeholder. The fixture was corrected to HTTPS without
+relaxing production URL validation. The later complete run above passed.
+The leaky flag was for
+`optimization::controller::file_tests::first_mutating_run_activates_a_frozen_config`;
+no optimization source was changed and its clean isolated rerun is not a claim
+that a cleanup race has been fixed.
+
+Logs and process evidence: `/tmp/unified-extension-validation/results.json`,
+`nextest.log`, `nextest-initial.log`, `leak-recheck.log`, `dependencies.json`,
+`http-e2e/report.json`, and `native-process-report.json` under the same directory.
+The native process runner used `/tmp/regex-native-e2e.py`; its captured host log
+is `/tmp/regex-native-e2e/host.log`.
+
+The public facade currently lives in the product host crate, with registration
+functions in custom-host integration modules. Reusable matcher/business code
+still depends only on the lightweight capability contract. No independent
+extension SDK, evaluator/selector entry, universal registry or remote process
+manager is part of this increment. Legacy API removal remains a future explicit
+breaking change; the current delivery is one recommended author entry with a
+bounded compatibility path.

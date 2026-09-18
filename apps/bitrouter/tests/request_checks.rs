@@ -567,11 +567,8 @@ fn native_config(config: &mut config::Config, id: &str, revision: &str) {
 
 #[tokio::test]
 async fn regex_native_and_http_share_decisions_bindings_and_receipts() -> Result<()> {
-    use bitrouter::request_checks::{
-        CheckerExecution, NativeChecker, ProbeProtocolStatus, ProbeReachability,
-    };
+    use bitrouter::request_checks::{CheckerExecution, ProbeProtocolStatus, ProbeReachability};
     use bitrouter_guardrails::{checker, config::InputGuardrailConfig};
-    use std::collections::HashMap;
 
     let rules: InputGuardrailConfig = serde_json::from_value(json!({
         "scope": "input", "rules": [{"name": "secret", "pattern": "secret-\\n[0-9]+", "action": "block"}]
@@ -601,10 +598,10 @@ async fn regex_native_and_http_share_decisions_bindings_and_receipts() -> Result
             contract_version: 1,
         },
     );
-    let registrations =
-        HashMap::from([("first".to_owned(), NativeChecker::new("rules-v1", callback))]);
-    let assembled =
-        bitrouter::assemble::build_app_with_checkers(&config, None, registrations).await?;
+    let assembled = bitrouter::assemble::build_app_with_extensions(&config, None, |api| {
+        api.request_check("first", "rules-v1", callback)
+    })
+    .await?;
     let server = gateway(&assembled)?;
     for (router, expected_id) in [("coding", "first"), ("restricted", "second")] {
         for (text, denied) in [("ordinary input", false), ("secret-", true)] {
@@ -681,6 +678,179 @@ async fn regex_native_and_http_share_decisions_bindings_and_receipts() -> Result
     drop(assembled);
     let _ = shutdown_tx.send(());
     service.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn unified_entry_preserves_router_binding_order_and_leaves_unbound_checks_inert() -> Result<()>
+{
+    use bitrouter_checker_protocol::capability::{CheckCallback, CheckDecision};
+    use bitrouter_sdk::config::router::RouterRequestCheck;
+    use std::sync::{Arc, mpsc};
+
+    let upstream = MockServer::start().await;
+    mount_upstream(&upstream).await;
+    let mut config = configuration(&upstream.uri(), "http://unused.invalid", 5_000)?;
+    for id in ["first", "second", "unbound"] {
+        native_config(&mut config, id, "rules-v1");
+    }
+    let coding = config
+        .routers
+        .get_mut("coding")
+        .context("missing coding router")?;
+    coding.checks.request.insert(
+        0,
+        RouterRequestCheck {
+            checker: "second".to_owned(),
+            timeout_ms: 5_000,
+            max_input_bytes: config::router::DEFAULT_CHECKER_MAX_INPUT_BYTES,
+        },
+    );
+    let restricted = config
+        .routers
+        .get_mut("restricted")
+        .context("missing restricted router")?;
+    restricted
+        .checks
+        .request
+        .first_mut()
+        .context("missing restricted checker binding")?
+        .checker = "first".to_owned();
+
+    let (calls_tx, calls_rx) = mpsc::channel();
+    let callback = |name: &'static str| -> Arc<CheckCallback> {
+        let calls = calls_tx.clone();
+        Arc::new(move |_| {
+            let _ = calls.send(name);
+            CheckDecision::Allow
+        })
+    };
+    let first = callback("first");
+    let unbound = callback("unbound");
+    let second = callback("second");
+    let assembled = bitrouter::assemble::build_app_with_extensions(&config, None, |api| {
+        // Registration order differs from the coding router's declared order.
+        api.request_check("first", "rules-v1", first)?;
+        api.request_check("unbound", "rules-v1", unbound)?;
+        api.request_check("second", "rules-v1", second)
+    })
+    .await?;
+    let server = gateway(&assembled)?;
+    for router in ["coding", "restricted"] {
+        let response = server
+            .post("/v1/chat/completions")
+            .json(&request(router))
+            .await;
+        ensure!(response.status_code().is_success(), "{}", response.text());
+    }
+    let calls = calls_rx.try_iter().collect::<Vec<_>>();
+    ensure!(calls == ["second", "first", "first"], "{calls:?}");
+    let inventory = assembled.request_checks.configured();
+    ensure!(
+        inventory
+            .iter()
+            .find(|checker| checker.checker_id == "unbound")
+            .is_some_and(|checker| checker.bindings.is_empty())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unified_entry_registration_failure_precedes_database_startup() -> Result<()> {
+    use bitrouter_checker_protocol::capability::CheckDecision;
+    use std::sync::Arc;
+
+    let directory = tempfile::tempdir()?;
+    let database_path = directory.path().join("must-not-exist.db");
+    let mut config = configuration(
+        "https://unused-upstream.invalid",
+        "https://unused-checker.invalid",
+        5_000,
+    )?;
+    config.database.url = format!("sqlite://{}?mode=rwc", database_path.display());
+
+    let error = match bitrouter::assemble::build_app_with_extensions(&config, None, |_| {
+        anyhow::bail!("fixture registration failed")
+    })
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => anyhow::bail!("registration failure unexpectedly activated the host"),
+    };
+    let error_chain = format!("{error:#}");
+    ensure!(error_chain.contains("registering extensions"));
+    ensure!(error_chain.contains("fixture registration failed"));
+    ensure!(
+        !database_path.exists(),
+        "database opened before registration completed"
+    );
+
+    let duplicate = match bitrouter::assemble::build_app_with_extensions(&config, None, |api| {
+        api.request_check("duplicate", "rules-v1", Arc::new(|_| CheckDecision::Allow))?;
+        // Ignoring a registration error must still abort assembly before DB I/O.
+        let _ = api.request_check("duplicate", "rules-v1", Arc::new(|_| CheckDecision::Allow));
+        Ok(())
+    })
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => anyhow::bail!("duplicate registration unexpectedly activated the host"),
+    };
+    ensure!(format!("{duplicate:#}").contains("already registered"));
+    ensure!(
+        !database_path.exists(),
+        "database opened after duplicate registration"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unified_entry_binding_failures_precede_database_startup() -> Result<()> {
+    use bitrouter_checker_protocol::capability::CheckDecision;
+    use std::sync::Arc;
+
+    for (case, diagnostic) in [
+        ("missing", "is not registered"),
+        ("mismatched", "revision does not match"),
+        ("extra", "no matching native configuration"),
+    ] {
+        let directory = tempfile::tempdir()?;
+        let database_path = directory.path().join("must-not-exist.db");
+        let mut config = configuration(
+            "https://unused-upstream.invalid",
+            "https://unused-checker.invalid",
+            5_000,
+        )?;
+        native_config(&mut config, "first", "rules-v1");
+        config.database.url = format!("sqlite://{}?mode=rwc", database_path.display());
+        let result = bitrouter::assemble::build_app_with_extensions(&config, None, |api| {
+            if case != "missing" {
+                let revision = if case == "mismatched" {
+                    "rules-v2"
+                } else {
+                    "rules-v1"
+                };
+                api.request_check("first", revision, Arc::new(|_| CheckDecision::Allow))?;
+            }
+            if case == "extra" {
+                api.request_check("extra", "rules-v1", Arc::new(|_| CheckDecision::Allow))?;
+            }
+            Ok(())
+        })
+        .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => anyhow::bail!("{case} registration activated the host"),
+        };
+        ensure!(
+            format!("{error:#}").contains(diagnostic),
+            "{case}: {error:#}"
+        );
+        ensure!(
+            !database_path.exists(),
+            "{case}: database opened before binding validation"
+        );
+    }
     Ok(())
 }
 

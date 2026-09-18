@@ -17,7 +17,7 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 | `crates/bitrouter-tui`           | crate   | Full-screen unified Code shell (`bro code [<agent>]`) — ACP transcript, multiline composer, temporary inspectors, and explicit permission choices |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App` and owns the management commands |
 
-The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks with `assemble::build_app_with_checkers`; the SDK also retains legacy `Plugin`/hook interfaces. See [the extension directory guide](../extensions/README.md) and [guardrails](../extensions/regex-checker/README.md).
+The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `extension::ExtensionApi` inside `assemble::build_app_with_extensions`; the SDK also retains legacy `Plugin`/hook interfaces for host assembly. See [the extension directory guide](../extensions/README.md) and [guardrails](../extensions/regex-checker/README.md).
 
 ### External interfaces
 
@@ -124,12 +124,38 @@ Because the schema is the contract, it is written down rather than inferred from
      - `mcp` — Model Context Protocol routing (pure routing, no settlement).
      - `acp` — Agent Client Protocol routing (pure routing, no settlement).
    - **Four wire-protocol adapters** — Chat Completions, Responses, Messages, Generate Content — each with an inbound side (parse a client request / encode a client response + SSE) and an outbound side (render a provider request / decode a provider response + SSE). Any inbound protocol can be served by any outbound protocol.
-   - **Hook traits** — `PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook` — the extension points every plugin and the binary's builtin hooks implement.
+   - **Hook traits** — `PreRequestHook`, `RouteHook`, `ExecutionHook`, `StreamHook`, `SettlementRecorder`, `ObserveHook` — trusted host assembly interfaces used by builtins and legacy packages. New request-check extensions use the restricted author API rather than mutable pipeline hooks.
    - **Config + routing** — YAML parsing, `${VAR}` substitution, the `ConfigRoutingTable`.
    - The **axum HTTP server** and the `App` builder.
 2. **`bitrouter-providers`** — depends on `bitrouter-sdk`. Provider integration glue. The only compiled-in provider entry is the hosted `bitrouter` cloud gateway (`providers/bitrouter.toml`, embedded via `include_str!`); every other provider comes from the runtime-fetched registry and is merged by `registry::apply`. Owns the `AuthApplier` impls (copilot, anthropic, claude-code, openai-codex) and `zero_config()` — the in-memory `Config` used when the binary runs with no config file.
 3. **`bitrouter-guardrails`** defaults to matcher/config only; its explicit `sdk` feature enables compatibility hooks for custom hosts. **`bitrouter-checker-protocol`** contains the small business callback contract, wire DTOs and strict codecs; **`bitrouter-regex-checker`** uses that contract and the matcher without linking the SDK. **`bitrouter-telemetry`** implements SDK hooks; telemetry's whole OpenTelemetry stack sits behind `otel-*` and its ingress span behind `server`, so `cargo add bitrouter-telemetry` on its own pulls neither. The `feature-isolation` CI job enforces all of it, plus the invariant that gives the split its point: **no `opentelemetry*` crate is in `bitrouter-sdk`'s tree at any feature combination**, and the two OTLP transports stay isolated from each other.
 4. **`apps/bitrouter`** — assembles the default host without a guardrails matcher dependency. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, observability) and router-bound external request checks onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
+
+### Extension authors and host assembly
+
+New request-check authors use an ordinary function accepting
+`bitrouter::extension::ExtensionApi` and register a callback with
+`request_check(id, revision, callback)`. The custom host passes that function to
+`assemble::build_app_with_extensions`. Router bindings control execution order
+and scope; registration is not global activation. Native and HTTP implementations
+still use the same request-check runtime and receipt lifecycle. The restricted
+API does not expose host builders, migrations, global hooks, credentials or
+mutable pipeline context. It currently provides only request-check, not empty
+evaluation or selection methods. See the
+[extension example](../extensions/regex-checker/README.md).
+
+`Plugin` / `AppBuilder::plugin` and optional `GuardrailsPlugin` are legacy
+custom-host assembly facilities. Their existing global, stream and migration
+semantics remain supported in the current alpha SDK API. They are not equivalent
+to router-bound input checks. `NativeChecker` / `build_app_with_checkers` also
+remain as a low-level compatibility entry delegating to the same host assembly
+and request-check runtime. Removal requires an explicitly announced breaking SDK release
+with migration notes; no removal date is scheduled. New examples recommend only
+`ExtensionApi`. `PluginId` continues to identify metadata owners, including core
+auth; `Config::plugins` retains its existing consumers. Context `extensions`
+remain typed request state, and external agent-plugin manifests retain their
+own distribution contracts. These names are not a reason to grant extensions
+core or host assembly responsibilities.
 
 ### SDK feature flags
 

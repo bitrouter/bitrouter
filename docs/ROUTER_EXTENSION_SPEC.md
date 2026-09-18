@@ -1,10 +1,10 @@
 # Router & Extension：组合、执行边界与 Guardrails 独立交付
 
-状态：**v0.4，6A–6C 已接入本工作区：共享 HTTP v1 契约、独立输入 checker、默认宿主依赖移除与迁移阻断。验证结果见验收记录；公开发布仍待发布流程。自定义 router/selector API 不在本轮范围。**
+状态：**v0.5，统一 Extension 作者入口已在本工作区接入、待代码 review；6A–6C 已接入本工作区：共享 HTTP v1 契约、独立输入 checker、默认宿主依赖移除与迁移阻断。验证结果见验收记录；公开发布仍待发布流程。自定义 router/selector API 不在本轮范围。**
 
-日期：2026-09-17。实施前源码基线：`main@2b01d2e6eab72274fb4b3571534fb5c9e656746b`；本轮状态指当前工作区变更，不代表已合并或发布。
+日期：2026-09-18（统一入口实施补记）。实施前源码基线：`main@2b01d2e6eab72274fb4b3571534fb5c9e656746b`；本轮状态指当前工作区变更，不代表已合并或发布。
 
-本文独立定义 router 与 extension 的关系，作为第一批最后一步 guardrails 拆分的评审依据。
+本文独立定义 router 与 extension 的关系，作为第一批最后一步 guardrails 拆分及后续作者入口收敛的评审依据。
 不引入新的模型选择算法，也不将整个 beta 架构纳入本次实施。
 
 v0.3 更新：落地第 6 项的共享协议、服务、构建隔离和旧键阻断；实现及制品证据见 [验收记录](GUARDRAILS_EXTENSION_ACCEPTANCE.md)。
@@ -13,12 +13,17 @@ v0.3 曾将目录收敛到 `extensions/guardrails/{matcher,service}`，当时保
 
 v0.2 更新：统一 Extension 产品术语，区分静态 Rust 装配与独立服务，明确普通函数的作者入口、
 宿主执行约束和 wire 契约；将 guardrails 独立交付与自定义 router/selector API 分为两个增量。
-与产品架构文档 `001-Extensible-Router-Architecture.md` v0.9 的第 3、4、6、10 节对应；
+与产品架构文档 `001-Extensible-Router-Architecture.md` v0.10 的第 3、4、6、10 节对应；
 该文档中的双模式、client/server 拆分及 durable workflow 不属于本 spec 的交付承诺。
 
 v0.4 更新：`request-check` 是 capability，`regex-checker` 是具体 extension；已接入显式
 Native 注册与 HTTP 共用的检查运行时。新服务 package/binary 改为 `bitrouter-regex-checker`，
 源码归入 `extensions/regex-checker/`；旧 matcher package 和 SDK hooks 保留兼容身份。
+
+v0.5 更新：确认以一个小型 Extension 作者入口收敛旧 Plugin 与 Native checker 注册路径；
+第三方通过类型化能力参与 router，直接改写宿主 pipeline 留给自定义宿主开发。
+第 4.8 节及 U1–U2 已接入，U3 的本轮验证单独记录；HTTP v1 和配置结构保持不变，
+Native revision 校验收敛到已有 v1 响应语法。6A–6C 历史验收不作为新入口的验证证据。
 
 ## 1. 产品目标与已确认决定
 
@@ -32,7 +37,7 @@ Native 注册与 HTTP 共用的检查运行时。新服务 package/binary 改为
 3. coding 复用已有 policy-lock，由初始化流程建立绑定；缺少模型或策略时明确未就绪。
 4. 沿现有 pipeline 和管理查询演进。第一版检查回执只保证当前进程内查询。
 5. guardrails 拆分允许明确迁移阻断；不得静默丢失既有保护。
-6. Rust Plugin 统一归入 Extension 产品概念；Context `extensions` 仍是请求状态容器。
+6. Rust Plugin 的作者入口收敛进 Extension；第三方通过明确的能力接口参与 router，直接改写整个 pipeline 留给自定义宿主。Context `extensions` 仍是请求状态容器。
 7. 开发者使用普通 Cargo 项目、业务函数和小型注册/服务入口；不先建设脚本 runtime 或通用插件平台。
 8. 配置与代码定义复用同一宿主执行路径；guardrails 拆分不等待自定义 router API。
 
@@ -44,10 +49,10 @@ Native 注册与 HTTP 共用的检查运行时。新服务 package/binary 改为
 | --- | --- | --- |
 | Router | 命名的请求处理配置，组合选择策略、默认值和能力绑定 | 已实现 |
 | Selection policy | 选模规则或策略产物；router 的 selection 当前支持固定模型引用或 policy-lock | 已实现，运行在宿主内 |
-| Extension | 向 router 或宿主提供一项有明确契约的可替换能力 | 产品概念；首个外部接入契约为 request checker |
+| Extension | 向 BitRouter 注册一组类型化能力的模块；也可经受支持协议交付其能力实现 | 统一作者入口已接入；当前能力为 request-check |
 | Checker instance | `checkers.<id>` 声明的 HTTP 连接或 Native 实例 | 已实现 |
 | Binding | Router 对 checker 的引用及调用限制 | 已实现，入口请求固定绑定 |
-| Rust `Plugin` | 构建时向 `AppBuilder` 注册 hooks 和 migrations 的便捷包装 | 已实现；不提供进程隔离或动态安装 |
+| Rust `Plugin` | 旧的宿主装配包装，可注册 hooks 和 migrations | 兼容 API；计划收敛，非另一种推荐扩展模型；无进程隔离或动态安装 |
 | Context `extensions` | 请求内部按 Rust 类型存放对象的数据容器 | 已实现；不是外部扩展注册表 |
 | Host | `apps/bitrouter` 的装配、HTTP 调用、凭据和管理实现，以及使用的 SDK runtime | 已实现；尚不等于最终 minimal core |
 | Extension artifact | 可独立构建、发布、运行和升级的能力实现 | guardrails 已有独立 executable 和本地归档；公开发布待完成 |
@@ -118,8 +123,9 @@ Router 决定采用哪一种 selection；policy-lock 保存当前发布的策略
 保留按能力命名的现有配置：首个外部能力使用 `checkers` 和 `checks.request`。
 本轮不增加通用 `extensions:` 注册表、manifest、任意 hooks DSL 或 extension 安装器。
 
-理由：当前只有一个已落地的外部调用契约。再建立一层 extension ID → checker ID → router
-binding 会增加配置和诊断对象，却不增加当前能力。未来出现第二种外部能力时，再评估统一注册需求。
+理由：再建立一层 extension ID → checker ID → router binding 会增加配置和诊断对象，却不增加当前能力。
+第 4.8 节将统一代码作者入口与通用配置/分发 registry 分开：前者已在本工作区接入，后者仍延后；
+不再以等待第二种能力为作者入口收敛的前提。
 
 同一个 checker instance 可以被多个 router 引用；每个 binding 具有自己的限制和身份。
 不同规则集可以先由不同 endpoint 表达，本轮不虚构 `ruleset` 配置字段或远程规则管理 API。
@@ -176,12 +182,13 @@ Rust hooks 仍是受信任的宿主代码，具有比 HTTP checker 更大的进�
 任意 HTTP URL 只有实现支持的版本化能力契约后，才能作为该能力的 extension 接入。
 
 建议项目从 `Cargo.toml`、`src/lib.rs`、`src/main.rs` 和测试开始：library 包含判定，binary 使用
-服务 helper 处理协议。已有 `Plugin::install` 可演进为装配入口；不并行新增一套同义的 Plugin/Extension
-注册体系，不以全面改名作为本批交付。注册仅提供能力，router 显式绑定才启用检查；不得隐式全局激活。
+服务 helper 处理协议。第 4.8 节以受限注册入口接管推荐的作者路径，不把完整
+`AppBuilder` 暴露为第三方 extension API；兼容路径有明确退出条件，不长期维护两套推荐体系。
+注册仅提供能力，router 显式绑定才启用检查；不得隐式全局激活。
 
 初版不用自定义 manifest 重复 Cargo 包信息，不承诺动态 Rust ABI、脚本加载、自动发现、stdio transport
 或 bro 自动拉起进程。当前具体入口为服务 crate 的 `adapter::router`、共享 capability 模块的 `CheckCallback` / `CheckDecision`，以及宿主的 `NativeChecker` / `build_app_with_checkers`；
-它们服务于这个输入 checker，不代表已新增通用 extension 注册接口。
+这些底层入口继续服务于输入 checker；统一代码作者入口见第 4.8 节，未引入通用配置/分发 registry。
 
 ### 4.5 首个作者入口：业务判定与 HTTP v1 分开〔已实现〕
 
@@ -207,7 +214,8 @@ Matcher 提供 `checker::callback(rules)`，Native 与 HTTP 服务使用同一�
 宿主 `RequestCheckRuntime` 统一 binding 校验、输入校验、并发许可、deadline、结果校验；
 pipeline 继续统一投影、拒绝、回执与零上游调用。HTTP 分支单独拥有凭据、编码与网络操作。
 
-自定义宿主显式调用 `assemble::build_app_with_checkers`，按 checker id 注册 `NativeChecker`。
+自定义宿主通过 `assemble::build_app_with_extensions` 调用注册函数，使用
+`extension::ExtensionApi::request_check(id, revision, callback)` 注册 checker；旧 map 入口保留兼容。
 配置使用 `checkers.<id>.native.revision`，代码注册 revision 必须相等；缺失、错配和多余注册阻断启动。
 Revision 是代码/规则的声明身份，变更须更新，非可信证明。注册不隐式全局启用；router 仍绑定
 `checks.request`。官方 bro 不链接 matcher、不提供 Native 注册；配置本身不能安装 Rust 代码。
@@ -244,6 +252,83 @@ CPU 密集工作需有界资源安排；异步 timeout 不会抢占同步计算�
 本轮不提前发布 `SimpleModelSelector` 等新 trait，也不将 closure helper 视为 selector 隔离已完成。
 现有观察 hook 具有 context 能力，不能仅改名就宣称只读；若以后开放 observer，应使用专门的事实投影。
 外部 selector 协议、通用 registry 和进程管理分别评审，均不是第 6 项的前置条件。
+
+### 4.8 统一 Extension 作者入口〔已在工作区实现，待代码 review〕
+
+**设计原则：一个注册入口，多个类型化能力；router 显式绑定，宿主拥有执行约束。**
+Extension 是能力提供模块；request-check 是能力接口；regex-checker 是实现；Native/HTTP 是部署与调用方式。
+统一后第三方不再需要在 Plugin、checker 专用装配与另一套 Extension 框架之间选择。
+本节替代此前“只统一术语、等第二种能力再讨论注册入口”的取舍，但不提前引入通用分发平台。
+
+**作者入口。** `bitrouter::extension::ExtensionApi` 接收普通 Rust 注册函数；不要求额外实现
+`Extension` trait。只有实际消费者需要统一持有对象或生命周期时，才评审引入 trait。
+当前签名为 `request_check(&mut self, id: &str, revision: &str, callback: Arc<CheckCallback>) -> anyhow::Result<()>`。
+宿主调用 `assemble::build_app_with_extensions(config, config_path, register)` 并等待装配完成。
+当前 facade 位于产品宿主 crate，注册函数放在自定义宿主的接入模块；可复用 matcher/业务库
+只依赖轻量能力契约，独立 HTTP 服务不因共享业务逻辑而依赖 `bitrouter`。本轮未发布独立 extension SDK。
+一个完整注册函数如下；运行入口见 [Native 示例](../apps/bitrouter/examples/native_regex_checker.rs)：
+
+```rust
+use bitrouter::extension::ExtensionApi;
+use bitrouter_guardrails::{checker, rules::RuleSet};
+
+fn register(api: &mut ExtensionApi, rules: RuleSet) -> anyhow::Result<()> {
+    api.request_check("secrets", "rules-v1", checker::callback(rules))
+}
+```
+
+首个方法只注册现有 request-check 回调；保留 checker id 与 revision 匹配约束。一个模块可注册
+多个具名实例，规则和共享状态由普通 Rust 值/闭包持有，遵守第 4.6 节并发约束。首版无须额外的
+operator-facing extension ID。同一 request-check ID 重复注册即报错，不覆盖原值；任一注册错误
+使本次收集失效，即使作者忽略返回错误也不能激活部分结果。
+
+Native revision 在配置、代码注册和运行时激活使用同一个 v1 implementation-version 校验器：
+1–128 个 ASCII 字母、数字或 `. _ + - /`。此前配置允许的 `rules:v1` 现在在启动前拒绝，
+不再等到每次回调返回才报 invalid_response；这是校验修复，不改变 wire 语法或配置字段。
+
+**注册、绑定和执行。** 注册阶段收集实现，不处理用户请求、不发起探测、不隐式激活全局 hook；
+配置解析后的实例、Native revision 与 router 引用由宿主统一校验，任一必需项失败则拒绝激活，
+不得暴露半成品 running 状态。初始化业务代码本身仍为可信代码，这不是副作用沙箱。
+未被 router 绑定的 checker 不处理业务流量；显式 probe 仍可独立运行且不算实际使用。
+绑定顺序由 router 声明，不能由模块注册顺序改变；每次请求沿现有固定身份、投影、检查和回执路径执行。
+
+**权限和契约。** `ExtensionApi` 不提供完整 `AppBuilder`、可变 `PipelineContext`、凭据、
+回执写入器、全局 hook 或 migrations 注册。认证、预算、终结、交付和结果校验仍由宿主掌握。
+自定义宿主可继续使用底层 builder/hook/migration 设施承担整体装配职责；它不是第三方 extension
+的另一种隐式特权模式。Native 仍是可信进程内代码，受限 API 只限制正常接口访问，不能防止其
+直接使用系统权限或其他已链接接口。HTTP 实现只获得协议允许的数据和操作。
+
+检查、评估、选模未来可共享作者入口，但分别保持输入、结果、顺序及失败规则。首版不加入空置的
+`evaluate`/`select` 方法，不用 `handle(event) -> JSON` 统一执行，不把 evaluator 故障折算成检查 deny。
+HTTP 服务按版本化 request-check 契约接入同一能力运行时，不需要运行 Rust 注册函数；任意 URL
+不自动成为 extension。代码注册入口收敛不改变现有 HTTP v1，也不创建万能远程 hook 协议。
+
+**旧语义迁移。** 以下分类决定迁移方式，不能全仓机械替换 `plugin` 字样：
+
+| 当前对象 | 迁移目标与边界 |
+| --- | --- |
+| `Plugin::install` / `AppBuilder::plugin` | 标为旧宿主装配路径；新 extension 作者使用受限注册入口。当前 alpha SDK 保留兼容；移除只允许在明确公告的 breaking SDK release 并附迁移说明，不设虚构日期，不以同名 alias 掩盖权限差异 |
+| `GuardrailsPlugin` / 可选 `sdk` hooks | 输入 request-check 示例迁入新入口；旧全局、输出 block/redact 行为不能自动映射为输入 checker。兼容路径保留明确范围或通过版本化破坏性迁移移除；未有替代能力时不宣称等价迁移 |
+| `Plugin::migrations` | 自定义宿主显式管理；不为了兼容旧包装给第三方能力新增数据库权限 |
+| `PluginId` / metadata | 按真实用途审查，核心 auth 等 metadata 不自动成为 extension；若改名采用表达 metadata 归属的名称，另做兼容处理 |
+| `Config::plugins` | 按 auth/access policy、telemetry、旧 guardrail 等实际消费者迁移；不直接复制为任意 JSON 的 `extensions:` |
+| Context `extensions` | 保留类型化请求状态容器语义，不加入能力注册生命周期 |
+| `.codex-plugin` / `.claude-plugin` / agent marketplace | 外部 agent 生态的分发格式；保留其命名与契约 |
+
+**替代范围。** 新入口接管推荐的代码注册流程，Native 与 HTTP 继续进入现有 `RequestCheckRuntime`。
+`build_app_with_checkers` 保留为旧 map 兼容入口，与新入口委托同一个私有宿主装配函数；不声称
+旧 map 能检查创建 map 前已经被覆盖的重复键。默认宿主通过统一入口提供空注册集合。
+`NativeChecker` 和旧 map 入口适用上述 alpha 兼容窗口；新示例和推荐文档只使用统一入口。
+现有 service helper 仍位于 regex 服务 package，未在本轮迁出；通用适配若需抽取，应由实际消费者
+证明复用价值，不能把具体 matcher 的依赖带回默认宿主。
+
+**Pi 参考与差异。** Pi 曾将 hooks/custom tools 合并为同一个 extension factory，再通过类型化
+方法分别注册事件、工具和命令；这里借鉴统一作者入口和普通闭包共享状态。Pi package 还可分发
+skills/prompts/themes，不等于所有资源使用同一执行接口。BitRouter 保留 router 绑定、服务端并发和
+能力失败语义，不据此承诺 TS 动态加载、热更新或 Native/HTTP 权限等价。
+参考：[Pi 合并讨论 #454](https://github.com/earendil-works/pi/issues/454)、
+[Extension API](https://github.com/earendil-works/pi/blob/d7296c063b7971a7298769cfff1a167a9a16f8ed/packages/coding-agent/src/core/extensions/types.ts)、
+[packages](https://github.com/earendil-works/pi/blob/d7296c063b7971a7298769cfff1a167a9a16f8ed/packages/coding-agent/docs/packages.md)。
 
 ## 5. 执行顺序与失败语义〔已实现〕
 
@@ -396,7 +481,8 @@ redact 按 chunk 执行，跨 chunk 匹配存在已知限制。不得称其为�
 6A 覆盖 E1–E2；6B 覆盖 E3–E4 的本地服务、归档和跨进程验证；6C 覆盖 E5 的宿主移除、迁移与复验。
 本工作区已接入这些实现；各项实测结果见 [验收记录](GUARDRAILS_EXTENSION_ACCEPTANCE.md)。
 独立制品必须在对外迁移时可供操作者获得；本地归档不等于已发布。公开发布前不宣称第 6 项的发布门槛已完成。
-后续 R1 用真实示例实现 router 对自定义 selector 的绑定与最小函数入口；R2 再按需求讨论外部 selector
+本工作区按下表 U1–U3 收敛已有 request-check 作者路径。随后 R1 用真实示例实现 router
+对自定义 selector 的绑定与最小函数入口；R2 再按需求讨论外部 selector
 和进程管理。R1/R2 不阻塞 E1–E5，也不捆绑 client/server 拆分、完整 SDK 重组或新的选模算法。
 
 | ID | 验收场景 | 要求 |
@@ -416,6 +502,27 @@ redact 按 chunk 执行，跨 chunk 匹配存在已知限制。不得称其为�
 模拟上游验证不能称为真实模型成功。源码变更仍须执行仓库要求的 tests、clippy、fmt 和适用发行检查。
 移除 guardrail matcher 不代表所有 `regex` 依赖消失；如宣称体积改善，必须提供同条件 A/B release 构建测量。
 
+### 9.1 作者入口收敛〔本工作区交付与验收〕
+
+| 顺序 | 最小改动 | 退出条件 |
+| --- | --- | --- |
+| U1 | 用 regex Native 示例确定受限注册入口，复用现有收集/激活过程 | ID/revision、冲突、错误与启动生命周期明确；既有 API 消费者清单和兼容窗口写明；没有第二套执行链 |
+| U2 | 迁移示例及旧 Plugin 作者路径，按用途处理遗留语义 | 输出/global 非等价明确；migrations 留在宿主；旧入口标记/移除及版本说明具体可查；不机械更名 metadata/config/agent manifests |
+| U3 | 验证统一入口与现有配置、诊断和发布边界 | 下列 UE01–UE06 通过；文档只推荐一个作者入口，兼容 API 明确标注；默认宿主仍不含 matcher |
+
+| ID | 验收要求 |
+| --- | --- |
+| UE01 | 一个普通 Cargo 模块通过统一入口注册两个现有 request-check 实例；两 router 分别绑定，未绑定实例不处理流量，注册顺序不改变 binding 执行顺序 |
+| UE02 | 重复 ID、未知引用、缺失/多余 Native 注册、revision 不匹配、注册失败均有诊断并阻断激活；注册校验和运行协议校验使用兼容的 revision/version 规则，不出现启动成功而所有响应 invalid 的状态 |
+| UE03 | Native 与 HTTP 保留 allow/deny/error、超时零上游、回执、probe/实际使用区分，以及原有并发和取消边界；HTTP v1/config 不变 |
+| UE04 | 新 API 不接收完整 builder/context/reporter、不提供 migrations/global hook 逃生口；核心 auth metadata 和宿主 migrations 的现有消费者不因术语迁移失效 |
+| UE05 | GuardrailsPlugin 的旧输入、输出、redact/global 范围与替代能力逐项对应；不可等价项明确保留兼容或发布迁移阻断，不静默缩小保护 |
+| UE06 | 默认 bro 的依赖/构建/制品仍不含 matcher；自定义 Native 宿主与独立服务示例均实际可运行；公共文档区分新入口、旧兼容和未实现能力 |
+
+U1–U2 已接入；U3 实测结果见 [验收记录](GUARDRAILS_EXTENSION_ACCEPTANCE.md) 的统一入口补记。
+旧 Plugin 的移除不在本轮完成范围；当前交付是单一推荐入口及明确兼容边界。
+不追溯改写 6A–6C 的历史测试记录，也不以文档验收表代替测试证据。
+
 ## 10. 本轮明确不做
 
 - 通用 extension marketplace、动态库/WASM 加载、进程内插件沙箱。
@@ -430,15 +537,18 @@ redact 按 chunk 执行，跨 chunk 匹配存在已知限制。不得称其为�
 
 | ID | 议题 | 当前决定 | 仍需确定或验证 |
 | --- | --- | --- | --- |
-| D1 | 产品概念与配置 | Plugin 归入 Extension；Context extensions 除外；保留 `checkers` / `checks.request` | 不新增通用 registry；旧 Rust API 兼容路径随实际消费者确定 |
+| D1 | 产品概念与配置 | Plugin 作者入口收敛进 Extension；Context extensions 除外；保留 `checkers` / `checks.request` | 不新增通用配置 registry；当前 alpha 保留，明确 breaking release 才移除 |
 | D2 | 首个 guardrail 范围 | 输入 block；不声称替代旧输出或全局覆盖 | 已实现逐片段附换行、严格启动 schema；具体证据见验收记录 |
 | D3 | 迁移阻断 | 旧键存在即阻止启动；删除旧键不证明等价覆盖 | 自动检测与部署者验收分别验证 |
 | D4 | 发布与依赖 | 同 workspace 独立服务；默认宿主不链接 matcher | 六平台归档计划已配置；本地 macOS 制品与公开跨平台发布分开验收 |
 | D5 | 规则生命周期 | 首版启动固定，不热更新 | 服务版本不能冒充规则摘要证明 |
-| D6 | Rust 作者入口 | 普通同步函数与小型 HTTP 适配已有实际消费者；静态 hooks 显式启用 | 新 async 回调或通用注册接口仍需真实消费者，不在本轮提前增加 |
+| D6 | Rust 作者入口 | 普通函数 + 单一受限注册入口；request-check 为首个消费者，旧宿主 hooks 单独定位 | 第 4.8 节已接入，见本轮验证；async/eval/selector 不提前泛化 |
 | D7 | 自定义 router | 单独增量，保留现有 PolicyRuntime | 按 router 绑定、重复/未知 ID、合法输出与兼容路径；不提前新增 trait |
 
-独立 reviewer 基于源码提出的关键修正已纳入：全局 selector 列表不能冒充 router 隔离；业务 decision
+v0.5 的统一入口已由本轮实现 agent 交叉做只读核对；这是局部源码 review，不等同独立发布验收。
+本轮运行验证与遗留边界见验收补记。
+
+此前独立 reviewer 基于源码提出的关键修正已纳入：全局 selector 列表不能冒充 router 隔离；业务 decision
 不能冒充 wire response；input-only 不能等价迁移 output/global 规则；异步 timeout 不能保证抢占 CPU
 或停止远端执行。该次审阅为只读源码与设计审阅，没有运行测试，也未交付新 API。
 

@@ -239,7 +239,7 @@ pub fn validate_host_configuration(config: &Config) -> Result<()> {
     anyhow::ensure!(
         !config.plugins.contains_key("bitrouter-guardrails"),
         "plugins.bitrouter-guardrails requires migration: the default bro no longer \
-         includes the guardrails matcher. Deploy the independent bitrouter-guardrails \
+         includes the guardrails matcher. Deploy the independent bitrouter-regex-checker \
          service and bind checkers through routers.<id>.checks.request. It checks input \
          only and does not replace global or output block/redact protection. Review \
          every protected entry point and output requirement before explicitly removing \
@@ -378,8 +378,8 @@ fn renamed_env_warnings(is_set: impl Fn(&str) -> bool) -> Vec<String> {
         .collect()
 }
 
-/// Assemble an [`App`] from a parsed config: connect the database, run every
-/// plugin's migrations, build the routing table + executor, and wire the
+/// Assemble an [`App`] from a parsed config: connect the database, run the
+/// host's migrations, build the routing table + executor, and wire the
 /// builtin hooks onto the `language_model` pipeline.
 pub async fn build_app(config: &Config) -> Result<Assembled> {
     build_app_with_path(config, None).await
@@ -391,13 +391,46 @@ pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
-    build_app_with_checkers(config, config_path, std::collections::HashMap::new()).await
+    build_app_with_extensions(config, config_path, |_| Ok(())).await
 }
 
-/// Assemble a custom host with explicit native request-check registrations.
+/// Assemble a custom host through the unified, capability-scoped extension API.
+///
+/// Registration completes before configuration validation, database access or
+/// any other startup work. Registered capabilities remain inert until the
+/// configuration binds them to a router.
+pub async fn build_app_with_extensions(
+    config: &Config,
+    config_path: Option<&std::path::Path>,
+    register: impl FnOnce(&mut crate::extension::ExtensionApi) -> Result<()>,
+) -> Result<Assembled> {
+    let mut extensions = crate::extension::ExtensionApi::new();
+    register(&mut extensions).context("registering extensions")?;
+    let native = extensions.into_native().context("registering extensions")?;
+    assemble_app(config, config_path, native).await
+}
+
+/// Legacy compatibility entry for hosts that already collect [`NativeChecker`] values.
+///
+/// New custom hosts should use [`build_app_with_extensions`]. This wrapper
+/// feeds the same private assembly and request-check runtime; it does not
+/// create a parallel registration or execution path. It remains available for
+/// the current alpha API; removal requires an announced breaking SDK release
+/// with migration notes.
+///
+/// [`NativeChecker`]: crate::request_checks::NativeChecker
+///
 /// Registrations are inert until referenced by a router's `checks.request`.
 /// The default CLI never supplies native registrations.
 pub async fn build_app_with_checkers(
+    config: &Config,
+    config_path: Option<&std::path::Path>,
+    native: std::collections::HashMap<String, crate::request_checks::NativeChecker>,
+) -> Result<Assembled> {
+    assemble_app(config, config_path, native).await
+}
+
+async fn assemble_app(
     config: &Config,
     config_path: Option<&std::path::Path>,
     native: std::collections::HashMap<String, crate::request_checks::NativeChecker>,

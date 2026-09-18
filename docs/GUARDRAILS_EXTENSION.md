@@ -120,6 +120,25 @@ they do not receive a host reporter or mutable pipeline context. The standalone
 service depends on the matcher without its SDK integration feature. Custom
 trusted hosts may still explicitly enable the library's legacy hook integration.
 
+`Plugin`, `AppBuilder::plugin`, and `GuardrailsPlugin` are legacy custom-host
+assembly APIs, retained in the current alpha SDK compatibility window. They keep
+their existing hook and migration behavior. The earlier `NativeChecker` /
+`build_app_with_checkers` entry remains a compatibility wrapper using the same
+host assembly and request-check runtime. Removal of these APIs requires an explicitly
+announced breaking SDK release with migration notes; there is no scheduled date.
+New request-check extensions use `ExtensionApi`. Its restricted surface grants
+no migrations, global hooks, credentials or mutable pipeline context. Existing
+`PluginId` metadata, `Config::plugins`, and agent-plugin manifests are not renamed.
+
+| Existing protection or responsibility | New request-check capability | Migration consequence |
+| --- | --- | --- |
+| Entry text blocked by regex | Supported for explicitly bound routers | Review text scope, rules and bindings |
+| Process-global input hook, including direct model requests | No implicit global coverage | Keep compatible host behavior for uncovered entry points |
+| Per-request rule deposits through Context `extensions` | No automatic translation | Custom host owns any retained legacy deposit logic |
+| Generated output block / redact | Unsupported | Retain a compatible deployment until replacement exists |
+| Legacy hook diagnostics | Separate from request-check receipts | Do not infer checks or coverage from new receipts |
+| Plugin migrations | Remain host assembly responsibility | Do not register migrations through `ExtensionApi` |
+
 Use the reproducible process-level acceptance harness after building `bro` and
 the checker. It starts isolated daemons, two real checker processes and a counted
 local mock upstream; it never calls a real model provider:
@@ -151,10 +170,15 @@ See [local acceptance evidence](GUARDRAILS_EXTENSION_ACCEPTANCE.md) for tested s
 
 ## Native request checks in a custom host
 
-The same `bitrouter_guardrails::checker::callback` can be registered through
-`NativeChecker::new(revision, callback)` and
-`assemble::build_app_with_checkers(config, config_path, registrations)`. See the
+The same `bitrouter_guardrails::checker::callback` is registered through
+`ExtensionApi::request_check(id, revision, callback)` in an ordinary registration
+function. A custom host supplies that function to
+`assemble::build_app_with_extensions(config, config_path, register)`. This is the
+recommended Rust author entry; see the
 [extension guide and runnable example](../extensions/regex-checker/README.md).
+Registration collects implementations without enabling global hooks. Duplicate
+IDs, invalid IDs/revisions and registration errors block assembly; configuration,
+revision and router bindings must also pass activation checks.
 Native configuration uses `checkers.<id>.native.revision`; router bindings remain
 `checks.request`. No HTTP endpoint or credential is accepted on a native entry.
 Default bro rejects native declarations during activation because it registers no

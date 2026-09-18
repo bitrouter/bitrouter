@@ -23,7 +23,7 @@
 //!   crate-root library code below, never a shared trait.
 //!
 //! - **Shared crate-root infrastructure** that every protocol uses:
-//!   - [`app`] — [`App`] / [`AppBuilder`] / [`Plugin`].
+//!   - [`app`] — [`App`] / [`AppBuilder`] and legacy custom-host [`Plugin`] assembly.
 //!   - [`error`] — the unified [`BitrouterError`] / [`Result`].
 //!   - [`caller`] — [`CallerContext`] (identity-only; business
 //!     classifications like payment method live in deployment code, not
@@ -85,20 +85,30 @@
 //! use bitrouter_sdk::language_model::{HttpExecutor, StaticRoutingTable};
 //!
 //! # fn run() -> bitrouter_sdk::Result<()> {
+//! let executor = Arc::new(HttpExecutor::with_defaults()?);
 //! let app = App::builder()
 //!     .language_model(|lm| {
 //!         lm.routing_table(Arc::new(StaticRoutingTable::new()))
-//!           .executor(Arc::new(HttpExecutor::with_defaults().unwrap()));
+//!           .executor(executor);
 //!     })
 //!     .build()?;
 //! # let _ = app;
 //! # Ok(()) }
 //! ```
 //!
-//! Shared library plugins implement one or more hook traits from this SDK
-//! and install themselves through [`AppBuilder::plugin`] (a convenience
-//! that drops their hooks into the right sub-builder; hooks can equally be
-//! registered one-by-one without [`Plugin`]).
+//! This builder is for trusted host assembly. Legacy [`Plugin`] packages can
+//! install hooks and migrations through [`AppBuilder::plugin`]; hosts can also
+//! register hooks individually. These facilities retain their existing behavior
+//! in the current alpha SDK API. Removal of the legacy package API requires an
+//! explicitly announced breaking SDK release with migration notes.
+//!
+//! New request-check extension authors use
+//! `bitrouter::extension::ExtensionApi::request_check` in the product host crate,
+//! called through `bitrouter::assemble::build_app_with_extensions`. This
+//! restricted registration path provides callbacks for explicit router bindings;
+//! it does not grant the builder, global hooks or migrations. It does not replace
+//! legacy global/output protection with input-only checks. See the extension
+//! guide in the repository for the runnable native and HTTP examples.
 //!
 //! With the `server` feature on, `app.serve("0.0.0.0:4356")` wires the
 //! whole router and runs it until SIGTERM.
@@ -126,12 +136,16 @@
 //! implementation, since the OSS binary registers its own observers alongside
 //! the OTLP one.
 //!
-//! Two shared library plugins live in their own crates:
+//! Shared implementations live in their own crates:
 //!
 //! - `bitrouter-telemetry` — optional telemetry egress: the OTLP exporter, the
 //!   inbound ingress span, and the `tracing` ↔ OpenTelemetry bridge.
-//! - `bitrouter-guardrails` — request / response content scanning (block +
-//!   redact). Content policy is a deployment's own call, not a wire standard.
+//! - `bitrouter-guardrails` — regex rules and the input request-check callback.
+//!   The default library has no SDK dependency; the optional `sdk` feature
+//!   retains legacy global/request-scoped and output block/redact hooks for
+//!   compatible custom hosts. These hooks are not the new request-check API.
+//! - `bitrouter-regex-checker` — independent HTTP delivery of that input checker.
+//!   Content policy is a deployment's own call, not a wire standard.
 //!
 //! Everything else in that category (auth, policy, charging, metering) is
 //! **deployment-specific business logic, not shared library code**. The OSS

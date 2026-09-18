@@ -423,7 +423,10 @@ pub fn encode_response(response: &Response) -> Result<Vec<u8>, ProtocolError> {
     )
 }
 
-fn validate_implementation_version(value: Option<&str>) -> Result<(), ProtocolError> {
+/// Validate an optional implementation identity using the v1 response grammar.
+/// Native registrations and configuration must use this same validation before
+/// activation because their revision is returned as the implementation version.
+pub fn validate_implementation_version(value: Option<&str>) -> Result<(), ProtocolError> {
     if value.is_some_and(|value| {
         value.is_empty()
             || value.len() > MAX_IMPLEMENTATION_VERSION_BYTES

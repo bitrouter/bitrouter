@@ -241,6 +241,15 @@ impl RequestCheckRuntime {
         config: &Config,
         mut native: HashMap<String, NativeChecker>,
     ) -> anyhow::Result<Self> {
+        for (checker_id, checker) in &native {
+            checker_protocol::validate_implementation_version(Some(&checker.revision)).map_err(
+                |_| {
+                    anyhow::anyhow!(
+                        "native checker '{checker_id}' revision is incompatible with request-check v1 implementation versions"
+                    )
+                },
+            )?;
+        }
         config.validate_router_config()?;
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -1528,6 +1537,17 @@ mod tests {
         assert!(RequestCheckRuntime::activate(&config).is_err());
         let register =
             |revision: &str| NativeChecker::new(revision, Arc::new(|_| CheckDecision::Allow));
+        let invalid_revision = RequestCheckRuntime::activate_with_native(
+            &config,
+            HashMap::from([("safety".to_owned(), register("rules:v1"))]),
+        )
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("invalid native revision activated"))?;
+        assert!(
+            invalid_revision
+                .to_string()
+                .contains("incompatible with request-check v1")
+        );
         assert!(
             RequestCheckRuntime::activate_with_native(
                 &config,

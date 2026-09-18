@@ -28,9 +28,24 @@ this service. See the [operation and migration guide](../../docs/GUARDRAILS_EXTE
 
 ## Custom Rust host: native delivery
 
-Link the matcher with default features and register `checker::callback(rules)`
-using `bitrouter::request_checks::NativeChecker`. Assemble through
-`bitrouter::assemble::build_app_with_checkers`. The configuration is explicit:
+Link the matcher with default features. New extension modules register
+`checker::callback(rules)` through the restricted `ExtensionApi`:
+
+```rust
+use bitrouter::extension::ExtensionApi;
+use bitrouter_guardrails::{checker, rules::RuleSet};
+
+fn register(api: &mut ExtensionApi, rules: RuleSet) -> anyhow::Result<()> {
+    api.request_check("secret-check", "secret-rules-v1", checker::callback(rules))
+}
+```
+
+The custom host calls this function inside
+`assemble::build_app_with_extensions(config, config_path, |api| register(api, rules))`
+and awaits assembly. One module can register multiple instances with distinct IDs;
+registration collects callbacks and does not run checks or install global hooks.
+The API does not expose the full builder, pipeline context, credentials, receipt
+writer or migrations. The configuration is explicit:
 
 ```yaml
 checkers:
@@ -44,10 +59,12 @@ checkers:
 #       timeout_ms: 500
 ```
 
-The map key, `secret-check`, is the same instance id used by router bindings.
-The registration revision must match configuration and must change when code or
-rules change. It is a declared identity, not cryptographic attestation. Missing,
-mismatched and unused registrations fail activation. A configured registration
+The registration id, `secret-check`, is the same instance id used by configuration
+and router bindings. The registration revision must match configuration and must
+change when code or rules change. It is a declared identity, not cryptographic
+attestation. Duplicate IDs and invalid IDs/revisions fail registration; callback
+registration errors prevent activation. Missing, mismatched and extra registrations
+without matching Native configuration also fail activation. A configured registration
 without a router binding stays inert; a probe invokes it explicitly with
 synthetic text. A native declaration alone cannot install code into standard bro.
 
@@ -74,10 +91,23 @@ completion. Neither mode inspects generated output or provides redaction.
 ## Legacy SDK compatibility
 
 The matcher's optional `sdk` feature retains `GuardrailsPlugin` and old
-input/output hook APIs. Those hooks have global/per-request rule deposits and
-stream block/redact semantics. They are distinct from the new router-bound native
-checker and do not inherit its receipts. New native request checks do not require
-this feature.
+input/output hook APIs for legacy custom-host assembly. Those hooks have
+global/per-request rule deposits and stream block/redact semantics. They are
+distinct from the new router-bound native checker and do not inherit its receipts.
+New native request checks use `ExtensionApi` and do not require this feature.
+
+The earlier `NativeChecker` / `build_app_with_checkers` map entry remains a
+low-level compatibility wrapper over the same host assembly and request-check runtime.
+It is not the recommended author entry for new code. Legacy `Plugin` /
+`AppBuilder::plugin` still permit host hooks and migrations; these privileges are
+not exposed by `ExtensionApi`.
+
+These APIs are retained during the current alpha SDK compatibility window.
+Removal requires an explicitly announced breaking SDK release and migration
+notes; no removal date is scheduled. Preserve a compatible custom host or prior
+deployment when global or output protection is required: binding an input check
+to a router does not reproduce those guarantees. See the
+[migration scope checklist](../../docs/GUARDRAILS_EXTENSION.md#migrate-the-former-built-in-plugin).
 
 ## Verification
 

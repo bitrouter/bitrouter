@@ -62,14 +62,13 @@ impl CheckerConfig {
     pub(super) fn validate(&self, checker_id: &str) -> Result<()> {
         let (endpoint, credential_env, contract_version) = match self {
             Self::Native { native } => {
-                if native.revision.is_empty()
-                    || native.revision.len() > 128
-                    || !native.revision.bytes().all(|b| {
-                        b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':' | b'/')
-                    })
+                if bitrouter_checker_protocol::v1::validate_implementation_version(Some(
+                    &native.revision,
+                ))
+                .is_err()
                 {
                     return Err(BitrouterError::bad_request(format!(
-                        "checker '{checker_id}' native revision must be a bounded machine-readable identifier"
+                        "checker '{checker_id}' native revision must be 1–128 ASCII letters, digits, or . _ + - /"
                     )));
                 }
                 return Ok(());
@@ -125,4 +124,36 @@ fn valid_env_name(name: &str) -> bool {
         && bytes
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CheckerConfig, NativeCheckerConfig};
+    use bitrouter_checker_protocol::v1;
+
+    #[test]
+    fn native_revision_is_accepted_only_when_it_can_be_returned_on_the_wire() {
+        for (revision, valid) in [
+            ("rules-v1".to_owned(), true),
+            ("rules/v1.2+build_3".to_owned(), true),
+            ("x".repeat(128), true),
+            ("rules:v1".to_owned(), false),
+            ("".to_owned(), false),
+            ("has spaces".to_owned(), false),
+            ("规则".to_owned(), false),
+            ("x".repeat(129), false),
+        ] {
+            let config = CheckerConfig::Native {
+                native: NativeCheckerConfig {
+                    revision: revision.clone(),
+                },
+            };
+            assert_eq!(config.validate("safety").is_ok(), valid, "{revision}");
+            assert_eq!(
+                v1::Response::allow("invocation-1".to_owned(), Some(revision.clone())).is_ok(),
+                valid,
+                "{revision}"
+            );
+        }
+    }
 }

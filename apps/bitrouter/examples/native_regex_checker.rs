@@ -2,14 +2,21 @@
 //! Usage: cargo run -p bitrouter --example native_regex_checker -- CONFIG RULES
 //! This minimal embedding does not start the bro daemon management socket.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use bitrouter::request_checks::NativeChecker;
+use bitrouter::extension::ExtensionApi;
 use bitrouter_guardrails::{checker, config::InputGuardrailConfig};
 use bitrouter_sdk::config;
 use bitrouter_sdk::server::{AppState, build_router};
+
+fn register(api: &mut ExtensionApi, rules: InputGuardrailConfig) -> Result<()> {
+    api.request_check(
+        "secret-check",
+        "secret-rules-v1",
+        checker::callback(rules.compile()?),
+    )
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -23,15 +30,13 @@ async fn main() -> Result<()> {
     let config = config::parse(&std::fs::read_to_string(&config_path)?)?;
     let rules: InputGuardrailConfig =
         serde_saphyr::from_str(&std::fs::read_to_string(rules_path)?)?;
-    // This custom host owns the revision; do not read it back from config and
+    // This module owns the revision; do not read it back from config and
     // blindly echo it. Update it when the callback or loaded rule set changes.
-    let checker = NativeChecker::new("secret-rules-v1", checker::callback(rules.compile()?));
-    let assembled = bitrouter::assemble::build_app_with_checkers(
-        &config,
-        Some(&config_path),
-        HashMap::from([("secret-check".to_owned(), checker)]),
-    )
-    .await?;
+    let assembled =
+        bitrouter::assemble::build_app_with_extensions(&config, Some(&config_path), |api| {
+            register(api, rules)
+        })
+        .await?;
     let router = build_router(AppState {
         language_model: assembled
             .app
