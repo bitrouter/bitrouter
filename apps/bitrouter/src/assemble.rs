@@ -391,11 +391,21 @@ pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
+    build_app_with_checkers(config, config_path, std::collections::HashMap::new()).await
+}
+
+/// Assemble a custom host with explicit native request-check registrations.
+/// Registrations are inert until referenced by a router's `checks.request`.
+/// The default CLI never supplies native registrations.
+pub async fn build_app_with_checkers(
+    config: &Config,
+    config_path: Option<&std::path::Path>,
+    native: std::collections::HashMap<String, crate::request_checks::NativeChecker>,
+) -> Result<Assembled> {
     validate_host_configuration(config)?;
     config.validate_router_config()?;
-    let request_checks = Arc::new(crate::request_checks::RequestCheckRuntime::activate(
-        config,
-    )?);
+    let request_checks =
+        Arc::new(crate::request_checks::RequestCheckRuntime::activate_with_native(config, native)?);
     let ignored_config = ignored_config_warnings(config);
     // Validate and construct ingress aliases before opening the database or
     // performing any other startup work. A custom transform must not run ahead

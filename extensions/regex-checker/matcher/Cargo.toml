@@ -16,6 +16,7 @@ default = []
 sdk = ["dep:async-trait", "dep:bitrouter-sdk", "dep:serde_json"]
 
 [dependencies]
+bitrouter-checker-protocol.workspace = true
 bitrouter-sdk = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 serde.workspace = true

@@ -1,7 +1,7 @@
 # Independent input checks
 
 The default `bro` no longer includes the guardrails matcher. The separate
-`bitrouter-guardrails` executable implements HTTP request-check v1 on `POST /check`.
+`bitrouter-regex-checker` executable implements HTTP request-check v1 on `POST /check`.
 Obtain the service archive separately from the matching BitRouter release; it is
 not installed or started by the default bro installer. Do not assume an
 unreleased source change is already available as a downloadable release.
@@ -19,7 +19,7 @@ rules:
 Save as `rules.yaml`, set a token in the service environment, and run:
 
 ```sh
-bitrouter-guardrails --rules rules.yaml --listen 127.0.0.1:8081 \
+bitrouter-regex-checker --rules rules.yaml --listen 127.0.0.1:8081 \
   --credential-env COMPANY_CHECKS_TOKEN
 ```
 
@@ -71,3 +71,24 @@ required; deleting the key alone does not prove migration is complete.
 Do not convert redact to block automatically. Media bytes, later tool turns,
 nested calls, generated output, and harness activity outside the router entry
 are not inspected. Binding digests do not attest service rules or code.
+
+
+## Compiled-in request checks
+
+`regex-checker` is the extension; `request-check` is its capability. It matches
+operator-supplied regex rules, not a built-in comprehensive PII detector.
+Custom Rust hosts may link the `bitrouter-guardrails` library (no `sdk` feature
+needed), register its `checker::callback` through `NativeChecker`, and assemble
+with `assemble::build_app_with_checkers`. A native instance declares
+`native: { revision: secret-rules-v1 }` under its checker id. The registration
+must match that revision; the router still explicitly binds the checker id.
+Standard bro registers no native callbacks and fails activation for such config.
+`bro config validate` checks declaration shape, not compiled-code availability.
+
+Native inventory reports its execution mode and revision, without an endpoint.
+A native probe is a synthetic local call: network `not_attempted`, protocol
+`not_checked`; consult its decision/error and keep it separate from actual usage.
+Synchronous native work is trusted and cannot be killed by the host's deadline.
+Timeout stops waiting and rejects the model request; its concurrency slot remains
+held until the callback finishes. Legacy `sdk` hooks have different scope and
+should not be substituted for router-bound native checks.

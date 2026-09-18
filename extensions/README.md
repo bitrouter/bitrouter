@@ -1,13 +1,14 @@
 # Extensions
 
-This directory groups independently delivered capabilities by ownership. Each
+This directory groups extension implementations by ownership. A capability is
+a host contract (such as request-check); an extension supplies an implementation. Each
 extension keeps its related Cargo packages, developer entry point and usage
 documentation together. Shared host contracts stay in `crates/`; product hosts
 stay in `apps/`.
 
 | Extension | Packages | Delivery |
 | --- | --- | --- |
-| [Guardrails](guardrails/README.md) | `bitrouter-guardrails`, `bitrouter-guardrails-service` | Reusable matcher with optional SDK hooks; independent HTTP input checker |
+| [Regex checker](regex-checker/README.md) | `bitrouter-guardrails`, `bitrouter-regex-checker` | Explicit native callback or independent HTTP service; legacy SDK hooks remain optional |
 
 An extension may be linked explicitly into a trusted custom host or run as a
 separate service implementing a supported capability contract. Directory

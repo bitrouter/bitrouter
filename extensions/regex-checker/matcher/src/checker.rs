@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use crate::rules::{RuleSet, flatten_fragments};
 use bitrouter_checker_protocol::v1;
-use bitrouter_guardrails::rules::{RuleSet, flatten_fragments};
 
-use crate::adapter::{CheckCallback, CheckDecision};
+use bitrouter_checker_protocol::capability::{CheckCallback, CheckDecision};
 
 const INPUT_BLOCKED_REASON: &str = "guardrail.input_blocked";
 

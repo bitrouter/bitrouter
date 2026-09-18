@@ -1,5 +1,5 @@
 [package]
-name = "bitrouter-guardrails-service"
+name = "bitrouter-regex-checker"
 description = "Independent input-block request checker for BitRouter"
 version.workspace = true
 edition.workspace = true
@@ -13,11 +13,11 @@ dist = true
 installers = []
 
 [lib]
-name = "bitrouter_guardrails_service"
+name = "bitrouter_regex_checker"
 path = "src/lib.rs"
 
 [[bin]]
-name = "bitrouter-guardrails"
+name = "bitrouter-regex-checker"
 path = "src/main.rs"
 
 [dependencies]

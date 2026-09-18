@@ -1,11 +1,12 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use bitrouter_guardrails_service::{VERSION, adapter, checker, startup};
+use bitrouter_guardrails::checker;
+use bitrouter_regex_checker::{VERSION, adapter, startup};
 use clap::Parser;
 
 #[derive(Debug, Parser)]
-#[command(name = "bitrouter-guardrails", version = VERSION)]
+#[command(name = "bitrouter-regex-checker", version = VERSION)]
 struct Cli {
     /// Loopback listener used by the request-check host.
     #[arg(long, default_value = "127.0.0.1:8081")]
@@ -23,7 +24,7 @@ struct Cli {
 #[tokio::main]
 async fn main() {
     if let Err(error) = run(Cli::parse()).await {
-        eprintln!("bitrouter-guardrails: {error}");
+        eprintln!("bitrouter-regex-checker: {error}");
         std::process::exit(1);
     }
 }
@@ -41,12 +42,12 @@ async fn run(cli: Cli) -> Result<(), String> {
         None => None,
     };
     let callback = checker::callback(rules);
-    let implementation_version = format!("bitrouter-guardrails/{VERSION}");
+    let implementation_version = format!("bitrouter-regex-checker/{VERSION}");
     let app = adapter::router(callback, credential, implementation_version);
     let listener = tokio::net::TcpListener::bind(cli.listen)
         .await
         .map_err(|_| "cannot bind configured listen address".to_owned())?;
-    eprintln!("bitrouter-guardrails listening on {}", cli.listen);
+    eprintln!("bitrouter-regex-checker listening on {}", cli.listen);
     axum::serve(listener, app)
         .await
         .map_err(|_| "HTTP server stopped unexpectedly".to_owned())

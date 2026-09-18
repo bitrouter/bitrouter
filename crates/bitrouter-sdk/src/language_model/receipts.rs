@@ -120,15 +120,15 @@ pub enum RequestCheckStatus {
     Skipped,
 }
 
-/// How far a real checker invocation progressed toward its remote service.
+/// How far a real checker invocation progressed. Consult checker inventory for execution mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestCheckDispatchStatus {
-    /// The invocation was queued or rejected locally before an HTTP attempt.
+    /// The invocation was queued or rejected before dispatch.
     NotAttempted,
-    /// An HTTP attempt began but no response headers were received.
+    /// An HTTP attempt began, or native work was submitted to the blocking pool.
     Attempted,
-    /// Response headers were received from the checker.
+    /// HTTP response headers arrived, or a native callback returned a decision.
     ResponseReceived,
 }
 
@@ -763,12 +763,12 @@ pub struct RequestCheckReporter {
 }
 
 impl RequestCheckReporter {
-    /// Record that the HTTP attempt began.
+    /// Record that an HTTP attempt began or native work was submitted.
     pub fn mark_dispatched(&self) {
         self.advance(RequestCheckDispatchStatus::Attempted);
     }
 
-    /// Record that response headers arrived from the checker.
+    /// Record that HTTP headers arrived or a native callback returned.
     pub fn mark_response_received(&self) {
         self.advance(RequestCheckDispatchStatus::ResponseReceived);
     }

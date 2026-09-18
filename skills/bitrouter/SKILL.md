@@ -168,7 +168,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 
 ## Gotchas
 
-- Legacy `plugins.bitrouter-guardrails` blocks startup; review `references/guardrails.md` before removing it.
+- HTTP uses `bitrouter-regex-checker`; native checks need a custom host. Legacy `plugins.bitrouter-guardrails` blocks startup; see `references/guardrails.md`.
 - **A Skill does not grant command execution.** If the host cannot run local
   processes, explain that this local integration is unavailable; do not suggest
   the removed OSS origin MCP server as a fallback.

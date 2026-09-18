@@ -1,4 +1,4 @@
-//! Fail-closed HTTP runtime for named-router request checks.
+//! Fail-closed native and HTTP runtime for named-router request checks.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -7,8 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use bitrouter_checker_protocol::capability::CheckCallback;
 use bitrouter_checker_protocol::v1 as checker_protocol;
 use bitrouter_sdk::config::Config;
+use bitrouter_sdk::config::checker::CheckerConfig;
 use bitrouter_sdk::config::router::{DEFAULT_CHECKER_MAX_INPUT_BYTES, MAX_CHECKER_TIMEOUT_MS};
 use bitrouter_sdk::language_model::receipts::{
     LatestRequestCheck, RequestCheckDispatchStatus, RequestCheckReporter, RequestCheckStatus,
@@ -26,7 +28,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 use url::Url;
 
-/// Maximum concurrent HTTP invocations admitted for one checker.
+/// Maximum concurrent invocations admitted for one checker.
 pub const MAX_CONCURRENT_INVOCATIONS_PER_CHECKER: usize = 32;
 /// Maximum checker response body accepted by the daemon.
 pub const MAX_CHECKER_RESPONSE_BYTES: usize = checker_protocol::MAX_RESPONSE_BYTES;
@@ -35,12 +37,60 @@ pub const MAX_CHECKER_REQUEST_BYTES: u64 = checker_protocol::MAX_REQUEST_BYTES a
 
 const PROBE_TIMEOUT_MS: u64 = 500;
 
-struct ActiveChecker {
+/// Trusted callback registered by a custom host, never dynamically loaded.
+/// Its revision must match the config and identify both code and rules.
+pub struct NativeChecker {
+    revision: String,
+    callback: Arc<CheckCallback>,
+}
+
+impl NativeChecker {
+    /// Register ordinary synchronous business logic. Started work is not
+    /// forcibly cancellable; its concurrency permit stays held until it ends.
+    pub fn new(revision: impl Into<String>, callback: Arc<CheckCallback>) -> Self {
+        Self {
+            revision: revision.into(),
+            callback,
+        }
+    }
+}
+
+struct HttpChecker {
     endpoint: Url,
     credential_env: Option<String>,
     credential: Option<String>,
     contract_version: u16,
+}
+
+enum CheckImplementation {
+    Http(HttpChecker),
+    Native(NativeChecker),
+}
+
+struct ActiveChecker {
+    implementation: CheckImplementation,
     semaphore: Arc<Semaphore>,
+}
+
+impl ActiveChecker {
+    fn missing_credential(&self) -> bool {
+        matches!(&self.implementation, CheckImplementation::Http(http)
+            if http.credential_env.is_some() && http.credential.is_none())
+    }
+
+    fn is_native(&self) -> bool {
+        matches!(self.implementation, CheckImplementation::Native(_))
+    }
+}
+
+/// Execution location; native execution is trusted code, not a sandbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckerExecution {
+    /// Independently operated HTTP service.
+    Http,
+    /// Explicitly registered callback in this process.
+    Native,
 }
 
 struct ActiveBinding {
@@ -69,15 +119,15 @@ pub struct CheckerBindingInfo {
 pub struct CheckerActualUsage {
     /// Caller-visible gateway request id.
     pub request_id: String,
-    /// Per-check invocation id sent to the remote service.
+    /// Per-check invocation id passed to the implementation.
     pub invocation_id: String,
     /// Binding identity used for this invocation.
     pub binding_digest: String,
     /// Current or terminal checker outcome.
     pub status: RequestCheckStatus,
-    /// Furthest remote-dispatch boundary reached.
+    /// Furthest execution boundary reached.
     pub dispatch: RequestCheckDispatchStatus,
-    /// Validated remote implementation version, when returned.
+    /// Validated implementation version, when returned.
     pub implementation_version: Option<String>,
     /// Observation time in Unix milliseconds.
     pub observed_at_unix_ms: u64,
@@ -89,7 +139,11 @@ pub struct CheckerInfo {
     /// Top-level checker id.
     pub checker_id: String,
     /// Opaque digest of the configured endpoint; the URL is not exposed.
-    pub endpoint_fingerprint: String,
+    pub endpoint_fingerprint: Option<String>,
+    /// Where the check executes.
+    pub execution: CheckerExecution,
+    /// Configured native code/rules revision, when applicable.
+    pub native_revision: Option<String>,
     /// Dedicated credential environment variable name, never its value.
     pub credential_env: Option<String>,
     /// Whether the configured credential is available to this daemon.
@@ -143,7 +197,7 @@ pub struct ProbeResult {
     pub protocol: ProbeProtocolStatus,
     /// End-to-end probe duration.
     pub latency_ms: Option<u64>,
-    /// Validated remote implementation version, when returned.
+    /// Validated implementation version, when returned.
     pub implementation_version: Option<String>,
     /// Synthetic decision, when the checker returned a valid response.
     pub decision: Option<CheckerProbeDecision>,
@@ -163,7 +217,7 @@ pub enum CheckerProbeDecision {
     Deny,
 }
 
-/// Activated HTTP checkers plus the receipt store shared with the pipeline.
+/// Activated request checkers plus the receipt store shared with the pipeline.
 pub struct RequestCheckRuntime {
     http: reqwest::Client,
     checkers: HashMap<String, ActiveChecker>,
@@ -177,6 +231,16 @@ impl RequestCheckRuntime {
     /// Activate a running config. Bound checkers must have their dedicated
     /// credential available; an unused checker may remain unready for probing.
     pub fn activate(config: &Config) -> anyhow::Result<Self> {
+        Self::activate_with_native(config, HashMap::new())
+    }
+
+    /// Activate explicitly registered native instances alongside HTTP services.
+    /// Missing, mismatched or unused registrations fail startup rather than
+    /// falling back to HTTP or silently enabling global checks.
+    pub fn activate_with_native(
+        config: &Config,
+        mut native: HashMap<String, NativeChecker>,
+    ) -> anyhow::Result<Self> {
         config.validate_router_config()?;
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -192,32 +256,57 @@ impl RequestCheckRuntime {
             .collect::<HashSet<_>>();
         let mut checkers = HashMap::with_capacity(config.checkers.len());
         for (checker_id, checker) in &config.checkers {
-            let endpoint = Url::parse(&checker.endpoint)
-                .map_err(|_| anyhow::anyhow!("checker '{checker_id}' endpoint is invalid"))?;
-            let credential = checker
-                .credential_env
-                .as_deref()
-                .and_then(bitrouter_sdk::config::env_lookup)
-                .filter(|value| !value.is_empty());
-            if bound_checker_ids.contains(checker_id.as_str())
-                && credential.is_none()
-                && let Some(env_name) = checker.credential_env.as_deref()
-            {
-                anyhow::bail!(
-                    "checker '{checker_id}' requires credential environment variable {env_name}"
-                );
-            }
+            let implementation = match checker {
+                CheckerConfig::Native { native: expected } => {
+                    let registered = native.remove(checker_id).ok_or_else(|| anyhow::anyhow!(
+                        "native checker '{checker_id}' is not registered; use a custom host that explicitly links it"
+                    ))?;
+                    anyhow::ensure!(
+                        registered.revision == expected.revision,
+                        "native checker '{checker_id}' revision does not match configuration"
+                    );
+                    CheckImplementation::Native(registered)
+                }
+                CheckerConfig::Http {
+                    endpoint,
+                    credential_env,
+                    contract_version,
+                } => {
+                    let endpoint = Url::parse(endpoint).map_err(|_| {
+                        anyhow::anyhow!("checker '{checker_id}' endpoint is invalid")
+                    })?;
+                    let credential = credential_env
+                        .as_deref()
+                        .and_then(bitrouter_sdk::config::env_lookup)
+                        .filter(|value| !value.is_empty());
+                    if bound_checker_ids.contains(checker_id.as_str())
+                        && credential.is_none()
+                        && let Some(env_name) = credential_env.as_deref()
+                    {
+                        anyhow::bail!(
+                            "checker '{checker_id}' requires credential environment variable {env_name}"
+                        );
+                    }
+                    CheckImplementation::Http(HttpChecker {
+                        endpoint,
+                        credential_env: credential_env.clone(),
+                        credential,
+                        contract_version: *contract_version,
+                    })
+                }
+            };
             checkers.insert(
                 checker_id.clone(),
                 ActiveChecker {
-                    endpoint,
-                    credential_env: checker.credential_env.clone(),
-                    credential,
-                    contract_version: checker.contract_version,
+                    implementation,
                     semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_INVOCATIONS_PER_CHECKER)),
                 },
             );
         }
+        anyhow::ensure!(
+            native.is_empty(),
+            "native checker registration has no matching native configuration"
+        );
 
         let (inventory, active_bindings) = build_inventory(config)?;
         Ok(Self {
@@ -269,7 +358,7 @@ impl RequestCheckRuntime {
                 observed_at_unix_ms: unix_millis(),
             };
         };
-        if checker.credential_env.is_some() && checker.credential.is_none() {
+        if checker.missing_credential() {
             let result = ProbeResult {
                 checker_id: checker_id.to_owned(),
                 reachability: ProbeReachability::NotAttempted,
@@ -316,8 +405,16 @@ impl RequestCheckRuntime {
         {
             Ok(outcome) => ProbeResult {
                 checker_id: checker_id.to_owned(),
-                reachability: ProbeReachability::Reachable,
-                protocol: ProbeProtocolStatus::Valid,
+                reachability: if checker.is_native() {
+                    ProbeReachability::NotAttempted
+                } else {
+                    ProbeReachability::Reachable
+                },
+                protocol: if checker.is_native() {
+                    ProbeProtocolStatus::NotChecked
+                } else {
+                    ProbeProtocolStatus::Valid
+                },
                 latency_ms: Some(elapsed_millis(started)),
                 implementation_version: outcome.implementation_version,
                 decision: Some(if outcome.allowed {
@@ -330,7 +427,9 @@ impl RequestCheckRuntime {
             },
             Err(error) => ProbeResult {
                 checker_id: checker_id.to_owned(),
-                reachability: if error.response_received {
+                reachability: if checker.is_native() {
+                    ProbeReachability::NotAttempted
+                } else if error.response_received {
                     ProbeReachability::Reachable
                 } else if !error.request_dispatched {
                     ProbeReachability::NotAttempted
@@ -339,7 +438,9 @@ impl RequestCheckRuntime {
                 } else {
                     ProbeReachability::Unknown
                 },
-                protocol: if error.response_received
+                protocol: if checker.is_native() {
+                    ProbeProtocolStatus::NotChecked
+                } else if error.response_received
                     && matches!(error.code, "timeout" | "body_read_failed")
                 {
                     ProbeProtocolStatus::Incomplete
@@ -393,7 +494,7 @@ impl RequestCheckRuntime {
                 ));
             }
         }
-        if checker.credential_env.is_some() && checker.credential.is_none() {
+        if checker.missing_credential() {
             return Err(InvokeError::failure(
                 CheckerFailureKind::NotConfigured,
                 "credential_missing",
@@ -420,73 +521,55 @@ impl RequestCheckRuntime {
         }
 
         let deadline = Duration::from_millis(invocation.checker.timeout_ms);
-        let expected_invocation_id = invocation.invocation_id.clone();
-        let request = protocol_request(checker.contract_version, invocation);
-        let body = checker_protocol::encode_request(&request).map_err(encode_error)?;
-        let operation = async move {
-            let _permit = checker.semaphore.acquire().await.map_err(|_| {
-                InvokeError::failure(CheckerFailureKind::Internal, "runtime_closed", false)
-            })?;
-            let mut request = self
-                .http
-                .post(checker.endpoint.clone())
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .header(reqwest::header::ACCEPT, "application/json")
-                .body(body);
-            if let Some(credential) = checker.credential.as_deref() {
-                request = request.bearer_auth(credential);
-            }
-            let request = request.build().map_err(|_| {
-                InvokeError::failure(
-                    CheckerFailureKind::NotConfigured,
-                    "invalid_request_configuration",
-                    false,
-                )
-            })?;
-            progress.mark_dispatched();
-            let response = self.http.execute(request).await.map_err(|_| {
-                InvokeError::dispatched(CheckerFailureKind::Unavailable, "unavailable", false)
-            })?;
-            progress.mark_response_received();
-            if !response.status().is_success() {
-                return Err(InvokeError::failure(
-                    CheckerFailureKind::InvalidResponse,
-                    "http_status",
-                    true,
-                ));
-            }
-            if response
-                .content_length()
-                .is_some_and(|length| length > MAX_CHECKER_RESPONSE_BYTES as u64)
-            {
-                return Err(InvokeError::failure(
-                    CheckerFailureKind::InvalidResponse,
-                    "response_too_large",
-                    true,
-                ));
-            }
-            let mut stream = response.bytes_stream();
-            let mut response_body = Vec::new();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|_| {
-                    InvokeError::failure(
-                        CheckerFailureKind::InvalidResponse,
-                        "body_read_failed",
-                        true,
-                    )
+        let request = protocol_request(checker_protocol::CONTRACT_VERSION, invocation);
+        checker_protocol::validate_request(&request).map_err(encode_error)?;
+        let operation = async {
+            let permit = checker
+                .semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| {
+                    InvokeError::failure(CheckerFailureKind::Internal, "runtime_closed", false)
                 })?;
-                if response_body.len().saturating_add(chunk.len()) > MAX_CHECKER_RESPONSE_BYTES {
-                    return Err(InvokeError::failure(
-                        CheckerFailureKind::InvalidResponse,
-                        "response_too_large",
-                        true,
-                    ));
+            match &checker.implementation {
+                CheckImplementation::Http(http) => {
+                    let _permit = permit;
+                    self.invoke_http(http, request, progress).await
                 }
-                response_body.extend_from_slice(&chunk);
+                CheckImplementation::Native(native) => {
+                    let callback = native.callback.clone();
+                    let revision = native.revision.clone();
+                    let invocation_id = request.invocation_id.clone();
+                    // Keep admission attached to CPU work after cancellation/timeout.
+                    progress.mark_dispatched();
+                    let decision = tokio::task::spawn_blocking(move || {
+                        let _permit = permit;
+                        callback(&request)
+                    })
+                    .await
+                    .map_err(|_| {
+                        InvokeError::dispatched(
+                            CheckerFailureKind::Internal,
+                            "native_execution_failed",
+                            false,
+                        )
+                    })?;
+                    progress.mark_response_received();
+                    let response =
+                        decision
+                            .into_response(invocation_id, revision)
+                            .map_err(|_| {
+                                InvokeError::failure(
+                                    CheckerFailureKind::InvalidResponse,
+                                    "invalid_response",
+                                    true,
+                                )
+                            })?;
+                    Ok(WireOutcome::from_response(response))
+                }
             }
-            decode_response(&expected_invocation_id, &response_body)
         };
-
         tokio::time::timeout(deadline, operation)
             .await
             .map_err(|_| {
@@ -497,6 +580,75 @@ impl RequestCheckRuntime {
                     progress.response_received(),
                 )
             })?
+    }
+
+    async fn invoke_http(
+        &self,
+        http: &HttpChecker,
+        mut request: checker_protocol::Request,
+        progress: InvocationProgress<'_>,
+    ) -> Result<WireOutcome, InvokeError> {
+        request.contract_version = http.contract_version;
+        let expected_invocation_id = request.invocation_id.clone();
+        let body = checker_protocol::encode_request(&request).map_err(encode_error)?;
+        let mut request = self
+            .http
+            .post(http.endpoint.clone())
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::ACCEPT, "application/json")
+            .body(body);
+        if let Some(credential) = http.credential.as_deref() {
+            request = request.bearer_auth(credential);
+        }
+        let request = request.build().map_err(|_| {
+            InvokeError::failure(
+                CheckerFailureKind::NotConfigured,
+                "invalid_request_configuration",
+                false,
+            )
+        })?;
+        progress.mark_dispatched();
+        let response = self.http.execute(request).await.map_err(|_| {
+            InvokeError::dispatched(CheckerFailureKind::Unavailable, "unavailable", false)
+        })?;
+        progress.mark_response_received();
+        if !response.status().is_success() {
+            return Err(InvokeError::failure(
+                CheckerFailureKind::InvalidResponse,
+                "http_status",
+                true,
+            ));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_CHECKER_RESPONSE_BYTES as u64)
+        {
+            return Err(InvokeError::failure(
+                CheckerFailureKind::InvalidResponse,
+                "response_too_large",
+                true,
+            ));
+        }
+        let mut stream = response.bytes_stream();
+        let mut response_body = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| {
+                InvokeError::failure(
+                    CheckerFailureKind::InvalidResponse,
+                    "body_read_failed",
+                    true,
+                )
+            })?;
+            if response_body.len().saturating_add(chunk.len()) > MAX_CHECKER_RESPONSE_BYTES {
+                return Err(InvokeError::failure(
+                    CheckerFailureKind::InvalidResponse,
+                    "response_too_large",
+                    true,
+                ));
+            }
+            response_body.extend_from_slice(&chunk);
+        }
+        decode_response(&expected_invocation_id, &response_body)
     }
 
     fn record_probe(&self, result: ProbeResult) {
@@ -680,6 +832,14 @@ struct WireOutcome {
 }
 
 impl WireOutcome {
+    fn from_response(response: checker_protocol::Response) -> Self {
+        Self {
+            allowed: response.decision() == checker_protocol::Decision::Allow,
+            reason_code: response.reason_code().map(str::to_owned),
+            implementation_version: response.implementation_version().map(str::to_owned),
+        }
+    }
+
     fn into_decision(self) -> CheckerDecision {
         if self.allowed {
             CheckerDecision::Allow {
@@ -732,11 +892,7 @@ fn decode_response(invocation_id: &str, body: &[u8]) -> Result<WireOutcome, Invo
     let response = checker_protocol::decode_response(invocation_id, body).map_err(|error| {
         InvokeError::failure(CheckerFailureKind::InvalidResponse, error.code(), true)
     })?;
-    Ok(WireOutcome {
-        allowed: response.decision() == checker_protocol::Decision::Allow,
-        reason_code: response.reason_code().map(str::to_owned),
-        implementation_version: response.implementation_version().map(str::to_owned),
-    })
+    Ok(WireOutcome::from_response(response))
 }
 
 fn elapsed_millis(started: Instant) -> u64 {
@@ -785,15 +941,35 @@ fn build_inventory(
             bindings.sort_by(|left, right| left.router_id.cmp(&right.router_id));
             CheckerInfo {
                 checker_id: checker_id.clone(),
-                endpoint_fingerprint: format!(
-                    "sha256:{}",
-                    hex::encode(Sha256::digest(checker.endpoint.as_bytes()))
-                ),
-                credential_env: checker.credential_env.clone(),
-                credential_ready: checker.credential_env.as_deref().is_none_or(|name| {
-                    bitrouter_sdk::config::env_lookup(name).is_some_and(|value| !value.is_empty())
-                }),
-                contract_version: checker.contract_version,
+                endpoint_fingerprint: match checker {
+                    CheckerConfig::Http { endpoint, .. } => Some(format!(
+                        "sha256:{}",
+                        hex::encode(Sha256::digest(endpoint.as_bytes()))
+                    )),
+                    CheckerConfig::Native { .. } => None,
+                },
+                execution: match checker {
+                    CheckerConfig::Http { .. } => CheckerExecution::Http,
+                    CheckerConfig::Native { .. } => CheckerExecution::Native,
+                },
+                native_revision: match checker {
+                    CheckerConfig::Native { native } => Some(native.revision.clone()),
+                    _ => None,
+                },
+                credential_env: match checker {
+                    CheckerConfig::Http { credential_env, .. } => credential_env.clone(),
+                    _ => None,
+                },
+                credential_ready: match checker {
+                    CheckerConfig::Http { credential_env, .. } => {
+                        credential_env.as_deref().is_none_or(|name| {
+                            bitrouter_sdk::config::env_lookup(name)
+                                .is_some_and(|value| !value.is_empty())
+                        })
+                    }
+                    _ => true,
+                },
+                contract_version: checker_protocol::CONTRACT_VERSION,
                 max_concurrent_invocations: MAX_CONCURRENT_INVOCATIONS_PER_CHECKER,
                 bindings,
                 last_probe: None,
@@ -869,7 +1045,7 @@ mod tests {
         let mut config = Config::default();
         config.checkers.insert(
             "safety".to_owned(),
-            CheckerConfig {
+            CheckerConfig::Http {
                 endpoint,
                 credential_env,
                 contract_version: checker_protocol::CONTRACT_VERSION,
@@ -1045,7 +1221,10 @@ mod tests {
             .checkers
             .get_mut("safety")
             .ok_or_else(|| anyhow::anyhow!("missing checker"))?;
-        checker.credential = Some("invalid\ncredential".into());
+        let CheckImplementation::Http(http) = &mut checker.implementation else {
+            anyhow::bail!("expected HTTP checker");
+        };
+        http.credential = Some("invalid\ncredential".into());
         let (invocation, reporter, receipt) =
             started_invocation(&runtime, &config, "bad-credential")?;
         let result = runtime.check(invocation, reporter).await;
@@ -1242,6 +1421,135 @@ mod tests {
         let probe = runtime.probe("safety").await;
         assert_eq!(probe.reachability, ProbeReachability::NotAttempted);
         assert_eq!(probe.error_code.as_deref(), Some("credential_missing"));
+        Ok(())
+    }
+    fn native_config() -> Config {
+        let mut config = config("http://unused.invalid".to_owned(), None, true, 100);
+        config.checkers.insert(
+            "safety".to_owned(),
+            CheckerConfig::Native {
+                native: bitrouter_sdk::config::checker::NativeCheckerConfig {
+                    revision: "rules-v1".to_owned(),
+                },
+            },
+        );
+        config
+    }
+
+    #[tokio::test]
+    async fn native_timeout_and_cancellation_hold_admission_until_cpu_work_finishes()
+    -> anyhow::Result<()> {
+        use bitrouter_checker_protocol::capability::CheckDecision;
+        use std::sync::atomic::AtomicUsize;
+        for cancel in [false, true] {
+            let config = native_config();
+            let (release, wait) = std::sync::mpsc::channel::<()>();
+            let wait = Mutex::new(wait);
+            let started = Arc::new(tokio::sync::Notify::new());
+            let signal = started.clone();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let captured = calls.clone();
+            let callback: Arc<CheckCallback> = Arc::new(move |_| {
+                captured.fetch_add(1, Ordering::SeqCst);
+                signal.notify_one();
+                if let Ok(receiver) = wait.lock() {
+                    // Bound the test even if an assertion fails before release.
+                    let _ = receiver.recv_timeout(Duration::from_secs(5));
+                }
+                CheckDecision::Allow
+            });
+            let runtime = Arc::new(RequestCheckRuntime::activate_with_native(
+                &config,
+                HashMap::from([(
+                    "safety".to_owned(),
+                    NativeChecker::new("rules-v1", callback),
+                )]),
+            )?);
+            let semaphore = runtime
+                .checkers
+                .get("safety")
+                .ok_or_else(|| anyhow::anyhow!("no checker"))?
+                .semaphore
+                .clone();
+            // Reserve every slot except one; only that last slot may start work.
+            let held = semaphore
+                .clone()
+                .acquire_many_owned((MAX_CONCURRENT_INVOCATIONS_PER_CHECKER - 1) as u32)
+                .await?;
+            let (input, reporter, _receipt) =
+                started_invocation(&runtime, &config, "native-in-flight")?;
+            let runner = runtime.clone();
+            let task = tokio::spawn(async move { runner.check(input, reporter).await });
+            tokio::time::timeout(Duration::from_secs(2), started.notified()).await?;
+            if cancel {
+                task.abort();
+                assert!(task.await.is_err());
+            } else {
+                let result = task.await?;
+                assert!(matches!(
+                    result,
+                    Err(CheckerFailure {
+                        kind: CheckerFailureKind::Timeout,
+                        ..
+                    })
+                ));
+            }
+            assert_eq!(semaphore.available_permits(), 0);
+            let (input, reporter, _receipt) =
+                started_invocation(&runtime, &config, "native-queued")?;
+            let result = runtime.check(input, reporter).await;
+            assert!(matches!(
+                result,
+                Err(CheckerFailure {
+                    kind: CheckerFailureKind::Timeout,
+                    ..
+                })
+            ));
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            release.send(())?;
+            let restored =
+                tokio::time::timeout(Duration::from_secs(2), semaphore.clone().acquire_owned())
+                    .await??;
+            drop(restored);
+            drop(held);
+            assert_eq!(
+                semaphore.available_permits(),
+                MAX_CONCURRENT_INVOCATIONS_PER_CHECKER
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_activation_rejects_missing_mismatched_and_unused_registrations() -> anyhow::Result<()>
+    {
+        use bitrouter_checker_protocol::capability::CheckDecision;
+        let config = native_config();
+        assert!(RequestCheckRuntime::activate(&config).is_err());
+        let register =
+            |revision: &str| NativeChecker::new(revision, Arc::new(|_| CheckDecision::Allow));
+        assert!(
+            RequestCheckRuntime::activate_with_native(
+                &config,
+                HashMap::from([("safety".to_owned(), register("wrong")),])
+            )
+            .is_err()
+        );
+        assert!(
+            RequestCheckRuntime::activate_with_native(
+                &config,
+                HashMap::from([
+                    ("safety".to_owned(), register("rules-v1")),
+                    ("typo".to_owned(), register("rules-v1")),
+                ])
+            )
+            .is_err()
+        );
+        let runtime = RequestCheckRuntime::activate_with_native(
+            &config,
+            HashMap::from([("safety".to_owned(), register("rules-v1"))]),
+        )?;
+        assert_eq!(runtime.configured()[0].execution, CheckerExecution::Native);
         Ok(())
     }
 }

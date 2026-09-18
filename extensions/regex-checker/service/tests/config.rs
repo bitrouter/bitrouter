@@ -1,6 +1,6 @@
 use std::fs;
 
-use bitrouter_guardrails_service::startup;
+use bitrouter_regex_checker::startup;
 use tempfile::tempdir;
 
 fn load(source: &str) -> Result<bitrouter_guardrails::rules::RuleSet, Box<dyn std::error::Error>> {

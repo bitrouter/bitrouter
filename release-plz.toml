@@ -15,7 +15,7 @@ changelog_include = [           # Include SDK and extension changes in the bitro
     "bitrouter-sdk",
     "bitrouter-checker-protocol",
     "bitrouter-guardrails",
-    "bitrouter-guardrails-service",
+    "bitrouter-regex-checker",
     "bitrouter-telemetry",
 ]
 git_tag_name = "v{{ version }}"     # Customize the git tag name (e.g. v1.0.0 instead of bitrouter-v1.0.0)

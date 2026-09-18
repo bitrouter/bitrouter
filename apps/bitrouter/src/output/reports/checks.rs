@@ -303,6 +303,7 @@ impl CliReport for ChecksReport {
         human.blank()?;
         let mut checkers = Table::new([
             "CHECKER",
+            "EXECUTION",
             "ENDPOINT FINGERPRINT",
             "CREDENTIAL",
             "CONTRACT",
@@ -312,7 +313,15 @@ impl CliReport for ChecksReport {
         for checker in &self.checkers {
             checkers.push([
                 checker.checker_id.clone(),
-                checker.endpoint_fingerprint.clone(),
+                match checker.execution {
+                    crate::request_checks::CheckerExecution::Http => "http",
+                    crate::request_checks::CheckerExecution::Native => "native",
+                }
+                .to_owned(),
+                checker
+                    .endpoint_fingerprint
+                    .clone()
+                    .unwrap_or_else(|| "not_applicable".to_owned()),
                 if checker.credential_ready {
                     checker.credential_env.as_deref().unwrap_or("not_required")
                 } else {

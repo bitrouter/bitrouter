@@ -1,6 +1,6 @@
 # Router & Extension：组合、执行边界与 Guardrails 独立交付
 
-状态：**v0.3，6A–6C 已接入本工作区：共享 HTTP v1 契约、独立输入 checker、默认宿主依赖移除与迁移阻断。验证结果见验收记录；公开发布仍待发布流程。自定义 router/selector API 不在本轮范围。**
+状态：**v0.4，6A–6C 已接入本工作区：共享 HTTP v1 契约、独立输入 checker、默认宿主依赖移除与迁移阻断。验证结果见验收记录；公开发布仍待发布流程。自定义 router/selector API 不在本轮范围。**
 
 日期：2026-09-17。实施前源码基线：`main@2b01d2e6eab72274fb4b3571534fb5c9e656746b`；本轮状态指当前工作区变更，不代表已合并或发布。
 
@@ -8,13 +8,17 @@
 不引入新的模型选择算法，也不将整个 beta 架构纳入本次实施。
 
 v0.3 更新：落地第 6 项的共享协议、服务、构建隔离和旧键阻断；实现及制品证据见 [验收记录](GUARDRAILS_EXTENSION_ACCEPTANCE.md)。
-目录随后收敛到 `extensions/guardrails/{matcher,service}`，保留 Cargo 包名、CLI 与运行语义；
+v0.3 曾将目录收敛到 `extensions/guardrails/{matcher,service}`，当时保留包名、CLI 与运行语义；
 共享 wire 契约仍位于 `crates/bitrouter-checker-protocol`。
 
 v0.2 更新：统一 Extension 产品术语，区分静态 Rust 装配与独立服务，明确普通函数的作者入口、
 宿主执行约束和 wire 契约；将 guardrails 独立交付与自定义 router/selector API 分为两个增量。
-与产品架构文档 `001-Extensible-Router-Architecture.md` v0.8 的第 3、4、6、10 节对应；
+与产品架构文档 `001-Extensible-Router-Architecture.md` v0.9 的第 3、4、6、10 节对应；
 该文档中的双模式、client/server 拆分及 durable workflow 不属于本 spec 的交付承诺。
+
+v0.4 更新：`request-check` 是 capability，`regex-checker` 是具体 extension；已接入显式
+Native 注册与 HTTP 共用的检查运行时。新服务 package/binary 改为 `bitrouter-regex-checker`，
+源码归入 `extensions/regex-checker/`；旧 matcher package 和 SDK hooks 保留兼容身份。
 
 ## 1. 产品目标与已确认决定
 
@@ -41,7 +45,7 @@ v0.2 更新：统一 Extension 产品术语，区分静态 Rust 装配与独立�
 | Router | 命名的请求处理配置，组合选择策略、默认值和能力绑定 | 已实现 |
 | Selection policy | 选模规则或策略产物；router 的 selection 当前支持固定模型引用或 policy-lock | 已实现，运行在宿主内 |
 | Extension | 向 router 或宿主提供一项有明确契约的可替换能力 | 产品概念；首个外部接入契约为 request checker |
-| Checker instance | `checkers.<id>` 声明的 HTTP 服务连接 | 已实现 |
+| Checker instance | `checkers.<id>` 声明的 HTTP 连接或 Native 实例 | 已实现 |
 | Binding | Router 对 checker 的引用及调用限制 | 已实现，入口请求固定绑定 |
 | Rust `Plugin` | 构建时向 `AppBuilder` 注册 hooks 和 migrations 的便捷包装 | 已实现；不提供进程隔离或动态安装 |
 | Context `extensions` | 请求内部按 Rust 类型存放对象的数据容器 | 已实现；不是外部扩展注册表 |
@@ -155,9 +159,9 @@ Rust hooks 仍是受信任的宿主代码，具有比 HTTP checker 更大的进�
 
 此契约不覆盖随后生成的输出、工具循环的新结果、嵌套请求的自动继承或原生 coding harness 的全部活动。
 外部实现版本是服务自报证据，不是可信证明；v1 尚无规则摘要锁定或远程证明机制。
-上述 deadline 不包含此前的投影与编码，也不是所有有序检查共享的总预算；新增这些保证需另行实现。
+上述 deadline 不包含此前的投影和输入校验，也不是所有有序检查共享的总预算。HTTP 编码位于等待预算内，但同步编码不可被异步 timeout 抢占。
 
-### 4.4 Rust 作者体验与两种交付方式〔独立服务已实现；通用静态入口仍沿用既有 API〕
+### 4.4 Rust 作者体验与两种交付方式〔request-check 两种方式已实现〕
 
 借鉴 Pi 的重点是小入口、普通业务代码与逐步增加复杂度。Rust 下使用 Cargo 管理代码和依赖，
 库中编写判定函数，入口负责注册或运行协议服务；作者不必复制 pipeline、回执存储或管理接口。
@@ -176,7 +180,7 @@ Rust hooks 仍是受信任的宿主代码，具有比 HTTP checker 更大的进�
 注册体系，不以全面改名作为本批交付。注册仅提供能力，router 显式绑定才启用检查；不得隐式全局激活。
 
 初版不用自定义 manifest 重复 Cargo 包信息，不承诺动态 Rust ABI、脚本加载、自动发现、stdio transport
-或 bro 自动拉起进程。当前具体入口为服务 crate 的 `adapter::router`、`CheckCallback` 与 `CheckDecision`；
+或 bro 自动拉起进程。当前具体入口为服务 crate 的 `adapter::router`、共享 capability 模块的 `CheckCallback` / `CheckDecision`，以及宿主的 `NativeChecker` / `build_app_with_checkers`；
 它们服务于这个输入 checker，不代表已新增通用 extension 注册接口。
 
 ### 4.5 首个作者入口：业务判定与 HTTP v1 分开〔已实现〕
@@ -191,6 +195,31 @@ SDK 的 invocation/decision 类型保留，宿主显式转换，不改变已有 
 
 Checker 的价值在于明确输入权限、拒绝点、失败规则和可查结果。代价是网络/序列化、部署、版本兼容与
 超时维护；受限投影也放弃了任意 context 访问和改写能力。首版保留这个明确边界，不扩成任意远程 hook。
+
+### 4.5.1 Native 与 HTTP 共用的 request-check 运行时〔已实现〕
+
+Capability 描述接口，extension 提供实现，实例携带配置，router 显式绑定；部署方式是独立维度。
+`regex-checker` 的规则可用于秘密信息或部分 PII 格式检查，不代表内置完整 PII 检测器。
+不新增通用 extension registry、manifest 或一组 Guardrail/Eval 包装接口。
+
+`bitrouter-checker-protocol::capability` 提供普通同步回调与业务判定，复用有界 v1 输入。
+Matcher 提供 `checker::callback(rules)`，Native 与 HTTP 服务使用同一函数。
+宿主 `RequestCheckRuntime` 统一 binding 校验、输入校验、并发许可、deadline、结果校验；
+pipeline 继续统一投影、拒绝、回执与零上游调用。HTTP 分支单独拥有凭据、编码与网络操作。
+
+自定义宿主显式调用 `assemble::build_app_with_checkers`，按 checker id 注册 `NativeChecker`。
+配置使用 `checkers.<id>.native.revision`，代码注册 revision 必须相等；缺失、错配和多余注册阻断启动。
+Revision 是代码/规则的声明身份，变更须更新，非可信证明。注册不隐式全局启用；router 仍绑定
+`checks.request`。官方 bro 不链接 matcher、不提供 Native 注册；配置本身不能安装 Rust 代码。
+
+管理 inventory 增加 execution/native_revision，Native 无 endpoint fingerprint。Native probe 的
+reachability 为 not_attempted、protocol 为 not_checked；synthetic decision/error 才是本地探测结果。
+Native 不经过 HTTP，不能宣称网络连通。回执 attempted 表示已提交本地工作，response_received 表示
+本地判定已返回；HTTP 保留原义。两种方式都不把 probe 写成实际请求使用证据。
+
+Native 使用 blocking pool；每实例最多 32 个已准入调用。超时包含排队等待，停止等待不抢占 CPU；
+许可随已提交的工作持有直至结束。共享判定/回执语义不意味着共享隔离或取消保证。
+旧 `sdk` feature hooks 仍是兼容路径，不是这个新 Native checker 的实现。
 
 ### 4.6 并发、异步与取消〔新 API 必须明确的约束〕
 
@@ -316,7 +345,7 @@ redact 按 chunk 执行，跨 chunk 匹配存在已知限制。不得称其为�
 ### 8.2 最小独立制品〔本地实现，公开发布待完成〕
 
 首个制品实现 HTTP request-checker v1，只承诺入口文本 block 判定。
-同一 workspace 中新增 package `bitrouter-guardrails-service`，binary `bitrouter-guardrails`，
+同一 workspace 中新增 package `bitrouter-regex-checker`，binary `bitrouter-regex-checker`，
 共享必要的规则实现；制品可独立发布，默认 `bro`
 不依赖该服务或 matcher。现有库如仍服务自定义宿主，可保留兼容接口；不必为了独立交付立刻迁仓。
 
@@ -424,12 +453,12 @@ redact 按 chunk 执行，跨 chunk 匹配存在已知限制。不得称其为�
 - [Router 配置及绑定](../crates/bitrouter-sdk/src/config/router.rs)
 - [Plugin 与应用构建](../crates/bitrouter-sdk/src/app.rs)
 - [Pipeline 入口、路由及执行](../crates/bitrouter-sdk/src/language_model/pipeline.rs)
-- [HTTP checker runtime](../apps/bitrouter/src/request_checks.rs)
+- [Native/HTTP checker runtime](../apps/bitrouter/src/request_checks.rs)
 - [Policy runtime](../apps/bitrouter/src/policy_lock.rs)
 - [宿主装配](../apps/bitrouter/src/assemble.rs)
-- [Guardrail hooks](../extensions/guardrails/matcher/src/hooks.rs) 与 [matcher](../extensions/guardrails/matcher/src/rules.rs)
+- [Guardrail hooks](../extensions/regex-checker/matcher/src/hooks.rs) 与 [matcher](../extensions/regex-checker/matcher/src/rules.rs)
 
-- [独立服务与配置](../extensions/guardrails/service/README.md)
+- [独立服务与配置](../extensions/regex-checker/service/README.md)
 - [共享 HTTP v1 契约](../crates/bitrouter-checker-protocol/src/v1.rs)
 - [迁移与操作说明](GUARDRAILS_EXTENSION.md)
 - [实施验收记录](GUARDRAILS_EXTENSION_ACCEPTANCE.md)

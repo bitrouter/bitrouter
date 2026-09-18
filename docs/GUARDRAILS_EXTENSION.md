@@ -1,20 +1,22 @@
-# Independent guardrails request checker
+# Regex request-check extension and guardrails migration
 
-`bitrouter-guardrails` is a separate executable. It checks the entry text of
+`bitrouter-regex-checker` is the independent HTTP executable. It checks the entry text of
 explicitly bound routers and returns allow/deny. It does not inspect or redact
 generated output, run inside `bro`, or cover direct model requests automatically.
 
-Source packages are grouped under [`extensions/guardrails/`](../extensions/guardrails/README.md):
-`matcher/` contains the reusable library and `service/` the executable. Package
-names, CLI, configuration and release artifact names are unchanged by this layout.
+Source packages are grouped under [`extensions/regex-checker/`](../extensions/regex-checker/README.md):
+`matcher/` contains the reusable library and `service/` the executable. The package
+name `bitrouter-guardrails` is retained for library compatibility. The new service
+package, binary and archives use `bitrouter-regex-checker`. HTTP configuration
+and wire v1 are unchanged.
 
 ## Build and run
 
-The Cargo package is `bitrouter-guardrails-service`; the reusable matcher remains
+The Cargo package is `bitrouter-regex-checker`; the reusable matcher remains
 the `bitrouter-guardrails` library. Build only the executable with:
 
 ```sh
-cargo build --release -p bitrouter-guardrails-service --bin bitrouter-guardrails
+cargo build --release -p bitrouter-regex-checker --bin bitrouter-regex-checker
 ```
 
 Create `rules.yaml`:
@@ -30,7 +32,7 @@ rules:
 Run the service separately from the daemon:
 
 ```sh
-bitrouter-guardrails --rules rules.yaml --listen 127.0.0.1:8081 \
+bitrouter-regex-checker --rules rules.yaml --listen 127.0.0.1:8081 \
   --credential-env COMPANY_CHECKS_TOKEN
 ```
 
@@ -124,7 +126,7 @@ local mock upstream; it never calls a real model provider:
 
 ```sh
 python3 tools/guardrails_e2e.py --bro target/debug/bro \
-  --checker target/debug/bitrouter-guardrails --output /tmp/guardrails-e2e
+  --checker target/debug/bitrouter-regex-checker --output /tmp/guardrails-e2e
 ```
 
 Async timeout stops the host waiting; it does not prove the remote process or
@@ -146,3 +148,29 @@ remaining external release gates separately.
 Packaging uses [`precise-builds`](https://axodotdev.github.io/cargo-dist/book/reference/config.html#precise-builds)
 so each application is built separately, avoiding workspace feature unification.
 See [local acceptance evidence](GUARDRAILS_EXTENSION_ACCEPTANCE.md) for tested scope.
+
+## Native request checks in a custom host
+
+The same `bitrouter_guardrails::checker::callback` can be registered through
+`NativeChecker::new(revision, callback)` and
+`assemble::build_app_with_checkers(config, config_path, registrations)`. See the
+[extension guide and runnable example](../extensions/regex-checker/README.md).
+Native configuration uses `checkers.<id>.native.revision`; router bindings remain
+`checks.request`. No HTTP endpoint or credential is accepted on a native entry.
+Default bro rejects native declarations during activation because it registers no
+native implementations. Configuration validation alone validates their shape,
+not the availability of a custom host's compiled code.
+
+Management inventory identifies `execution: native` and its revision; there is
+no endpoint fingerprint. A successful native probe reports the synthetic
+allow/deny decision, with network reachability `not_attempted` and wire protocol
+`not_checked`. It never claims an HTTP service is reachable. Real request usage
+and probes remain separate. Receipt dispatch `attempted` means native work was
+submitted; `response_received` means the callback returned. For HTTP these retain
+their existing network meanings.
+
+Native callbacks run under the same per-instance 32-slot admission bound. Timeout
+or cancellation cannot kill synchronous Rust computation; a started callback
+retains its slot until it returns. Native code shares the host's trust and failure
+domain. The input scope, allow/deny decision and zero-upstream-on-failure guarantee
+are common to both delivery modes; process isolation is not.

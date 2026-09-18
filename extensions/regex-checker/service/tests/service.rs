@@ -2,12 +2,14 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
+use bitrouter_checker_protocol::capability;
 use bitrouter_checker_protocol::v1::{
     self, CheckerBinding, ContentFragment, ContentFragmentKind, ContentRole, Coverage,
     CoverageScope, CoverageStatus, Decision,
 };
+use bitrouter_guardrails::checker;
 use bitrouter_guardrails::config::{InputAction, InputGuardrailConfig, InputRuleSpec, InputScope};
-use bitrouter_guardrails_service::{adapter, checker};
+use bitrouter_regex_checker::adapter;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn invocation(fragments: &[&str]) -> v1::Request {
@@ -130,9 +132,9 @@ async fn malformed_and_oversized_requests_never_reach_callback()
 -> Result<(), Box<dyn std::error::Error>> {
     let called = Arc::new(AtomicBool::new(false));
     let callback_called = called.clone();
-    let callback: Arc<adapter::CheckCallback> = Arc::new(move |_| {
+    let callback: Arc<capability::CheckCallback> = Arc::new(move |_| {
         callback_called.store(true, Ordering::Relaxed);
-        adapter::CheckDecision::Allow
+        capability::CheckDecision::Allow
     });
     let app = adapter::router(callback, None, "fixture-v1".to_owned());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -170,11 +172,11 @@ async fn saturation_rejects_before_body_and_retains_cancelled_work_permits()
     let callback_entered = entered.clone();
     let callback_completed = completed.clone();
     let callback_release = release.clone();
-    let callback: Arc<adapter::CheckCallback> = Arc::new(move |_| {
+    let callback: Arc<capability::CheckCallback> = Arc::new(move |_| {
         callback_entered.fetch_add(1, Ordering::SeqCst);
         callback_release.wait();
         callback_completed.fetch_add(1, Ordering::SeqCst);
-        adapter::CheckDecision::Allow
+        capability::CheckDecision::Allow
     });
     let app = adapter::router(callback, None, "fixture-v1".to_owned());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

@@ -329,33 +329,52 @@
       ]
     },
     "CheckerConfig": {
-      "additionalProperties": false,
-      "description": "One remotely hosted request checker.",
-      "properties": {
-        "contract_version": {
-          "description": "Version of the checker request and response contract.",
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "An external service implementing request-check v1.",
+          "properties": {
+            "contract_version": {
+              "description": "Version of the request and response contract.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "credential_env": {
+              "description": "Dedicated bearer credential environment variable.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "endpoint": {
+              "description": "Exact HTTP endpoint receiving versioned checker invocations.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "endpoint",
+            "contract_version"
+          ],
+          "type": "object"
         },
-        "credential_env": {
-          "description": "Dedicated bearer credential environment variable, if authentication is required.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "endpoint": {
-          "description": "Exact HTTP endpoint receiving versioned checker invocations.",
-          "type": "string"
+        {
+          "additionalProperties": false,
+          "description": "A callback explicitly registered under this checker id by a custom host.",
+          "properties": {
+            "native": {
+              "$ref": "#/$defs/NativeCheckerConfig",
+              "description": "Expected code/rules revision; registration must match exactly."
+            }
+          },
+          "required": [
+            "native"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "endpoint",
-        "contract_version"
       ],
-      "type": "object"
+      "description": "A request-check instance, supplied over HTTP or explicitly linked by a custom host.\nExisting HTTP configuration keeps its untagged wire shape."
     },
     "ContinuationConfig": {
       "description": "Always-active durable provider continuation lifecycle settings.",
@@ -799,6 +818,20 @@
           "description": "Chat Completions-specific request settings."
         }
       },
+      "type": "object"
+    },
+    "NativeCheckerConfig": {
+      "additionalProperties": false,
+      "description": "Startup identity for trusted, compiled-in request-check code.",
+      "properties": {
+        "revision": {
+          "description": "Operator-chosen code/rules revision. Change it when behavior changes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision"
+      ],
       "type": "object"
     },
     "PatternMap_for_ProtocolList": {

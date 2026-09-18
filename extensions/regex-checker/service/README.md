@@ -1,6 +1,6 @@
-# BitRouter guardrails service
+# BitRouter regex-checker service
 
-`bitrouter-guardrails` is an independent HTTP request-checker v1 service. It
+`bitrouter-regex-checker` is an independent HTTP request-checker v1 service. It
 loads immutable input-block rules before binding its listener and exposes
 `POST /check` for a BitRouter checker binding.
 
@@ -15,7 +15,7 @@ rules:
 Run it with:
 
 ```console
-bitrouter-guardrails --rules ./guardrails.yaml
+bitrouter-regex-checker --rules ./guardrails.yaml
 ```
 
 The complete CLI is `--listen <ADDR>` (default `127.0.0.1:8081`), required
@@ -43,3 +43,7 @@ coverage requirements before removing the legacy configuration.
 Matching runs on a blocking worker pool with at most 32 concurrent callbacks.
 An HTTP caller timing out does not forcibly cancel synchronous regex work that
 has already started.
+
+The matcher is also usable as a native callback in a custom Rust host. See the
+[parent extension guide](../README.md). HTTP v1 is the shared request-check
+capability contract; regex-checker is one implementation, not a PII-specific engine.

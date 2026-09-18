@@ -78,9 +78,8 @@ impl RouterRequestCheck {
             version: &'static str,
             router_id: &'a str,
             checker_id: &'a str,
-            endpoint: &'a str,
-            credential_env: Option<&'a str>,
-            contract_version: u16,
+            #[serde(flatten)]
+            configuration: &'a CheckerConfig,
             timeout_ms: u64,
             max_input_bytes: u64,
         }
@@ -89,9 +88,7 @@ impl RouterRequestCheck {
             version: "checker-binding-v1",
             router_id,
             checker_id: &self.checker,
-            endpoint: &checker.endpoint,
-            credential_env: checker.credential_env.as_deref(),
-            contract_version: checker.contract_version,
+            configuration: checker,
             timeout_ms: self.timeout_ms,
             max_input_bytes: self.max_input_bytes,
         })
@@ -441,9 +438,8 @@ impl<'a> EffectiveRouterDefinition<'a> {
         #[derive(Serialize)]
         struct DigestCheck<'a> {
             checker: &'a str,
-            endpoint: &'a str,
-            credential_env: Option<&'a str>,
-            contract_version: u16,
+            #[serde(flatten)]
+            configuration: &'a CheckerConfig,
             timeout_ms: u64,
             max_input_bytes: u64,
         }
@@ -467,9 +463,7 @@ impl<'a> EffectiveRouterDefinition<'a> {
             .filter_map(|binding| {
                 checkers.get(&binding.checker).map(|checker| DigestCheck {
                     checker: &binding.checker,
-                    endpoint: &checker.endpoint,
-                    credential_env: checker.credential_env.as_deref(),
-                    contract_version: checker.contract_version,
+                    configuration: checker,
                     timeout_ms: binding.timeout_ms,
                     max_input_bytes: binding.max_input_bytes,
                 })

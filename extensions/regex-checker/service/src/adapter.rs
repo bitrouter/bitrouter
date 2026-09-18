@@ -10,6 +10,7 @@ use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response as HttpResponse};
 use axum::routing::post;
+use bitrouter_checker_protocol::capability::CheckCallback;
 use bitrouter_checker_protocol::v1::{self, ProtocolError};
 use serde::Serialize;
 use subtle::ConstantTimeEq;
@@ -19,22 +20,6 @@ use tokio::sync::Semaphore;
 pub const MAX_CONCURRENT_CHECKS: usize = 32;
 /// Maximum time spent receiving one complete request body.
 pub const REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Business decision returned by a request-check callback.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CheckDecision {
-    /// The validated entry-request projection may proceed.
-    Allow,
-    /// The request must stop. The reason must follow the v1 reason-code grammar.
-    Deny { reason_code: String },
-}
-
-/// Synchronous business callback invoked only with a validated v1 request.
-///
-/// The callback must be `Send + Sync` because requests execute concurrently.
-/// CPU work is bounded by [`MAX_CONCURRENT_CHECKS`], but it is not forcibly
-/// cancellable when the HTTP caller stops waiting.
-pub type CheckCallback = dyn Fn(&v1::Request) -> CheckDecision + Send + Sync + 'static;
 
 /// Optional bearer credential for the HTTP adapter.
 ///
@@ -152,16 +137,7 @@ async fn check(State(state): State<Arc<AdapterState>>, request: HttpRequest) -> 
         Err(_) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal", false),
     };
 
-    let wire_response = match decision {
-        CheckDecision::Allow => {
-            v1::Response::allow(invocation_id, Some(state.implementation_version.clone()))
-        }
-        CheckDecision::Deny { reason_code } => v1::Response::deny(
-            invocation_id,
-            Some(reason_code),
-            Some(state.implementation_version.clone()),
-        ),
-    };
+    let wire_response = decision.into_response(invocation_id, state.implementation_version.clone());
     let wire_response = match wire_response {
         Ok(response) => response,
         Err(_) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "internal", false),
@@ -196,7 +172,7 @@ fn error_response(status: StatusCode, code: &'static str, authenticate: bool) ->
     if authenticate {
         response.headers_mut().insert(
             WWW_AUTHENTICATE,
-            HeaderValue::from_static("Bearer realm=\"bitrouter-guardrails\""),
+            HeaderValue::from_static("Bearer realm=\"bitrouter-regex-checker\""),
         );
     }
     response

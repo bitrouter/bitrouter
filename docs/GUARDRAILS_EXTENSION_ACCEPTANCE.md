@@ -157,3 +157,57 @@ Verification after the move:
 The archive path is unchanged and now contains this rebuilt artifact, replacing
 the earlier archive at that path. Earlier hashes above document the pre-move
 verification. Cross-platform execution and public publication remain pending.
+
+
+## Regex checker / native capability follow-up (2026-09-17)
+
+The preceding sections are historical evidence for 6A–6C and the first directory
+move. This subsequent change renames the implementation directory to
+`extensions/regex-checker/` and the new service package/binary to
+`bitrouter-regex-checker`. The matcher package remains `bitrouter-guardrails`.
+Earlier archive names and hashes above describe the earlier builds, not this
+refactor. No new release or public artifact publication is claimed here.
+
+`request-check` is the capability; regex-checker is one extension implementing it.
+The common callback/decision contract lives in
+`bitrouter-checker-protocol::capability`. Native custom hosts and the HTTP service
+reuse the same matcher callback. `RequestCheckRuntime` owns both execution paths;
+projection, binding, rejection and receipts continue through the existing pipeline.
+Native registration is explicit and checked against a code/rules revision. Native
+probe results do not claim HTTP reachability or wire-protocol validation.
+
+Validation of this refactor:
+
+- Full workspace all-feature nextest: **3,483 passed, 22 skipped**, no leak flag.
+- Workspace all-target/all-feature clippy with `-D warnings`, fmt, doctests and
+  strict rustdoc passed. SDK minimal/config-only, matcher minimal/SDK compatibility
+  and independent-service checks passed.
+- New gateway integration tests run the same regex callback natively and through
+  a real HTTP service, covering cross-fragment decisions, two router bindings,
+  receipts, version attribution and probe/actual-use separation. Separate tests
+  cover malformed native decisions, timeout and unbound-registration inactivity;
+  streaming and nonstreaming failures have zero model dispatches.
+- Native cancellation/timeout test confirms that a started callback holds its
+  admission slot after the caller stops waiting; a queued invocation times out
+  without starting more CPU work. Missing/mismatched/extra registration and mixed
+  transport config are rejected. Revision changes alter binding identities.
+- Dependency trees confirm default bro has no matcher/service in normal/build
+  dependencies and the independent service has no SDK/host. Example and gateway
+  tests deliberately link these libraries through development dependencies.
+- Config schema regenerated; `dist-helper check`, `dist generate --check` and
+  `dist plan` passed. The plan lists the new binary/archive names on six targets.
+- Fresh debug bro and renamed checker processes pass all seven existing process
+  E2E scenario groups; exactly one allowed request reaches the mock upstream.
+- Fresh compiled custom-host example passes real-socket allow, nonstreaming deny,
+  streaming deny and unbound-router scenarios. Exactly two allowed requests reach
+  its counted mock upstream; both denials return 403 without upstream calls.
+- Both process suites use local mock providers; no real model provider was called.
+
+Evidence: `/tmp/regex-nextest.log`, `/tmp/regex-validation-results.json`,
+`/tmp/regex-checker-e2e/report.json`, `/tmp/regex-native-e2e/report.json`,
+`/tmp/regex-host-tree.txt`, `/tmp/regex-service-tree.txt`.
+Native process driver for this local run: `/tmp/regex-native-e2e.py`; reproducible
+custom-host source: `apps/bitrouter/examples/native_regex_checker.rs`.
+Cross-platform CI, public release and this follow-up's release archive build
+remain separate gates. Native revisions are declared identities, not attestations;
+trusted callbacks are not sandboxed or forcibly terminated by deadlines.

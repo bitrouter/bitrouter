@@ -16,6 +16,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod checker;
 pub mod config;
 #[cfg(feature = "sdk")]
 pub mod hooks;

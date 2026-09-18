@@ -1,8 +1,8 @@
 //! HTTP adapter and fixed-rule input checker used by the
-//! `bitrouter-guardrails` executable.
+//! `bitrouter-regex-checker` executable.
 //!
 //! The adapter validates the strict request-check v1 envelope before invoking
-//! a small synchronous [`adapter::CheckCallback`]. Callback work runs on
+//! a small synchronous [`bitrouter_checker_protocol::capability::CheckCallback`]. Callback work runs on
 //! Tokio's blocking pool under a 32-permit semaphore. A caller or host timing
 //! out does not forcibly cancel synchronous matching already running; the
 //! permit stays with that work until it returns.
@@ -19,7 +19,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adapter;
-pub mod checker;
+
 pub mod startup;
 
 /// Service package version returned in validated checker responses.

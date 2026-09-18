@@ -3534,7 +3534,11 @@ presets:
             running
                 .checkers
                 .get("company")
-                .map(|checker| checker.endpoint.as_str()),
+                .and_then(|checker| match checker {
+                    bitrouter_sdk::config::checker::CheckerConfig::Http { endpoint, .. } =>
+                        Some(endpoint.as_str()),
+                    _ => None,
+                }),
             Some("http://127.0.0.1:18081/check")
         );
         let state = reloader
