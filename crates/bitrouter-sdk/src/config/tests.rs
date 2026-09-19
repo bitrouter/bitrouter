@@ -948,6 +948,12 @@ routers:
     selection: { kind: model, model: vendor:base }
     workflow: later
 "#,
+        r#"
+routers:
+  project:
+    selection: { kind: model, model: vendor:base }
+    checks: { request: [] }
+"#,
     ] {
         assert!(parse(yaml).is_err(), "unknown router field was accepted");
     }
