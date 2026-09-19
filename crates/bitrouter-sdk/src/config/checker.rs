@@ -75,7 +75,7 @@ mod tests {
     use super::{CheckerConfig, NativeCheckerConfig};
 
     #[test]
-    fn native_revision_is_bounded_receipt_metadata() {
+    fn native_revision_is_bounded_diagnostic_metadata() {
         for (revision, valid) in [
             ("rules-v1".to_owned(), true),
             ("rules/v1.2+build_3".to_owned(), true),

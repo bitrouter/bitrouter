@@ -32,8 +32,8 @@ handlers. Run one host per process and let it initialize tracing.
 The low-level `assemble::build_app_with_extensions` remains available for embedding.
 One module can register multiple instances with distinct IDs;
 registration collects callbacks and does not run checks or install global hooks.
-The API does not expose the full builder, pipeline context, credentials, receipt
-writer or migrations. The configuration is explicit:
+The API does not expose the full builder, pipeline context, credentials, host
+diagnostic state or migrations. The configuration is explicit:
 
 ```yaml
 checkers:

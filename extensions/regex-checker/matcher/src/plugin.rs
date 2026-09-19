@@ -5,8 +5,8 @@
 //! `bitrouter::extension::ExtensionApi`; they do not require the `sdk` feature.
 //! This compatibility API retains its existing global/per-request rule deposits
 //! and stream block/redact behavior. Input-only request checks cannot replace
-//! those output or global protection guarantees and do not add request-check
-//! receipts to these hooks.
+//! those output or global protection guarantees, and these hooks do not inherit
+//! the router binding or bounded diagnostics of native request checks.
 //!
 //! The current alpha SDK API retains this path. Removal requires an explicitly
 //! announced breaking SDK release with migration notes; no removal date is

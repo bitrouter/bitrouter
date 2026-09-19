@@ -328,10 +328,10 @@ Append the output under the comment header in `public-api-deps.txt` — the head
 ### Named-router request checks
 
 Named-router entry checks use the SDK's typed `language_model::request_checks`
-contract and process-local `language_model::receipts` store. The app assembles
-startup-owned compiled registrations in `request_checks` and shares that runtime with
-local IPC and remote administration. Receipt storage is mandatory for a
-configured check and independent of the optional observability exporter.
+contract. The app assembles startup-owned compiled registrations in
+`request_checks`; a custom host supplies callbacks through
+`extension::ExtensionApi`. The official `bro` binary has no custom
+registrations, and there is no request-check inventory or receipt store.
 
 Authentication and session/continuation normalization precede router binding.
 The logical router/check binding remains fixed through candidate preparation,
@@ -339,14 +339,14 @@ model selection and fallback. One preparation path serves both response modes.
 Checked routers apply effective defaults before content checks; ordinary local
 hooks cannot change their selector afterward. Unguarded requests preserve the
 legacy pre-request rewrite/defaults timing. The existing model selector and
-executor run after required checks allow. Local policy rejection never invokes a registered checker. SDK receipt
-lifecycle handling also covers early failures, cancellation and streaming
-termination. Real-use inventory is derived from retained receipts; the callback runtime
-reports execution progress and registration readiness is separate evidence.
-It does not turn these requests into durable workflow tasks.
+executor run after required checks allow. Local policy rejection never invokes
+a registered checker. The runtime emits bounded, content-free tracing for
+registration and invocation outcomes; it does not expose checker inventory,
+progress reporting or durable workflow state. Registration readiness and a
+real invocation remain separate evidence.
 
 See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for coverage, resource limits,
-retention, activation and the acceptance ledger. The default host no longer links
+activation and the acceptance ledger. The default host no longer links
 the matcher and rejects legacy `plugins.bitrouter-guardrails` configuration. See
 [GUARDRAILS_EXTENSION.md](GUARDRAILS_EXTENSION.md) for custom-host assembly,
 input-only scope, explicit migration blockers, and process-level verification.

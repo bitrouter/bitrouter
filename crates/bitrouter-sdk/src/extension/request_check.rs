@@ -1,7 +1,7 @@
 //! Business contract for checks on a named router's entry request.
 //!
 //! Inputs contain bounded projected text and coverage evidence, without a
-//! transport envelope. The host owns router binding, scheduling and receipts.
+//! transport envelope. The host owns router binding, scheduling and diagnostics.
 
 use std::sync::Arc;
 
@@ -110,7 +110,7 @@ pub enum Decision {
     Allow,
     /// Stop the request before provider dispatch.
     Deny {
-        /// Bounded machine-readable code suitable for receipts.
+        /// Bounded machine-readable code suitable for host diagnostics.
         reason_code: String,
     },
 }
@@ -178,7 +178,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn denial_codes_are_bounded_receipt_metadata() {
+    fn denial_codes_are_bounded_diagnostic_metadata() {
         for (reason_code, valid) in [
             ("policy:block".to_owned(), true),
             ("a".repeat(64), true),

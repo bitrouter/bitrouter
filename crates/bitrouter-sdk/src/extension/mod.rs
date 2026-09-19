@@ -1,7 +1,7 @@
 //! Restricted author API for statically linked BitRouter extensions.
 //!
 //! Registration only supplies capability implementations. The host retains
-//! configuration validation, router binding, execution limits and receipts.
+//! configuration validation, router binding, execution limits and diagnostics.
 
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::Arc;
@@ -31,7 +31,7 @@ impl ExtensionApi {
     /// Register one native request-check implementation.
     ///
     /// `id` uses the same grammar as checker ids in BitRouter configuration.
-    /// `revision` identifies the code or rules used for execution and receipts.
+    /// `revision` identifies the code or rules used for execution diagnostics.
     /// It must satisfy the same bounds as configured native revisions. Duplicate
     /// ids are rejected and never replace the first registration.
     ///

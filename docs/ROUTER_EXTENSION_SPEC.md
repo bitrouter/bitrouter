@@ -97,7 +97,7 @@ Router 决定采用哪一种 selection；policy-lock 保存当前发布的策略
 注册不执行检查，不安装全局 hooks，不代表所有 router 都启用它。
 重复或非法注册使整个注册集合无效，即使作者忽略单次错误也不能部分启动。
 配置缺少注册或 revision 错配阻断启动，包括声明但未绑定的实例。
-有效但未配置的注册保持未激活，只产生按 ID 排序的启动诊断；不创建执行状态或查询条目。
+有效但未配置的注册保持未激活，只产生按 ID 排序的启动诊断；不创建执行状态。
 配置中的同一 id 可供多个 router 绑定。
 
 ### 4.2 输入与能力边界
@@ -105,16 +105,16 @@ Router 决定采用哪一种 selection；policy-lock 保存当前发布的策略
 输入提供有界、有序的文本片段及 coverage；业务判定为 allow 或带有限 reason code 的 deny。
 fragment/coverage 的作者类型统一位于 `extension::request_check`；原来位于
 `language_model::request_checks` 的六个类型已移动，不保留旧路径别名，序列化字段不变。
-回调不接收 HTTP 信封、协议版本、响应关联字段、完整 pipeline context、凭据或回执写入器。
+回调不接收 HTTP 信封、协议版本、响应关联字段、完整 pipeline context、凭据或宿主诊断接口。
 输入覆盖 system、消息文本/reasoning、已有工具参数和结果、批准理由。
 媒体仅计入未覆盖信息；不读取文件 bytes，不检查生成输出、后续 harness 工具循环或嵌套调用。
 超限拒绝，不截断。输入检查不能冒充完整 PII 检测、脱敏或输出保护。
 
-宿主 runner 只接收固定 binding、同一业务 `Input` 和受限 progress reporter；请求、router
-与 invocation 身份留在 pipeline/receipt。返回 `CheckerResult { decision, revision }`，
-复用业务 `Decision`，由宿主附上注册 revision，pipeline 统一校验判定。
+宿主 runner 只接收固定 binding 和同一业务 `Input`；请求与 router 身份留在 pipeline。
+返回 `CheckerResult { decision, revision }`，复用业务 `Decision`，由宿主附上注册 revision，
+pipeline 对任意 runner 的返回继续统一校验；native runtime 在记录完成诊断前先执行同一校验。
 原 `CheckerInvocation` / `CheckerDecision` 属于本次 beta Rust API 收敛的迁移项；
-作者 callback、配置和管理 JSON 不变。详见 [runner 契约](REQUEST_CHECKS_SPEC.md#host-runner-boundary)。
+作者 callback 与配置不变。详见 [runner 契约](REQUEST_CHECKS_SPEC.md#host-runner-boundary)。
 
 ### 4.3 执行、并发和失败
 
@@ -148,27 +148,23 @@ Extension 内部可自行调用网络，但不因此构成 BitRouter 远程扩�
 ```mermaid
 flowchart TD
     A[协议解析与本地认证 / 会话归一化] --> B[解析并固定入口 router 和检查绑定]
-    B --> C[受理回执]
-    C --> D[路由准备与有效默认值]
-    D --> E[本地 policy hooks；自定义宿主可显式安装额外 hooks]
-    E --> F[按序调用已注册 request checks]
-    F -->|全部 allow| G[已有 policy 选模]
-    G --> H[Provider 路由 / fallback / 上游执行]
-    H --> I[响应处理、交付与回执终结]
-    E -->|拒绝或失败| J[终结回执，无模型调用]
-    F -->|deny 或失败| J
+    B --> C[路由准备与有效默认值]
+    C --> D[本地 policy hooks；自定义宿主可显式安装额外 hooks]
+    D --> E[按序调用已注册 request checks]
+    E -->|全部 allow| F[已有 policy 选模]
+    F --> G[Provider 路由 / fallback / 上游执行]
+    G --> H[响应处理与交付]
+    D -->|拒绝或失败| I[失败返回，无模型调用]
+    E -->|deny 或失败| I
 ```
 
 1. 流式和非流式请求共享入口准备；之后按执行和交付模式分支。
-2. `pre_resolution_hook` 完成本地认证和会话处理，之后才固定绑定并受理回执。
+2. `pre_resolution_hook` 完成本地认证和会话处理，之后才固定绑定。
 3. `router_preparation_hook` 可以选择有效候选配置，但不能替换原始检查绑定。
 4. 对有检查绑定的请求，普通 `pre_request_hook` 接收有效默认值；此时修改 selector 明确失败。
 5. 无检查绑定的旧路径保留普通 hook 改写 selector 后再应用最终默认值的兼容语义。
-   不能声称旧 hook 已检查后来补入的默认值，也不能在受理之后改写出新的受检 router。
-6. 取消请求可终结或标记回执不完整，但不能证明同步回调停止执行，也不能撤销已发生的上游调用。
-
-回执不是所有入口错误的全局日志。认证失败、畸形入口、未解析出的 router、直接模型请求，
-都不伪造 named-router 受理回执；绑定成功之后的本地拒绝和 checker 失败才在该契约内。
+   不能声称旧 hook 已检查后来补入的默认值，也不能在固定绑定之后改写出新的受检 router。
+6. 取消请求会停止等待，但不能证明同步回调停止执行，也不能撤销已发生的上游调用。
 
 ## 6. 配置与迁移
 
@@ -200,19 +196,13 @@ routers:
 任何 `plugins.bitrouter-guardrails` 旧键仍阻断默认宿主激活，不能通过移除配置静默失去保护。
 需要旧输出/global/redact 能力的部署须保留相应 custom-host hooks，不能自动改成输入 block。
 
-## 7. 诊断与回执
+## 7. 诊断
 
-`bro checks` 查询目标宿主的已激活检查实例、revision、router 绑定和实际使用证据。
-删除 `bro checks probe`、远程 probe 管理方法以及 endpoint/credential/protocol 连通状态。
-区分配置有效、代码成功注册、保存/运行状态、实际调用；注册成功不等于内容已经检查。
-
-受理回执在固定 named-router 身份后建立，与 exporter 无关。默认最多 4,096 条，
-完成后 TTL 为 15 分钟，容量压力可提前淘汰完成记录，活动记录不能被淘汰。
-容量不足时在检查/模型调用前拒绝。回执只覆盖当前进程，重启后未知，不能推断未执行或成功。
-同一 request id 的重试保留独立 receipt id；查询 request id 返回最新保留尝试及匹配数。
-
-实际使用状态来自当前绑定最新开始且仍保留的回执；淘汰后不复活较早 allow。
-回执区分检查、上游执行及服务端可见交付状态，不保存 prompt/答案，也不证明客户端已消费。
+不提供 `bro checks`、checker inventory、probe 或 request-check receipt 查询面。
+启动时报告注册、revision 和绑定错误，并按 ID 排序报告未激活注册。每次 native 调用只记录
+checker id、注册 revision、耗时和固定结果/失败类别；不记录 prompt、匹配文本、规则名或
+callback 原始错误。配置有效、代码成功注册和真实调用仍是不同事实；缺少日志或遥测不能证明
+检查未执行，allow 也不能证明模型执行或客户端交付成功。
 
 ## 8. 验收门槛
 
@@ -222,8 +212,8 @@ routers:
 | CE02 | 注册非法/重复/被忽略错误、配置缺失注册/revision 错配阻断启动；合法未配置注册保持未激活 |
 | CE03 | 两 router 绑定不同检查，allow 正常路由，deny/超时/非法结果零上游 |
 | CE04 | 同步超时和取消不提前释放已开始工作的并发名额 |
-| CE05 | 回执、固定 router 身份、saved/running/restart 状态仍成立 |
-| CE06 | 旧 HTTP 配置明确失败；probe CLI/管理端点移除；默认宿主不含 matcher |
+| CE05 | 固定 router 身份、saved/running/restart 状态仍成立；非法结果记录为失败类别 |
+| CE06 | 旧 HTTP 配置明确失败；checker CLI/管理端点移除；默认宿主不含 matcher |
 | CE07 | 旧 SDK Plugin/stream/output 兼容测试保持；输入检查不宣称替代全部保护 |
 | CE08 | 本地全量测试、lint、fmt、文档、schema、feature 和真实 Native 进程验证 |
 
@@ -236,6 +226,6 @@ routers:
 - [宿主装配](../apps/bitrouter/src/assemble.rs)
 - [共享前台宿主](../apps/bitrouter/src/host.rs)
 - [检查 runtime](../apps/bitrouter/src/request_checks.rs)
-- [请求检查契约与回执](REQUEST_CHECKS_SPEC.md)
+- [请求检查契约](REQUEST_CHECKS_SPEC.md)
 - [扩展使用与迁移](GUARDRAILS_EXTENSION.md)
 - [regex extension](../extensions/regex-checker/README.md)

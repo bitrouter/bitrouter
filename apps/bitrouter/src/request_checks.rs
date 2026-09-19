@@ -5,7 +5,7 @@ use bitrouter_sdk::config::Config;
 use bitrouter_sdk::config::checker::CheckerConfig;
 use bitrouter_sdk::config::router::MAX_CHECKER_TIMEOUT_MS;
 use bitrouter_sdk::extension::request_check::{
-    Input, Registration, RequestCheckCoverageStatus, validate_revision,
+    Decision, Input, Registration, RequestCheckCoverageStatus, validate_revision,
 };
 use bitrouter_sdk::language_model::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
@@ -158,11 +158,17 @@ impl RequestCheckerRunner for RequestCheckRuntime {
     ) -> Result<CheckerResult, CheckerFailure> {
         let checker_id = binding.checker_id.clone();
         let started = Instant::now();
-        let result = self.invoke(binding, input).await;
+        let result = self.invoke(binding, input).await.and_then(|result| {
+            result
+                .decision
+                .validate()
+                .map_err(|_| failure(CheckerFailureKind::InvalidResponse, "invalid_decision"))?;
+            Ok(result)
+        });
         let elapsed_ms = started.elapsed().as_millis();
         match &result {
             Ok(CheckerResult {
-                decision: bitrouter_sdk::extension::request_check::Decision::Allow,
+                decision: Decision::Allow,
                 revision,
             }) => tracing::debug!(
                 checker_id,
@@ -172,7 +178,7 @@ impl RequestCheckerRunner for RequestCheckRuntime {
                 "native request check completed"
             ),
             Ok(CheckerResult {
-                decision: bitrouter_sdk::extension::request_check::Decision::Deny { .. },
+                decision: Decision::Deny { .. },
                 revision,
             }) => tracing::info!(
                 checker_id,
@@ -348,6 +354,31 @@ mod tests {
                 MAX_CONCURRENT_INVOCATIONS_PER_CHECKER
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_native_decision_is_classified_before_return() -> anyhow::Result<()> {
+        let config = native_config();
+        let runtime = RequestCheckRuntime::activate_with_registrations(
+            &config,
+            HashMap::from([(
+                "safety".to_owned(),
+                Registration::new(
+                    "rules-v1",
+                    Arc::new(|_| Decision::Deny {
+                        reason_code: "invalid reason".to_owned(),
+                    }),
+                ),
+            )]),
+        )?;
+        let error = runtime
+            .check(binding(&config)?, input())
+            .await
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("invalid native decision was accepted"))?;
+        assert_eq!(error.kind, CheckerFailureKind::InvalidResponse);
+        assert_eq!(error.detail.as_deref(), Some("invalid_decision"));
         Ok(())
     }
 
