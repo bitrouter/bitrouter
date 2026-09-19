@@ -468,3 +468,30 @@ The build emitted the existing macOS compact-unwind size and third-party
 `proc-macro-error2` future-compatibility notices. No check suppression was added.
 These results do not represent remote CI, a merge, cross-platform process tests
 or a published release.
+
+## Native-only management cleanup (2026-09-19)
+
+This slice supersedes the request-check receipt and checker-inventory behavior
+described in earlier historical sections. It keeps the compiled extension author
+API, native configuration, frozen router bindings, shared foreground host and
+regex-checker implementation. It removes the dedicated receipt store, progress
+reporter, `bro checks`, daemon inspection variants and `/control/v1/checks*`
+routes. Former HTTP checker configuration fields remain explicit migration
+errors.
+
+The maintained tests now assert behavior rather than receipt bookkeeping:
+
+- SDK pipeline: checked bindings remain frozen; defaults and local hooks precede
+  native checks; selector mutation cannot bypass or introduce checks.
+- Runtime: registration/revision validation, bounded concurrency, deadline,
+  cancellation permit ownership and fail-closed errors remain.
+- HTTP integration: stream/nonstream denial, invalid decisions, timeout,
+  oversized input and authentication never dispatch unintended upstream work.
+- Shared host: startup failures precede database assembly, reload reports
+  restart-required, stop/restart/SIGTERM cleanup works, and legacy authenticated
+  checker-control routes return 404.
+
+At the first pushed cleanup commit, focused local validation passed: 87 SDK
+pipeline tests, 3 native-runtime tests, 13 request-check integration tests and 4
+real-process host tests. A full workspace run is recorded only after it completes;
+these figures do not claim remote CI, merge or release status.

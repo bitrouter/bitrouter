@@ -13,7 +13,7 @@ The foreground host calls `bitrouter::host::serve_with_extensions`; see the runn
 `apps/bitrouter/examples/native_regex_checker.rs` example in the source repository.
 No separate extension API or checker-protocol crate is required.
 The shared entry runs inference, the local management socket and optional remote
-control with the same configuration baseline, reload, receipts and shutdown as
+control with the same configuration baseline, reload and shutdown as
 `bro serve`. Use `assemble::build_app_with_extensions` only when owning a separate
 embedding lifecycle.
 On Unix, the host keeps a small `.sock.lock` file beside its control socket to
@@ -45,20 +45,19 @@ Restart the same custom executable after editing bindings. The example is a
 foreground process, not a complete `bro` CLI: official `bro restart` would launch
 the official binary without your registrations. Use your custom invocation or
 service manager to restart, and explicitly target its config/socket for `bro`
-management queries and `stop`. Clients select `model: bitrouter/<id>`; direct
-model requests do not inherit checks. Use `bro config validate`, `bro checks`,
-`bro checks receipts`, and `bro checks receipt REQUEST_ID`. Static validation
-checks declarations; activation additionally checks compiled registrations.
+management status and `stop`. Clients select `model: bitrouter/<id>`; direct
+model requests do not inherit checks. Use `bro config validate` before starting;
+activation additionally checks compiled registrations.
 Default bro rejects Native declarations without corresponding registrations.
 Missing or mismatched configured registrations fail activation even when unbound.
 Valid unconfigured registrations remain inactive with a sorted startup diagnostic;
-they create no execution state or `bro checks` entry. Duplicate/invalid
+they create no execution state. Duplicate/invalid
 registration invalidates the collection even when an extension ignores its error.
 
-There is no `bro checks probe`. Inventory shows registered revision, bindings and
-actual request evidence. Receipts remain process-local, independent of exporters.
-Deny, timeout, invalid results and oversized input prevent model dispatch.
-A successful check does not mean upstream generation or delivery succeeded.
+There is no checker probe, inventory or receipt query. Startup diagnostics and
+bounded native-invocation tracing do not include request content or matched
+text. Deny, timeout, invalid results and oversized input prevent model dispatch.
+An allow result does not mean upstream generation or delivery succeeded.
 
 ## Rules and protection boundary
 

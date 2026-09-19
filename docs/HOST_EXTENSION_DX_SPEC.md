@@ -1,6 +1,6 @@
 # Host-oriented Extension 开发体验 Spec
 
-状态：**v0.2 — S1–S3 已实现；本地验证范围见验收记录，尚未发布。** 2026-09-18。
+状态：**v0.3 — S1–S4 已实现；本地验证范围见验收记录，尚未发布。** 2026-09-19。
 
 目标：扩展作者实现具体能力，自定义宿主复用 BitRouter 的完整服务生命周期。
 普通用户选择 router 后，仍主要将模型选择交给 router。
@@ -37,7 +37,7 @@ BitRouter 同样应让使用已编译能力的人通过 router 配置操作，�
 | --- | --- | --- |
 | 作者入口 | `ExtensionApi::request_check(id, revision, callback)` | 保留 |
 | 业务契约 | `Input → Decision`，host runner 附加 revision | 保留 |
-| 执行证据 | pipeline 持有身份、回执、结果与交付状态 | 保留 |
+| 执行诊断 | pipeline 执行 fail-closed；专用回执与查询面已移除 | 使用有界 tracing 和通用 daemon 状态 |
 | 自定义宿主装配 | `assemble::build_app_with_extensions` | 继续作为低层装配接口 |
 | 完整服务启动 | 编排主要在 CLI 私有 `serve()` 中 | 提取到 app crate 的共享前台宿主入口 |
 | regex 示例 | 手动启动 HTTP gateway，没有 daemon 管理 socket | 改用共享宿主启动路径 |
@@ -53,15 +53,15 @@ BitRouter 同样应让使用已编译能力的人通过 router 配置操作，�
 - [共享装配](../apps/bitrouter/src/assemble.rs)
 - [共享服务编排](../apps/bitrouter/src/host.rs)
 - [CLI 入口](../apps/bitrouter/src/main.rs)
-- [运行绑定与管理报告](../apps/bitrouter/src/request_checks.rs)
+- [运行绑定](../apps/bitrouter/src/request_checks.rs)
 - [当前最小示例](../apps/bitrouter/examples/native_regex_checker.rs)
 
 ## 3. 作者、宿主与 router 的边界
 
 | 角色 | 负责 | 不需要掌握 |
 | --- | --- | --- |
-| Router 使用者 | 选择 router，配置可用能力，检查运行状态 | Rust callback、runner、回执写入 |
-| Extension 作者 | 实现能力函数，注册实例，声明代码/规则 revision | listener、control socket、reload、回执终结 |
+| Router 使用者 | 选择 router，配置可用能力，检查启动和失败诊断 | Rust callback、runner、并发执行 |
+| Extension 作者 | 实现能力函数，注册实例，声明代码/规则 revision | listener、control socket、reload、请求生命周期 |
 | 自定义宿主维护者 | 选择链接的 crate，加载规则，调用注册函数与共享宿主入口 | 复制官方 daemon 编排 |
 | SDK / 产品宿主实现 | 输入投影、调用顺序、限制、身份、诊断和生命周期 | 具体 matcher 的业务规则 |
 
@@ -107,12 +107,12 @@ bitrouter::host::serve_with_extensions(&source, move |api| {
 1. 配置来源、home 与相对路径规则、现存 daemon 检查，以及运行配置基线。
 2. 既有 provider/registry 准备，注册校验、app 装配、数据库和已有后台任务。
 3. HTTP 模型服务、本地 control socket、配置启用的 remote control。
-4. 既有认证、管理 action、reload coordinator、checks 和 receipts 查询。
+4. 既有认证、通用管理 action 和 reload coordinator。
 5. 信号与管理 stop、请求收尾、既有后台任务关闭、telemetry flush 和进程资源清理。
 
-HTTP pipeline 与管理查询必须持有同一个 request-check runtime 和 receipt store；
-共享启动不能创建第二份检查实例、运行配置事实或回执历史。
-local/remote 管理仍由目标 daemon 提供证据，不读取客户端文件来补充其运行状态。
+HTTP pipeline 必须持有唯一的 request-check runtime；共享启动不能创建第二份
+检查实例或运行配置事实。local/remote 管理仍由目标 daemon 提供通用状态，
+不读取客户端文件来补充其运行状态。
 
 这是产品 daemon 的入口：首版每个进程运行一个宿主，保留当前进程级 CWD、信号和
 tracing 所有权。需要自定义 listener 或嵌入其他运行时的调用者继续使用低层装配接口。
@@ -153,11 +153,11 @@ tracing 所有权。需要自定义 listener 或嵌入其他运行时的调用�
 | `RequestCheckCoverageScope`、`RequestCheckCoverageStatus`、`RequestCheckCoverage` | 移入同一作者模块，保留现有名称和序列化 |
 | 从 Prompt/Role 投影、计数与边界校验 | 保留在 language_model 执行层 |
 | `RequestCheckBinding`、`CheckerResult`、`CheckerFailure`、`RequestCheckerRunner` | 保持宿主执行契约，不作为作者入门接口 |
-| receipt store、progress reporter、管理报告 | 保持执行/管理层 |
+| 有界 tracing、deadline 和并发准入 | 保持宿主执行层 |
 
 通过移动定义和调整 imports 改变归属，不用 public re-export 制造两个公开入口。
 普通 callback 的签名不变；直接引用旧 fragment/coverage 路径的作者、测试和宿主需要
-修改 imports。这属于 beta Rust 源码兼容变化。配置和管理 JSON 字段及枚举值保持不变。
+修改 imports。这属于 beta Rust 源码兼容变化。配置字段保持不变；专用管理 JSON 已移除。
 
 业务模块不依赖完整 `PipelineContext` 或模型 Prompt；投影层消费业务类型。
 作者参考文档以注册、Input、Decision、失败与限制为主，宿主装配和执行接口单独说明。
@@ -181,18 +181,16 @@ tracing 所有权。需要自定义 listener 或嵌入其他运行时的调用�
 注册集合是代码提供的可用实现；配置声明和 router 绑定决定实际使用。
 “允许多余注册”不放宽配置引用和 revision 校验，不允许用猜测 ID 或默认实现补齐缺失。
 
-未声明的合法注册不创建执行 semaphore 或绑定，不调用业务 callback，不生成回执。
+未声明的合法注册不创建执行 semaphore 或绑定，也不调用业务 callback。
 注册闭包本身仍会运行，可能已经加载或编译规则；因此不承诺未激活实现完全没有初始化
 成本，也不增加 lazy factory 来解决尚未出现的需求。
 
 ### 6.2 诊断与配置
 
-`bro checks` 继续列出配置声明并成功激活的实例；未声明注册不混入该列表。
 通过既有启动诊断机制报告排序后的未激活注册 ID，供维护者发现漏配或拼写错误。
 首批不增加“available/configured/enabled/installed”等多套状态字段或新查询命令。
-
-`registered: true` 仍只表示当前实例有匹配实现，`last_actual` 仍只来自真实请求回执。
-配置声明但未绑定的实例仍显示空 bindings，不能被解释为检查已执行。
+专用 checker inventory、probe 与 request-check receipt 均不保留；配置声明但未绑定
+只能解释为能力可用，不能解释为检查已执行。
 
 继续使用 `checkers.<id>.native.revision` 和 `routers.<id>.checks.request`。
 不新增顶层 `extensions:`，不复制一份 manifest。声明或绑定变化仍要求 restart，
@@ -202,19 +200,18 @@ tracing 所有权。需要自定义 listener 或嵌入其他运行时的调用�
 这一变化便利“一份自定义二进制、多种部署配置”，但降低了多余注册的严格报错程度。
 排序启动诊断是对该取舍的补偿，不能完全代替用户审阅配置。
 
-## 7. 必须保持的五类保证
+## 7. 必须保持的四类保证
 
 | 保证 | 本轮必须保留的机制 |
 | --- | --- |
 | 保存成功不等于运行生效 | 启动基线、saved/running/restart 状态及既有 reload 证据 |
-| 注册成功不等于实际检查 | 注册元数据与 receipt 派生的实际使用分离 |
-| 检查允许不等于模型成功 | 检查结果、请求 outcome、delivery 分开终结 |
-| 无回执不等于未执行 | incarnation、受理前容量预留、保留边界和 unknown |
+| 注册成功不等于实际检查 | 只有 router binding 和真实请求才会调用 callback |
+| 检查允许不等于模型成功 | allow 后仍可能在路由、上游或交付阶段失败 |
 | 超时不等于 callback 停止 | blocking 工作持有 permit，超时/取消只停止等待 |
 
-继续保留 latest-started 索引、active 回执不淘汰、重复 request ID 对应独立 receipt、
-取消收尾和 fail-closed。认证失败及未形成 named-router 绑定的入口不伪造受理回执。
-本轮不统一 checked/unchecked hook 顺序，不缩小 reload 范围，不新增选模算法。
+继续保留取消后的 permit 所有权和 fail-closed。认证失败及未形成 named-router
+binding 的入口不会调用 callback。本轮不统一 checked/unchecked hook 顺序，
+不缩小 reload 范围，不新增选模算法。
 
 ## 8. 实施顺序与验收
 
@@ -227,11 +224,11 @@ tracing 所有权。需要自定义 listener 或嵌入其他运行时的调用�
 本地 mock provider。通过真实 HTTP 及管理端点确认：
 
 - H01：allow 产生预期上游调用；deny/timeout/非法判定零上游调用，均覆盖 stream/nonstream。
-- H02：`checks` 与请求回执对应同一运行实例；注册本身不产生 last_actual。
-- H03：本地及已启用远端管理查询一致，沿用现有认证和访问限制。
+- H02：注册本身不执行 callback；未绑定注册保持未激活。
+- H03：通用本地及远端管理沿用现有认证和访问限制；旧 checker 路由返回 404。
 - H04：文件修改显示 saved 与运行差异；checker 修改 reload 被拒绝，进程内实现不变。
 - H05：注册/配置/revision 错误先于数据库装配和服务就绪；端口冲突或部分启动失败能清理自身资源。
-- H06：stop/信号沿同一路径关闭；显式再次启动相同自定义二进制，注册仍在，旧 receipt 不跨进程保留。
+- H06：stop/信号沿同一路径关闭；显式再次启动相同自定义二进制，注册仍在。
 - H07：官方空注册宿主保持原有服务行为，默认依赖树不引入 matcher。
 
 实施涉及启动说明时，同步更新 `skills/bitrouter/` 及分发清单中相关描述。
@@ -243,18 +240,29 @@ tracing 所有权。需要自定义 listener 或嵌入其他运行时的调用�
 
 - A01：regex checker 的业务实现和输入构造测试只需作者模块中的 request-check 类型。
 - A02：SDK no-default-features、config_file 组合及 matcher 最小构建通过。
-- A03：覆盖范围、deny reason、JSON 回执和身份冻结回归通过；迁移说明列出旧/新路径。
+- A03：覆盖范围、deny reason、身份冻结和 fail-closed 回归通过；迁移说明列出旧/新路径。
 
 ### S3 — 允许未声明注册保持未激活
 
 移除“剩余合法注册阻断启动”的规则，添加启动诊断；不增加第二套 inventory。
 
-- R01：同一二进制注册 A/B，仅配置 A 时可启动；B callback 调用数为零，checks 不显示 B。
+- R01：同一二进制注册 A/B，仅配置 A 时可启动；B callback 调用数为零。
 - R02：B 即使未使用，非法注册或重复注册仍阻断启动；配置声明 B 后仍要求正确 revision。
 - R03：声明但未绑定的实例、缺失引用、多 router/重复绑定及实际使用状态保持原有行为。
-- R04：未激活 ID 诊断稳定可读；现有 checks JSON 形状不变。
+- R04：未激活 ID 诊断稳定可读；不新增 checker inventory。
 
-每个切片单独可审阅、可验证，不等到三项全部完成才检查默认宿主回归。
+### S4 — 移除旧 HTTP checker 管理面
+
+保留 native 配置、router binding、作者 API、共享宿主和 regex 实现；删除专用 receipt
+store、progress reporter、checker inventory、local/remote control 路由和 `bro checks`。
+执行诊断改为有界 tracing，不记录 prompt、匹配文本、规则名或 callback 原始错误。
+
+- M01：旧 HTTP 配置字段继续显式失败，合法 native declaration 继续生效。
+- M02：旧 local/remote checker 管理动作不可达，HTTP 路由返回 404。
+- M03：stream/nonstream 的 allow/deny/timeout/invalid 保持 fail-closed 和零绕过。
+- M04：custom host 的 stop、restart-required、重启和 SIGTERM 生命周期保持。
+
+每个切片单独可审阅、可验证，不等到四项全部完成才检查默认宿主回归。
 实现提交需完成仓库要求的 all-feature tests、clippy、fmt；公共 API 迁移同时检查
 doctests、严格 rustdoc 与上述 feature 组合。验收结果写入
 [验收记录](GUARDRAILS_EXTENSION_ACCEPTANCE.md)，本文件不预先标记通过。

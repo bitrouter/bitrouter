@@ -53,9 +53,9 @@ This is a declared identity, not cryptographic attestation. Duplicate IDs and
 invalid IDs/revisions fail registration; registration errors prevent activation.
 Missing or mismatched registrations for configured instances fail activation,
 including instances without router bindings. Valid registrations absent from
-configuration remain inactive with a sorted startup diagnostic; they do not
-appear in `bro checks` or allocate execution slots. A configured registration
-without a router binding appears in inventory without request evidence.
+configuration remain inactive with a sorted startup diagnostic and allocate no
+execution slots. A configured registration without a router binding remains
+available but is never invoked.
 A native declaration alone cannot install code into standard `bro`: adding or
 upgrading extension code requires rebuilding the custom host.
 
@@ -84,23 +84,23 @@ cargo run -p bitrouter --example native_regex_checker -- bitrouter.yaml rules.ya
 Set `server.listen: 127.0.0.1:4356` (or another free loopback port) in the
 example config. The shared host serves inference, the local daemon control socket,
 and the optional authenticated remote control listener. It reuses configuration
-baselines, reload, receipts, signals and shutdown from `bro serve`.
+baselines, reload, signals and shutdown from `bro serve`.
 In a
 separate project, explicitly depend on `bitrouter`, `bitrouter-guardrails`,
 `bitrouter-sdk`, `tokio`, `serde-saphyr` and `anyhow` as used by the example.
 The normal `bro` dependency graph excludes the matcher; example/test dependencies
 are development-only.
 
-This is a foreground host, not the complete `bro` CLI. Use `bro --config
-bitrouter.yaml checks` (and `checks receipts` or `stop`) to target its management
-socket. Restart by invoking this same custom executable or its service manager.
+This is a foreground host, not the complete `bro` CLI. `bro --config
+bitrouter.yaml status` and `stop` can target its management socket. Restart by
+invoking this same custom executable or its service manager.
 Do not use official `bro restart` to replace it: that binary has no registered
 extension, and the example does not implement the `serve` subcommand expected by
 the default background launcher. Changing bindings or startup-loaded rules
 requires restarting the custom host.
 
 The host owns projection, frozen bindings, concurrency admission, deadlines,
-result validation, fail-closed execution and receipts. Extension code runs in the
+result validation and fail-closed execution. Extension code runs in the
 blocking pool as trusted process-local code; it is not sandboxed. Timeout or
 cancellation stops waiting, but started work retains its concurrency permit until
 completion. The request-check capability does not inspect generated output or
@@ -112,8 +112,8 @@ does not provide a remote extension transport.
 The matcher's optional `sdk` feature retains `GuardrailsPlugin` and old
 input/output hook APIs for legacy custom-host assembly. Those hooks have
 global/per-request rule deposits and stream block/redact semantics. They are
-distinct from the router-bound request-check capability and do not inherit its
-receipts. New request checks use `ExtensionApi` and do not require this feature.
+distinct from the router-bound request-check capability. New request checks use
+`ExtensionApi` and do not require this feature.
 
 The alpha `NativeChecker` / `build_app_with_checkers` map entry and
 `bitrouter::extension` import are removed. Migrate registration to

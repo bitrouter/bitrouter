@@ -6,7 +6,7 @@
 
 本文记录原始 M0–M1 第一批中的路由配置与身份迁移子批次，不代表原始六项已全部完成。
 整体配置状态契约另见 [CONFIGURATION_STATE_CONTRACT_SPEC.md](CONFIGURATION_STATE_CONTRACT_SPEC.md)。
-本文保留 R1–R6 的历史范围；后续编译式 request-check、回执和诊断的当前契约见
+本文保留 R1–R6 的历史范围；后续编译式 request-check 的当前契约见
 [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md)。Guardrails 独立制品仍未交付。
 首批目标是：用户直接配置、调用、诊断一个 router，而不必同时理解 preset。
 默认 coding router 复用现有 policy-lock；本批不开发新的模型选择算法。
@@ -33,9 +33,9 @@
 批次内：统一配置语义、直接寻址、policy 绑定、默认 coding 初始化、旧 preset
 兼容输入与迁移、CLI/远程诊断、既有成功与失败行为的回归。
 
-历史下一批交付 HTTP checker 和覆盖提前拒绝路径的独立执行回执（HTTP 路径现已收敛为编译式 extension）；它们依赖本批
-建立的 router 身份。本批的请求历史只声明现有 settlement 记录的覆盖范围，
-不能声称已完成原 M1 的完整回执保证。
+历史下一批曾规划 HTTP checker 和独立执行回执；当前实现已收敛为编译式
+extension，并删除专用回执/查询面。它仍依赖本批建立的 router 身份。本批的
+请求历史只声明现有 settlement 记录的覆盖范围。
 
 本批不引入通用 DSL、程序继承、热替换框架、router 套 router、任务调度、
 ACP workflow 或默认 `bro code` 语义切换。新的 router 配置不接受尚未实现的
@@ -225,7 +225,7 @@ CLI 新参数和 JSON 字段名称在对应 PR 固定；以下是报告语义，
   实际 provider/model 和现有 usage 保持原含义；旧记录为 unknown/null，不能
   按当前配置倒推历史归属。`route_scope_id` 是既有 session/policy 归属，不可挪用。
 - 不在数据库或遥测中重复计费；history 只覆盖已有记录路径。Exporter 关闭时，
-  本地已有记录仍可查询；提前 auth/check 拒绝的完整回执在下一批完成。
+  本地已有记录仍可查询；提前 auth/check 拒绝不创建专用 request-check 回执。
 - Binding digest 使用带版本的稳定序列化及 SHA-256，仅覆盖 router id、selection、
   routing 与默认字段的名称/是否存在；排除所有 prompt/params 值以及它们的散列。
   它是路由绑定摘要，不能识别敏感默认值变更，也不代表完整配置修订。

@@ -412,20 +412,9 @@ The daemon `chdir`s to the directory holding the resolved config on startup, so 
 
 ## Router request-check diagnostics
 
-| Command | Meaning |
-| --- | --- |
-| `bro checks` | Target-daemon checker inventory, running router bindings, registration/usage evidence and saved/running configuration status. |
-| `bro checks receipts [--limit N]` | Bounded list of process-local request-check receipts, independent of telemetry export. |
-| `bro checks receipt <request-id-or-receipt-id> [--incarnation ID]` | One receipt or an explicit unknown/unavailable result; never infers success from missing evidence. |
-
-These commands support the existing local/remote target selection and JSON or
-`--human` output. They require a reachable daemon. Receipts are current-process
-only (4,096-record capacity, completed-record TTL 15 minutes, possible earlier
-capacity eviction); settled token/cost history remains under `bro requests`.
-Checker and router check-binding edits require restart. See `diagnose.md` for
-coverage and how to distinguish registration readiness from actual use.
-
-Actual-use inventory is derived from the latest started invocation's retained
-receipt. When that receipt expires or is evicted, the view reports no retained
-evidence; it does not substitute an older allow or claim the checker was never
-used.
+There is no `bro checks` command, checker probe or request-check receipt API.
+Use `bro config validate` for static declarations. A custom host verifies linked
+registrations and revisions at startup, and emits bounded content-free tracing
+for native invocations. Checker declarations and router bindings require restart.
+Settled token/cost history remains under `bro requests`, but does not prove that
+a particular native check ran.

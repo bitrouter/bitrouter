@@ -127,7 +127,7 @@ Because the schema is the contract, it is written down rather than inferred from
    - The **axum HTTP server** and the `App` builder.
 2. **`bitrouter-providers`** — depends on `bitrouter-sdk`. Provider integration glue. The only compiled-in provider entry is the hosted `bitrouter` cloud gateway (`providers/bitrouter.toml`, embedded via `include_str!`); every other provider comes from the runtime-fetched registry and is merged by `registry::apply`. Owns the `AuthApplier` impls (copilot, anthropic, claude-code, openai-codex) and `zero_config()` — the in-memory `Config` used when the binary runs with no config file.
 3. **`bitrouter-guardrails`** provides the regex matcher and the SDK request-check callback; its explicit `sdk` feature enables legacy global/stream hooks. It depends on `bitrouter-sdk` with default features disabled. The default host still has no normal/build dependency on the matcher. **`bitrouter-telemetry`** implements SDK hooks; telemetry's whole OpenTelemetry stack sits behind `otel-*` and its ingress span behind `server`, so `cargo add bitrouter-telemetry` on its own pulls neither. The `feature-isolation` CI job enforces all of it, plus the invariant that gives the split its point: **no `opentelemetry*` crate is in `bitrouter-sdk`'s tree at any feature combination**, and the two OTLP transports stay isolated from each other.
-4. **`apps/bitrouter`** — assembles the default host without a guardrails matcher dependency. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, observability) and router-bound external request checks onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
+4. **`apps/bitrouter`** — assembles the default host without a guardrails matcher dependency. The assembly layer (`assemble.rs`) turns a parsed `Config` into a running `App` by wiring the builtin hooks (auth, policy, metering, observability) and router-bound native request checks onto the `language_model` pipeline; `main.rs` is a thin CLI shell over that library.
 
 ### Extension authors and host assembly
 
@@ -149,10 +149,10 @@ The regex example uses the same inference, local/remote management, reload and
 shutdown path as `bro serve`. Restart custom hosts with their own executable;
 the example does not implement the default CLI's background-launch protocol.
 
-The SDK entry does not expose host builders, migrations, credentials, mutable
-pipeline context or receipt writers. The host retains resource bounds, fixed
-binding identity and process-local receipts. Synchronous callbacks cannot be
-forcibly terminated by deadlines; they are trusted in-process code.
+The SDK entry does not expose host builders, migrations, credentials or mutable
+pipeline context. The host retains resource bounds, fixed binding identity and
+bounded content-free tracing. Synchronous callbacks cannot be forcibly
+terminated by deadlines; they are trusted in-process code.
 
 Legacy `Plugin` / `AppBuilder::plugin` and optional `GuardrailsPlugin` retain
 custom-host global, stream/output and migration semantics. Input-only checks do

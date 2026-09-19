@@ -207,30 +207,16 @@ bro observe status --json     # machine-readable
 
 ## Router request checks
 
-Use `bro checks` to inspect the selected daemon's registered compiled checks,
-running bindings, revisions and configuration state. No network probe is needed:
-registration is startup readiness; a retained receipt supplies actual-use evidence.
+There is no checker probe, `bro checks` command or request-check receipt API.
+Run `bro config validate` for static declarations, then inspect custom-host
+startup errors for missing/mismatched registrations or revisions. Native
+invocations emit bounded content-free tracing with checker id, revision, elapsed
+time and fixed outcome/failure class. Do not infer non-execution from missing
+telemetry.
 
-Use `bro checks receipts` to list retained entry-request receipts and
-`bro checks receipt <request-id-or-receipt-id>` to inspect one. The gateway returns
-`x-bitrouter-request-id` even when a checker rejects a request. A successful
-check does not mean model execution or delivery succeeded: inspect those fields
-separately. Provider cost/usage history remains under `bro requests`.
-
-Receipts require no telemetry exporter. They cover only the current process,
-retain at most 4,096 active/completed records, and expire completed records after
-15 minutes (or earlier under capacity pressure). Missing/old-process records do
-not prove a request was never executed. No prompt or answer is retained. A transport retry may reuse its request id;
-lookup returns the newest retained attempt and its retained-match count. Each
-attempt has a separate receipt id in the list.
-
-Checker declarations and router check-binding edits require restart. Missing or
-mismatched compiled registrations prevent activation; timeout, invalid results and
-oversize input fail closed before model dispatch. The initial checker covers
-entry-request text only, including router defaults and existing tool text. It
-does not inspect file bytes, generated output or later tools inside a harness.
-
-Actual-use inventory is derived from the latest started invocation's retained
-receipt. When that receipt expires or is evicted, the view reports no retained
-evidence; it does not substitute an older allow or claim the checker was never
-used.
+Checker declarations and router check-binding edits require restart. Timeout,
+invalid results and oversized input fail closed before model dispatch. The
+initial checker covers entry-request text, including router defaults and existing
+tool text; it does not inspect file bytes, generated output or later tools inside
+a harness. Provider cost/usage history under `bro requests` does not prove that a
+particular check ran.
