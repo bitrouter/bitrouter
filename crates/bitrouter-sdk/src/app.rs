@@ -252,9 +252,9 @@ impl AppBuilder {
     ///
     /// Retains global hook registration semantics in the current alpha SDK.
     /// New request-check extensions use [`crate::extension::ExtensionApi`];
-    /// this method does not apply router bindings or request-check receipts to
-    /// legacy hooks. Removal requires an explicitly announced breaking SDK
-    /// release with migration notes.
+    /// this method does not apply router bindings to legacy hooks. Removal
+    /// requires an explicitly announced breaking SDK release with migration
+    /// notes.
     pub fn plugin(mut self, plugin: impl Plugin) -> Self {
         self.migrations.extend(plugin.migrations());
         plugin.install(&mut self);

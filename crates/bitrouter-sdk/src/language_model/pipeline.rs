@@ -11,7 +11,6 @@ use futures::{FutureExt, StreamExt};
 use futures_core::Stream;
 use tracing::Instrument;
 
-use crate::config::router::MAX_REQUEST_CHECKS_PER_ROUTER;
 use crate::error::{BitrouterError, Result};
 use crate::extension::request_check::{Decision, Input};
 use crate::language_model::context::PipelineContext;
@@ -21,8 +20,8 @@ use crate::language_model::hooks::{
     RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
 use crate::language_model::request_checks::{
-    CheckerFailure, CheckerFailureKind, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
-    content_fragments,
+    CheckerFailure, CheckerFailureKind, CheckerResult, MAX_REQUEST_CHECKS_PER_ROUTER,
+    RequestCheckBinding, RequestCheckerRunner, content_fragments,
 };
 use crate::language_model::routing::ModelResolution;
 use crate::language_model::routing::{FallbackPolicy, RoutingTable};

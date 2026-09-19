@@ -17,6 +17,9 @@ use crate::language_model::types::{
     Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
 };
 
+/// Maximum number of ordered request checks attached to one named router.
+pub const MAX_REQUEST_CHECKS_PER_ROUTER: usize = 16;
+
 /// A checker binding frozen with a named router for one request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RequestCheckBinding {

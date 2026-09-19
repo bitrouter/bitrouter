@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::config::checker::CheckerConfig;
 use crate::config::{Config, PresetConfig, RoutingConfig};
 use crate::error::{BitrouterError, Result};
-use crate::language_model::request_checks::RequestCheckBinding;
+use crate::language_model::request_checks::{MAX_REQUEST_CHECKS_PER_ROUTER, RequestCheckBinding};
 use crate::language_model::routing::{PromptOverrides, SortOrder};
 
 /// One named router definition.
@@ -59,9 +59,6 @@ pub const MAX_CHECKER_TIMEOUT_MS: u64 = crate::extension::request_check::MAX_TIM
 pub const DEFAULT_CHECKER_MAX_INPUT_BYTES: u64 = 256 * 1024;
 /// Largest configurable projected-text byte limit.
 pub const MAX_CHECKER_INPUT_BYTES: u64 = crate::extension::request_check::MAX_INPUT_BYTES;
-/// Maximum number of request checks on one router.
-pub const MAX_REQUEST_CHECKS_PER_ROUTER: usize = 16;
-
 const fn default_checker_timeout_ms() -> u64 {
     DEFAULT_CHECKER_TIMEOUT_MS
 }

@@ -1450,8 +1450,8 @@ async fn handle(
             Err(e) => e.into_response(),
         }
     };
-    // Every admitted pipeline result, including a pre-request rejection, must
-    // expose the correlation ID used by the daemon's process-local receipts.
+    // Every admitted pipeline result, including a pre-request rejection,
+    // exposes the caller-visible correlation ID.
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response
             .headers_mut()
