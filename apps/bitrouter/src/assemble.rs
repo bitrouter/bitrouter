@@ -77,8 +77,6 @@ use crate::workflow_state::response_observer::PredictiveResponseObserver;
 pub struct Assembled {
     /// The fully wired application.
     pub app: App,
-    /// Startup-owned checker clients and the process-local receipt query store.
-    pub request_checks: Arc<crate::request_checks::RequestCheckRuntime>,
     /// The shared database connection.
     pub db: DatabaseConnection,
     /// In-memory API-principal-scoped ACP route leases.
@@ -854,7 +852,6 @@ async fn assemble_app(
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
-            lm.request_receipt_store(request_checks_for_pipeline.receipts());
             lm.request_checker_runner(request_checks_for_pipeline);
             lm.fallback_backoff(
                 config
@@ -994,7 +991,6 @@ async fn assemble_app(
     let app = app.build().context("building the App")?;
 
     Ok(Assembled {
-        request_checks,
         app,
         db,
         acp_runtime,

@@ -6,22 +6,16 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
-use crate::extension::request_check::RequestCheckCoverage;
 use crate::language_model::auth::ContinuationAuthority;
 use crate::language_model::protocol::responses::{
     AssistantTurnCommitment, CausalPrefixPlan, StreamingAssistantTurnCommitment,
     assistant_turn_commitment, extend_causal_prefix,
 };
-use crate::language_model::receipts::{
-    RequestCheckReporter, RequestCheckStatus, RequestDeliveryStatus, RequestFailureStage,
-    RequestReceiptHandle, RequestReceiptOutcome,
-};
-use crate::language_model::request_checks::CheckerFailureKind;
 use crate::language_model::routing::RouterRequestIdentity;
 use crate::language_model::settlement::RequiredFinalizationContext;
 use crate::language_model::settlement::SettlementContext;
@@ -170,11 +164,6 @@ pub struct PipelineContext {
     /// Named router identity frozen by Stage 0. Policy selection and fallback
     /// may change `model` and the serving target but never this binding.
     router_identity: Option<RouterRequestIdentity>,
-    /// Required lifecycle handle for an admitted named-router request. Shared
-    /// with server-tool prompt forks, but only the entry pipeline creates or
-    /// runs request checks.
-    request_receipt: Arc<OnceLock<RequestReceiptHandle>>,
-
     // ===== accumulated: written per stage, readable downstream =====
     /// The resolved fallback chain (Stage 2).
     pub route_chain: Option<Vec<RoutingTarget>>,
@@ -240,7 +229,6 @@ impl PipelineContext {
             request_started_at: Instant::now(),
             delivery_attempt_id: NEXT_DELIVERY_ATTEMPT_ID.fetch_add(1, Ordering::Relaxed),
             router_identity: None,
-            request_receipt: Arc::new(OnceLock::new()),
             route_chain: None,
             last_attempted_target: Mutex::new(None),
             successful_target: Arc::new(Mutex::new(None)),
@@ -277,7 +265,6 @@ impl PipelineContext {
             request_started_at: self.request_started_at,
             delivery_attempt_id: self.delivery_attempt_id,
             router_identity: self.router_identity.clone(),
-            request_receipt: self.request_receipt.clone(),
             route_chain: self.route_chain.clone(),
             last_attempted_target: Mutex::new(None),
             successful_target: self.successful_target.clone(),
@@ -494,60 +481,6 @@ impl PipelineContext {
     /// Named router identity selected for this request, if any.
     pub fn router_identity(&self) -> Option<&RouterRequestIdentity> {
         self.router_identity.as_ref()
-    }
-
-    pub(crate) fn set_request_receipt(
-        &self,
-        handle: RequestReceiptHandle,
-    ) -> std::result::Result<(), RequestReceiptHandle> {
-        self.request_receipt.set(handle)
-    }
-
-    pub(crate) fn mark_request_check_started(
-        &self,
-        index: usize,
-        invocation_id: &str,
-        coverage: RequestCheckCoverage,
-    ) -> Option<RequestCheckReporter> {
-        self.request_receipt
-            .get()?
-            .mark_check_started(index, invocation_id, coverage)
-    }
-
-    pub(crate) fn mark_request_check_finished(
-        &self,
-        index: usize,
-        status: RequestCheckStatus,
-        reason_code: Option<String>,
-        implementation_version: Option<String>,
-        failure_kind: Option<CheckerFailureKind>,
-    ) {
-        if let Some(receipt) = self.request_receipt.get() {
-            receipt.mark_check_finished(
-                index,
-                status,
-                reason_code,
-                implementation_version,
-                failure_kind,
-            );
-        }
-    }
-
-    pub(crate) fn mark_request_upstream_started(&self) {
-        if let Some(receipt) = self.request_receipt.get() {
-            receipt.mark_upstream_started();
-        }
-    }
-
-    pub(crate) fn finish_request_receipt(
-        &self,
-        outcome: RequestReceiptOutcome,
-        delivery: RequestDeliveryStatus,
-        failure_stage: Option<RequestFailureStage>,
-    ) {
-        if let Some(receipt) = self.request_receipt.get() {
-            receipt.finish(outcome, delivery, failure_stage);
-        }
     }
 
     /// Apply a policy-owned reasoning effort to the canonical request.

@@ -1,7 +1,7 @@
 //! `bro` CLI entry point — a thin shell over the `bitrouter` lib.
 //!
 //! Subcommand surface: `serve` / `start` / `stop` / `restart` /
-//! `reload` / `status` / `requests` / `checks` / `route` / `init` / `key sign` / `models` /
+//! `reload` / `status` / `requests` / `route` / `init` / `key sign` / `models` /
 //! `policy create` / `providers (list|login|logout)` / `agents` / `run` /
 //! `code` / `launch` / `cloud` / `skills` / `mcp (serve|check)` / `acp serve`.
 //! Cloud-account sign-in lives under
@@ -262,17 +262,6 @@ enum Command {
         /// Explicit local control socket path.
         #[arg(long)]
         socket: Option<PathBuf>,
-    },
-    /// Inspect the running daemon's request checkers and process-local receipts.
-    Checks {
-        /// Path to `bitrouter.yaml` (used only to locate the local control socket).
-        #[arg(short, long, global = true)]
-        config: Option<PathBuf>,
-        /// Explicit local control socket path.
-        #[arg(long, global = true)]
-        socket: Option<PathBuf>,
-        #[command(subcommand)]
-        action: Option<ChecksAction>,
     },
     /// Resolve a model name through the routing table. Uses the running
     /// daemon if reachable, otherwise loads the config — policy table included
@@ -1105,25 +1094,6 @@ enum OperationsAction {
         /// Daemon boot instance UUID returned with the operation.
         #[arg(long)]
         instance: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum ChecksAction {
-    /// List retained receipts from the current daemon process.
-    Receipts {
-        /// Maximum number of newest receipts to return.
-        #[arg(long, default_value_t = bitrouter::actions::checks::DEFAULT_RECEIPT_LIMIT)]
-        limit: usize,
-    },
-    /// Look up one current-process receipt by caller request id or receipt id.
-    Receipt {
-        /// Caller request id or unique receipt id from `bro checks receipts`.
-        #[arg(value_name = "REQUEST_ID_OR_RECEIPT_ID")]
-        request_id_or_receipt_id: String,
-        /// Optional daemon incarnation fence.
-        #[arg(long)]
-        incarnation: Option<String>,
     },
 }
 
@@ -2016,34 +1986,6 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     })
                     .await?,
             )?;
-            Ok(())
-        }
-        Command::Checks {
-            config,
-            socket,
-            action,
-        } => {
-            let target = inspection_target(
-                remote_context.as_ref(),
-                cli.context.as_deref(),
-                config.as_deref(),
-                socket.as_deref(),
-            )
-            .await?;
-            match action {
-                None => output.emit(&target.checks().await?)?,
-                Some(ChecksAction::Receipts { limit }) => {
-                    output.emit(&target.check_receipts(limit).await?)?
-                }
-                Some(ChecksAction::Receipt {
-                    request_id_or_receipt_id,
-                    incarnation,
-                }) => output.emit(
-                    &target
-                        .check_receipt(&request_id_or_receipt_id, incarnation.as_deref())
-                        .await?,
-                )?,
-            }
             Ok(())
         }
         Command::Route {
@@ -3324,15 +3266,6 @@ fn remote_cli_leaf(command: &Command) -> Option<&'static str> {
         Command::Agents {
             action: AgentsAction::List { remote: false, .. },
         } => Some("agents list"),
-        Command::Checks { action: None, .. } => Some("checks"),
-        Command::Checks {
-            action: Some(ChecksAction::Receipts { .. }),
-            ..
-        } => Some("checks receipts"),
-        Command::Checks {
-            action: Some(ChecksAction::Receipt { .. }),
-            ..
-        } => Some("checks receipt"),
         _ => None,
     }
 }
@@ -3364,8 +3297,7 @@ fn remote_target_flags(command: &Command) -> Option<(Option<&Path>, Option<&Path
         }
         | Command::Agents {
             action: AgentsAction::List { config, socket, .. },
-        }
-        | Command::Checks { config, socket, .. } => Some((config.as_deref(), socket.as_deref())),
+        } => Some((config.as_deref(), socket.as_deref())),
         Command::Models { config, .. } => Some((config.as_deref(), None)),
         _ => None,
     }
@@ -6013,9 +5945,7 @@ mod tests {
         for hidden in ["spawn", "chat", "tui", "tools"] {
             assert!(!visible.contains(&hidden), "{hidden} leaked into root help");
         }
-        for canonical in [
-            "code", "run", "requests", "checks", "launch", "claude", "codex",
-        ] {
+        for canonical in ["code", "run", "requests", "launch", "claude", "codex"] {
             assert!(
                 visible.contains(&canonical),
                 "{canonical} missing from root help"
@@ -6797,26 +6727,6 @@ mod tests {
                 "disk",
             ],
             "agents list" => vec!["bitrouter", "--context", "workstation", "agents", "list"],
-            "checks" => vec!["bitrouter", "--context", "workstation", "checks"],
-            "checks receipts" => vec![
-                "bitrouter",
-                "--context",
-                "workstation",
-                "checks",
-                "receipts",
-                "--limit",
-                "10",
-            ],
-            "checks receipt" => vec![
-                "bitrouter",
-                "--context",
-                "workstation",
-                "checks",
-                "receipt",
-                "request-1",
-                "--incarnation",
-                "incarnation-1",
-            ],
             _ => return None,
         };
         Some(args)

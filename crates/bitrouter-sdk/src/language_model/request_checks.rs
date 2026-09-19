@@ -13,7 +13,6 @@ use crate::extension::request_check::{
     ContentFragment, ContentFragmentKind, ContentRole, Decision, Input, RequestCheckCoverage,
     RequestCheckCoverageScope, RequestCheckCoverageStatus,
 };
-use crate::language_model::receipts::RequestCheckReporter;
 use crate::language_model::types::{
     Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
 };
@@ -43,7 +42,7 @@ impl From<Role> for ContentRole {
 }
 
 /// A business decision with the registered implementation revision supplied by the host.
-/// The pipeline validates the decision before recording it or proceeding.
+/// The pipeline validates the decision before proceeding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckerResult {
     /// Decision returned by the extension callback.
@@ -53,7 +52,7 @@ pub struct CheckerResult {
 }
 
 /// Stable checker failure classification. Raw implementation errors are deliberately
-/// excluded from the receipt contract.
+/// excluded from this host boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckerFailureKind {
@@ -84,16 +83,13 @@ pub struct CheckerFailure {
 /// Host runner for statically linked request-check extensions.
 #[async_trait]
 pub trait RequestCheckerRunner: Send + Sync {
-    /// Evaluate one configured entry-request invocation. The host reports only
-    /// execution progress through `reporter`; the pipeline owns checker
-    /// outcomes and cancellation transitions in the request receipt. Request,
-    /// router and invocation identities stay in that receipt, not the runner input.
-    /// The pipeline validates the returned business decision before recording it.
+    /// Evaluate one configured entry-request invocation. Request and router
+    /// identities stay outside the runner input. The pipeline validates the
+    /// returned business decision before proceeding.
     async fn check(
         &self,
         binding: RequestCheckBinding,
         input: Input,
-        reporter: RequestCheckReporter,
     ) -> std::result::Result<CheckerResult, CheckerFailure>;
 }
 

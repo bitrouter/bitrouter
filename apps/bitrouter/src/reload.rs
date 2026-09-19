@@ -641,8 +641,8 @@ fn restart_required_fields(
     if current.routers != candidate.routers {
         fields.insert("routers".to_string());
     }
-    // Checker clients, credentials and request bindings are assembled once.
-    // A routing-table reload cannot activate a different checker connection.
+    // Compiled checker registrations and request bindings are assembled once.
+    // A routing-table reload cannot activate a different native capability.
     if current.checkers != candidate.checkers {
         fields.insert("checkers".to_string());
     }

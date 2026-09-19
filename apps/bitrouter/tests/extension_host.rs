@@ -1,5 +1,5 @@
 //! Real foreground-host acceptance: TCP inference, both management transports,
-//! startup failures and process-local evidence across a custom-host restart.
+//! startup failures and lifecycle behavior across a custom-host restart.
 #![cfg(unix)]
 
 use std::net::{SocketAddr, TcpListener};
@@ -9,18 +9,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter::actions::checks::ChecksReport;
-use bitrouter::daemon::{
-    self, DaemonCommand, DaemonInspection, DaemonInspectionReport, DaemonResponse,
-};
+use bitrouter::daemon::{self, DaemonCommand, DaemonResponse};
 use bitrouter::paths::ConfigSource;
 use bitrouter::reload::RunningConfigState;
 use bitrouter_sdk::extension::request_check::Decision;
-use bitrouter_sdk::language_model::receipts::{
-    RequestCheckStatus, RequestReceipt, RequestReceiptLookup, RequestReceiptOutcome,
-    RequestReceiptUnknownReason,
-};
-use bitrouter_sdk::language_model::request_checks::CheckerFailureKind;
 use serde_json::json;
 use tempfile::TempDir;
 use wiremock::matchers::{body_partial_json, method, path};
@@ -168,7 +160,7 @@ impl Host {
                     .await
                     .is_ok();
                 let remote_ready = client
-                    .get(format!("http://{control}/control/v1/checks"))
+                    .get(format!("http://{control}/control/v1/capabilities"))
                     .bearer_auth(TOKEN)
                     .send()
                     .await
@@ -252,59 +244,6 @@ routers:
     Ok(())
 }
 
-async fn inspect(home: &Path, inspection: DaemonInspection) -> Result<DaemonInspectionReport> {
-    match daemon::send_command(
-        &home.join("host.sock"),
-        &DaemonCommand::Inspect { inspection },
-    )
-    .await?
-    {
-        DaemonResponse::Inspection { report } => Ok(report),
-        other => bail!("unexpected management reply: {other:?}"),
-    }
-}
-
-async fn checks(home: &Path) -> Result<ChecksReport> {
-    match inspect(home, DaemonInspection::Checks).await? {
-        DaemonInspectionReport::Checks(report) => Ok(report),
-        other => bail!("unexpected checks reply: {other:?}"),
-    }
-}
-
-async fn lookup(
-    home: &Path,
-    id: &str,
-    incarnation: Option<String>,
-) -> Result<RequestReceiptLookup> {
-    match inspect(
-        home,
-        DaemonInspection::CheckReceipt {
-            request_id: id.into(),
-            incarnation,
-        },
-    )
-    .await?
-    {
-        DaemonInspectionReport::CheckReceipt(report) => Ok(report),
-        other => bail!("unexpected receipt reply: {other:?}"),
-    }
-}
-
-async fn terminal_receipt(home: &Path, id: &str) -> Result<RequestReceipt> {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let RequestReceiptLookup::Found { receipt, .. } = lookup(home, id, None).await?
-                && receipt.outcome.is_some()
-            {
-                return Ok(receipt);
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .context("receipt remained nonterminal")?
-}
-
 fn ensure_clean(home: &Path) -> Result<()> {
     ensure!(
         !home.join("host.sock").exists(),
@@ -351,25 +290,13 @@ async fn compiled_host_shares_inference_management_reload_and_shutdown() -> Resu
     write_config(home.path(), inference, control, &upstream.uri(), "rules-v1")?;
     let mut host = Host::spawn(home.path(), "normal")?;
     host.ready(home.path(), inference, control).await?;
-    let initial = checks(home.path()).await?;
-    ensure!(
-        initial.checkers.len() == 1,
-        "unused registration appeared in inventory"
-    );
-    ensure!(
-        initial.checkers[0]
-            .bindings
-            .iter()
-            .all(|binding| binding.last_actual.is_none())
-    );
-    let incarnation = initial.receipt_retention.incarnation_id;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
     let remote = format!("http://{control}/control/v1");
     ensure!(
         client
-            .get(format!("{remote}/checks"))
+            .get(format!("{remote}/capabilities"))
             .send()
             .await?
             .status()
@@ -392,39 +319,6 @@ async fn compiled_host_shares_inference_management_reload_and_shutdown() -> Resu
             if stream && action == "allow" {
                 ensure!(body.contains("[DONE]"), "incomplete stream: {body}");
             }
-            let receipt = terminal_receipt(home.path(), &id).await?;
-            ensure!(receipt.upstream_started == (action == "allow"));
-            ensure!(receipt.identity.incarnation_id == incarnation);
-            let expected = match action {
-                "allow" => RequestCheckStatus::Allowed,
-                "deny" => RequestCheckStatus::Denied,
-                _ => RequestCheckStatus::Failed,
-            };
-            ensure!(receipt.checks[0].status == expected, "{id}: {receipt:?}");
-            let failure_kind = match action {
-                "timeout" => Some(CheckerFailureKind::Timeout),
-                "invalid" => Some(CheckerFailureKind::InvalidResponse),
-                _ => None,
-            };
-            ensure!(
-                receipt.checks[0].failure_kind == failure_kind,
-                "{id}: {receipt:?}"
-            );
-            if action == "allow" {
-                ensure!(receipt.outcome == Some(RequestReceiptOutcome::Completed));
-            }
-            let remote_receipt: RequestReceiptLookup = client
-                .get(format!("{remote}/checks/receipts/{id}"))
-                .bearer_auth(TOKEN)
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-            ensure!(
-                matches!(remote_receipt, RequestReceiptLookup::Found { receipt: remote, .. } if remote == receipt),
-                "local and remote receipts disagree"
-            );
         }
     }
     ensure!(
@@ -436,17 +330,15 @@ async fn compiled_host_shares_inference_management_reload_and_shutdown() -> Resu
             == 2,
         "rejected check reached provider"
     );
-    let local = checks(home.path()).await?;
-    let remote_checks: ChecksReport = client
-        .get(format!("{remote}/checks"))
+    let capabilities: serde_json::Value = client
+        .get(format!("{remote}/capabilities"))
         .bearer_auth(TOKEN)
         .send()
         .await?
         .error_for_status()?
         .json()
         .await?;
-    ensure!(remote_checks.receipt_retention == local.receipt_retention);
-    ensure!(serde_json::to_value(remote_checks.checkers)? == serde_json::to_value(local.checkers)?);
+    ensure!(capabilities["protocol"] == "bitrouter-control");
 
     write_config(home.path(), inference, control, &upstream.uri(), "rules-v2")?;
     let reload = daemon::send_command(
@@ -458,15 +350,16 @@ async fn compiled_host_shares_inference_management_reload_and_shutdown() -> Resu
         !matches!(reload, DaemonResponse::Ok),
         "checker edit reloaded unexpectedly"
     );
-    let changed = checks(home.path()).await?;
-    ensure!(
-        changed
-            .config_state
-            .context("missing config evidence")?
-            .running
-            == RunningConfigState::RestartRequired
-    );
-    ensure!(changed.checkers[0].revision == "rules-v1");
+    let changed =
+        daemon::send_command(&home.path().join("host.sock"), &DaemonCommand::Status).await?;
+    let DaemonResponse::Status {
+        config_state: Some(config_state),
+        ..
+    } = changed
+    else {
+        bail!("status omitted configuration evidence after checker edit")
+    };
+    ensure!(config_state.running == RunningConfigState::RestartRequired);
     write_config(home.path(), inference, control, &upstream.uri(), "rules-v1")?;
     ensure!(matches!(
         daemon::send_command(&home.path().join("host.sock"), &DaemonCommand::Stop).await?,
@@ -481,21 +374,12 @@ async fn compiled_host_shares_inference_management_reload_and_shutdown() -> Resu
 
     let mut restarted = Host::spawn(home.path(), "normal")?;
     restarted.ready(home.path(), inference, control).await?;
-    ensure!(checks(home.path()).await?.receipt_retention.incarnation_id != incarnation);
-    ensure!(matches!(
-        lookup(home.path(), "allow-false", Some(incarnation)).await?,
-        RequestReceiptLookup::Unknown {
-            reason: RequestReceiptUnknownReason::IncarnationMismatch,
-            ..
-        }
-    ));
-    ensure!(matches!(
-        lookup(home.path(), "allow-false", None).await?,
-        RequestReceiptLookup::Unknown {
-            reason: RequestReceiptUnknownReason::NotRetained,
-            ..
-        }
-    ));
+    let response = client
+        .post(format!("http://{inference}/v1/chat/completions"))
+        .json(&json!({"model":"bitrouter/coding","messages":[{"role":"user","content":"allow"}]}))
+        .send()
+        .await?;
+    ensure!(response.status().is_success());
     let status = Command::new("kill")
         .args(["-TERM", &restarted.child.id().to_string()])
         .status()?;
@@ -626,15 +510,6 @@ async fn official_cli_uses_shared_host_without_extension_registrations() -> Resu
     std::fs::write(&config_path, without_checks)?;
     let mut host = Host::official(home.path())?;
     host.ready(home.path(), inference, control).await?;
-    let output = cli(home.path(), "checks").await?;
-    ensure!(
-        output.status.success(),
-        "checks CLI failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: ChecksReport = serde_json::from_slice(&output.stdout)?;
-    ensure!(report.checkers.is_empty());
-    ensure!(report.receipt_retention == checks(home.path()).await?.receipt_retention);
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?

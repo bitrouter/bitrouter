@@ -202,7 +202,6 @@ pub async fn serve_with_extensions(
             routing: assembled.routing_table.clone(),
             policy: assembled.policy_runtime.clone(),
             observe: observe_provider.clone(),
-            request_checks: Some(assembled.request_checks.clone()),
         };
         let acp_runtime_for_control = assembled.acp_runtime.clone();
         let reloader = crate::reload::AppReloader::new(

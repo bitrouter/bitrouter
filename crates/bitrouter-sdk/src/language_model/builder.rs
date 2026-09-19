@@ -11,7 +11,6 @@ use crate::language_model::hooks::{
     ExecutionHook, ObserveHook, PreRequestHook, RouteHook, StreamHook,
 };
 use crate::language_model::pipeline::{DEFAULT_KEEPALIVE, Pipeline};
-use crate::language_model::receipts::RequestReceiptStore;
 use crate::language_model::request_checks::RequestCheckerRunner;
 use crate::language_model::routing::ModelSelector;
 use crate::language_model::routing::{DefaultFallbackPolicy, FallbackPolicy, RoutingTable};
@@ -39,7 +38,6 @@ pub struct PipelineBuilder {
     keepalive_interval: Duration,
     fallback_backoff: Vec<Duration>,
     request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
-    request_receipt_store: Option<RequestReceiptStore>,
 }
 
 impl PipelineBuilder {
@@ -63,7 +61,6 @@ impl PipelineBuilder {
             keepalive_interval: DEFAULT_KEEPALIVE,
             fallback_backoff: Vec::new(),
             request_checker_runner: None,
-            request_receipt_store: None,
         }
     }
 
@@ -108,7 +105,7 @@ impl PipelineBuilder {
     }
 
     /// Register a local pre-request hook (runs in registration order before
-    /// configured external request checks).
+    /// configured native request checks).
     ///
     /// For a router with request checks, these hooks see the effective
     /// router defaults and must not change
@@ -125,7 +122,7 @@ impl PipelineBuilder {
     }
 
     /// Register a pre-resolution hook. These hooks run before named-router
-    /// binding, defaults, receipt admission, and external request checks.
+    /// binding, defaults, and native request checks.
     /// Production uses this narrow stage for local declarations, auth, session
     /// selector normalization, and continuation preflight.
     pub fn pre_resolution_hook(&mut self, hook: impl PreRequestHook + 'static) -> &mut Self {
@@ -144,15 +141,9 @@ impl PipelineBuilder {
         self
     }
 
-    /// Attach the host implementation for configured external request checks.
+    /// Attach the host implementation for configured native request checks.
     pub fn request_checker_runner(&mut self, runner: Arc<dyn RequestCheckerRunner>) -> &mut Self {
         self.request_checker_runner = Some(runner);
-        self
-    }
-
-    /// Attach the process-local receipt store used by named-router requests.
-    pub fn request_receipt_store(&mut self, store: RequestReceiptStore) -> &mut Self {
-        self.request_receipt_store = Some(store);
         self
     }
 
@@ -248,7 +239,6 @@ impl PipelineBuilder {
             pending_settlements: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
             detached_executions: tokio_util::task::TaskTracker::new(),
             request_checker_runner: self.request_checker_runner,
-            request_receipt_store: self.request_receipt_store,
         })
     }
 }

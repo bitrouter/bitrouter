@@ -6,9 +6,6 @@ use anyhow::{Context, Result, ensure};
 use axum_test::TestServer;
 use bitrouter_sdk::config;
 use bitrouter_sdk::extension::request_check::{Callback, Decision};
-use bitrouter_sdk::language_model::receipts::{
-    RequestCheckStatus, RequestReceipt, RequestReceiptLookup, RequestReceiptOutcome,
-};
 use bitrouter_sdk::server::{AppState, build_router};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -117,13 +114,6 @@ routers:
     .map_err(Into::into)
 }
 
-fn receipt(assembled: &bitrouter::Assembled, request_id: &str) -> Result<RequestReceipt> {
-    match assembled.request_checks.receipts().get(request_id, None) {
-        RequestReceiptLookup::Found { receipt, .. } => Ok(receipt),
-        result => anyhow::bail!("request {request_id} has no receipt: {result:?}"),
-    }
-}
-
 async fn mount_upstream(upstream: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
@@ -191,30 +181,6 @@ async fn routers_apply_distinct_checks_to_effective_text_before_model_dispatch()
     ensure!(body.contains("router-default-must-be-checked"));
     ensure!(body.contains("same input"));
     ensure!(!body.contains("provider-secret-must-not-be-projected"));
-    let allowed_receipt = receipt(&assembled, "check-allowed")?;
-    let denied_receipt = receipt(&assembled, "check-denied")?;
-    ensure!(allowed_receipt.identity.router_id == "coding");
-    ensure!(denied_receipt.identity.router_id == "restricted");
-    ensure!(allowed_receipt.upstream_started);
-    ensure!(!denied_receipt.upstream_started);
-    ensure!(allowed_receipt.outcome == Some(RequestReceiptOutcome::Completed));
-    ensure!(denied_receipt.outcome == Some(RequestReceiptOutcome::Denied));
-    ensure!(
-        allowed_receipt
-            .checks
-            .first()
-            .is_some_and(|check| check.status == RequestCheckStatus::Allowed)
-    );
-    ensure!(
-        denied_receipt
-            .checks
-            .first()
-            .is_some_and(|check| check.status == RequestCheckStatus::Denied)
-    );
-    let serialized = serde_json::to_string(&assembled.request_checks.receipts().list(20))?;
-    ensure!(!serialized.contains("router-default-must-be-checked"));
-    ensure!(!serialized.contains("same input"));
-    ensure!(!serialized.contains("provider-secret-must-not-be-projected"));
     Ok(())
 }
 
@@ -260,8 +226,7 @@ async fn checker_denial_stops_later_checker_and_model_dispatch() -> Result<()> {
 }
 
 #[tokio::test]
-async fn registration_does_not_claim_usage_and_allow_does_not_mask_upstream_failure() -> Result<()>
-{
+async fn registration_is_inert_and_allow_does_not_mask_upstream_failure() -> Result<()> {
     let upstream = MockServer::start().await;
     let checker = Capture::default();
     Mock::given(method("POST"))
@@ -269,23 +234,6 @@ async fn registration_does_not_claim_usage_and_allow_does_not_mask_upstream_fail
         .mount(&upstream)
         .await;
     let assembled = assemble(&configuration(&upstream.uri(), 5_000)?, &checker).await?;
-    let before = assembled.request_checks.receipts().list(20);
-    ensure!(before.receipts.is_empty());
-    ensure!(assembled.request_checks.configured().iter().all(|item| {
-        item.registered
-            && item
-                .bindings
-                .iter()
-                .all(|binding| binding.last_actual.is_none())
-    }));
-    ensure!(
-        assembled
-            .request_checks
-            .receipts()
-            .list(20)
-            .receipts
-            .is_empty()
-    );
     ensure!(
         upstream
             .received_requests()
@@ -307,14 +255,13 @@ async fn registration_does_not_claim_usage_and_allow_does_not_mask_upstream_fail
         .json(&request("coding"))
         .await;
     ensure!(!response.status_code().is_success());
-    let retained = receipt(&assembled, "upstream-failed-after-allow")?;
-    ensure!(retained.upstream_started);
-    ensure!(retained.outcome == Some(RequestReceiptOutcome::Failed));
     ensure!(
-        retained
-            .checks
-            .first()
-            .is_some_and(|check| check.status == RequestCheckStatus::Allowed)
+        checker
+            .received_requests()
+            .await
+            .context("checker capture unavailable")?
+            .len()
+            == 1
     );
     Ok(())
 }
@@ -353,9 +300,6 @@ async fn oversize_text_is_rejected_without_checker_or_model_dispatch() -> Result
             .context("upstream capture unavailable")?
             .is_empty()
     );
-    let retained = receipt(&assembled, "input-too-large")?;
-    ensure!(!retained.upstream_started);
-    ensure!(retained.outcome == Some(RequestReceiptOutcome::Failed));
     Ok(())
 }
 
@@ -388,19 +332,11 @@ async fn unauthenticated_requests_do_not_invoke_a_checker_or_claim_router_admiss
             .context("upstream capture unavailable")?
             .is_empty()
     );
-    ensure!(
-        assembled
-            .request_checks
-            .receipts()
-            .list(20)
-            .receipts
-            .is_empty()
-    );
     Ok(())
 }
 
 #[tokio::test]
-async fn streaming_success_retains_check_and_server_delivery_evidence() -> Result<()> {
+async fn streaming_success_runs_native_check_before_delivery() -> Result<()> {
     let upstream = MockServer::start().await;
     let checker = Capture::default();
     let first = json!({"id":"stream-1","object":"chat.completion.chunk","model":"model","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]});
@@ -432,23 +368,19 @@ async fn streaming_success_retains_check_and_server_delivery_evidence() -> Resul
         .context("no pipeline")?
         .drain_required_pending_settlements()
         .await?;
-    let retained = receipt(&assembled, "stream-completed")?;
-    ensure!(retained.upstream_started);
     ensure!(
-        retained.outcome == Some(RequestReceiptOutcome::Completed),
-        "{retained:?}"
-    );
-    ensure!(
-        retained
-            .checks
-            .first()
-            .is_some_and(|check| check.status == RequestCheckStatus::Allowed)
+        checker
+            .received_requests()
+            .await
+            .context("checker capture unavailable")?
+            .len()
+            == 1
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn transport_retries_keep_separate_receipts_under_one_request_id() -> Result<()> {
+async fn repeated_transport_requests_each_run_native_checks() -> Result<()> {
     let upstream = MockServer::start().await;
     let checker = Capture::default();
     mount_upstream(&upstream).await;
@@ -462,21 +394,14 @@ async fn transport_retries_keep_separate_receipts_under_one_request_id() -> Resu
             .await;
         ensure!(response.status_code().is_success(), "{}", response.text());
     }
-    let lookup = serde_json::to_value(
-        assembled
-            .request_checks
-            .receipts()
-            .get("transport-retry", None),
-    )?;
-    ensure!(lookup["status"] == "found");
-    ensure!(lookup["retained_matches"] == 2, "{lookup}");
-    let listed = assembled.request_checks.receipts().list(20);
-    ensure!(listed.receipts.len() == 2);
-    let first = serde_json::to_value(&listed.receipts[0].identity)?;
-    let second = serde_json::to_value(&listed.receipts[1].identity)?;
-    ensure!(first["receipt_id"].is_string());
-    ensure!(first["receipt_id"] != second["receipt_id"]);
-    ensure!(first["request_id"] == second["request_id"]);
+    ensure!(
+        checker
+            .received_requests()
+            .await
+            .context("checker capture unavailable")?
+            .len()
+            == 2
+    );
     Ok(())
 }
 
@@ -492,7 +417,7 @@ fn native_config(config: &mut config::Config, id: &str, revision: &str) {
 }
 
 #[tokio::test]
-async fn regex_extensions_preserve_decisions_bindings_and_receipts() -> Result<()> {
+async fn regex_extensions_preserve_decisions_and_router_bindings() -> Result<()> {
     use bitrouter_guardrails::{checker, config::InputGuardrailConfig};
 
     let rules: InputGuardrailConfig = serde_json::from_value(json!({
@@ -509,7 +434,7 @@ async fn regex_extensions_preserve_decisions_bindings_and_receipts() -> Result<(
     })
     .await?;
     let server = gateway(&assembled)?;
-    for (router, expected_id) in [("coding", "first"), ("restricted", "second")] {
+    for router in ["coding", "restricted"] {
         for (text, denied) in [("ordinary input", false), ("secret-", true)] {
             // Matching across fragments uses the same newline boundary in both adapters.
             let mut body = request(router);
@@ -527,23 +452,6 @@ async fn regex_extensions_preserve_decisions_bindings_and_receipts() -> Result<(
                 "{}",
                 response.text()
             );
-            let retained = receipt(&assembled, &id)?;
-            ensure!(retained.identity.router_id == router);
-            ensure!(retained.upstream_started != denied);
-            let check = retained.checks.first().context("no check receipt")?;
-            ensure!(check.checker_id.as_deref() == Some(expected_id));
-            ensure!(check.implementation_version.as_deref() == Some("rules-v1"));
-            ensure!(
-                check.status
-                    == if denied {
-                        RequestCheckStatus::Denied
-                    } else {
-                        RequestCheckStatus::Allowed
-                    }
-            );
-            if denied {
-                ensure!(check.reason_code.as_deref() == Some("guardrail.input_blocked"));
-            }
         }
     }
     ensure!(
@@ -554,12 +462,6 @@ async fn regex_extensions_preserve_decisions_bindings_and_receipts() -> Result<(
             .len()
             == 2
     );
-    let inventory = assembled.request_checks.configured();
-    let native = inventory
-        .iter()
-        .find(|item| item.checker_id == "first")
-        .context("native inventory")?;
-    ensure!(native.registered && native.revision == "rules-v1");
     Ok(())
 }
 
@@ -590,7 +492,7 @@ async fn unified_entry_preserves_router_binding_order_and_leaves_unbound_checks_
             max_input_bytes: config::router::DEFAULT_CHECKER_MAX_INPUT_BYTES,
         },
     );
-    // Repeated bindings remain ordered invocations and visible inventory entries.
+    // Repeated bindings remain ordered invocations.
     let repeated = coding
         .checks
         .request
@@ -637,39 +539,6 @@ async fn unified_entry_preserves_router_binding_order_and_leaves_unbound_checks_
     }
     let calls = calls_rx.try_iter().collect::<Vec<_>>();
     ensure!(calls == ["second", "first", "first", "first"], "{calls:?}");
-    let inventory = assembled.request_checks.configured();
-    ensure!(
-        inventory
-            .iter()
-            .map(|item| item.checker_id.as_str())
-            .collect::<Vec<_>>()
-            == ["first", "second", "unbound"]
-    );
-    let first = inventory.first().context("missing first checker")?;
-    ensure!(
-        first
-            .bindings
-            .iter()
-            .map(|binding| binding.router_id.as_str())
-            .collect::<Vec<_>>()
-            == ["coding", "coding", "restricted"]
-    );
-    ensure!(first.bindings[0].binding_digest == first.bindings[1].binding_digest);
-    ensure!(first.bindings[0].binding_digest != first.bindings[2].binding_digest);
-    for binding in &first.bindings {
-        let actual = binding
-            .last_actual
-            .as_ref()
-            .context("missing real check evidence")?;
-        ensure!(actual.binding_digest == binding.binding_digest);
-        ensure!(actual.status == RequestCheckStatus::Allowed);
-    }
-    ensure!(
-        inventory
-            .iter()
-            .find(|checker| checker.checker_id == "unbound")
-            .is_some_and(|checker| checker.bindings.is_empty())
-    );
     Ok(())
 }
 
@@ -700,22 +569,6 @@ async fn undeclared_registrations_stay_inactive_with_sorted_startup_diagnostics(
                 "request-check registration 'second' is inactive: no checkers.second declaration",
             ]
     );
-    let inventory = assembled.request_checks.configured();
-    ensure!(inventory.len() == 1 && inventory[0].checker_id == "first");
-    ensure!(
-        inventory[0]
-            .bindings
-            .iter()
-            .all(|binding| binding.last_actual.is_none())
-    );
-    ensure!(
-        assembled
-            .request_checks
-            .receipts()
-            .list(20)
-            .receipts
-            .is_empty()
-    );
     ensure!(
         capture
             .received_requests()
@@ -735,9 +588,6 @@ async fn undeclared_registrations_stay_inactive_with_sorted_startup_diagnostics(
         .await
         .context("callback capture")?;
     ensure!(calls.len() == 1 && calls[0].id == "first");
-    let retained = receipt(&assembled, "configured-only")?;
-    ensure!(retained.checks.len() == 1);
-    ensure!(retained.checks[0].checker_id.as_deref() == Some("first"));
     ensure!(
         upstream
             .received_requests()
@@ -871,7 +721,6 @@ async fn native_failures_and_unbound_registration_never_dispatch_unintended_work
     use bitrouter_sdk::extension::request_check::{
         Callback as CheckCallback, Decision as CheckDecision,
     };
-    use bitrouter_sdk::language_model::request_checks::CheckerFailureKind;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -905,10 +754,7 @@ async fn native_failures_and_unbound_registration_never_dispatch_unintended_work
     })
     .await?;
     let server = gateway(&assembled)?;
-    for (router, kind) in [
-        ("coding", CheckerFailureKind::Timeout),
-        ("restricted", CheckerFailureKind::InvalidResponse),
-    ] {
+    for router in ["coding", "restricted"] {
         for stream in [false, true] {
             let id = format!("native-{router}-{stream}");
             let mut body = request(router);
@@ -919,14 +765,6 @@ async fn native_failures_and_unbound_registration_never_dispatch_unintended_work
                 .json(&body)
                 .await;
             ensure!(!response.status_code().is_success());
-            let retained = receipt(&assembled, &id)?;
-            ensure!(!retained.upstream_started);
-            ensure!(
-                retained
-                    .checks
-                    .first()
-                    .is_some_and(|check| check.failure_kind == Some(kind))
-            );
         }
     }
     ensure!(

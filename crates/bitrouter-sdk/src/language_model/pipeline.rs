@@ -11,6 +11,7 @@ use futures::{FutureExt, StreamExt};
 use futures_core::Stream;
 use tracing::Instrument;
 
+use crate::config::router::MAX_REQUEST_CHECKS_PER_ROUTER;
 use crate::error::{BitrouterError, Result};
 use crate::extension::request_check::{Decision, Input};
 use crate::language_model::context::PipelineContext;
@@ -18,10 +19,6 @@ use crate::language_model::executor::{Executor, StreamPartStream};
 use crate::language_model::hooks::{
     ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
     RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
-};
-use crate::language_model::receipts::{
-    MAX_RECEIPT_CHECKS, RequestCheckStatus, RequestDeliveryStatus, RequestFailureStage,
-    RequestReceiptAdmissionError, RequestReceiptOutcome, RequestReceiptStore,
 };
 use crate::language_model::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
@@ -64,7 +61,6 @@ struct PreparedEntry {
 
 struct EntryPreparationFailure {
     error: BitrouterError,
-    stage: RequestFailureStage,
     requires_settlement: bool,
 }
 
@@ -72,7 +68,6 @@ impl EntryPreparationFailure {
     fn pre_request(error: BitrouterError) -> Self {
         Self {
             error,
-            stage: RequestFailureStage::PreRequest,
             requires_settlement: false,
         }
     }
@@ -80,7 +75,6 @@ impl EntryPreparationFailure {
     fn request_check(error: BitrouterError) -> Self {
         Self {
             error,
-            stage: RequestFailureStage::RequestCheck,
             requires_settlement: false,
         }
     }
@@ -88,7 +82,6 @@ impl EntryPreparationFailure {
     fn route(error: BitrouterError) -> Self {
         Self {
             error,
-            stage: RequestFailureStage::Route,
             requires_settlement: true,
         }
     }
@@ -326,7 +319,6 @@ pub struct Pipeline {
     /// billing us for.
     pub(crate) detached_executions: tokio_util::task::TaskTracker,
     pub(crate) request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
-    pub(crate) request_receipt_store: Option<RequestReceiptStore>,
 }
 
 /// Adapts the pipeline's fallback execution into an [`UpstreamTurn`] so the
@@ -609,12 +601,8 @@ impl Pipeline {
                     self.run_settlement(&mut ctx, false, Some(error.clone()))
                         .await;
                     self.observe_after(Phase::Settlement, &ctx).await;
-                    self.observe_end(
-                        &ctx,
-                        RequestOutcome::Failed(error.clone()),
-                        Some(RequestFailureStage::Upstream),
-                    )
-                    .await;
+                    self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
+                        .await;
                     return Err(error);
                 }
                 let native_response_completed = provider_terminal_exposed
@@ -641,12 +629,8 @@ impl Pipeline {
                 // Settlement still runs for failed requests (records the error).
                 self.run_settlement(&mut ctx, false, Some(e.clone())).await;
                 self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(
-                    &ctx,
-                    RequestOutcome::Failed(e.clone()),
-                    Some(RequestFailureStage::Upstream),
-                )
-                .await;
+                self.observe_end(&ctx, RequestOutcome::Failed(e.clone()))
+                    .await;
                 return Err(e);
             }
         }
@@ -658,12 +642,8 @@ impl Pipeline {
                 self.run_settlement(&mut ctx, false, Some(error.clone()))
                     .await;
                 self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(
-                    &ctx,
-                    RequestOutcome::Failed(error.clone()),
-                    Some(RequestFailureStage::Delivery),
-                )
-                .await;
+                self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
+                    .await;
                 return Err(error);
             }
         };
@@ -688,23 +668,6 @@ impl Pipeline {
                     "delivery authorization outcome ended unexpectedly: {error}"
                 ))),
             };
-            match &outcome {
-                RequestOutcome::Completed => ctx.finish_request_receipt(
-                    RequestReceiptOutcome::Completed,
-                    RequestDeliveryStatus::ServerCommitted,
-                    None,
-                ),
-                RequestOutcome::ClientDisconnected => ctx.finish_request_receipt(
-                    RequestReceiptOutcome::ClientDisconnected,
-                    RequestDeliveryStatus::Disconnected,
-                    None,
-                ),
-                RequestOutcome::Failed(_) => ctx.finish_request_receipt(
-                    RequestReceiptOutcome::Failed,
-                    RequestDeliveryStatus::Failed,
-                    Some(RequestFailureStage::Delivery),
-                ),
-            }
             for hook in &observe_hooks {
                 hook.on_request_end(&ctx, &outcome).await;
             }
@@ -793,12 +756,8 @@ impl Pipeline {
                 self.run_settlement(&mut ctx, false, Some(error.clone()))
                     .await;
                 self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(
-                    &ctx,
-                    RequestOutcome::Failed(error.clone()),
-                    Some(RequestFailureStage::Upstream),
-                )
-                .await;
+                self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
+                    .await;
                 return Err(error);
             }
         };
@@ -947,12 +906,8 @@ impl Pipeline {
                         .await;
                     self.observe_after(Phase::Settlement, &ctx).await;
                 }
-                self.observe_end(
-                    &ctx,
-                    RequestOutcome::Failed(failure.error.clone()),
-                    Some(failure.stage),
-                )
-                .await;
+                self.observe_end(&ctx, RequestOutcome::Failed(failure.error.clone()))
+                    .await;
                 Err(failure.error)
             }
         }
@@ -1047,38 +1002,16 @@ impl Pipeline {
         checked_selector: Option<&str>,
     ) -> Result<()> {
         for hook in hooks {
-            let decision = match hook.check(ctx).await {
-                Ok(decision) => decision,
-                Err(error) => {
-                    ctx.finish_request_receipt(
-                        RequestReceiptOutcome::Failed,
-                        RequestDeliveryStatus::NotApplicable,
-                        Some(RequestFailureStage::PreRequest),
-                    );
-                    return Err(error);
-                }
-            };
+            let decision = hook.check(ctx).await?;
             match decision {
                 HookDecision::Allow => {
                     if checked_selector.is_some_and(|selector| ctx.model() != selector) {
-                        ctx.finish_request_receipt(
-                            RequestReceiptOutcome::Failed,
-                            RequestDeliveryStatus::NotApplicable,
-                            Some(RequestFailureStage::PreRequest),
-                        );
                         return Err(BitrouterError::internal(
                             "a pre-request hook cannot change a checked router selector; register selector rewrites as router preparation hooks",
                         ));
                     }
                 }
-                HookDecision::Deny(reason) => {
-                    ctx.finish_request_receipt(
-                        RequestReceiptOutcome::Denied,
-                        RequestDeliveryStatus::NotApplicable,
-                        Some(RequestFailureStage::PreRequest),
-                    );
-                    return Err(reason.into());
-                }
+                HookDecision::Deny(reason) => return Err(reason.into()),
             }
         }
         Ok(())
@@ -1087,7 +1020,7 @@ impl Pipeline {
     async fn resolve_binding(&self, ctx: &mut PipelineContext) -> Result<ResolvedRequestBinding> {
         let resolved_selector = ctx.model().to_owned();
         let mut resolution = self.routing_table.resolve_model(ctx.model()).await?;
-        if resolution.request_checks.len() > MAX_RECEIPT_CHECKS {
+        if resolution.request_checks.len() > MAX_REQUEST_CHECKS_PER_ROUTER {
             return Err(BitrouterError::internal(
                 "named router exceeds the maximum of 16 request checks",
             ));
@@ -1098,24 +1031,7 @@ impl Pipeline {
             // post-session value used for this resolution.
             identity.original_selector = ctx.original_model().to_owned();
             ctx.set_router_identity(identity.clone());
-            ctx.emit(identity.clone());
-            if let Some(store) = self.request_receipt_store.as_ref() {
-                let handle = store
-                    .admit(ctx.request_id(), &identity, &resolution.request_checks)
-                    .map_err(request_receipt_admission_error)?;
-                ctx.set_request_receipt(handle).map_err(|receipt| {
-                    receipt.finish(
-                        RequestReceiptOutcome::Failed,
-                        RequestDeliveryStatus::Unknown,
-                        Some(RequestFailureStage::Internal),
-                    );
-                    BitrouterError::internal("request receipt was already attached")
-                })?;
-            } else if !resolution.request_checks.is_empty() {
-                return Err(BitrouterError::internal(
-                    "configured request checks require a request receipt store",
-                ));
-            }
+            ctx.emit(identity);
         } else if !resolution.request_checks.is_empty() {
             return Err(BitrouterError::internal(
                 "request checks require a named-router binding",
@@ -1160,59 +1076,18 @@ impl Pipeline {
         ctx.router_identity().ok_or_else(|| {
             BitrouterError::internal("request checks lost their named-router binding")
         })?;
-        for (index, binding) in bindings.iter().enumerate() {
-            let invocation_id = uuid::Uuid::new_v4().to_string();
-            let (content, coverage) = match content_fragments(ctx.prompt(), binding.max_input_bytes)
-            {
-                Ok(input) => input,
-                Err(coverage) => {
-                    ctx.mark_request_check_started(index, &invocation_id, coverage)
-                        .ok_or_else(|| {
-                            BitrouterError::internal(
-                                "request receipt could not start configured checker",
-                            )
-                        })?;
-                    ctx.mark_request_check_finished(
-                        index,
-                        RequestCheckStatus::Failed,
-                        None,
-                        None,
-                        Some(CheckerFailureKind::InputTooLarge),
-                    );
-                    ctx.finish_request_receipt(
-                        RequestReceiptOutcome::Failed,
-                        RequestDeliveryStatus::NotApplicable,
-                        Some(RequestFailureStage::RequestCheck),
-                    );
-                    return Err(BitrouterError::BadRequest {
-                        message: "request exceeds the configured checker input limit".to_string(),
-                    });
-                }
-            };
-            let reporter = ctx
-                .mark_request_check_started(index, &invocation_id, coverage.clone())
-                .ok_or_else(|| {
-                    BitrouterError::internal("request receipt could not start configured checker")
+        let Some(runner) = runner else {
+            return Err(BitrouterError::internal(
+                "configured request checker is unavailable",
+            ));
+        };
+        for binding in bindings {
+            let (content, coverage) = content_fragments(ctx.prompt(), binding.max_input_bytes)
+                .map_err(|_| BitrouterError::BadRequest {
+                    message: "request exceeds the configured checker input limit".to_string(),
                 })?;
-            let Some(runner) = runner else {
-                ctx.mark_request_check_finished(
-                    index,
-                    RequestCheckStatus::Failed,
-                    None,
-                    None,
-                    Some(CheckerFailureKind::NotConfigured),
-                );
-                ctx.finish_request_receipt(
-                    RequestReceiptOutcome::Failed,
-                    RequestDeliveryStatus::NotApplicable,
-                    Some(RequestFailureStage::RequestCheck),
-                );
-                return Err(BitrouterError::internal(
-                    "configured request checker is unavailable",
-                ));
-            };
             let result = runner
-                .check(binding.clone(), Input { content, coverage }, reporter)
+                .check(binding.clone(), Input { content, coverage })
                 .await
                 .and_then(|result| {
                     result.decision.validate().map_err(|_| CheckerFailure {
@@ -1224,47 +1099,17 @@ impl Pipeline {
             match result {
                 Ok(CheckerResult {
                     decision: Decision::Allow,
-                    revision,
-                }) => ctx.mark_request_check_finished(
-                    index,
-                    RequestCheckStatus::Allowed,
-                    None,
-                    Some(revision),
-                    None,
-                ),
+                    revision: _,
+                }) => {}
                 Ok(CheckerResult {
-                    decision: Decision::Deny { reason_code },
-                    revision,
+                    decision: Decision::Deny { reason_code: _ },
+                    revision: _,
                 }) => {
-                    ctx.mark_request_check_finished(
-                        index,
-                        RequestCheckStatus::Denied,
-                        Some(reason_code),
-                        Some(revision),
-                        None,
-                    );
-                    ctx.finish_request_receipt(
-                        RequestReceiptOutcome::Denied,
-                        RequestDeliveryStatus::NotApplicable,
-                        Some(RequestFailureStage::RequestCheck),
-                    );
                     return Err(BitrouterError::Forbidden(
                         "request denied by configured checker".to_string(),
                     ));
                 }
-                Err(failure) => {
-                    ctx.mark_request_check_finished(
-                        index,
-                        RequestCheckStatus::Failed,
-                        None,
-                        None,
-                        Some(failure.kind),
-                    );
-                    ctx.finish_request_receipt(
-                        RequestReceiptOutcome::Failed,
-                        RequestDeliveryStatus::NotApplicable,
-                        Some(RequestFailureStage::RequestCheck),
-                    );
+                Err(_) => {
                     return Err(BitrouterError::internal(
                         "configured request checker failed closed",
                     ));
@@ -1397,7 +1242,6 @@ impl Pipeline {
         let mut errors = Vec::new();
         for (attempt_index, target) in chain.iter().enumerate() {
             self.wait_before_fallback(attempt_index).await;
-            ctx.mark_request_upstream_started();
             self.observe_hop_start(ctx, target).await;
             let outcome = self.executor.execute(target, prompt, ctx).await;
             match &outcome {
@@ -1445,7 +1289,6 @@ impl Pipeline {
         for (attempt_index, target) in chain.iter().enumerate() {
             self.wait_before_fallback(attempt_index).await;
             let provider_started_at = Instant::now();
-            ctx.mark_request_upstream_started();
             self.observe_hop_start(ctx, target).await;
             let outcome = self
                 .executor
@@ -1599,51 +1442,12 @@ impl Pipeline {
         observe_hop_end_with(&self.observe_hooks, ctx, target, outcome).await;
     }
 
-    async fn observe_end(
-        &self,
-        ctx: &PipelineContext,
-        outcome: RequestOutcome,
-        failure_stage: Option<RequestFailureStage>,
-    ) {
-        match &outcome {
-            RequestOutcome::Completed => ctx.finish_request_receipt(
-                RequestReceiptOutcome::Completed,
-                RequestDeliveryStatus::ServerCommitted,
-                None,
-            ),
-            RequestOutcome::ClientDisconnected => ctx.finish_request_receipt(
-                RequestReceiptOutcome::ClientDisconnected,
-                RequestDeliveryStatus::Disconnected,
-                None,
-            ),
-            RequestOutcome::Failed(_) => ctx.finish_request_receipt(
-                RequestReceiptOutcome::Failed,
-                RequestDeliveryStatus::NotApplicable,
-                failure_stage.or(Some(RequestFailureStage::Internal)),
-            ),
-        }
+    async fn observe_end(&self, ctx: &PipelineContext, outcome: RequestOutcome) {
         for hook in &self.observe_hooks {
             let fut = std::panic::AssertUnwindSafe(hook.on_request_end(ctx, &outcome));
             if fut.catch_unwind().await.is_err() {
                 tracing::warn!("ObserveHook::on_request_end panicked; swallowed");
             }
-        }
-    }
-}
-
-fn request_receipt_admission_error(error: RequestReceiptAdmissionError) -> BitrouterError {
-    match error {
-        RequestReceiptAdmissionError::InvalidIdentity => BitrouterError::BadRequest {
-            message: "request receipt identity is invalid".to_owned(),
-        },
-        RequestReceiptAdmissionError::CapacityExhausted => {
-            BitrouterError::internal("request receipt capacity is exhausted")
-        }
-        RequestReceiptAdmissionError::Disabled => {
-            BitrouterError::internal("request receipt store is disabled")
-        }
-        RequestReceiptAdmissionError::StoreUnavailable => {
-            BitrouterError::internal("request receipt store is unavailable")
         }
     }
 }
@@ -2211,14 +2015,8 @@ impl StreamSettlementGuard {
             if task_disconnected.load(Ordering::Acquire)
                 && matches!(task_outcome, StreamOutcome::Completed)
             {
-                settle_prepared_stream(
-                    pipeline,
-                    ctx,
-                    None,
-                    RequestOutcome::ClientDisconnected,
-                    None,
-                )
-                .await;
+                settle_prepared_stream(pipeline, ctx, None, RequestOutcome::ClientDisconnected)
+                    .await;
                 return;
             }
             match task_prepared.lock() {
@@ -2229,14 +2027,8 @@ impl StreamSettlementGuard {
                 && matches!(task_outcome, StreamOutcome::Completed)
             {
                 if let Some(ctx) = take_prepared_context(&task_prepared) {
-                    settle_prepared_stream(
-                        pipeline,
-                        ctx,
-                        None,
-                        RequestOutcome::ClientDisconnected,
-                        None,
-                    )
-                    .await;
+                    settle_prepared_stream(pipeline, ctx, None, RequestOutcome::ClientDisconnected)
+                        .await;
                 }
                 return;
             }
@@ -2249,9 +2041,7 @@ impl StreamSettlementGuard {
                 } else {
                     stream_terminal_metadata(&task_outcome)
                 };
-                let failure_stage = matches!(request_outcome, RequestOutcome::Failed(_))
-                    .then_some(RequestFailureStage::Upstream);
-                settle_prepared_stream(pipeline, ctx, error, request_outcome, failure_stage).await;
+                settle_prepared_stream(pipeline, ctx, error, request_outcome).await;
             }
         });
         self.state = Some(StreamDeliveryState::Preparing {
@@ -2340,7 +2130,6 @@ impl StreamSettlementGuard {
                     *ctx,
                     Some(settlement_error.clone()),
                     RequestOutcome::Failed(settlement_error),
-                    Some(RequestFailureStage::Delivery),
                 )
                 .await;
             });
@@ -2355,14 +2144,7 @@ impl StreamSettlementGuard {
         if settlement_error.is_some() {
             let pipeline = self.pipeline.clone();
             self.pipeline.spawn_stream_finalization(async move {
-                settle_prepared_stream(
-                    pipeline,
-                    *ctx,
-                    settlement_error,
-                    request_outcome,
-                    Some(RequestFailureStage::Upstream),
-                )
-                .await;
+                settle_prepared_stream(pipeline, *ctx, settlement_error, request_outcome).await;
             });
             if let Some(error) = delivery_error {
                 return Err(error);
@@ -2392,25 +2174,17 @@ impl StreamSettlementGuard {
                         *ctx,
                         Some(error.clone()),
                         RequestOutcome::Failed(error),
-                        Some(RequestFailureStage::Delivery),
                     )
                     .await;
                     return;
                 }
             };
             if delivered {
-                settle_prepared_stream(pipeline, *ctx, settlement_error, request_outcome, None)
-                    .await;
+                settle_prepared_stream(pipeline, *ctx, settlement_error, request_outcome).await;
             } else {
                 rollback_required_finalizer(&pipeline, &ctx, true, receipt).await;
-                settle_prepared_stream(
-                    pipeline,
-                    *ctx,
-                    None,
-                    RequestOutcome::ClientDisconnected,
-                    None,
-                )
-                .await;
+                settle_prepared_stream(pipeline, *ctx, None, RequestOutcome::ClientDisconnected)
+                    .await;
             }
         });
 
@@ -2457,32 +2231,12 @@ async fn settle_prepared_stream(
     mut ctx: PipelineContext,
     settlement_error: Option<BitrouterError>,
     request_outcome: RequestOutcome,
-    failure_stage: Option<RequestFailureStage>,
 ) {
     pipeline
         .run_settlement(&mut ctx, true, settlement_error)
         .await;
     pipeline.observe_after(Phase::Settlement, &ctx).await;
-    match &request_outcome {
-        RequestOutcome::Completed => ctx.finish_request_receipt(
-            RequestReceiptOutcome::Completed,
-            RequestDeliveryStatus::ServerCommitted,
-            None,
-        ),
-        RequestOutcome::ClientDisconnected => ctx.finish_request_receipt(
-            RequestReceiptOutcome::ClientDisconnected,
-            RequestDeliveryStatus::Disconnected,
-            None,
-        ),
-        RequestOutcome::Failed(_) => ctx.finish_request_receipt(
-            RequestReceiptOutcome::Failed,
-            RequestDeliveryStatus::Failed,
-            failure_stage.or(Some(RequestFailureStage::Internal)),
-        ),
-    }
-    pipeline
-        .observe_end(&ctx, request_outcome, failure_stage)
-        .await;
+    pipeline.observe_end(&ctx, request_outcome).await;
 }
 
 async fn finalize_disconnected_stream(
@@ -2501,14 +2255,7 @@ async fn finalize_disconnected_stream(
         ctx.absorb_stream(processor.into_context());
         ctx.finalize_stream_upstream_duration();
     }
-    settle_prepared_stream(
-        pipeline,
-        ctx,
-        None,
-        RequestOutcome::ClientDisconnected,
-        None,
-    )
-    .await;
+    settle_prepared_stream(pipeline, ctx, None, RequestOutcome::ClientDisconnected).await;
 }
 
 impl Drop for StreamSettlementGuard {
@@ -2545,7 +2292,6 @@ impl Drop for StreamSettlementGuard {
                             ctx,
                             None,
                             RequestOutcome::ClientDisconnected,
-                            None,
                         )
                         .await;
                     });
@@ -2561,7 +2307,6 @@ impl Drop for StreamSettlementGuard {
                         *ctx,
                         None,
                         RequestOutcome::ClientDisconnected,
-                        None,
                     )
                     .await;
                 });
