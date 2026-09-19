@@ -11,8 +11,6 @@ use crate::language_model::hooks::{
     ExecutionHook, ObserveHook, PreRequestHook, RouteHook, StreamHook,
 };
 use crate::language_model::pipeline::{DEFAULT_KEEPALIVE, Pipeline};
-use crate::language_model::receipts::RequestReceiptStore;
-use crate::language_model::request_checks::RequestCheckerRunner;
 use crate::language_model::routing::ModelSelector;
 use crate::language_model::routing::{DefaultFallbackPolicy, FallbackPolicy, RoutingTable};
 use crate::language_model::server_tools::loop_controller::ServerToolLoop;
@@ -22,8 +20,6 @@ use crate::language_model::settlement::{RequiredFinalizer, SettlementRecorder};
 /// `&mut self` and returns `&mut Self`, so it composes both inside the
 /// `App::builder().language_model(|lm| ...)` closure and in `Plugin::install`.
 pub struct PipelineBuilder {
-    pre_resolution_hooks: Vec<Arc<dyn PreRequestHook>>,
-    router_preparation_hooks: Vec<Arc<dyn PreRequestHook>>,
     pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
     route_hooks: Vec<Arc<dyn RouteHook>>,
     model_selectors: Vec<Arc<dyn ModelSelector>>,
@@ -38,16 +34,12 @@ pub struct PipelineBuilder {
     server_tool_loop: Option<Arc<ServerToolLoop>>,
     keepalive_interval: Duration,
     fallback_backoff: Vec<Duration>,
-    request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
-    request_receipt_store: Option<RequestReceiptStore>,
 }
 
 impl PipelineBuilder {
     /// A fresh builder with default keepalive interval.
     pub fn new() -> Self {
         Self {
-            pre_resolution_hooks: Vec::new(),
-            router_preparation_hooks: Vec::new(),
             pre_request_hooks: Vec::new(),
             route_hooks: Vec::new(),
             model_selectors: Vec::new(),
@@ -62,8 +54,6 @@ impl PipelineBuilder {
             server_tool_loop: None,
             keepalive_interval: DEFAULT_KEEPALIVE,
             fallback_backoff: Vec::new(),
-            request_checker_runner: None,
-            request_receipt_store: None,
         }
     }
 
@@ -107,52 +97,9 @@ impl PipelineBuilder {
         self
     }
 
-    /// Register a local pre-request hook (runs in registration order before
-    /// configured external request checks).
-    ///
-    /// For a router with request checks, these hooks see the effective
-    /// router defaults and must not change
-    /// [`PipelineContext::model`](crate::language_model::PipelineContext::model).
-    /// Register checked-router selector rewrites with
-    /// [`Self::router_preparation_hook`] so they happen before defaults while
-    /// the ingress router identity and checker bindings stay frozen.
-    ///
-    /// Requests without checks retain the legacy SDK order: ordinary hooks
-    /// run before the final selector's defaults and may rewrite the selector.
+    /// Register a Stage-1 pre-request hook (runs in registration order).
     pub fn pre_request_hook(&mut self, hook: impl PreRequestHook + 'static) -> &mut Self {
         self.pre_request_hooks.push(Arc::new(hook));
-        self
-    }
-
-    /// Register a pre-resolution hook. These hooks run before named-router
-    /// binding, defaults, receipt admission, and external request checks.
-    /// Production uses this narrow stage for local declarations, auth, session
-    /// selector normalization, and continuation preflight.
-    pub fn pre_resolution_hook(&mut self, hook: impl PreRequestHook + 'static) -> &mut Self {
-        self.pre_resolution_hooks.push(Arc::new(hook));
-        self
-    }
-
-    /// Register a local router-preparation hook. It runs after the ingress
-    /// router identity and request-check bindings are frozen, and before the
-    /// effective selector's defaults and ordinary pre-request policy checks.
-    /// A selector rewrite changes effective defaults, preferences, and policy,
-    /// but never replaces the ingress router identity or checker bindings. A
-    /// request without frozen checks cannot gain checks through a rewrite.
-    pub fn router_preparation_hook(&mut self, hook: impl PreRequestHook + 'static) -> &mut Self {
-        self.router_preparation_hooks.push(Arc::new(hook));
-        self
-    }
-
-    /// Attach the host implementation for configured external request checks.
-    pub fn request_checker_runner(&mut self, runner: Arc<dyn RequestCheckerRunner>) -> &mut Self {
-        self.request_checker_runner = Some(runner);
-        self
-    }
-
-    /// Attach the process-local receipt store used by named-router requests.
-    pub fn request_receipt_store(&mut self, store: RequestReceiptStore) -> &mut Self {
-        self.request_receipt_store = Some(store);
         self
     }
 
@@ -229,8 +176,6 @@ impl PipelineBuilder {
             .unwrap_or_else(|| Arc::new(DefaultFallbackPolicy));
 
         Ok(Pipeline {
-            pre_resolution_hooks: self.pre_resolution_hooks,
-            router_preparation_hooks: self.router_preparation_hooks,
             pre_request_hooks: self.pre_request_hooks,
             route_hooks: self.route_hooks,
             model_selectors: self.model_selectors,
@@ -247,8 +192,6 @@ impl PipelineBuilder {
             fallback_backoff: self.fallback_backoff,
             pending_settlements: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
             detached_executions: tokio_util::task::TaskTracker::new(),
-            request_checker_runner: self.request_checker_runner,
-            request_receipt_store: self.request_receipt_store,
         })
     }
 }

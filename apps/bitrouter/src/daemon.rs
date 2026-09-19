@@ -210,20 +210,7 @@ pub enum DaemonInspection {
     Providers,
     Agents,
     Observe,
-    Policy {
-        input: PolicyInput,
-    },
-    Checks,
-    ChecksProbe {
-        checker: String,
-    },
-    CheckReceipts {
-        limit: usize,
-    },
-    CheckReceipt {
-        request_id: String,
-        incarnation: Option<String>,
-    },
+    Policy { input: PolicyInput },
 }
 
 /// Typed result of a [`DaemonInspection`] request.
@@ -234,10 +221,6 @@ pub enum DaemonInspectionReport {
     Agents(AgentsReport),
     Observe(ObserveReport),
     Policy(PolicyReport),
-    Checks(crate::actions::checks::ChecksReport),
-    ChecksProbe(crate::actions::checks::CheckerProbeReport),
-    CheckReceipts(bitrouter_sdk::language_model::receipts::RequestReceiptList),
-    CheckReceipt(bitrouter_sdk::language_model::receipts::RequestReceiptLookup),
 }
 
 /// One resolved hop of a route chain.
@@ -1060,7 +1043,7 @@ async fn dispatch(
             payload: observe.status(),
         },
         DaemonCommand::Inspect { inspection } => {
-            inspection_response(inspection, administration, reloader).await
+            inspection_response(inspection, administration).await
         }
     }
 }
@@ -1114,7 +1097,6 @@ async fn router_state(administration: &Option<Administration>) -> Option<RouterS
 async fn inspection_response(
     inspection: DaemonInspection,
     administration: &Option<Administration>,
-    reloader: &Arc<dyn DaemonReloader>,
 ) -> DaemonResponse {
     let Some(administration) = administration else {
         return DaemonResponse::Error {
@@ -1137,45 +1119,6 @@ async fn inspection_response(
             },
             Err(error) => DaemonResponse::Error {
                 message: format!("policy inspection failed: {error}"),
-            },
-        },
-        DaemonInspection::Checks => {
-            match administration.checks(reloader.configuration_state().await) {
-                Ok(report) => DaemonResponse::Inspection {
-                    report: DaemonInspectionReport::Checks(report),
-                },
-                Err(error) => DaemonResponse::Error {
-                    message: format!("request-check inspection failed: {error}"),
-                },
-            }
-        }
-        DaemonInspection::ChecksProbe { checker } => {
-            match administration.checks_probe(&checker).await {
-                Ok(report) => DaemonResponse::Inspection {
-                    report: DaemonInspectionReport::ChecksProbe(report),
-                },
-                Err(error) => DaemonResponse::Error {
-                    message: format!("request-check probe failed: {error}"),
-                },
-            }
-        }
-        DaemonInspection::CheckReceipts { limit } => match administration.check_receipts(limit) {
-            Ok(report) => DaemonResponse::Inspection {
-                report: DaemonInspectionReport::CheckReceipts(report),
-            },
-            Err(error) => DaemonResponse::Error {
-                message: format!("request-check receipt listing failed: {error}"),
-            },
-        },
-        DaemonInspection::CheckReceipt {
-            request_id,
-            incarnation,
-        } => match administration.check_receipt(&request_id, incarnation.as_deref()) {
-            Ok(report) => DaemonResponse::Inspection {
-                report: DaemonInspectionReport::CheckReceipt(report),
-            },
-            Err(error) => DaemonResponse::Error {
-                message: format!("request-check receipt lookup failed: {error}"),
             },
         },
     }
@@ -1685,84 +1628,6 @@ pub async fn start_and_wait(
 mod tests {
     use super::*;
 
-    struct InvalidSavedConfigReloader;
-
-    #[async_trait::async_trait]
-    impl DaemonReloader for InvalidSavedConfigReloader {
-        async fn reload(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn configuration_state(&self) -> Option<crate::reload::ConfigurationState> {
-            Some(crate::reload::ConfigurationState {
-                server_instance_id: Some("test-incarnation".into()),
-                generation: Some(0),
-                source: crate::reload::ConfigSourceKind::File,
-                saved: crate::reload::SavedConfigState::Invalid,
-                running: crate::reload::RunningConfigState::Unknown,
-                reload_required_fields: Vec::new(),
-                restart_required_fields: vec!["checkers".into()],
-                named_policy: crate::reload::AuxiliaryConfigState::NotConfigured,
-                access_policies: crate::reload::AuxiliaryConfigState::NotConfigured,
-                last_reload: None,
-                mixed_state_history: Vec::new(),
-            })
-        }
-    }
-
-    async fn checker_administration() -> anyhow::Result<Administration> {
-        let config = bitrouter_sdk::config::parse(
-            "inherit_defaults: false\ncheckers:\n  company:\n    endpoint: http://127.0.0.1:9/check\n    contract_version: 1\n    credential_env: BITROUTER_TEST_MISSING_CHECKER_PARITY_TOKEN\n",
-        )?;
-        let db = crate::db::connect("sqlite::memory:").await?;
-        crate::db::run_migrations(&db).await?;
-        let policy = crate::policy_lock::PolicyRuntime::new(
-            &config,
-            None,
-            db,
-            None,
-            crate::eval::settlement::PendingEvalDecisionStore::default(),
-            None,
-        )
-        .await?;
-        let request_checks = Arc::new(crate::request_checks::RequestCheckRuntime::activate(
-            &config,
-        )?);
-        let receipts = request_checks.receipts();
-        let binding = bitrouter_sdk::language_model::request_checks::RequestCheckBinding {
-            checker_id: "company".into(),
-            binding_digest: "sha256:checker-binding".into(),
-            max_input_bytes: 1024,
-            timeout_ms: 500,
-        };
-        let handle = receipts.admit(
-            "request-1",
-            &bitrouter_sdk::language_model::routing::RouterRequestIdentity {
-                router_id: "coding".into(),
-                original_selector: "bitrouter/coding".into(),
-                binding_digest: "sha256:router-binding".into(),
-            },
-            &[binding],
-        )?;
-        handle.mark_upstream_started();
-        handle.finish(
-            bitrouter_sdk::language_model::receipts::RequestReceiptOutcome::Completed,
-            bitrouter_sdk::language_model::receipts::RequestDeliveryStatus::ServerCommitted,
-            None,
-        );
-        Ok(Administration {
-            source: crate::paths::ConfigSource::Default {
-                home: PathBuf::from("/nonexistent-checker-management-test"),
-            },
-            routing: Arc::new(bitrouter_sdk::config::ConfigRoutingTable::from_config(
-                config,
-            )),
-            policy,
-            observe: Arc::new(NoopObserveStatus { compiled_in: false }),
-            request_checks: Some(request_checks),
-        })
-    }
-
     #[test]
     fn commands_round_trip_as_json() {
         for cmd in [
@@ -1779,131 +1644,12 @@ mod tests {
                     input: PolicyInput::default(),
                 },
             },
-            DaemonCommand::Inspect {
-                inspection: DaemonInspection::Checks,
-            },
-            DaemonCommand::Inspect {
-                inspection: DaemonInspection::ChecksProbe {
-                    checker: "company".into(),
-                },
-            },
-            DaemonCommand::Inspect {
-                inspection: DaemonInspection::CheckReceipts { limit: 10 },
-            },
-            DaemonCommand::Inspect {
-                inspection: DaemonInspection::CheckReceipt {
-                    request_id: "request-1".into(),
-                    incarnation: Some("incarnation-1".into()),
-                },
-            },
         ] {
             let json = serde_json::to_string(&cmd).unwrap();
             let back: DaemonCommand = serde_json::from_str(&json).unwrap();
             // tag-based round trip
             assert_eq!(std::mem::discriminant(&cmd), std::mem::discriminant(&back));
         }
-    }
-
-    #[tokio::test]
-    async fn local_and_remote_checker_receipts_share_one_runtime_authority() -> anyhow::Result<()> {
-        use axum::body::{Body, to_bytes};
-        use http::{Request, StatusCode, header};
-        use tower::ServiceExt;
-
-        const TOKEN: &str = "0123456789abcdef0123456789abcdef";
-        let administration = checker_administration().await?;
-        let reloader: Arc<dyn DaemonReloader> = Arc::new(InvalidSavedConfigReloader);
-
-        let inventory = inspection_response(
-            DaemonInspection::Checks,
-            &Some(administration.clone()),
-            &reloader,
-        )
-        .await;
-        match inventory {
-            DaemonResponse::Inspection {
-                report: DaemonInspectionReport::Checks(report),
-            } => {
-                assert_eq!(report.checkers.len(), 1);
-                let state = report
-                    .config_state
-                    .ok_or_else(|| anyhow::anyhow!("missing configuration state"))?;
-                assert_eq!(state.saved, crate::reload::SavedConfigState::Invalid);
-                assert_eq!(state.running, crate::reload::RunningConfigState::Unknown);
-            }
-            other => anyhow::bail!("expected checker inventory, got {other:?}"),
-        }
-
-        let before = administration.check_receipts(10)?;
-        let probe = inspection_response(
-            DaemonInspection::ChecksProbe {
-                checker: "company".into(),
-            },
-            &Some(administration.clone()),
-            &reloader,
-        )
-        .await;
-        assert!(matches!(
-            probe,
-            DaemonResponse::Inspection {
-                report: DaemonInspectionReport::ChecksProbe(_)
-            }
-        ));
-        let after = administration.check_receipts(10)?;
-        assert_eq!(after.receipts, before.receipts);
-
-        let local = inspection_response(
-            DaemonInspection::CheckReceipt {
-                request_id: "request-1".into(),
-                incarnation: None,
-            },
-            &Some(administration.clone()),
-            &reloader,
-        )
-        .await;
-        let DaemonResponse::Inspection {
-            report: DaemonInspectionReport::CheckReceipt(local),
-        } = local
-        else {
-            anyhow::bail!("local checker receipt lookup returned the wrong response")
-        };
-
-        let source = administration.source.clone();
-        let router = crate::remote_control::control_router_with_administration(
-            source,
-            PathBuf::from("missing.sock"),
-            TOKEN.as_bytes().to_vec(),
-            administration,
-        )?;
-        let request = Request::builder()
-            .uri("/control/v1/checks/receipts/request-1")
-            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
-            .body(Body::empty())?;
-        let response = router.oneshot(request).await?;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), 1024 * 1024).await?;
-        let remote: bitrouter_sdk::language_model::receipts::RequestReceiptLookup =
-            serde_json::from_slice(&body)?;
-        assert_eq!(remote, local);
-        match remote {
-            bitrouter_sdk::language_model::receipts::RequestReceiptLookup::Found {
-                receipt,
-                retained_matches,
-            } => {
-                assert_eq!(retained_matches, 1);
-                assert_eq!(receipt.identity.incarnation_id, before.incarnation_id);
-                assert_eq!(
-                    receipt.identity.router_binding_digest,
-                    "sha256:router-binding"
-                );
-                assert_eq!(
-                    receipt.outcome,
-                    Some(bitrouter_sdk::language_model::receipts::RequestReceiptOutcome::Completed)
-                );
-            }
-            other => anyhow::bail!("expected retained receipt, got {other:?}"),
-        }
-        Ok(())
     }
 
     #[test]

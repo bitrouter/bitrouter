@@ -146,10 +146,6 @@ impl CapabilitiesReport {
                     "max_request_window_days".into(),
                     crate::actions::requests::MAX_REQUEST_WINDOW_DAYS as u64,
                 ),
-                (
-                    "max_check_receipt_rows".into(),
-                    crate::actions::checks::MAX_RECEIPT_LIMIT as u64,
-                ),
                 ("max_response_bytes".into(), 8 * 1024 * 1024),
             ]),
             protocol: "bitrouter-control".into(),
@@ -325,27 +321,6 @@ fn control_router(source: ConfigSource, socket: PathBuf, token: Vec<u8>) -> Resu
     ))
 }
 
-#[cfg(test)]
-pub(crate) fn control_router_with_administration(
-    source: ConfigSource,
-    socket: PathBuf,
-    token: Vec<u8>,
-    administration: Administration,
-) -> Result<Router> {
-    let token = String::from_utf8(token).map_err(|_| anyhow::anyhow!("invalid test token"))?;
-    let auth = ControlAuth::from_lookup(&ControlConfig::default(), |_| Some(token.clone()))?;
-    Ok(control_router_with(
-        ControlState {
-            source,
-            socket,
-            administration: Some(administration),
-            operations: None,
-            instance: uuid::Uuid::new_v4().to_string(),
-        },
-        auth,
-    ))
-}
-
 fn control_router_with(state: ControlState, expected: ControlAuth) -> Router {
     let mut router = Router::new()
         .route("/control/v1/capabilities", get(capabilities))
@@ -364,10 +339,6 @@ fn control_router_with(state: ControlState, expected: ControlAuth) -> Router {
             inventory::Action::PolicyStatus => get(policy_status),
             inventory::Action::PolicyShow => get(policy_show),
             inventory::Action::Agents => get(agents),
-            inventory::Action::Checks => get(checks),
-            inventory::Action::CheckProbe => post(checks_probe),
-            inventory::Action::CheckReceipts => get(check_receipts),
-            inventory::Action::CheckReceipt => get(check_receipt),
             inventory::Action::Reload => post(reload).layer(DefaultBodyLimit::max(16 * 1024)),
         };
         router = router.route(row.path, handler);
@@ -699,59 +670,6 @@ async fn agents(
     Ok(Json(state.administration()?.agents()))
 }
 
-async fn checks(
-    State(state): State<ControlState>,
-) -> Result<Json<crate::actions::checks::ChecksReport>, ControlError> {
-    let config_state = match &state.operations {
-        Some(operations) => operations.configuration_state().await,
-        None => None,
-    };
-    state
-        .administration()?
-        .checks(config_state)
-        .map(Json)
-        .map_err(ControlError::internal)
-}
-
-async fn checks_probe(
-    State(state): State<ControlState>,
-    Path(checker): Path<String>,
-) -> Result<Json<crate::actions::checks::CheckerProbeReport>, ControlError> {
-    crate::actions::administration::validate_identifier(&checker)
-        .map_err(ControlError::bad_request)?;
-    state
-        .administration()?
-        .checks_probe(&checker)
-        .await
-        .map(Json)
-        .map_err(ControlError::bad_request)
-}
-
-async fn check_receipts(
-    State(state): State<ControlState>,
-    query: Result<Query<inventory::ReceiptListInput>, QueryRejection>,
-) -> Result<Json<bitrouter_sdk::language_model::receipts::RequestReceiptList>, ControlError> {
-    let Query(input) = query.map_err(|_| ControlError::bad_request("invalid receipt filters"))?;
-    state
-        .administration()?
-        .check_receipts(input.limit)
-        .map(Json)
-        .map_err(ControlError::bad_request)
-}
-
-async fn check_receipt(
-    State(state): State<ControlState>,
-    Path(request_id): Path<String>,
-    query: Result<Query<inventory::ReceiptLookupInput>, QueryRejection>,
-) -> Result<Json<bitrouter_sdk::language_model::receipts::RequestReceiptLookup>, ControlError> {
-    let Query(input) = query.map_err(|_| ControlError::bad_request("invalid receipt lookup"))?;
-    state
-        .administration()?
-        .check_receipt(&request_id, input.incarnation.as_deref())
-        .map(Json)
-        .map_err(ControlError::bad_request)
-}
-
 async fn policy_status(
     State(state): State<ControlState>,
     query: Result<Query<PolicyInput>, QueryRejection>,
@@ -1051,54 +969,6 @@ impl HttpControlClient {
         self.get(path, Some(&query)).await
     }
 
-    pub async fn checks(&self) -> Result<crate::actions::checks::ChecksReport> {
-        self.require_action("checks").await?;
-        self.get("checks", None).await
-    }
-
-    pub async fn checks_probe(
-        &self,
-        checker: &str,
-    ) -> Result<crate::actions::checks::CheckerProbeReport> {
-        crate::actions::administration::validate_identifier(checker)?;
-        self.require_action("checks_probe").await?;
-        let url = self.action_url_segments(&["checks", checker, "probe"])?;
-        self.send(self.http.post(url).bearer_auth(&self.token))
-            .await
-    }
-
-    pub async fn check_receipts(
-        &self,
-        limit: usize,
-    ) -> Result<bitrouter_sdk::language_model::receipts::RequestReceiptList> {
-        crate::actions::checks::validate_receipt_limit(limit)?;
-        self.require_action("checks_receipts").await?;
-        let url = self.action_url("checks/receipts")?;
-        self.send(
-            self.http
-                .get(url)
-                .bearer_auth(&self.token)
-                .query(&[("limit", limit)]),
-        )
-        .await
-    }
-
-    pub async fn check_receipt(
-        &self,
-        request_id: &str,
-        incarnation: Option<&str>,
-    ) -> Result<bitrouter_sdk::language_model::receipts::RequestReceiptLookup> {
-        crate::actions::checks::validate_receipt_lookup(request_id, incarnation)?;
-        self.require_action("checks_receipt").await?;
-        let url = self.action_url_segments(&["checks", "receipts", request_id])?;
-        let request = self.http.get(url).bearer_auth(&self.token);
-        let request = match incarnation {
-            Some(incarnation) => request.query(&[("incarnation", incarnation)]),
-            None => request,
-        };
-        self.send(request).await
-    }
-
     pub async fn status(&self) -> Result<StatusReport> {
         self.require_action("status").await?;
         self.get("status", None).await
@@ -1287,20 +1157,6 @@ impl HttpControlClient {
         self.endpoint
             .join(path)
             .with_context(|| format!("build remote control URL for {path}"))
-    }
-
-    fn action_url_segments(&self, segments: &[&str]) -> Result<Url> {
-        let mut url = self.endpoint.clone();
-        {
-            let mut path = url.path_segments_mut().map_err(|_| {
-                anyhow::anyhow!("remote control endpoint cannot carry path segments")
-            })?;
-            path.pop_if_empty();
-            for segment in segments {
-                path.push(segment);
-            }
-        }
-        Ok(url)
     }
 }
 
@@ -1662,28 +1518,6 @@ providers:
             .oneshot(request("ADMIN", "GET", &changed, String::new())?)
             .await?;
         assert_eq!(response.status(), StatusCode::CONFLICT);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn checker_management_uses_read_authorization() -> anyhow::Result<()> {
-        let (_directory, source) = default_source()?;
-        let router = test_router(source, PathBuf::from("missing.sock"))?;
-        for (method, path) in [
-            ("GET", "/control/v1/checks"),
-            ("POST", "/control/v1/checks/company/probe"),
-            ("GET", "/control/v1/checks/receipts?limit=10"),
-            ("GET", "/control/v1/checks/receipts/request-1"),
-        ] {
-            let request = Request::builder()
-                .method(method)
-                .uri(path)
-                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
-                .body(Body::empty())?;
-            let response = router.clone().oneshot(request).await?;
-            assert_ne!(response.status(), StatusCode::UNAUTHORIZED);
-            assert_ne!(response.status(), StatusCode::FORBIDDEN);
-        }
         Ok(())
     }
 

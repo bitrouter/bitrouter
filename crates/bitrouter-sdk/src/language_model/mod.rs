@@ -2,20 +2,15 @@
 //!
 //! This is the main BitRouter pipeline. Inbound requests on any of four wire
 //! protocols ([`ApiProtocol`]) are parsed into a canonical [`Prompt`] by the
-//! adapters in [`protocol`], run through the flight pipeline plus an
+//! adapters in [`protocol`], run through a four-stage flight pipeline plus an
 //! interleaved stream stage, and rendered back in the inbound protocol.
 //!
 //! ## Pipeline stages
 //!
-//! 1. **Entry preparation** — pre-resolution hooks perform local auth and
-//!    ingress normalization, then the pipeline freezes any named-router
-//!    identity and checker bindings. Router-preparation hooks may choose the
-//!    effective selector before its defaults are applied. Ordinary local
-//!    policy/guardrail hooks then run before configured external checks. For
-//!    requests without checks, the legacy order is retained: ordinary hooks
-//!    finalize the selector before its defaults are applied.
-//! 2. **Route** — after external checks allow the request, the cached
-//!    [`RoutingTable`] resolution applies model policy and produces an
+//! 1. **Pre-request** — every [`PreRequestHook`] runs in registration order.
+//!    Each returns a [`HookDecision`] of [`Allow`](HookDecision::Allow) or
+//!    [`Deny`](HookDecision::Deny). The first deny short-circuits the pipeline.
+//! 2. **Route** — the [`RoutingTable`] resolves the request's `model` into an
 //!    ordered chain of [`RoutingTarget`]s, then every [`RouteHook`] can mutate
 //!    or extend it (e.g. BYOK swaps the caller's own provider key onto a
 //!    target).
@@ -68,8 +63,6 @@ pub mod executor;
 pub mod hooks;
 pub mod pipeline;
 pub mod protocol;
-pub mod receipts;
-pub mod request_checks;
 pub mod routing;
 pub mod server_tools;
 pub mod settlement;

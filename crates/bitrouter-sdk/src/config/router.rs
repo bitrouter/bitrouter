@@ -9,10 +9,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::config::checker::CheckerConfig;
 use crate::config::{Config, PresetConfig, RoutingConfig};
 use crate::error::{BitrouterError, Result};
-use crate::language_model::request_checks::RequestCheckBinding;
 use crate::language_model::routing::{PromptOverrides, SortOrder};
 
 /// One named router definition.
@@ -24,90 +22,6 @@ pub struct RouterConfig {
     /// Request values filled only when the caller omitted them.
     #[serde(default)]
     pub defaults: RouterDefaults,
-    /// Fail-closed checks run before this router may contact an upstream.
-    #[serde(default)]
-    pub checks: RouterChecks,
-}
-
-/// Request checks attached to a named router.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct RouterChecks {
-    /// Ordered remote checks. Every checker must allow the request.
-    pub request: Vec<RouterRequestCheck>,
-}
-
-/// One router-to-checker binding.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct RouterRequestCheck {
-    /// Checker id under the top-level `checkers` map.
-    pub checker: String,
-    /// Total checker deadline, including queue admission and response body reads.
-    #[serde(default = "default_checker_timeout_ms")]
-    pub timeout_ms: u64,
-    /// Maximum projected text bytes. Oversize input is rejected, never truncated.
-    #[serde(default = "default_checker_max_input_bytes")]
-    pub max_input_bytes: u64,
-}
-
-/// Default total checker deadline.
-pub const DEFAULT_CHECKER_TIMEOUT_MS: u64 = 500;
-/// Longest configurable checker deadline.
-pub const MAX_CHECKER_TIMEOUT_MS: u64 = 30_000;
-/// Default serialized checker invocation limit.
-pub const DEFAULT_CHECKER_MAX_INPUT_BYTES: u64 = 256 * 1024;
-/// Largest configurable serialized checker invocation limit.
-pub const MAX_CHECKER_INPUT_BYTES: u64 = 4 * 1024 * 1024;
-/// Maximum number of request checks on one router.
-pub const MAX_REQUEST_CHECKS_PER_ROUTER: usize = 16;
-
-const fn default_checker_timeout_ms() -> u64 {
-    DEFAULT_CHECKER_TIMEOUT_MS
-}
-
-const fn default_checker_max_input_bytes() -> u64 {
-    DEFAULT_CHECKER_MAX_INPUT_BYTES
-}
-
-impl RouterRequestCheck {
-    /// Resolve this config entry into the redaction-safe runtime binding.
-    pub fn resolve(&self, router_id: &str, checker: &CheckerConfig) -> Result<RequestCheckBinding> {
-        #[derive(Serialize)]
-        struct DigestInput<'a> {
-            version: &'static str,
-            router_id: &'a str,
-            checker_id: &'a str,
-            endpoint: &'a str,
-            credential_env: Option<&'a str>,
-            contract_version: u16,
-            timeout_ms: u64,
-            max_input_bytes: u64,
-        }
-
-        let canonical = serde_json::to_vec(&DigestInput {
-            version: "checker-binding-v1",
-            router_id,
-            checker_id: &self.checker,
-            endpoint: &checker.endpoint,
-            credential_env: checker.credential_env.as_deref(),
-            contract_version: checker.contract_version,
-            timeout_ms: self.timeout_ms,
-            max_input_bytes: self.max_input_bytes,
-        })
-        .map_err(|error| {
-            BitrouterError::internal(format!("serializing checker binding identity: {error}"))
-        })?;
-        Ok(RequestCheckBinding {
-            checker_id: self.checker.clone(),
-            binding_digest: format!(
-                "checker-binding-v1:sha256:{}",
-                hex::encode(Sha256::digest(canonical))
-            ),
-            max_input_bytes: self.max_input_bytes,
-            timeout_ms: self.timeout_ms,
-        })
-    }
 }
 
 /// Model selection performed by a named router.
@@ -301,7 +215,6 @@ pub(super) struct EffectiveRouterDefinition<'a> {
     pub(super) selection: EffectiveRouterSelection<'a>,
     pub(super) defaults: EffectiveRouterDefaults<'a>,
     pub(super) routing: &'a RoutingConfig,
-    checks: &'a [RouterRequestCheck],
 }
 
 impl<'a> EffectiveRouterDefinition<'a> {
@@ -331,7 +244,6 @@ impl<'a> EffectiveRouterDefinition<'a> {
                 params: &router.defaults.params,
             },
             routing,
-            checks: &router.checks.request,
         }
     }
 
@@ -353,7 +265,6 @@ impl<'a> EffectiveRouterDefinition<'a> {
                 params: &preset.params,
             },
             routing: &preset.routing,
-            checks: &[],
         }
     }
 
@@ -378,37 +289,14 @@ impl<'a> EffectiveRouterDefinition<'a> {
         }
     }
 
-    pub(super) fn request_checks(
-        &self,
-        router_id: &str,
-        checkers: &std::collections::HashMap<String, CheckerConfig>,
-    ) -> Result<Vec<RequestCheckBinding>> {
-        self.checks
-            .iter()
-            .map(|binding| {
-                let checker = checkers.get(&binding.checker).ok_or_else(|| {
-                    BitrouterError::bad_request(format!(
-                        "router '{router_id}' request check references unknown checker '{}'",
-                        binding.checker
-                    ))
-                })?;
-                binding.resolve(router_id, checker)
-            })
-            .collect()
-    }
-
     /// Redaction-safe identity for one effective router binding.
     ///
-    /// The versioned digest covers routing behavior, checker bindings, and the
-    /// presence/key shape of defaults. It deliberately excludes prompt and
-    /// parameter values (and hashes of those values), which could disclose
-    /// enumerable secrets. The policy artifact digest remains a separate
-    /// identity owned by the policy runtime.
-    pub(super) fn binding_digest(
-        &self,
-        router_id: &str,
-        checkers: &std::collections::HashMap<String, CheckerConfig>,
-    ) -> Result<String> {
+    /// The versioned digest covers routing behavior plus the presence/key shape
+    /// of defaults. It deliberately excludes prompt and parameter values (and
+    /// hashes of those values), which could disclose enumerable secrets. The
+    /// policy artifact digest remains a separate identity owned by the policy
+    /// runtime.
+    pub(super) fn binding_digest(&self, router_id: &str) -> Result<String> {
         #[derive(Serialize)]
         #[serde(tag = "kind", rename_all = "snake_case")]
         enum DigestSelection<'a> {
@@ -434,18 +322,6 @@ impl<'a> EffectiveRouterDefinition<'a> {
             selection: DigestSelection<'a>,
             routing: &'a RoutingConfig,
             defaults: DigestDefaults<'a>,
-            #[serde(skip_serializing_if = "Vec::is_empty")]
-            checks: Vec<DigestCheck<'a>>,
-        }
-
-        #[derive(Serialize)]
-        struct DigestCheck<'a> {
-            checker: &'a str,
-            endpoint: &'a str,
-            credential_env: Option<&'a str>,
-            contract_version: u16,
-            timeout_ms: u64,
-            max_input_bytes: u64,
         }
 
         let selection = match self.selection {
@@ -461,27 +337,8 @@ impl<'a> EffectiveRouterDefinition<'a> {
             .map(String::as_str)
             .collect::<Vec<_>>();
         param_keys.sort_unstable();
-        let checks = self
-            .checks
-            .iter()
-            .filter_map(|binding| {
-                checkers.get(&binding.checker).map(|checker| DigestCheck {
-                    checker: &binding.checker,
-                    endpoint: &checker.endpoint,
-                    credential_env: checker.credential_env.as_deref(),
-                    contract_version: checker.contract_version,
-                    timeout_ms: binding.timeout_ms,
-                    max_input_bytes: binding.max_input_bytes,
-                })
-            })
-            .collect::<Vec<_>>();
-        let digest_version = if checks.is_empty() {
-            "router-v1"
-        } else {
-            "router-v2"
-        };
         let canonical = serde_json::to_vec(&DigestInput {
-            version: digest_version,
+            version: "router-v1",
             router_id,
             selection,
             routing: self.routing,
@@ -489,13 +346,12 @@ impl<'a> EffectiveRouterDefinition<'a> {
                 system_prompt_present: self.defaults.system_prompt.is_some(),
                 param_keys,
             },
-            checks,
         })
         .map_err(|error| {
             BitrouterError::internal(format!("serializing router binding identity: {error}"))
         })?;
         Ok(format!(
-            "{digest_version}:sha256:{}",
+            "router-v1:sha256:{}",
             hex::encode(Sha256::digest(canonical))
         ))
     }
@@ -504,7 +360,6 @@ impl<'a> EffectiveRouterDefinition<'a> {
         &self,
         router_id: &str,
         source: RouterConfigSource,
-        checkers: &std::collections::HashMap<String, CheckerConfig>,
     ) -> Result<RouterInventoryEntry> {
         let selection = match self.selection {
             EffectiveRouterSelection::Model { model } => RouterInventorySelection::Model {
@@ -529,7 +384,7 @@ impl<'a> EffectiveRouterDefinition<'a> {
                 system_prompt_present: self.defaults.system_prompt.is_some(),
                 param_keys,
             },
-            binding_digest: self.binding_digest(router_id, checkers)?,
+            binding_digest: self.binding_digest(router_id)?,
         })
     }
 }
@@ -539,20 +394,14 @@ pub(super) fn router_inventory(config: &Config) -> Result<Vec<RouterInventoryEnt
     let mut entries = Vec::with_capacity(config.routers.len() + config.presets.len());
     for (id, router) in &config.routers {
         entries.push(
-            EffectiveRouterDefinition::from_router(router).inventory_entry(
-                id,
-                RouterConfigSource::User,
-                &config.checkers,
-            )?,
+            EffectiveRouterDefinition::from_router(router)
+                .inventory_entry(id, RouterConfigSource::User)?,
         );
     }
     for (id, preset) in &config.presets {
         entries.push(
-            EffectiveRouterDefinition::from_legacy_preset(preset).inventory_entry(
-                id,
-                RouterConfigSource::LegacyPreset,
-                &config.checkers,
-            )?,
+            EffectiveRouterDefinition::from_legacy_preset(preset)
+                .inventory_entry(id, RouterConfigSource::LegacyPreset)?,
         );
     }
     entries.sort_by(|left, right| left.id.cmp(&right.id));
@@ -560,15 +409,6 @@ pub(super) fn router_inventory(config: &Config) -> Result<Vec<RouterInventoryEnt
 }
 
 pub(super) fn validate_router_config(config: &Config) -> Result<()> {
-    for (checker_id, checker) in &config.checkers {
-        if !valid_router_id(checker_id) {
-            return Err(BitrouterError::bad_request(format!(
-                "invalid checker id '{checker_id}' (use a lowercase letter followed by up to 63 lowercase letters, digits, '_' or '-')"
-            )));
-        }
-        checker.validate(checker_id)?;
-    }
-
     for router_id in config.routers.keys() {
         if !valid_router_id(router_id) {
             return Err(BitrouterError::bad_request(format!(
@@ -588,31 +428,6 @@ pub(super) fn validate_router_config(config: &Config) -> Result<()> {
     }
 
     for (router_id, router) in &config.routers {
-        if router.checks.request.len() > MAX_REQUEST_CHECKS_PER_ROUTER {
-            return Err(BitrouterError::bad_request(format!(
-                "router '{router_id}' checks.request may contain at most {MAX_REQUEST_CHECKS_PER_ROUTER} bindings"
-            )));
-        }
-        for binding in &router.checks.request {
-            if !config.checkers.contains_key(&binding.checker) {
-                return Err(BitrouterError::bad_request(format!(
-                    "router '{router_id}' request check references unknown checker '{}'",
-                    binding.checker
-                )));
-            }
-            if binding.timeout_ms == 0 || binding.timeout_ms > MAX_CHECKER_TIMEOUT_MS {
-                return Err(BitrouterError::bad_request(format!(
-                    "router '{router_id}' checker '{}' timeout_ms must be between 1 and {MAX_CHECKER_TIMEOUT_MS}",
-                    binding.checker
-                )));
-            }
-            if binding.max_input_bytes == 0 || binding.max_input_bytes > MAX_CHECKER_INPUT_BYTES {
-                return Err(BitrouterError::bad_request(format!(
-                    "router '{router_id}' checker '{}' max_input_bytes must be between 1 and {MAX_CHECKER_INPUT_BYTES}",
-                    binding.checker
-                )));
-            }
-        }
         match &router.selection {
             RouterSelection::Model { model, .. } => {
                 if router_id == "auto" {
@@ -674,7 +489,6 @@ mod tests {
                 routing: RoutingConfig::default(),
             },
             defaults: RouterDefaults::default(),
-            checks: RouterChecks::default(),
         }
     }
 
@@ -766,7 +580,6 @@ mod tests {
                 system_prompt: Some("secret one".into()),
                 params: serde_json::Map::from_iter([("temperature".into(), 0.2.into())]),
             },
-            checks: RouterChecks::default(),
         };
         let values_changed = RouterConfig {
             selection: first.selection.clone(),
@@ -774,7 +587,6 @@ mod tests {
                 system_prompt: Some("secret two".into()),
                 params: serde_json::Map::from_iter([("temperature".into(), 0.9.into())]),
             },
-            checks: RouterChecks::default(),
         };
         let selection_changed = RouterConfig {
             selection: RouterSelection::Model {
@@ -782,7 +594,6 @@ mod tests {
                 routing: RoutingConfig::default(),
             },
             defaults: first.defaults.clone(),
-            checks: RouterChecks::default(),
         };
         let keys_changed = RouterConfig {
             selection: first.selection.clone(),
@@ -790,18 +601,16 @@ mod tests {
                 system_prompt: first.defaults.system_prompt.clone(),
                 params: serde_json::Map::from_iter([("top_p".into(), 0.9.into())]),
             },
-            checks: RouterChecks::default(),
         };
 
-        let empty = std::collections::HashMap::new();
         let first_digest =
-            EffectiveRouterDefinition::from_router(&first).binding_digest("coding", &empty)?;
-        let values_digest = EffectiveRouterDefinition::from_router(&values_changed)
-            .binding_digest("coding", &empty)?;
-        let selection_digest = EffectiveRouterDefinition::from_router(&selection_changed)
-            .binding_digest("coding", &empty)?;
-        let keys_digest = EffectiveRouterDefinition::from_router(&keys_changed)
-            .binding_digest("coding", &empty)?;
+            EffectiveRouterDefinition::from_router(&first).binding_digest("coding")?;
+        let values_digest =
+            EffectiveRouterDefinition::from_router(&values_changed).binding_digest("coding")?;
+        let selection_digest =
+            EffectiveRouterDefinition::from_router(&selection_changed).binding_digest("coding")?;
+        let keys_digest =
+            EffectiveRouterDefinition::from_router(&keys_changed).binding_digest("coding")?;
 
         assert!(first_digest.starts_with("router-v1:sha256:"));
         assert_eq!(first_digest, values_digest);

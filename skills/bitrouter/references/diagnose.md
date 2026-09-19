@@ -204,35 +204,3 @@ bro observe status --json     # machine-readable
 ```
 
 `compiled: no` means the binary was built without the OTel feature — install from a release build, not a custom `cargo install --no-default-features` invocation.
-
-## Router request checks
-
-Use `bro checks` to inspect the selected daemon's running checker bindings and
-configuration state. `bro checks probe <checker>` sends a fixed synthetic input
-from that daemon; it does not prove that a real request used the checker. A probe
-failure is separate from a content deny. Remote contexts run the same probe on
-the remote daemon using its credentials, not the client's environment.
-
-Use `bro checks receipts` to list retained entry-request receipts and
-`bro checks receipt <request-id-or-receipt-id>` to inspect one. The gateway returns
-`x-bitrouter-request-id` even when a checker rejects a request. A successful
-check does not mean model execution or delivery succeeded: inspect those fields
-separately. Provider cost/usage history remains under `bro requests`.
-
-Receipts require no telemetry exporter. They cover only the current process,
-retain at most 4,096 active/completed records, and expire completed records after
-15 minutes (or earlier under capacity pressure). Missing/old-process records do
-not prove a request was never executed. No prompt or answer is retained. A transport retry may reuse its request id;
-lookup returns the newest retained attempt and its retained-match count. Each
-attempt has a separate receipt id in the list.
-
-Checker connection and router check-binding edits require restart. Missing
-required credentials prevent activation; timeout, incompatible response and
-oversize input fail closed before model dispatch. The initial checker covers
-entry-request text only, including router defaults and existing tool text. It
-does not inspect file bytes, generated output or later tools inside a harness.
-
-Actual-use inventory is derived from the latest started invocation's retained
-receipt. When that receipt expires or is evicted, the view reports no retained
-evidence; it does not substitute an older allow or claim the checker was never
-used. Synthetic probe history is separate from receipt retention.

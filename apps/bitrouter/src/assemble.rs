@@ -78,8 +78,6 @@ use crate::workflow_state::response_observer::PredictiveResponseObserver;
 pub struct Assembled {
     /// The fully wired application.
     pub app: App,
-    /// Startup-owned checker clients and the process-local receipt query store.
-    pub request_checks: Arc<crate::request_checks::RequestCheckRuntime>,
     /// The shared database connection.
     pub db: DatabaseConnection,
     /// In-memory API-principal-scoped ACP route leases.
@@ -378,9 +376,6 @@ pub async fn build_app_with_path(
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
     config.validate_router_config()?;
-    let request_checks = Arc::new(crate::request_checks::RequestCheckRuntime::activate(
-        config,
-    )?);
     let ignored_config = ignored_config_warnings(config);
     // Validate and construct ingress aliases before opening the database or
     // performing any other startup work. A custom transform must not run ahead
@@ -797,14 +792,11 @@ pub async fn build_app_with_path(
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
     let acp_runtime_for_session = Arc::clone(&acp_runtime);
-    let request_checks_for_pipeline = request_checks.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
-            lm.request_receipt_store(request_checks_for_pipeline.receipts());
-            lm.request_checker_runner(request_checks_for_pipeline);
             lm.fallback_backoff(
                 config
                     .upstream
@@ -824,23 +816,21 @@ pub async fn build_app_with_path(
             // and stashes it, before auth, so the toolsets can read it
             // regardless of credential state.
             if server_tools_enabled {
-                lm.pre_resolution_hook(ServerToolDeclarationsHook);
+                lm.pre_request_hook(ServerToolDeclarationsHook);
             }
             // Reserved judge IDs are checked even before auth, so an early
             // rejection cannot overwrite an existing attempt's metering row.
-            lm.pre_resolution_hook(judge_costs.clone());
-            // Authenticate and normalize the selector before freezing the router
-            // binding and applying its defaults. Session normalization may apply a
+            lm.pre_request_hook(judge_costs.clone());
+            // Remaining Stage 1: auth → request-session normalization →
+            // continuation → canonical evolution → policy. Session normalization may apply a
             // API-principal-scoped route lease before Stage 2 model selection;
             // explicit routes and provider continuations retain precedence.
             // The guardrail plugin appends its hooks after this closure (see
             // `.plugin(...)` below), preserving the policy → guardrail order.
-            lm.pre_resolution_hook(AuthHook::new(db_for_hooks.clone()));
-            lm.pre_resolution_hook(SessionContextHook::new(acp_runtime_for_session));
-            lm.pre_resolution_hook(continuation_for_pre_request);
-            // Candidate recipe selection may replace defaults and the policy,
-            // but cannot replace the ingress router's frozen checker bindings.
-            lm.router_preparation_hook(evolution_for_hooks.clone());
+            lm.pre_request_hook(AuthHook::new(db_for_hooks.clone()));
+            lm.pre_request_hook(SessionContextHook::new(acp_runtime_for_session));
+            lm.pre_request_hook(continuation_for_pre_request);
+            lm.pre_request_hook(evolution_for_hooks.clone());
             lm.pre_request_hook(PolicyHook::new(
                 policy_store.clone(),
                 Some(metering_store_for_policy),
@@ -952,7 +942,6 @@ pub async fn build_app_with_path(
     let app = app.build().context("building the App")?;
 
     Ok(Assembled {
-        request_checks,
         app,
         db,
         acp_runtime,

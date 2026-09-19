@@ -6,8 +6,7 @@
 
 本文记录原始 M0–M1 第一批中的路由配置与身份迁移子批次，不代表原始六项已全部完成。
 整体配置状态契约另见 [CONFIGURATION_STATE_CONTRACT_SPEC.md](CONFIGURATION_STATE_CONTRACT_SPEC.md)。
-本文保留 R1–R6 的历史范围；后续检查回执、HTTP checker 和诊断的当前契约见
-[REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md)。Guardrails 独立制品仍未交付。
+检查回执、HTTP checker、checker 诊断和 guardrails 独立制品仍待实现。
 首批目标是：用户直接配置、调用、诊断一个 router，而不必同时理解 preset。
 默认 coding router 复用现有 policy-lock；本批不开发新的模型选择算法。
 
@@ -41,20 +40,6 @@
 ACP workflow 或默认 `bro code` 语义切换。新的 router 配置不接受尚未实现的
 `checks`、`workflow` 等字段；不得静默忽略后宣称已提供保护。
 Guardrails 独立发布及其他 extension 默认排除仍是后续发布门槛。
-
-## 独立审阅边界
-
-运行时读取旧 preset 配置的兼容能力属于 router 核心；修改用户 YAML 的迁移工具
-是独立的运维能力。启动、路由、checker 和配置查询都不调用迁移写入逻辑。
-审阅或后续拆分时分别检查：
-
-| 范围 | 实现提交 | 重点 |
-| --- | --- | --- |
-| 归一化、寻址、初始化、身份与诊断 | `06d2a685`、`52a0ef2f`、`c12aa814`、`2392afbe` | 选择 router 后沿用既有 policy-lock；旧配置可直接读取 |
-| 显式 YAML 迁移工具 | `55d14463` | `apps/bitrouter/src/router_migration.rs` 的候选文件、备份及发布规则；运行时不依赖该写入功能 |
-| 跨协议与回归验证 | `8f01c2ca` | 核心行为与迁移命令分别验收 |
-
-上述提交是 PR #916 的审阅入口；本次收敛保留已有 CLI、配置兼容行为和迁移文件保护。
 
 ## 3. 当前实现与迁移接点
 

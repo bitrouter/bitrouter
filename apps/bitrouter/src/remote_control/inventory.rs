@@ -17,10 +17,6 @@ pub enum Action {
     PolicyStatus,
     PolicyShow,
     Agents,
-    Checks,
-    CheckProbe,
-    CheckReceipts,
-    CheckReceipt,
     Reload,
 }
 
@@ -49,31 +45,6 @@ pub struct EmptyInput {}
 #[serde(deny_unknown_fields)]
 pub struct ModelsInput {
     pub provider: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ReceiptListInput {
-    #[serde(default = "default_receipt_limit")]
-    pub limit: usize,
-}
-
-impl Default for ReceiptListInput {
-    fn default() -> Self {
-        Self {
-            limit: default_receipt_limit(),
-        }
-    }
-}
-
-fn default_receipt_limit() -> usize {
-    crate::actions::checks::DEFAULT_RECEIPT_LIMIT
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ReceiptLookupInput {
-    pub incarnation: Option<String>,
 }
 
 fn input_schema<T: JsonSchema>() -> serde_json::Value {
@@ -244,58 +215,6 @@ pub const ACTIONS: &[ControlActionSpec] = &[
         EmptyInput,
         administration::AgentsReport
     ),
-    action!(
-        Checks,
-        "checks",
-        "checks",
-        None,
-        "GET",
-        "/checks",
-        "checks",
-        "checks",
-        true,
-        EmptyInput,
-        crate::actions::checks::ChecksReport
-    ),
-    action!(
-        CheckProbe,
-        "checks_probe",
-        "checks_probe",
-        None,
-        "POST",
-        "/checks/{checker}/probe",
-        "checks probe",
-        "checks",
-        true,
-        EmptyInput,
-        crate::actions::checks::CheckerProbeReport
-    ),
-    action!(
-        CheckReceipts,
-        "checks_receipts",
-        "checks_receipts",
-        None,
-        "GET",
-        "/checks/receipts",
-        "checks receipts",
-        "checks",
-        true,
-        ReceiptListInput,
-        bitrouter_sdk::language_model::receipts::RequestReceiptList
-    ),
-    action!(
-        CheckReceipt,
-        "checks_receipt",
-        "checks_receipt",
-        None,
-        "GET",
-        "/checks/receipts/{request_id}",
-        "checks receipt",
-        "checks",
-        true,
-        ReceiptLookupInput,
-        bitrouter_sdk::language_model::receipts::RequestReceiptLookup
-    ),
 ];
 
 pub fn by_id(id: &str) -> Option<&'static ControlActionSpec> {
@@ -360,26 +279,6 @@ mod tests {
                 assert_eq!(row.id, shared.id);
             }
         }
-        Ok(())
-    }
-
-    #[test]
-    fn checker_diagnostics_are_bounded_read_actions() -> anyhow::Result<()> {
-        let expected = [
-            ("checks", "GET"),
-            ("checks_probe", "POST"),
-            ("checks_receipts", "GET"),
-            ("checks_receipt", "GET"),
-        ];
-        for (id, method) in expected {
-            let row =
-                by_id(id).ok_or_else(|| anyhow::anyhow!("missing checker control action {id}"))?;
-            assert_eq!(row.scope, ControlScope::Read);
-            assert_eq!(row.method, method);
-            assert!(row.requires_administration);
-            assert!(!row.requires_reload);
-        }
-        assert_eq!(crate::actions::checks::MAX_RECEIPT_LIMIT, 500);
         Ok(())
     }
 }

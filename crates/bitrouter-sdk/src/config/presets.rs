@@ -33,11 +33,9 @@
 
 use std::collections::HashMap;
 
-use crate::config::checker::CheckerConfig;
 use crate::config::router::{EffectiveRouterDefinition, RouterConfig};
 use crate::config::{PresetConfig, RoutingConfig, VariantConfig};
 use crate::error::{BitrouterError, Result};
-use crate::language_model::request_checks::RequestCheckBinding;
 use crate::language_model::routing::{RouterRequestIdentity, RoutingPrefs};
 
 // `PromptOverrides` is defined in `language_model::routing` because it is the
@@ -121,8 +119,6 @@ pub struct PresetResolution {
     pub variant: Option<String>,
     /// Stable router identity for canonical and legacy named addresses.
     pub router: Option<RouterRequestIdentity>,
-    /// Ordered request-check bindings frozen with this router resolution.
-    pub request_checks: Vec<RequestCheckBinding>,
 }
 
 #[derive(Clone, Copy)]
@@ -168,13 +164,7 @@ pub fn resolve_presets(
     presets: &HashMap<String, PresetConfig>,
     variants: &HashMap<String, VariantConfig>,
 ) -> Result<PresetResolution> {
-    resolve_routers(
-        raw_model,
-        &HashMap::new(),
-        presets,
-        variants,
-        &HashMap::new(),
-    )
+    resolve_routers(raw_model, &HashMap::new(), presets, variants)
 }
 
 pub(super) fn resolve_routers(
@@ -182,7 +172,6 @@ pub(super) fn resolve_routers(
     routers: &HashMap<String, RouterConfig>,
     presets: &HashMap<String, PresetConfig>,
     variants: &HashMap<String, VariantConfig>,
-    checkers: &HashMap<String, CheckerConfig>,
 ) -> Result<PresetResolution> {
     // Reject a reserved colon spelling before variant parsing. Otherwise a
     // configured variant with the same name (for example `auto`) could consume
@@ -274,13 +263,9 @@ pub(super) fn resolve_routers(
         (Some(name), Some(router)) => Some(RouterRequestIdentity {
             router_id: name.to_owned(),
             original_selector: raw_model.to_owned(),
-            binding_digest: router.binding_digest(name, checkers)?,
+            binding_digest: router.binding_digest(name)?,
         }),
         _ => None,
-    };
-    let request_checks = match (router_name, router) {
-        (Some(name), Some(router)) => router.request_checks(name, checkers)?,
-        _ => Vec::new(),
     };
 
     // 4. The clean model: a router's model/base_model wins, else the literal base.
@@ -321,7 +306,6 @@ pub(super) fn resolve_routers(
         policy: router.and_then(|router| router.policy().map(ToOwned::to_owned)),
         variant: variant_name.map(ToString::to_string),
         router: router_identity,
-        request_checks,
     })
 }
 
@@ -391,7 +375,6 @@ mod tests {
                         system_prompt: Some("Be exact.".into()),
                         params: serde_json::Map::new(),
                     },
-                    checks: Default::default(),
                 },
             ),
             (
@@ -403,7 +386,6 @@ mod tests {
                         routing: RoutingConfig::default(),
                     },
                     defaults: RouterDefaults::default(),
-                    checks: Default::default(),
                 },
             ),
         ])
@@ -439,13 +421,7 @@ mod tests {
 
     #[test]
     fn canonical_router_resolves_without_a_same_named_preset() -> Result<()> {
-        let resolved = resolve_routers(
-            "bitrouter/project",
-            &routers(),
-            &presets(),
-            &variants(),
-            &HashMap::new(),
-        )?;
+        let resolved = resolve_routers("bitrouter/project", &routers(), &presets(), &variants())?;
         assert_eq!(resolved.clean_model, "gpt-5");
         assert_eq!(resolved.prefs.sort, SortOrder::Latency);
         assert_eq!(resolved.prefs.require_tags, vec!["paid"]);
@@ -463,13 +439,7 @@ mod tests {
 
     #[test]
     fn legacy_router_address_keeps_known_variant_compatibility() -> Result<()> {
-        let resolved = resolve_routers(
-            "@project:free",
-            &routers(),
-            &presets(),
-            &variants(),
-            &HashMap::new(),
-        )?;
+        let resolved = resolve_routers("@project:free", &routers(), &presets(), &variants())?;
         assert_eq!(resolved.clean_model, "gpt-5");
         assert_eq!(resolved.variant.as_deref(), Some("free"));
         assert_eq!(resolved.prefs.require_tags, vec!["paid", "free"]);
@@ -479,15 +449,9 @@ mod tests {
     #[test]
     fn canonical_router_rejects_variant_suffixes() -> Result<()> {
         for selector in ["bitrouter/project:free", "bitrouter/project:unknown"] {
-            let error = resolve_routers(
-                selector,
-                &routers(),
-                &presets(),
-                &variants(),
-                &HashMap::new(),
-            )
-            .err()
-            .ok_or_else(|| BitrouterError::internal("canonical router variant was accepted"))?;
+            let error = resolve_routers(selector, &routers(), &presets(), &variants())
+                .err()
+                .ok_or_else(|| BitrouterError::internal("canonical router variant was accepted"))?;
             assert!(error.to_string().contains("does not support ':variant'"));
         }
         Ok(())
@@ -495,13 +459,7 @@ mod tests {
 
     #[test]
     fn canonical_auto_keeps_policy_and_variant_compatibility() -> Result<()> {
-        let resolved = resolve_routers(
-            "bitrouter/auto:cost",
-            &routers(),
-            &presets(),
-            &variants(),
-            &HashMap::new(),
-        )?;
+        let resolved = resolve_routers("bitrouter/auto:cost", &routers(), &presets(), &variants())?;
         assert_eq!(resolved.clean_model, "openai-codex:gpt-5.6-sol");
         assert_eq!(resolved.policy.as_deref(), Some("auto"));
         assert_eq!(resolved.variant.as_deref(), Some("cost"));
@@ -520,18 +478,11 @@ mod tests {
                     routing: RoutingConfig::default(),
                 },
                 defaults: RouterDefaults::default(),
-                checks: Default::default(),
             },
         );
 
         for selector in ["bitrouter/auto", "bitrouter/auto:cost"] {
-            let resolved = resolve_routers(
-                selector,
-                &configured,
-                &presets(),
-                &variants(),
-                &HashMap::new(),
-            )?;
+            let resolved = resolve_routers(selector, &configured, &presets(), &variants())?;
             assert_eq!(resolved.clean_model, "vendor:base");
             assert_eq!(resolved.policy.as_deref(), Some("custom-policy"));
         }

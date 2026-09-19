@@ -660,7 +660,6 @@ impl RoutingTable for ConfigRoutingTable {
             policy: resolution.policy,
             variant: resolution.variant,
             router: resolution.router,
-            request_checks: resolution.request_checks,
         })
     }
 
@@ -1379,7 +1378,6 @@ routers:
                     routing: crate::config::RoutingConfig::default(),
                 },
                 defaults: crate::config::router::RouterDefaults::default(),
-                checks: crate::config::router::RouterChecks::default(),
             },
         );
         let table = ConfigRoutingTable::from_config(config);
