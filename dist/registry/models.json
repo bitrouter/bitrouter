@@ -2900,6 +2900,27 @@
       ],
       "providers": [
         {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01488,
+              "no_cache": 0.29754
+            },
+            "output_tokens": {
+              "text": 1.19015
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "deepseek-v4.1-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -4391,6 +4412,48 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "kimi-k3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.283,
+              "no_cache": 2.827
+            },
+            "output_tokens": {
+              "text": 14.133
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "kimi-k3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
         {
           "api_protocol": "openai",
           "pricing": {
@@ -9282,6 +9345,28 @@
       ],
       "providers": [
         {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.275,
+              "cache_write": 0.0,
+              "no_cache": 1.1
+            },
+            "output_tokens": {
+              "text": 3.851
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "glm-5.3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -9342,6 +9427,23 @@
               "high",
               "max"
             ]
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.45,
+              "no_cache": 1.8
+            },
+            "output_tokens": {
+              "text": 5.75
+            }
+          },
+          "provider": "tinfoil",
+          "provider_model_id": "glm-5-3",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
