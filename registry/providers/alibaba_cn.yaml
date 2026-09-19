@@ -192,6 +192,31 @@ models:
         cache_write: 0.14844
       output_tokens:
         text: 0.40073
+  - id: deepseek/deepseek-v4.1-flash
+    provider_model_id: deepseek-v4.1-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.29754
+        cache_read: 0.01488
+      output_tokens:
+        text: 1.19015
+  - id: z-ai/glm-5.3
+    provider_model_id: glm-5.3
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.275
+        cache_write: 0
+      output_tokens:
+        text: 3.851
+  - id: moonshotai/kimi-k3
+    provider_model_id: kimi-k3
+    pricing:
+      input_tokens:
+        no_cache: 2.827
+        cache_read: 0.283
+      output_tokens:
+        text: 14.133
 status: active
 weight: 1
 submitted_at: 2026-07-06
