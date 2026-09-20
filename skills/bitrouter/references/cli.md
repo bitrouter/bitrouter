@@ -48,6 +48,23 @@ Configuration status uses the target-owned optional `config_state`: saved input 
 
 ## Inspection
 
+### Local menu-bar companion
+
+`bro panel --since RFC3339 --until RFC3339 [--session-limit N] [--session-offset N]`
+reads the running local daemon over owner-scoped IPC and returns a versioned JSON
+snapshot for BitRouter Bar. Pass explicit local-day boundaries (converted to UTC),
+at most 26 hours apart. Session pages contain 1–500 rows per client (default 100);
+use `session_page.next_offset` with the same time bounds to continue. Client totals
+always cover the whole interval, including rows outside the displayed page.
+`--config PATH` / `--socket PATH` select the local daemon; remote contexts are not
+supported. A stopped or older daemon is an error, never a zero-usage report.
+
+Usage and quota freshness are separate. Missing client/session identity stays in
+an unknown group; unknown tokens are not zero. Account quotas may include usage
+outside BitRouter and are shared across clients. Only verified account mappings
+can carry quota readings; unsupported providers or historical requests lacking
+account evidence retain explicit unknown/unavailable states.
+
 | Command | Effect |
 |---|---|
 | `bro route <model> [--prompt TEXT] [--config PATH]` | Preview a model or router using the running daemon, otherwise local config (`resolved_via: live/config/zero_config`). Fixed routes show `effective_model`, `provider_chain`, and available rate estimates. Policy-bound routers show identity, source, `bound_policy`, candidates, and `policy_decision_executed: false`; their `effective_model` is the base model and their provider chain is empty. No dynamic selection is executed. `--prompt` only affects the existing local static policy-table preview. Nothing is sent upstream. |

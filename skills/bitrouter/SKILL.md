@@ -31,6 +31,9 @@ These emit JSON by default (`--human` is readable). Branch on the result:
 missing command → §2; no active providers → §3; stopped daemon → `start`; both
 ready → §5.
 
+`bro panel --since RFC3339 --until RFC3339` reads local usage/quotas for BitRouter Bar.
+Requires a running daemon with panel support; see `references/cli.md` for details.
+
 ### 2. Install
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://bitrouter.ai/install.sh | sh

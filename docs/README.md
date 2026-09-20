@@ -5,6 +5,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [`MENUBAR_COMPANION_SPEC.md`](MENUBAR_COMPANION_SPEC.md) — **draft for review;
+  nothing implemented.** Cross-repository proposal for an independently shipped
+  single-panel companion: today's client/session token usage, shared account
+  quotas, and four acceptance criteria.
 - [`CONFIGURATION_STATE_CONTRACT_SPEC.md`](CONFIGURATION_STATE_CONTRACT_SPEC.md) —
   **implemented and locally verified.** Whole-configuration saved/running/restart
   evidence shared by local and remote status, CLI, and Code inspectors.

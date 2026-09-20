@@ -847,6 +847,7 @@ impl PipelineContext {
             reasoning_effort: self.prompt.params.reasoning_effort,
             provider_id,
             account_label,
+            credential_authority: self.credential_authority(),
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             reasoning_tokens: usage.reasoning_tokens,

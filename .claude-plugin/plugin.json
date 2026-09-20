@@ -2,7 +2,7 @@
   "name": "bitrouter",
   "displayName": "BitRouter",
   "version": "0.1.0",
-  "description": "Cost-optimize your agentic loops: route every model call through the cheapest viable path. Bundles the BitRouter setup and operations skill.",
+  "description": "Cost-optimize your agentic loops: route every model call through the cheapest viable path. Bundles setup, operations, and local companion usage inspection.",
   "author": { "name": "BitRouterAI" },
   "homepage": "https://bitrouter.ai",
   "repository": "https://github.com/bitrouter/bitrouter",

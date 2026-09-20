@@ -243,6 +243,7 @@ pub fn ensure_home_directory(home: &Path) -> Result<()> {
 const INSTALL_ID_FILENAME: &str = "installation.id";
 const CORRELATION_KEY_FILENAME: &str = "correlation.key";
 const CONTINUATION_KEY_FILENAME: &str = "continuation.key";
+const ACCOUNT_REF_KEY_FILENAME: &str = "account-ref.key";
 const INSTALL_LOCK_FILENAME: &str = ".installation.lock";
 
 /// Read the stable anonymous install id from `<home>/installation.id`,
@@ -312,6 +313,30 @@ pub fn get_or_create_continuation_key(home: &Path) -> Result<[u8; 32]> {
             });
         }
 
+        let mut secret = [0_u8; 32];
+        rand::rng().fill_bytes(&mut secret);
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
+        create_private_file(&path, encoded.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(secret)
+    })
+}
+
+/// Load or atomically create the installation-local key used to make upstream
+/// account references safe to expose through local inspection APIs.
+pub fn get_or_create_account_ref_key(home: &Path) -> Result<[u8; 32]> {
+    ensure_home_directory(home)?;
+    with_install_lock(home, || {
+        get_or_create_install_id_locked(home)?;
+        let path = home.join(ACCOUNT_REF_KEY_FILENAME);
+        if let Some(encoded) = read_private_text(&path)? {
+            let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(encoded.trim())
+                .context("existing account reference key is not valid base64")?;
+            return decoded.try_into().map_err(|_| {
+                anyhow::anyhow!("existing account reference key must contain exactly 32 bytes")
+            });
+        }
         let mut secret = [0_u8; 32];
         rand::rng().fill_bytes(&mut secret);
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);

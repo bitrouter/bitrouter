@@ -154,6 +154,25 @@ reports, which use the redacted typed read contracts.
 
 ## Daemon lifecycle
 
+### Menu-bar companion snapshot
+
+```console
+bro panel --since RFC3339 --until RFC3339 [--session-limit 100] [--session-offset 0]
+```
+
+Local-only read for the independent BitRouter Bar app. The explicit time bounds
+describe the client's local day, converted to RFC3339, and span at most 26 hours.
+The running daemon returns schema-versioned client totals, root-session rows,
+and evidence-backed account-quota state. Missing identity, usage or quota remains
+explicitly unknown. Totals include all matching records, not just recent requests.
+
+`session_limit` is 1–500 per client. Continue with `session_page.next_offset` and
+the same time bounds; a fresh refresh starts at offset zero. Use `--config PATH`
+or `--socket PATH` for a local endpoint. No remote-context support, database
+fallback, routing mutation or control-token setup is involved. A stopped or
+unsupported daemon produces a nonzero error. JSON is the default; `--human`
+renders a compact summary.
+
 ### `bro serve`
 
 Run the HTTP server and control socket **in the foreground**.

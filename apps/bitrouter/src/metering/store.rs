@@ -14,6 +14,7 @@
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use sea_orm::sea_query::OnConflict;
@@ -413,13 +414,23 @@ fn summarize(charges: Vec<(i64, String)>) -> SpendSummary {
 #[derive(Clone)]
 pub struct MeteringStore {
     db: DatabaseConnection,
+    pub(super) companion_snapshots: Arc<Mutex<super::companion::CompanionSnapshotCache>>,
 }
 
 impl MeteringStore {
     /// Build a store over a database connection. The database must already
     /// carry the `requests` table (`crate::db::run_migrations`).
     pub fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+        Self {
+            db,
+            companion_snapshots: Arc::new(Mutex::new(
+                super::companion::CompanionSnapshotCache::default(),
+            )),
+        }
+    }
+
+    pub(super) fn connection(&self) -> &DatabaseConnection {
+        &self.db
     }
 
     /// Total estimated spend (micro-USD) for `api_key_id` within `window`.
@@ -1319,6 +1330,7 @@ impl MeteringStore {
             original_selector: Set(record.original_selector),
             model_id: Set(record.model_id),
             provider_id: Set(record.provider_id),
+            upstream_account_ref: Set(record.upstream_account_ref),
             prompt_tokens: Set(record.prompt_tokens as i64),
             completion_tokens: Set(record.completion_tokens as i64),
             reasoning_tokens: Set(record.reasoning_tokens as i64),

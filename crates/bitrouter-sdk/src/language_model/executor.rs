@@ -909,6 +909,10 @@ impl HttpExecutor {
         &self,
         input: &RequestBuildInput<'_>,
     ) -> Result<reqwest::Request> {
+        // Every attempt must establish its own authority. A failed fallback
+        // must never settle under the previous hop's successfully applied
+        // credential proof.
+        input.ctx.record_credential_authority(None);
         let mut builder = input.client.post(input.url).json(input.body);
         if let Some(total) = input.timeouts.total {
             builder = builder.timeout(total);
@@ -1849,6 +1853,7 @@ mod error_classification_tests {
 mod beta_forward_tests {
     use super::*;
     use crate::caller::CallerContext;
+    use crate::language_model::auth::AuthApplier;
     use crate::language_model::types::{OutboundHeaderRule, Prompt};
     use crate::language_model::{Message, PipelineRequest, Role};
 
@@ -1904,6 +1909,19 @@ mod beta_forward_tests {
             api_base_override: None,
             auth_scheme: Default::default(),
             headers: Vec::new(),
+        }
+    }
+
+    struct FailingFallbackAuth;
+
+    #[async_trait::async_trait]
+    impl AuthApplier for FailingFallbackAuth {
+        async fn apply(
+            &self,
+            _request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> crate::Result<reqwest::Request> {
+            Err(BitrouterError::internal("fallback authentication failed"))
         }
     }
 
@@ -2074,6 +2092,85 @@ mod beta_forward_tests {
         );
         assert_eq!(request.headers()["x-opencode-session"], "request-session");
         assert_eq!(request.headers()["x-bitrouter-request-id"], "t");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_fallback_clears_previous_attempt_credential_authority() -> crate::Result<()> {
+        let mut first = target(ApiProtocol::ChatCompletions);
+        first.provider_name = "first-provider".to_string();
+        first.api_key = "first-provider-secret".to_string();
+        let mut fallback = target(ApiProtocol::ChatCompletions);
+        fallback.provider_name = "fallback-provider".to_string();
+
+        let auth = AuthAppliers::new().with("fallback-provider", Arc::new(FailingFallbackAuth));
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            HttpTimeouts::default(),
+            OutboundDispatch::builtin(),
+            auth,
+        )?;
+        let (_, transport) = executor
+            .dispatch
+            .lookup(&ApiProtocol::ChatCompletions)
+            .ok_or_else(|| BitrouterError::internal("chat transport was not registered"))?;
+        let body = serde_json::json!({"model": "claude-haiku"});
+        let mut ctx = ctx_with_beta(None);
+        ctx.route_chain = Some(vec![first.clone(), fallback.clone()]);
+
+        ctx.set_last_attempted_target(first.clone());
+        let (client, timeouts) = executor.client_for(&first);
+        executor
+            .build_authenticated_request(&RequestBuildInput {
+                client: &client,
+                timeouts: &timeouts,
+                url: "https://first.example/v1/chat/completions",
+                body: &body,
+                target: &first,
+                transport,
+                ctx: &ctx,
+                trace_headers: None,
+            })
+            .await?;
+        assert!(
+            ctx.required_finalization_context(false)
+                .credential_authority
+                .is_some(),
+            "the first authenticated attempt must establish the regression precondition"
+        );
+
+        ctx.set_last_attempted_target(fallback.clone());
+        let (client, timeouts) = executor.client_for(&fallback);
+        let error = executor
+            .build_authenticated_request(&RequestBuildInput {
+                client: &client,
+                timeouts: &timeouts,
+                url: "https://fallback.example/v1/chat/completions",
+                body: &body,
+                target: &fallback,
+                transport,
+                ctx: &ctx,
+                trace_headers: None,
+            })
+            .await
+            .err()
+            .ok_or_else(|| {
+                BitrouterError::internal("fallback authentication unexpectedly passed")
+            })?;
+        assert!(error.to_string().contains("upstream authentication failed"));
+
+        let finalization = ctx.required_finalization_context(false);
+        assert_eq!(
+            finalization
+                .target
+                .as_ref()
+                .map(|target| target.provider_name.as_str()),
+            Some("fallback-provider")
+        );
+        assert!(finalization.credential_authority.is_none());
+
+        let settlement = ctx.settlement_context();
+        assert_eq!(settlement.provider_id, "fallback-provider");
+        assert!(settlement.credential_authority.is_none());
         Ok(())
     }
 

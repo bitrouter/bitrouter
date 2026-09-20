@@ -36,6 +36,7 @@ pub struct MeteringRecorder {
     store: MeteringStore,
     pricing: Arc<PricingTable>,
     reconciliation_providers: HashSet<String>,
+    account_ref_key: crate::account_ref::AccountRefKey,
 }
 
 /// Content-free, typed proof that metering successfully persisted its
@@ -73,7 +74,13 @@ impl MeteringRecorder {
             store,
             pricing,
             reconciliation_providers: HashSet::new(),
+            account_ref_key: crate::account_ref::AccountRefKey::ephemeral(),
         }
+    }
+
+    pub fn with_account_ref_key(mut self, key: crate::account_ref::AccountRefKey) -> Self {
+        self.account_ref_key = key;
+        self
     }
 
     /// Require request-scoped authoritative reconciliation for this provider.
@@ -258,6 +265,10 @@ impl SettlementRecorder for MeteringRecorder {
             original_selector: router.map(|identity| identity.original_selector),
             model_id: ctx.model_id.clone(),
             provider_id: ctx.provider_id.clone(),
+            upstream_account_ref: ctx
+                .credential_authority
+                .as_ref()
+                .and_then(|authority| self.account_ref_key.derive(&ctx.provider_id, authority)),
             prompt_tokens: ctx.prompt_tokens,
             completion_tokens: ctx.completion_tokens,
             reasoning_tokens: ctx.reasoning_tokens,

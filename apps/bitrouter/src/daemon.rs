@@ -102,6 +102,10 @@ impl DaemonReloader for NoopReloader {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum DaemonCommand {
+    /// Read today's client/session usage for the local menu-bar companion.
+    Panel {
+        input: crate::actions::panel::PanelInput,
+    },
     /// Stop the daemon — it finishes the response, then exits.
     Stop,
     /// Hot-reload the config / routing table. The CLI piggybacks a
@@ -255,6 +259,10 @@ pub struct RouteHop {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "resp", rename_all = "snake_case")]
 pub enum DaemonResponse {
+    /// Versioned companion snapshot; available only on owner-scoped IPC.
+    Panel {
+        report: Box<crate::actions::panel::PanelReport>,
+    },
     /// The command succeeded with no payload.
     Ok,
     /// Status payload.
@@ -794,6 +802,30 @@ async fn dispatch(
                 message: "reload state is unavailable on this daemon".to_string(),
             },
         },
+        DaemonCommand::Panel { input } => {
+            match crate::actions::panel::report(
+                &acp.metering,
+                input,
+                administration
+                    .as_ref()
+                    .and_then(|admin| admin.panel_quota.as_ref()),
+            )
+            .await
+            {
+                Ok(report) => DaemonResponse::Panel {
+                    report: Box::new(report),
+                },
+                Err(error) if error.to_string().contains("panel_snapshot_expired") => {
+                    DaemonResponse::Error {
+                        message: "panel_snapshot_expired: refresh the panel to load sessions"
+                            .into(),
+                    }
+                }
+                Err(_) => DaemonResponse::Error {
+                    message: "panel_read_failed: unable to read local usage".into(),
+                },
+            }
+        }
         DaemonCommand::Status => {
             let routable = app
                 .language_model()
@@ -1760,6 +1792,7 @@ mod tests {
             policy,
             observe: Arc::new(NoopObserveStatus { compiled_in: false }),
             request_checks: Some(request_checks),
+            panel_quota: None,
         })
     }
 

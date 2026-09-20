@@ -286,6 +286,27 @@ enum Command {
         #[arg(short, long, hide = true)]
         requests: bool,
     },
+    /// Read the local menu-bar companion's client/session usage and quotas.
+    Panel {
+        /// Inclusive RFC3339 start of the client's local day.
+        #[arg(long)]
+        since: chrono::DateTime<chrono::Utc>,
+        /// Exclusive RFC3339 sampling boundary, at most 26 hours after since.
+        #[arg(long)]
+        until: chrono::DateTime<chrono::Utc>,
+        /// Maximum root sessions per client in this page (1..=500).
+        #[arg(long, default_value_t = 100)]
+        session_limit: usize,
+        /// Session offset within every client, preserving complete totals.
+        #[arg(long, default_value_t = 0)]
+        session_offset: usize,
+        /// Path to bitrouter.yaml used to locate the local daemon.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Explicit owner-scoped local control socket.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
     /// Show recent settled requests and aggregate spend.
     Requests {
         /// Maximum number of recent requests to return.
@@ -2041,6 +2062,25 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             }
             Ok(())
         }
+        Command::Panel {
+            since,
+            until,
+            session_limit,
+            session_offset,
+            config,
+            socket,
+        } => {
+            let input = bitrouter::actions::panel::PanelInput {
+                since,
+                until,
+                session_limit,
+                session_offset,
+            };
+            input.validate()?;
+            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            output.emit(&bitrouter::actions::panel::read(&socket, input).await?)?;
+            Ok(())
+        }
         Command::Requests {
             limit,
             since,
@@ -3637,6 +3677,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         policy: assembled.policy_runtime.clone(),
         observe: observe_provider.clone(),
         request_checks: Some(assembled.request_checks.clone()),
+        panel_quota: Some(assembled.panel_quota.clone()),
     };
     let acp_runtime_for_control = assembled.acp_runtime.clone();
     let reloader = bitrouter::reload::AppReloader::new(

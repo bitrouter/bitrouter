@@ -20,6 +20,7 @@
 //! charge status before using the legacy non-null
 //! `estimated_charge_micro_usd` column.
 
+pub mod companion;
 pub mod db;
 pub mod entities;
 pub mod pricing;

@@ -402,6 +402,7 @@ pub(super) async fn seed_request(
         original_selector: Set(None),
         model_id: Set("coding-model".into()),
         provider_id: Set("provider".into()),
+        upstream_account_ref: Set(None),
         prompt_tokens: Set(0),
         completion_tokens: Set(0),
         reasoning_tokens: Set(0),

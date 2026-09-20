@@ -50,7 +50,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use reqwest::header::{HeaderName, HeaderValue};
 
-use bitrouter_sdk::language_model::AuthApplier;
+use bitrouter_sdk::language_model::auth::{AppliedAuth, AuthApplier, CredentialAuthority};
 use bitrouter_sdk::language_model::types::RoutingTarget;
 use bitrouter_sdk::{BitrouterError, Result};
 
@@ -393,6 +393,19 @@ impl ClaudeCodeAuthApplier {
     fn label_for<'a>(&self, target: &'a RoutingTarget) -> &'a str {
         target.account_label.as_deref().unwrap_or(DEFAULT_LABEL)
     }
+
+    /// Derive the credential authority used for an authenticated Claude Code
+    /// request without exposing the OAuth credential itself.
+    pub fn credential_authority(token: &OAuthToken) -> CredentialAuthority {
+        // Prefer the refresh credential because it survives access-token
+        // renewal. Setup tokens and providers without refresh credentials fall
+        // back to the exact bearer that was installed on the wire.
+        let identity = token
+            .refresh_token
+            .as_deref()
+            .unwrap_or(token.access_token.as_str());
+        CredentialAuthority::derive("claude-code/oauth-principal", identity)
+    }
 }
 
 fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
@@ -417,9 +430,20 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
 impl AuthApplier for ClaudeCodeAuthApplier {
     async fn apply(
         &self,
-        mut request: reqwest::Request,
+        request: reqwest::Request,
         target: &RoutingTarget,
     ) -> Result<reqwest::Request> {
+        Ok(self
+            .apply_with_authority(request, target)
+            .await?
+            .into_request())
+    }
+
+    async fn apply_with_authority(
+        &self,
+        mut request: reqwest::Request,
+        target: &RoutingTarget,
+    ) -> Result<AppliedAuth> {
         // Reaching this applier means routing already resolved an explicit
         // `claude-code:<model>` target. That explicit target is the
         // subscription-use boundary. Downstream clients speak normal Anthropic
@@ -482,7 +506,21 @@ impl AuthApplier for ClaudeCodeAuthApplier {
             HeaderName::from_static("x-app"),
             HeaderValue::from_static(headers::CLAUDE_CODE_X_APP),
         );
-        Ok(request)
+        Ok(AppliedAuth::proven(
+            request,
+            Self::credential_authority(&token),
+        ))
+    }
+
+    async fn continuation_authority(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<Option<CredentialAuthority>> {
+        Ok(self
+            .resolve_credential(self.label_for(target))
+            .await?
+            .as_ref()
+            .map(Self::credential_authority))
     }
 
     async fn prepare_body(

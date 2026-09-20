@@ -348,6 +348,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
         reasoning_effort: None,
         provider_id: "provider".into(),
         account_label: None,
+        credential_authority: None,
         prompt_tokens: 10,
         completion_tokens: 5,
         reasoning_tokens: 0,
