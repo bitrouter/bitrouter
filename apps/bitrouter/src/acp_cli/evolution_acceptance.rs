@@ -365,6 +365,7 @@ models:
                     metering: crate::metering::MeteringStore::new(assembled.db),
                     inventory: Some(runtime.inventory()),
                     evolution: Some(runtime),
+                    panel_activity: Arc::new(crate::panel_activity::AgentActivityRegistry::new()),
                 },
             )
             .await;

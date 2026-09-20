@@ -34,6 +34,13 @@ checks, launches, and ACP sessions remain local. Remote policy defaults to
 
 ## Daemon lifecycle
 
+`bro panel --since RFC3339 --until RFC3339` exposes managed `bro code` lifecycle
+snapshots and recent notification events to the local BitRouter Bar. A snapshot's
+`updated_at` is its last visible transition; heartbeats refresh only its expiry.
+For routed turns, an ACP `end_turn` is converted to failure only when the
+owner-scoped session evidence for that turn contains requests and all of them
+failed. Direct and inconclusive turns preserve the ACP outcome.
+
 | Command | Effect |
 |---|---|
 | `bro serve [--config PATH]` | Run the inference HTTP server + local control socket **in the foreground**. Optional `control.enabled: true` also starts the authenticated typed HTTP control listener at `control.listen` (default `127.0.0.1:4358`). `control.credentials` may name `{id, token_env, scopes}` credentials using `control:read` and `control:reload`; absent/empty credentials preserve `BITROUTER_CONTROL_TOKEN` as read-only. Explicit credentials exclude that legacy token. Tokens are at least 32 bytes, browser origins are checked, the listener stays loopback-only for a private tunnel/TLS reverse proxy, and inference `server.skip_auth` does not affect it. It does not expose MCP or ACP sessions. |
@@ -47,6 +54,31 @@ checks, launches, and ACP sessions remain local. Remote policy defaults to
 Configuration status uses the target-owned optional `config_state`: saved input availability, running `in_sync/reload_required/restart_required/mixed/unknown`, safe changed-field categories, and separate policy-lock/access-policy evidence. Missing evidence from an older daemon stays unknown. Code inspectors consume this same report. Live responses never combine a client's alternate config with the daemon's source. A source-specific local locator preserves access to the running endpoint after socket edits or invalid/deleted YAML, and validates its daemon instance; `--socket` overrides it. `init` and `policy init` report `config_activation: saved_only`, not runtime activation.
 
 ## Inspection
+
+### Local menu-bar companion
+
+`bro panel --since RFC3339 --until RFC3339 [--session-limit N] [--session-offset N]`
+reads the running local daemon over owner-scoped IPC and returns a versioned JSON
+snapshot for BitRouter Bar. Pass explicit local-day boundaries (converted to UTC),
+at most 26 hours apart. Session pages contain 1–500 rows per client (default 100);
+use `session_page.next_offset` with the same time bounds to continue. Client totals
+always cover the whole interval, including rows outside the displayed page.
+`--config PATH` / `--socket PATH` select the local daemon; remote contexts are not
+supported. A stopped or older daemon is an error, never a zero-usage report.
+
+Usage and quota freshness are separate. Missing client/session identity stays in
+an unknown group; unknown tokens are not zero. Account quotas may include usage
+outside BitRouter and are shared across clients. Only verified account mappings
+can carry quota readings; unsupported providers or historical requests lacking
+account evidence retain explicit unknown/unavailable states.
+
+The additive `agents` and `agent_events` arrays contain owner-local lifecycle
+facts published by managed `bro code` ACP sessions. `agents` includes opaque
+instance and session ids plus connecting, idle, working, needs-approval,
+completed, failed, or disconnected state and bounded activity text.
+`agent_events` is the bounded actionable log for approval, completion, failure,
+and disconnection. Do not infer lifecycle state for traffic-only clients;
+`last_activity_at` proves only recent routed activity.
 
 | Command | Effect |
 |---|---|

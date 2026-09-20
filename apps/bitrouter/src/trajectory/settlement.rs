@@ -1615,6 +1615,7 @@ mod tests {
             reasoning_effort: None,
             provider_id: "provider".into(),
             account_label: None,
+            credential_authority: None,
             prompt_tokens: 0,
             completion_tokens: 0,
             reasoning_tokens: 0,

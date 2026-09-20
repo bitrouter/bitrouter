@@ -6,7 +6,7 @@
     {
       "name": "bitrouter",
       "source": "./",
-      "description": "Cost-optimize your agentic loops with the BitRouter setup and operations skill."
+      "description": "Cost-optimize your agentic loops with the BitRouter setup, operations, and local companion inspection skill."
     }
   ]
 }

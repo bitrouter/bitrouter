@@ -48,6 +48,8 @@ pub struct Model {
     pub model_id: String,
     /// Resolved provider id.
     pub provider_id: String,
+    /// Opaque upstream credential principal proven during authentication.
+    pub upstream_account_ref: Option<String>,
     /// Prompt tokens consumed.
     pub prompt_tokens: i64,
     /// Completion tokens consumed.

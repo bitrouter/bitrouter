@@ -154,6 +154,33 @@ reports, which use the redacted typed read contracts.
 
 ## Daemon lifecycle
 
+### Menu-bar companion snapshot
+
+```console
+bro panel --since RFC3339 --until RFC3339 [--session-limit 100] [--session-offset 0]
+```
+
+Local-only read for the independent BitRouter Bar app. The explicit time bounds
+describe the client's local day, converted to RFC3339, and span at most 26 hours.
+The running daemon returns schema-versioned client totals, root-session rows,
+evidence-backed account-quota state, managed ACP lifecycle snapshots, and a bounded
+recent lifecycle event log. Missing identity, usage or quota remains explicitly
+unknown. Totals include all matching records, not just recent requests. Lifecycle
+facts are authoritative only for managed clients that publish them; routed traffic
+alone proves recent activity, not completion or approval state. Repeated managed
+heartbeats refresh expiry without changing a lifecycle snapshot's `updated_at`,
+which remains the time of the visible transition. For routed `bro code` turns,
+an ACP `end_turn` is reported as failed when owner-scoped metering proves that
+every request in that turn failed; direct or unavailable-evidence turns retain
+the adapter's ACP outcome.
+
+`session_limit` is 1–500 per client. Continue with `session_page.next_offset` and
+the same time bounds; a fresh refresh starts at offset zero. Use `--config PATH`
+or `--socket PATH` for a local endpoint. No remote-context support, database
+fallback, routing mutation or control-token setup is involved. A stopped or
+unsupported daemon produces a nonzero error. JSON is the default; `--human`
+renders a compact summary.
+
 ### `bro serve`
 
 Run the HTTP server and control socket **in the foreground**.

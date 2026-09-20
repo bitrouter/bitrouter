@@ -307,6 +307,10 @@ pub struct SettlementContext {
     /// `None` for a single-credential provider. Reflects any failover
     /// hop.
     pub account_label: Option<String>,
+    /// Redaction-safe authority returned by authentication for the exact
+    /// credential that served this request. `None` means account attribution
+    /// was not proven and consumers must not infer it from provider or label.
+    pub credential_authority: Option<ContinuationAuthority>,
     /// Prompt tokens consumed.
     pub prompt_tokens: u64,
     /// Completion tokens consumed.
@@ -426,6 +430,7 @@ mod tests {
             reasoning_effort: None,
             provider_id: "test-provider".into(),
             account_label: None,
+            credential_authority: None,
             prompt_tokens: 0,
             completion_tokens: 0,
             reasoning_tokens: 0,

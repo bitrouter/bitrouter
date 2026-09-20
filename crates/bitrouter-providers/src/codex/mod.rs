@@ -265,7 +265,9 @@ impl OpenAiCodexAuthApplier {
         target.account_label.as_deref().unwrap_or(DEFAULT_LABEL)
     }
 
-    fn continuation_authority(token: &OAuthToken) -> Option<CredentialAuthority> {
+    /// Derive the same account authority used for an authenticated Codex
+    /// request, or `None` when the token has no ChatGPT account claim.
+    pub fn credential_authority(token: &OAuthToken) -> Option<CredentialAuthority> {
         jwt::decode_codex_claims(&token.access_token)
             .ok()
             .and_then(|claims| claims.chatgpt_account_id)
@@ -357,7 +359,7 @@ impl AuthApplier for OpenAiCodexAuthApplier {
             reqwest::header::USER_AGENT,
             HeaderValue::from_static(headers::USER_AGENT),
         );
-        Ok(match Self::continuation_authority(&token) {
+        Ok(match Self::credential_authority(&token) {
             Some(authority) => AppliedAuth::proven(request, authority),
             None => AppliedAuth::unproven(request),
         })
@@ -368,7 +370,7 @@ impl AuthApplier for OpenAiCodexAuthApplier {
         target: &RoutingTarget,
     ) -> Result<Option<CredentialAuthority>> {
         let token = self.resolve_token(self.label_for(target)).await?;
-        Ok(Self::continuation_authority(&token))
+        Ok(Self::credential_authority(&token))
     }
 
     async fn prepare_body(
@@ -747,14 +749,14 @@ mod tests {
         };
 
         assert_eq!(
-            OpenAiCodexAuthApplier::continuation_authority(&token(first_access)),
-            OpenAiCodexAuthApplier::continuation_authority(&token(rotated_access))
+            OpenAiCodexAuthApplier::credential_authority(&token(first_access)),
+            OpenAiCodexAuthApplier::credential_authority(&token(rotated_access))
         );
         assert_ne!(
-            OpenAiCodexAuthApplier::continuation_authority(&token(make_jwt_with_account(
+            OpenAiCodexAuthApplier::credential_authority(&token(make_jwt_with_account(
                 "acct-stable"
             ))),
-            OpenAiCodexAuthApplier::continuation_authority(&token(make_jwt_with_account(
+            OpenAiCodexAuthApplier::credential_authority(&token(make_jwt_with_account(
                 "acct-replaced"
             )))
         );

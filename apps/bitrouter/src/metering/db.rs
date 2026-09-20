@@ -108,6 +108,9 @@ pub struct RequestMetric {
     pub model_id: String,
     /// Resolved provider id.
     pub provider_id: String,
+    /// Opaque, redaction-safe upstream credential principal that actually
+    /// served the request. Null when authentication could not prove one.
+    pub upstream_account_ref: Option<String>,
     /// Prompt tokens consumed.
     pub prompt_tokens: u64,
     /// Completion tokens consumed.

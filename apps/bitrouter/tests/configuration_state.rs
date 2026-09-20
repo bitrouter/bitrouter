@@ -59,6 +59,7 @@ impl RunningFixture {
             routing: assembled.routing_table.clone(),
             policy: assembled.policy_runtime.clone(),
             observe: assembled.observe.clone(),
+            panel_quota: Some(assembled.panel_quota.clone()),
         };
         let task = tokio::spawn(
             daemon::run_control_socket_with_acp_runtime_and_administration(
@@ -72,6 +73,9 @@ impl RunningFixture {
                     metering: bitrouter::metering::MeteringStore::new(assembled.db),
                     inventory: None,
                     evolution: None,
+                    panel_activity: Arc::new(
+                        bitrouter::panel_activity::AgentActivityRegistry::new(),
+                    ),
                 },
                 Some(administration),
             ),

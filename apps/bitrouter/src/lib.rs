@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod account_ref;
 pub mod acp_cli;
 pub mod acp_runtime;
 pub mod acp_trajectory;
@@ -45,6 +46,8 @@ pub mod metering;
 pub mod onboarding;
 pub mod optimization;
 pub mod output;
+pub mod panel_activity;
+pub mod panel_quota;
 pub mod paths;
 pub mod policy;
 pub mod policy_compile;

@@ -20,6 +20,7 @@
 //! charge status before using the legacy non-null
 //! `estimated_charge_micro_usd` column.
 
+pub mod companion;
 pub mod db;
 pub mod entities;
 pub mod pricing;
@@ -39,8 +40,8 @@ pub use pricing::{
 pub use reconciliation::{ReconciliationSummary, reconcile_requests};
 pub use recorder::{MeteringRecorder, MeteringSettlementEvent};
 pub use store::{
-    MeteringStore, MeteringUsageRecord, RateMetrics, ReconciliationRecord, TimeWindow, TokenUsage,
-    UsagePriceOverride,
+    AcpTurnEvidence, MeteringStore, MeteringUsageRecord, RateMetrics, ReconciliationRecord,
+    TimeWindow, TokenUsage, UsagePriceOverride,
 };
 
 /// Render micro-USD for the agent-facing cost surfaces (`status --agent`

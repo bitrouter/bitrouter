@@ -80,6 +80,8 @@ pub struct Assembled {
     pub app: App,
     /// Startup-owned checker clients and the process-local receipt query store.
     pub request_checks: Arc<crate::request_checks::RequestCheckRuntime>,
+    /// Daemon-owned passive quota cache sharing the recorder's account key.
+    pub panel_quota: crate::panel_quota::PanelQuotaService,
     /// The shared database connection.
     pub db: DatabaseConnection,
     /// In-memory API-principal-scoped ACP route leases.
@@ -410,6 +412,21 @@ pub async fn build_app_with_path(
         Some(home) => home.to_path_buf(),
         None => std::env::current_dir().context("resolve continuation key home")?,
     };
+    // An in-memory assembly has no installation home and must not create
+    // identity files in the caller's working directory. Configured daemons
+    // persist the key next to their config so account references survive restarts.
+    let account_ref_key = match config_path.and_then(std::path::Path::parent) {
+        Some(home) => crate::account_ref::AccountRefKey::load(home)
+            .context("loading upstream account reference key")?,
+        None => crate::account_ref::AccountRefKey::ephemeral(),
+    };
+    let credential_store =
+        bitrouter_providers::oauth::credential_store::CredentialStore::default_path()
+            .context("loading provider credential store for panel quota")?;
+    let panel_quota = crate::panel_quota::PanelQuotaService::new(
+        account_ref_key.clone(),
+        credential_store.path().to_path_buf(),
+    )?;
     let continuation_registry = ContinuationRegistry::new(
         db.clone(),
         ContinuationKeySource::lazy(runtime_home),
@@ -507,6 +524,7 @@ pub async fn build_app_with_path(
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
     let pricing_for_recorder = pricing.clone();
+    let account_ref_key_for_recorder = account_ref_key.clone();
     let policy_store: Arc<PolicyStore> = Arc::new(load_policy_store(config).await?);
     let policy_store_for_reload = policy_store.clone();
     let guardrail_rules = build_guardrail_config(config)?
@@ -668,6 +686,7 @@ pub async fn build_app_with_path(
             .executor(executor.clone())
             .settlement_recorder(
                 MeteringRecorder::new(metering_store.clone(), pricing.clone())
+                    .with_account_ref_key(account_ref_key.clone())
                     .with_reconciliation_provider("bitrouter"),
             );
         let sub_pipeline = Arc::new(
@@ -860,6 +879,7 @@ pub async fn build_app_with_path(
             // for spend caps.
             lm.settlement_recorder(
                 MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
+                    .with_account_ref_key(account_ref_key_for_recorder)
                     .with_reconciliation_provider("bitrouter"),
             );
             lm.settlement_recorder(evolution_for_hooks);
@@ -953,6 +973,7 @@ pub async fn build_app_with_path(
 
     Ok(Assembled {
         request_checks,
+        panel_quota,
         app,
         db,
         acp_runtime,

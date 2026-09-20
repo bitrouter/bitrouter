@@ -102,6 +102,14 @@ impl DaemonReloader for NoopReloader {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum DaemonCommand {
+    /// Read today's client/session usage for the local menu-bar companion.
+    Panel {
+        input: crate::actions::panel::PanelInput,
+    },
+    /// Publish one managed ACP lifecycle observation for the local companion.
+    PanelAgentUpdate {
+        update: crate::panel_activity::AgentActivityUpdate,
+    },
     /// Stop the daemon — it finishes the response, then exits.
     Stop,
     /// Hot-reload the config / routing table. The CLI piggybacks a
@@ -193,6 +201,17 @@ pub enum DaemonCommand {
         /// Harness-native ACP session identity.
         session_id: String,
     },
+    /// Read content-free routed request outcomes for one native session turn.
+    AcpTurnEvidence {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+        /// Inclusive start of the turn being classified.
+        started_at: DateTime<Utc>,
+    },
     AcpRouteReset {
         /// Opaque principal derived from the normal API credential, or local.
         api_principal: String,
@@ -255,6 +274,10 @@ pub struct RouteHop {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "resp", rename_all = "snake_case")]
 pub enum DaemonResponse {
+    /// Versioned companion snapshot; available only on owner-scoped IPC.
+    Panel {
+        report: Box<crate::actions::panel::PanelReport>,
+    },
     /// The command succeeded with no payload.
     Ok,
     /// Status payload.
@@ -353,6 +376,13 @@ pub enum DaemonResponse {
         requests: u64,
         /// Rows without charge evidence, absent from `spend_micro_usd`.
         unpriced: u64,
+    },
+    /// Content-free terminal evidence for routed requests in one ACP turn.
+    AcpTurnEvidence {
+        /// Settled requests observed after the turn began.
+        requests: u64,
+        /// Settled requests carrying an error code.
+        failures: u64,
     },
     /// The command failed.
     Error {
@@ -597,6 +627,7 @@ pub async fn run_control_socket(
             metering,
             inventory: None,
             evolution: None,
+            panel_activity: Arc::new(crate::panel_activity::AgentActivityRegistry::new()),
         },
     )
     .await
@@ -620,6 +651,8 @@ pub struct AcpControlPlane {
     pub inventory: Option<crate::evolution::inventory::GatewayInventory>,
     /// Live route validation and checkpoint worker status, when installed.
     pub evolution: Option<crate::evolution::runtime::EvolutionRuntime>,
+    /// Managed ACP lifecycle observations for the owner-scoped companion.
+    pub panel_activity: Arc<crate::panel_activity::AgentActivityRegistry>,
 }
 
 pub async fn run_control_socket_with_acp_runtime(
@@ -684,9 +717,17 @@ async fn accept_loop(
         let stream = listener.accept().await?;
         // Handle one command per connection. A `Stop` ends the loop (and thus
         // the whole `serve`); any other command loops for the next client.
-        if handle_connection(stream, app, listen, reloader, observe, acp, administration).await? {
-            tracing::info!("stop command received — shutting down");
-            return Ok(());
+        match handle_connection(stream, app, listen, reloader, observe, acp, administration).await {
+            Ok(true) => {
+                tracing::info!("stop command received — shutting down");
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(error) => {
+                // A caller can cancel a read at any point (for example when a
+                // menu closes). Its connection failure must not stop routing.
+                tracing::debug!(%error, "local control connection ended before completing");
+            }
         }
     }
 }
@@ -729,7 +770,13 @@ where
 
     let is_stop = matches!(command, DaemonCommand::Stop);
     let response = dispatch(command, app, listen, reloader, observe, acp, administration).await;
-    write_response(reader.get_mut(), &response).await?;
+    if let Err(error) = write_response(reader.get_mut(), &response).await {
+        if !is_stop {
+            return Err(error);
+        }
+        // An accepted Stop still takes effect if its caller has disconnected.
+        tracing::debug!(%error, "stop caller disconnected before acknowledgement");
+    }
     Ok(is_stop)
 }
 
@@ -793,6 +840,37 @@ async fn dispatch(
             None => DaemonResponse::Error {
                 message: "reload state is unavailable on this daemon".to_string(),
             },
+        },
+        DaemonCommand::Panel { input } => {
+            let (activities, activity_events) = acp.panel_activity.snapshot();
+            match crate::actions::panel::report(
+                &acp.metering,
+                input,
+                administration
+                    .as_ref()
+                    .and_then(|admin| admin.panel_quota.as_ref()),
+                &activities,
+                &activity_events,
+            )
+            .await
+            {
+                Ok(report) => DaemonResponse::Panel {
+                    report: Box::new(report),
+                },
+                Err(error) if error.to_string().contains("panel_snapshot_expired") => {
+                    DaemonResponse::Error {
+                        message: "panel_snapshot_expired: refresh the panel to load sessions"
+                            .into(),
+                    }
+                }
+                Err(_) => DaemonResponse::Error {
+                    message: "panel_read_failed: unable to read local usage".into(),
+                },
+            }
+        }
+        DaemonCommand::PanelAgentUpdate { update } => match acp.panel_activity.publish(update) {
+            Ok(()) => DaemonResponse::Ok,
+            Err(message) => DaemonResponse::Error { message },
         },
         DaemonCommand::Status => {
             let routable = app
@@ -878,6 +956,39 @@ async fn dispatch(
                 },
                 Err(error) => DaemonResponse::Error {
                     message: format!("session spend is unavailable: {error}"),
+                },
+            }
+        }
+        DaemonCommand::AcpTurnEvidence {
+            api_principal,
+            controller_instance_id,
+            session_id,
+            started_at,
+        } => {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+            {
+                return DaemonResponse::Error {
+                    message: "principal, controller and session must not be empty".to_string(),
+                };
+            }
+            match acp
+                .metering
+                .turn_evidence_for_acp_session(
+                    &api_principal,
+                    &controller_instance_id,
+                    &session_id,
+                    started_at,
+                )
+                .await
+            {
+                Ok(evidence) => DaemonResponse::AcpTurnEvidence {
+                    requests: evidence.requests,
+                    failures: evidence.failures,
+                },
+                Err(error) => DaemonResponse::Error {
+                    message: format!("turn evidence is unavailable: {error}"),
                 },
             }
         }
@@ -1760,6 +1871,7 @@ mod tests {
             policy,
             observe: Arc::new(NoopObserveStatus { compiled_in: false }),
             request_checks: Some(request_checks),
+            panel_quota: None,
         })
     }
 

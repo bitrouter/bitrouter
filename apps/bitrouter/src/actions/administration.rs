@@ -241,6 +241,8 @@ pub struct Administration {
     /// Daemon-owned request-check runtime. Absent only for limited embeddings
     /// that cannot answer process-local checker or receipt inspection.
     pub request_checks: Option<Arc<crate::request_checks::RequestCheckRuntime>>,
+    /// Daemon-owned non-blocking quota cache for panel reads.
+    pub panel_quota: Option<crate::panel_quota::PanelQuotaService>,
 }
 
 impl Administration {

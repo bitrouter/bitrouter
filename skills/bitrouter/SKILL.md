@@ -31,6 +31,14 @@ These emit JSON by default (`--human` is readable). Branch on the result:
 missing command → §2; no active providers → §3; stopped daemon → `start`; both
 ready → §5.
 
+`bro panel --since RFC3339 --until RFC3339` reads local usage/quotas plus managed
+`bro code` lifecycle snapshots/events for BitRouter Bar. Traffic-only clients do
+not acquire inferred completion or approval state. Snapshot `updated_at` is the
+last visible transition, not the latest heartbeat; routed `bro code` also rejects
+a false-success `end_turn` when scoped metering proves every request in that turn
+failed.
+Requires a running daemon with panel support; see `references/cli.md` for details.
+
 ### 2. Install
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://bitrouter.ai/install.sh | sh

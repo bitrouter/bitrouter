@@ -11,16 +11,18 @@ use bitrouter_tui::code::{
     CodeAction, CodeEffect, CodeState, CodeStatus, CodeView, Command, CommandOwner, CommandTarget,
     Inspector, Selector, TurnOutcome,
 };
+use chrono::{DateTime, Utc};
 use crossterm::event::EventStream;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use tokio_util::sync::CancellationToken;
 
-use crate::acp_cli::{SessionHandle, SessionSelection};
+use crate::acp_cli::{RoutedTurnEvidence, SessionHandle, SessionSelection};
 use crate::actions::code::evolution::candidate::CandidateDraft;
 use crate::actions::code::evolution::manual::ReviewDraft;
 use crate::actions::code::evolution::{Panel, SessionRef};
 use crate::actions::code::{CodeServices, OpenedSession};
 use crate::dashboard::SessionRequest;
+use crate::panel_activity::{AgentActivityUpdate, AgentLifecycleState};
 
 use super::code_controls::{picker, row};
 use super::code_wire::{CodeWire, WireEvent};
@@ -66,6 +68,10 @@ struct Runtime {
     evolution_review: Option<ReviewDraft>,
     evolution_candidate: Option<CandidateDraft>,
     last_launch: Option<SessionRequest>,
+    activity_instance_id: String,
+    lifecycle_state: AgentLifecycleState,
+    lifecycle_activity: String,
+    turn_started_at: Option<DateTime<Utc>>,
 }
 
 fn fresh_request(previous: Option<&SessionRequest>, agent: String) -> SessionRequest {
@@ -112,6 +118,10 @@ pub(crate) async fn run(
         evolution_review: None,
         evolution_candidate: None,
         last_launch: None,
+        activity_instance_id: format!("bro-code-{}", uuid::Uuid::new_v4().simple()),
+        lifecycle_state: AgentLifecycleState::Idle,
+        lifecycle_activity: "Choosing agent".into(),
+        turn_started_at: None,
     };
     runtime
         .state
@@ -148,6 +158,7 @@ pub(crate) async fn run(
         runtime.teardown_failed |= !cleanup;
     }
     let restored = view.finish();
+    runtime.transition_activity(AgentLifecycleState::Idle, "Session closed");
     result?;
     restored?;
     if let Some(error) = session_job_error {
@@ -161,11 +172,45 @@ pub(crate) async fn run(
 }
 
 impl Runtime {
+    fn transition_activity(&mut self, state: AgentLifecycleState, activity: impl Into<String>) {
+        self.lifecycle_state = state;
+        self.lifecycle_activity = bounded_activity(activity.into());
+        self.publish_current_activity();
+    }
+
+    fn publish_current_activity(&self) {
+        let identity = self
+            .wire
+            .handle
+            .as_ref()
+            .map(|handle| (handle.agent_id.clone(), handle.session_id.clone()))
+            .or_else(|| {
+                self.last_launch
+                    .as_ref()
+                    .map(|launch| (launch.agent.clone(), self.activity_instance_id.clone()))
+            });
+        let Some((agent_id, session_id)) = identity else {
+            return;
+        };
+        self.services.publish_panel_activity(AgentActivityUpdate {
+            instance_id: self.activity_instance_id.clone(),
+            agent_id,
+            session_id,
+            state: self.lifecycle_state,
+            activity: self.lifecycle_activity.clone(),
+        });
+    }
+
     async fn drive(&mut self, view: &mut CodeView) -> Result<()> {
         let mut events = Some(EventStream::new());
         let mut shutdown = super::signals::Shutdown::install();
         let mut dirty = true;
         let mut paint_due = None;
+        let mut activity_heartbeat = tokio::time::interval_at(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(10),
+        );
+        activity_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             while let Some(effect) = self.effects.pop_front() {
                 if effect == CodeEffect::Redraw {
@@ -226,7 +271,7 @@ impl Runtime {
                 }
                 event = self.wire.next() => {
                     let streamed = matches!(&event, WireEvent::Update(_));
-                    self.wire_event(event);
+                    self.wire_event(event).await;
                     if streamed {
                         paint_due.get_or_insert(tokio::time::Instant::now() + bitrouter_tui::writer::Schedule::INTERVAL);
                     } else { dirty = true; }
@@ -297,6 +342,7 @@ impl Runtime {
                     if clean == Some(false) { self.teardown_failed = true; self.state.set_notice("ACP teardown did not confirm; inspect the session log"); }
                     dirty = true;
                 }
+                _ = activity_heartbeat.tick() => self.publish_current_activity(),
                 () = paint_at(paint_due), if !self.editing => { dirty = true; },
             }
         }
@@ -314,6 +360,10 @@ impl Runtime {
         self.state.set_session_active(false);
         self.status.activity = format!("connecting · {}", request.agent);
         self.state.set_status(self.status.clone());
+        self.transition_activity(
+            AgentLifecycleState::Connecting,
+            format!("Connecting · {}", request.agent),
+        );
         self.job = Some(
             async move {
                 ensure!(
@@ -387,9 +437,12 @@ impl Runtime {
                         "This agent command is no longer advertised"
                     );
                 }
+                let started_at = Utc::now();
                 self.wire.submit(prompt)?;
+                self.turn_started_at = Some(started_at);
                 self.effects
                     .extend(self.state.step(CodeAction::TurnStarted));
+                self.transition_activity(AgentLifecycleState::Working, "Working");
                 return Ok(());
             }
             CodeEffect::Exit => {
@@ -398,10 +451,16 @@ impl Runtime {
             }
             CodeEffect::Cancel => {
                 self.wire.cancel();
+                self.transition_activity(AgentLifecycleState::Working, "Cancelling");
                 return Ok(());
             }
             CodeEffect::ResolvePermission { id, outcome } => {
                 self.wire.resolve(&id, outcome);
+                if self.wire.has_permissions() {
+                    self.transition_activity(AgentLifecycleState::NeedsApproval, "Approval needed");
+                } else {
+                    self.transition_activity(AgentLifecycleState::Working, "Working");
+                }
                 return Ok(());
             }
             _ => {}
@@ -830,6 +889,7 @@ impl Runtime {
                     self.state.set_notice(opened.diagnostics.join("\n"));
                 }
                 self.wire.attach(opened.handle);
+                self.transition_activity(AgentLifecycleState::Idle, "Ready");
                 self.seed_initial_settings();
                 self.refresh_settings();
                 self.refresh_commands();
@@ -853,11 +913,16 @@ impl Runtime {
                         if resumed {
                             self.state.set_notice("Earlier history was not replayed");
                         }
+                        self.transition_activity(AgentLifecycleState::Idle, "Ready");
                     }
                     Err(error) => {
                         self.wire.handle = Some(*handle);
                         self.state
                             .set_notice(format!("Could not open native session: {error:#}"));
+                        self.transition_activity(
+                            AgentLifecycleState::Failed,
+                            "Could not open native session",
+                        );
                     }
                 }
                 self.status.activity = "ready".into();
@@ -898,15 +963,26 @@ impl Runtime {
         }
     }
 
-    fn wire_event(&mut self, event: WireEvent) {
+    async fn wire_event(&mut self, event: WireEvent) {
         match event {
             WireEvent::Update(update) => {
+                let tool_activity = match &update {
+                    SessionUpdate::ToolCall(tool) => Some(tool.title.clone()),
+                    SessionUpdate::ToolCallUpdate(tool) => tool.fields.title.clone(),
+                    _ => None,
+                };
                 let commands = matches!(update, SessionUpdate::AvailableCommandsUpdate(_));
                 let settings = matches!(
                     update,
                     SessionUpdate::ConfigOptionUpdate(_) | SessionUpdate::CurrentModeUpdate(_)
                 );
                 self.state.apply(update);
+                if let Some(activity) = tool_activity.filter(|value| !value.trim().is_empty()) {
+                    self.transition_activity(
+                        AgentLifecycleState::Working,
+                        format!("Tool · {activity}"),
+                    );
+                }
                 if settings {
                     self.refresh_settings();
                 }
@@ -925,20 +1001,60 @@ impl Runtime {
                 );
                 self.effects
                     .extend(self.state.receive_permission_with_context(prompt, context));
+                self.transition_activity(AgentLifecycleState::NeedsApproval, "Approval needed");
             }
             WireEvent::Settled(result) => {
-                let outcome = match result {
+                let started_at = self.turn_started_at.take();
+                let routed_evidence = if result
+                    .as_ref()
+                    .is_ok_and(|response| response.stop_reason == StopReason::EndTurn)
+                {
+                    match (started_at, self.wire.handle.as_ref()) {
+                        (Some(started_at), Some(handle)) => {
+                            handle.routed_turn_evidence(started_at).await
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let (outcome, state, activity) = match result {
                     Ok(response) => match response.stop_reason {
-                        StopReason::EndTurn => TurnOutcome::Completed,
-                        StopReason::Cancelled => TurnOutcome::Cancelled,
-                        reason => TurnOutcome::Stopped(format!("{reason:?}")),
+                        StopReason::EndTurn => match routed_failure_detail(routed_evidence) {
+                            Some(detail) => (
+                                TurnOutcome::Failed(detail),
+                                AgentLifecycleState::Failed,
+                                "Turn failed".to_string(),
+                            ),
+                            None => (
+                                TurnOutcome::Completed,
+                                AgentLifecycleState::Completed,
+                                "Turn completed".to_string(),
+                            ),
+                        },
+                        StopReason::Cancelled => (
+                            TurnOutcome::Cancelled,
+                            AgentLifecycleState::Idle,
+                            "Turn cancelled".to_string(),
+                        ),
+                        reason => (
+                            TurnOutcome::Stopped(format!("{reason:?}")),
+                            AgentLifecycleState::Failed,
+                            "Turn stopped".to_string(),
+                        ),
                     },
-                    Err(error) => TurnOutcome::Failed(format!("{error:#}")),
+                    Err(error) => (
+                        TurnOutcome::Failed(format!("{error:#}")),
+                        AgentLifecycleState::Failed,
+                        "Turn failed".to_string(),
+                    ),
                 };
                 self.effects
                     .extend(self.state.step(CodeAction::TurnSettled(outcome)));
+                self.transition_activity(state, activity);
             }
             WireEvent::CancellationExpired | WireEvent::Disconnected => {
+                self.turn_started_at = None;
                 self.retain_session_details();
                 let activity = if matches!(event, WireEvent::CancellationExpired) {
                     "disconnected · cancellation did not settle"
@@ -957,6 +1073,7 @@ impl Runtime {
                 self.status = self.state.status().clone();
                 self.status.activity = activity.into();
                 self.state.set_status(self.status.clone());
+                self.transition_activity(AgentLifecycleState::Disconnected, activity);
                 self.refresh_commands();
             }
             WireEvent::CancelFailed(error) => self.state.set_notice(format!(
@@ -1226,6 +1343,30 @@ impl Runtime {
     }
 }
 
+fn bounded_activity(value: String) -> String {
+    let mut bounded = String::new();
+    for character in value.chars().filter(|character| !character.is_control()) {
+        if bounded.len() + character.len_utf8() > 200 {
+            break;
+        }
+        bounded.push(character);
+    }
+    if bounded.trim().is_empty() {
+        "Working".into()
+    } else {
+        bounded
+    }
+}
+
+fn routed_failure_detail(evidence: Option<RoutedTurnEvidence>) -> Option<String> {
+    evidence.filter(|evidence| evidence.proves_failure()).map(|evidence| {
+        format!(
+            "BitRouter observed {} failed routed request(s) and no successful request in this turn",
+            evidence.failures
+        )
+    })
+}
+
 fn title_is_root(title: &str) -> bool {
     title == "Target status"
 }
@@ -1308,5 +1449,30 @@ mod tests {
         assert_eq!(other.selection, SessionSelection::New);
         assert_eq!(other.routing, RoutingOptions::default());
         assert_eq!(other.turn_timeout, None);
+    }
+
+    #[test]
+    fn end_turn_is_failed_only_when_routed_evidence_is_conclusive() {
+        assert!(routed_failure_detail(None).is_none());
+        assert!(
+            routed_failure_detail(Some(RoutedTurnEvidence {
+                requests: 0,
+                failures: 0,
+            }))
+            .is_none()
+        );
+        assert!(
+            routed_failure_detail(Some(RoutedTurnEvidence {
+                requests: 2,
+                failures: 1,
+            }))
+            .is_none()
+        );
+        let failure = routed_failure_detail(Some(RoutedTurnEvidence {
+            requests: 3,
+            failures: 3,
+        }))
+        .expect("all routed requests failed");
+        assert!(failure.contains("3 failed routed request(s)"));
     }
 }

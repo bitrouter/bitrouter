@@ -11,6 +11,7 @@ pub mod checks;
 pub(crate) mod code;
 pub mod commands;
 pub mod models;
+pub mod panel;
 pub mod requests;
 pub mod route;
 pub mod session;
