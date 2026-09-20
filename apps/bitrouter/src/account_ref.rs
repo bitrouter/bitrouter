@@ -1,7 +1,6 @@
 //! Installation-local opaque references for authenticated upstream accounts.
 
 use hmac::{Hmac, KeyInit, Mac};
-use rand::RngExt;
 use sha2::Sha256;
 
 use bitrouter_sdk::language_model::auth::ContinuationAuthority;
@@ -17,9 +16,7 @@ impl AccountRefKey {
     }
 
     pub fn ephemeral() -> Self {
-        let mut secret = [0_u8; 32];
-        rand::rng().fill(&mut secret);
-        Self(secret)
+        Self(rand::random())
     }
 
     pub fn derive(&self, provider_id: &str, authority: &ContinuationAuthority) -> Option<String> {
