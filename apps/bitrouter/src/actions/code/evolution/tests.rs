@@ -140,6 +140,7 @@ presets:
             metering: crate::metering::MeteringStore::new(assembled.db),
             inventory: Some(assembled.evolution.inventory()),
             evolution: Some(assembled.evolution),
+            panel_activity: Arc::new(crate::panel_activity::AgentActivityRegistry::new()),
         },
     ));
     let fixture = Fixture {

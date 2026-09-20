@@ -46,6 +46,7 @@ async fn serve_control(
                 metering: bitrouter::metering::MeteringStore::new(assembled.db),
                 inventory: Some(evolution.inventory()),
                 evolution: Some(evolution.clone()),
+                panel_activity: Arc::new(bitrouter::panel_activity::AgentActivityRegistry::new()),
             },
         ),
     ));

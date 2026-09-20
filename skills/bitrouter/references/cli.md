@@ -34,6 +34,13 @@ checks, launches, and ACP sessions remain local. Remote policy defaults to
 
 ## Daemon lifecycle
 
+`bro panel --since RFC3339 --until RFC3339` exposes managed `bro code` lifecycle
+snapshots and recent notification events to the local BitRouter Bar. A snapshot's
+`updated_at` is its last visible transition; heartbeats refresh only its expiry.
+For routed turns, an ACP `end_turn` is converted to failure only when the
+owner-scoped session evidence for that turn contains requests and all of them
+failed. Direct and inconclusive turns preserve the ACP outcome.
+
 | Command | Effect |
 |---|---|
 | `bro serve [--config PATH]` | Run the inference HTTP server + local control socket **in the foreground**. Optional `control.enabled: true` also starts the authenticated typed HTTP control listener at `control.listen` (default `127.0.0.1:4358`). `control.credentials` may name `{id, token_env, scopes}` credentials using `control:read` and `control:reload`; absent/empty credentials preserve `BITROUTER_CONTROL_TOKEN` as read-only. Explicit credentials exclude that legacy token. Tokens are at least 32 bytes, browser origins are checked, the listener stays loopback-only for a private tunnel/TLS reverse proxy, and inference `server.skip_auth` does not affect it. It does not expose MCP or ACP sessions. |
@@ -64,6 +71,14 @@ an unknown group; unknown tokens are not zero. Account quotas may include usage
 outside BitRouter and are shared across clients. Only verified account mappings
 can carry quota readings; unsupported providers or historical requests lacking
 account evidence retain explicit unknown/unavailable states.
+
+The additive `agents` and `agent_events` arrays contain owner-local lifecycle
+facts published by managed `bro code` ACP sessions. `agents` includes opaque
+instance and session ids plus connecting, idle, working, needs-approval,
+completed, failed, or disconnected state and bounded activity text.
+`agent_events` is the bounded actionable log for approval, completion, failure,
+and disconnection. Do not infer lifecycle state for traffic-only clients;
+`last_activity_at` proves only recent routed activity.
 
 | Command | Effect |
 |---|---|

@@ -46,6 +46,7 @@ pub mod metering;
 pub mod onboarding;
 pub mod optimization;
 pub mod output;
+pub mod panel_activity;
 pub mod panel_quota;
 pub mod paths;
 pub mod policy;

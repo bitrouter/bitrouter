@@ -14,6 +14,7 @@ use crate::metering::MeteringStore;
 use crate::metering::companion::{ClientIdentity, CompanionUsageAggregate, UsageAggregate};
 use crate::output::CliReport;
 use crate::output::human::Human;
+use crate::panel_activity::{AgentActivityEvent, AgentActivitySnapshot, AgentLifecycleState};
 
 /// Explicit local-day bounds and per-client session page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,8 +53,38 @@ pub struct PanelReport {
     pub since: DateTime<Utc>,
     pub until: DateTime<Utc>,
     pub clients: Vec<PanelClient>,
+    #[serde(default)]
+    pub agents: Vec<PanelAgent>,
+    #[serde(default)]
+    pub agent_events: Vec<PanelAgentEvent>,
     pub session_page: SessionPage,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PanelAgent {
+    pub id: String,
+    pub agent_id: String,
+    pub label: String,
+    pub session_id: String,
+    pub short_id: String,
+    pub state: AgentLifecycleState,
+    pub activity: String,
+    pub updated_at: DateTime<Utc>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PanelAgentEvent {
+    pub id: String,
+    pub agent_id: String,
+    pub label: String,
+    pub session_id: String,
+    pub short_id: String,
+    pub state: AgentLifecycleState,
+    pub activity: String,
+    pub occurred_at: DateTime<Utc>,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +194,8 @@ pub async fn report(
     store: &MeteringStore,
     input: PanelInput,
     quotas: Option<&crate::panel_quota::PanelQuotaService>,
+    activities: &[AgentActivitySnapshot],
+    activity_events: &[AgentActivityEvent],
 ) -> Result<PanelReport> {
     input.validate()?;
     let usage = store
@@ -178,7 +211,7 @@ pub async fn report(
     let snapshots = quotas
         .map(|service| service.snapshot(&account_refs))
         .unwrap_or_default();
-    from_usage(usage, &input, &snapshots)
+    from_usage(usage, &input, &snapshots, activities, activity_events)
 }
 
 fn opaque_id(value: &impl Serialize) -> Result<String> {
@@ -189,6 +222,8 @@ fn from_usage(
     usage: CompanionUsageAggregate,
     input: &PanelInput,
     quotas: &HashMap<String, PanelQuota>,
+    activities: &[AgentActivitySnapshot],
+    activity_events: &[AgentActivityEvent],
 ) -> Result<PanelReport> {
     let mut sharing = BTreeMap::<String, usize>::new();
     for client in &usage.clients {
@@ -309,6 +344,14 @@ fn from_usage(
         });
     }
     let sampled = Utc::now();
+    let agents = activities
+        .iter()
+        .map(panel_agent)
+        .collect::<Result<Vec<_>>>()?;
+    let agent_events = activity_events
+        .iter()
+        .map(panel_agent_event)
+        .collect::<Result<Vec<_>>>()?;
     Ok(PanelReport {
         schema_version: 1,
         generated_at: sampled,
@@ -316,6 +359,8 @@ fn from_usage(
         since: input.since,
         until: input.until,
         clients,
+        agents,
+        agent_events,
         session_page: SessionPage {
             offset: input.session_offset,
             limit: input.session_limit,
@@ -324,6 +369,50 @@ fn from_usage(
         },
         warnings: vec![],
     })
+}
+
+fn panel_agent(activity: &AgentActivitySnapshot) -> Result<PanelAgent> {
+    let session_id = opaque_id(&(&activity.agent_id, &activity.session_id))?;
+    Ok(PanelAgent {
+        id: opaque_id(&activity.instance_id)?,
+        agent_id: activity.agent_id.clone(),
+        label: agent_label(&activity.agent_id),
+        short_id: session_id.chars().take(8).collect(),
+        session_id,
+        state: activity.state,
+        activity: activity.activity.clone(),
+        updated_at: activity.updated_at,
+        source: "managed_acp".into(),
+    })
+}
+
+fn panel_agent_event(event: &AgentActivityEvent) -> Result<PanelAgentEvent> {
+    let session_id = opaque_id(&(&event.agent_id, &event.session_id))?;
+    Ok(PanelAgentEvent {
+        id: event.id.clone(),
+        agent_id: event.agent_id.clone(),
+        label: agent_label(&event.agent_id),
+        short_id: session_id.chars().take(8).collect(),
+        session_id,
+        state: event.state,
+        activity: event.activity.clone(),
+        occurred_at: event.occurred_at,
+        source: "managed_acp".into(),
+    })
+}
+
+fn agent_label(agent_id: &str) -> String {
+    match agent_id {
+        "codex" | "codex-acp" => "Codex".into(),
+        "claude" | "claude-code" | "claude-code-acp" => "Claude Code".into(),
+        "opencode" | "opencode-acp" => "OpenCode".into(),
+        other => other
+            .trim_end_matches("-acp")
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(80)
+            .collect(),
+    }
 }
 
 impl CliReport for PanelReport {
@@ -395,6 +484,8 @@ mod tests {
                 session_offset: 0,
             },
             &HashMap::from([("account-a".into(), quota)]),
+            &[],
+            &[],
         )?;
         let known = report
             .clients
@@ -418,6 +509,51 @@ mod tests {
         assert_eq!(unknown.quota.state, "unknown");
         assert!(!unknown.shared);
         assert!(unknown.quota.sampled_at.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn managed_activity_is_opaque_in_panel_output() -> Result<()> {
+        let now = Utc::now();
+        let activity = AgentActivitySnapshot {
+            instance_id: "process-secret".into(),
+            agent_id: "codex-acp".into(),
+            session_id: "native-session-secret".into(),
+            state: AgentLifecycleState::NeedsApproval,
+            activity: "Approval needed".into(),
+            updated_at: now,
+            last_seen_at: now,
+        };
+        let panel = panel_agent(&activity)?;
+        assert_eq!(panel.label, "Codex");
+        assert_eq!(panel.state, AgentLifecycleState::NeedsApproval);
+        assert_ne!(panel.id, activity.instance_id);
+        assert_ne!(panel.session_id, activity.session_id);
+        assert_eq!(panel.short_id.len(), 8);
+        Ok(())
+    }
+
+    #[test]
+    fn additive_activity_fields_accept_older_panel_responses() -> Result<()> {
+        let now = Utc::now();
+        let value = serde_json::json!({
+            "schema_version": 1,
+            "generated_at": now,
+            "usage_updated_at": now,
+            "since": now - chrono::Duration::minutes(1),
+            "until": now,
+            "clients": [],
+            "session_page": {
+                "offset": 0,
+                "limit": 100,
+                "has_more": false,
+                "next_offset": null
+            },
+            "warnings": []
+        });
+        let report: PanelReport = serde_json::from_value(value)?;
+        assert!(report.agents.is_empty());
+        assert!(report.agent_events.is_empty());
         Ok(())
     }
 

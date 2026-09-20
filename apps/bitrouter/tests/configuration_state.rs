@@ -73,6 +73,9 @@ impl RunningFixture {
                     metering: bitrouter::metering::MeteringStore::new(assembled.db),
                     inventory: None,
                     evolution: None,
+                    panel_activity: Arc::new(
+                        bitrouter::panel_activity::AgentActivityRegistry::new(),
+                    ),
                 },
                 Some(administration),
             ),

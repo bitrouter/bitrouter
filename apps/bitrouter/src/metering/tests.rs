@@ -1751,6 +1751,20 @@ async fn record_attributed_as(
     recorder.record(&mut request).await
 }
 
+async fn record_failed_attributed(
+    recorder: &MeteringRecorder,
+    request_id: &str,
+    identity: SessionIdentityObserved,
+) -> Result<()> {
+    let mut request = ctx("acp", 0, 0);
+    request.request_id = request_id.to_string();
+    request.error = Some(bitrouter_sdk::BitrouterError::internal(
+        "upstream unavailable",
+    ));
+    request.emit(identity);
+    recorder.record(&mut request).await
+}
+
 #[tokio::test]
 async fn acp_session_spend_is_scoped_to_its_controller() -> Result<()> {
     let pool = pool().await;
@@ -1790,6 +1804,70 @@ async fn acp_session_spend_is_scoped_to_its_controller() -> Result<()> {
         .spend_summary_for_acp_session("acp", "brc_never", "shared", TimeWindow::ThisMonth)
         .await?;
     assert_eq!((none.requests, none.spend_micro_usd), (0, 0));
+    Ok(())
+}
+
+#[tokio::test]
+async fn acp_turn_evidence_counts_only_its_scoped_requests_after_start() -> Result<()> {
+    let pool = pool().await;
+    let store = MeteringStore::new(pool.clone());
+    let recorder = MeteringRecorder::new(store.clone(), pricing());
+    let started_at = chrono::Utc::now() - chrono::Duration::seconds(1);
+
+    record_attributed(
+        &recorder,
+        "turn-success",
+        10,
+        5,
+        acp_identity(
+            "turn-success",
+            Some("brc_turn"),
+            "codex",
+            Some("session-turn"),
+            None,
+        ),
+    )
+    .await?;
+    record_failed_attributed(
+        &recorder,
+        "turn-failure",
+        acp_identity(
+            "turn-failure",
+            Some("brc_turn"),
+            "codex",
+            Some("session-turn"),
+            None,
+        ),
+    )
+    .await?;
+    record_failed_attributed(
+        &recorder,
+        "other-controller",
+        acp_identity(
+            "other-controller",
+            Some("brc_other"),
+            "codex",
+            Some("session-turn"),
+            None,
+        ),
+    )
+    .await?;
+
+    let evidence = store
+        .turn_evidence_for_acp_session("acp", "brc_turn", "session-turn", started_at)
+        .await?;
+    assert_eq!((evidence.requests, evidence.failures), (2, 1));
+
+    let after_turn = store
+        .turn_evidence_for_acp_session(
+            "acp",
+            "brc_turn",
+            "session-turn",
+            chrono::Utc::now() + chrono::Duration::seconds(1),
+        )
+        .await?;
+    assert_eq!(after_turn.requests, 0);
+    assert_eq!(after_turn.failures, 0);
     Ok(())
 }
 

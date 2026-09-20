@@ -3825,6 +3825,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
             metering: bitrouter::metering::MeteringStore::new(assembled.db.clone()),
             inventory: Some(assembled.evolution.inventory()),
             evolution: Some(assembled.evolution.clone()),
+            panel_activity: Arc::new(bitrouter::panel_activity::AgentActivityRegistry::new()),
         },
         Some(administration),
     );

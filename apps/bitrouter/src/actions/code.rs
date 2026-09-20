@@ -68,6 +68,35 @@ pub(crate) struct OpenedSession {
 }
 
 impl CodeServices {
+    pub(crate) fn publish_panel_activity(
+        &self,
+        update: crate::panel_activity::AgentActivityUpdate,
+    ) {
+        let Some(socket) = self.target.local_socket().map(Path::to_path_buf) else {
+            return;
+        };
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                crate::daemon::send_command(
+                    &socket,
+                    &crate::daemon::DaemonCommand::PanelAgentUpdate { update },
+                ),
+            )
+            .await;
+            match result {
+                Ok(Ok(crate::daemon::DaemonResponse::Ok)) => {}
+                Ok(Ok(response)) => {
+                    tracing::debug!(?response, "panel activity update was not accepted")
+                }
+                Ok(Err(error)) => {
+                    tracing::debug!(%error, "panel activity update could not reach daemon")
+                }
+                Err(_) => tracing::debug!("panel activity update timed out"),
+            }
+        });
+    }
+
     pub fn commands(
         &self,
         client: Option<&bitrouter_sdk::acp::client::AcpClient>,

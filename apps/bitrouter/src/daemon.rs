@@ -106,6 +106,10 @@ pub enum DaemonCommand {
     Panel {
         input: crate::actions::panel::PanelInput,
     },
+    /// Publish one managed ACP lifecycle observation for the local companion.
+    PanelAgentUpdate {
+        update: crate::panel_activity::AgentActivityUpdate,
+    },
     /// Stop the daemon — it finishes the response, then exits.
     Stop,
     /// Hot-reload the config / routing table. The CLI piggybacks a
@@ -196,6 +200,17 @@ pub enum DaemonCommand {
         controller_instance_id: String,
         /// Harness-native ACP session identity.
         session_id: String,
+    },
+    /// Read content-free routed request outcomes for one native session turn.
+    AcpTurnEvidence {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+        /// Inclusive start of the turn being classified.
+        started_at: DateTime<Utc>,
     },
     AcpRouteReset {
         /// Opaque principal derived from the normal API credential, or local.
@@ -361,6 +376,13 @@ pub enum DaemonResponse {
         requests: u64,
         /// Rows without charge evidence, absent from `spend_micro_usd`.
         unpriced: u64,
+    },
+    /// Content-free terminal evidence for routed requests in one ACP turn.
+    AcpTurnEvidence {
+        /// Settled requests observed after the turn began.
+        requests: u64,
+        /// Settled requests carrying an error code.
+        failures: u64,
     },
     /// The command failed.
     Error {
@@ -605,6 +627,7 @@ pub async fn run_control_socket(
             metering,
             inventory: None,
             evolution: None,
+            panel_activity: Arc::new(crate::panel_activity::AgentActivityRegistry::new()),
         },
     )
     .await
@@ -628,6 +651,8 @@ pub struct AcpControlPlane {
     pub inventory: Option<crate::evolution::inventory::GatewayInventory>,
     /// Live route validation and checkpoint worker status, when installed.
     pub evolution: Option<crate::evolution::runtime::EvolutionRuntime>,
+    /// Managed ACP lifecycle observations for the owner-scoped companion.
+    pub panel_activity: Arc<crate::panel_activity::AgentActivityRegistry>,
 }
 
 pub async fn run_control_socket_with_acp_runtime(
@@ -817,12 +842,15 @@ async fn dispatch(
             },
         },
         DaemonCommand::Panel { input } => {
+            let (activities, activity_events) = acp.panel_activity.snapshot();
             match crate::actions::panel::report(
                 &acp.metering,
                 input,
                 administration
                     .as_ref()
                     .and_then(|admin| admin.panel_quota.as_ref()),
+                &activities,
+                &activity_events,
             )
             .await
             {
@@ -840,6 +868,10 @@ async fn dispatch(
                 },
             }
         }
+        DaemonCommand::PanelAgentUpdate { update } => match acp.panel_activity.publish(update) {
+            Ok(()) => DaemonResponse::Ok,
+            Err(message) => DaemonResponse::Error { message },
+        },
         DaemonCommand::Status => {
             let routable = app
                 .language_model()
@@ -924,6 +956,39 @@ async fn dispatch(
                 },
                 Err(error) => DaemonResponse::Error {
                     message: format!("session spend is unavailable: {error}"),
+                },
+            }
+        }
+        DaemonCommand::AcpTurnEvidence {
+            api_principal,
+            controller_instance_id,
+            session_id,
+            started_at,
+        } => {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+            {
+                return DaemonResponse::Error {
+                    message: "principal, controller and session must not be empty".to_string(),
+                };
+            }
+            match acp
+                .metering
+                .turn_evidence_for_acp_session(
+                    &api_principal,
+                    &controller_instance_id,
+                    &session_id,
+                    started_at,
+                )
+                .await
+            {
+                Ok(evidence) => DaemonResponse::AcpTurnEvidence {
+                    requests: evidence.requests,
+                    failures: evidence.failures,
+                },
+                Err(error) => DaemonResponse::Error {
+                    message: format!("turn evidence is unavailable: {error}"),
                 },
             }
         }

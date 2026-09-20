@@ -61,6 +61,7 @@ use anyhow::{Context, Result};
 use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
 use bitrouter_sdk::invocation;
+use chrono::{DateTime, Utc};
 use futures::{FutureExt, StreamExt};
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -1549,6 +1550,19 @@ struct DaemonSessionCost {
     controller_instance_id: String,
 }
 
+/// Content-free routed request outcomes observed for one interactive turn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RoutedTurnEvidence {
+    pub(crate) requests: u64,
+    pub(crate) failures: u64,
+}
+
+impl RoutedTurnEvidence {
+    pub(crate) fn proves_failure(self) -> bool {
+        self.requests > 0 && self.failures == self.requests
+    }
+}
+
 /// How long one usage update may wait on the daemon before it is forwarded
 /// without a figure. The lookup sits on the controller's forward path, so a
 /// stalled daemon must cost the ACP client a cost line, never its update stream.
@@ -1771,6 +1785,7 @@ pub(crate) struct SessionHandle {
     pub(crate) launch_id: Option<String>,
     pub(crate) capabilities: CapabilitySnapshot,
     pub(crate) initial_settings: bitrouter_sdk::acp::client::SessionInitialSettings,
+    turn_evidence_binding: Option<LocalControllerBinding>,
     cwd: PathBuf,
     mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
     pub(crate) updates: std::pin::Pin<Box<dyn futures::Stream<Item = SessionUpdate> + Send>>,
@@ -1780,6 +1795,52 @@ pub(crate) struct SessionHandle {
 }
 
 impl SessionHandle {
+    /// Ask the owner-scoped daemon for terminal request evidence from this
+    /// routed turn. Absence is intentionally inconclusive: direct sessions,
+    /// older daemons, and unavailable IPC retain the adapter's ACP outcome.
+    pub(crate) async fn routed_turn_evidence(
+        &self,
+        started_at: DateTime<Utc>,
+    ) -> Option<RoutedTurnEvidence> {
+        let binding = self.turn_evidence_binding.as_ref()?;
+        let command = crate::daemon::DaemonCommand::AcpTurnEvidence {
+            api_principal: binding.api_principal.clone(),
+            controller_instance_id: binding.controller_instance_id.clone(),
+            session_id: self.session_id.clone(),
+            started_at,
+        };
+        let response = tokio::time::timeout(
+            SESSION_COST_LOOKUP_TIMEOUT,
+            crate::daemon::send_command(&binding.socket_path, &command),
+        )
+        .await;
+        match response {
+            Ok(Ok(crate::daemon::DaemonResponse::AcpTurnEvidence { requests, failures })) => {
+                Some(RoutedTurnEvidence { requests, failures })
+            }
+            Ok(Ok(crate::daemon::DaemonResponse::Error { message })) => {
+                tracing::debug!(session_id = %self.session_id, %message, "turn evidence is unavailable");
+                None
+            }
+            Ok(Ok(other)) => {
+                tracing::debug!(
+                    session_id = %self.session_id,
+                    ?other,
+                    "daemon returned an unexpected turn-evidence response"
+                );
+                None
+            }
+            Ok(Err(error)) => {
+                tracing::debug!(session_id = %self.session_id, %error, "turn evidence lookup failed");
+                None
+            }
+            Err(_) => {
+                tracing::debug!(session_id = %self.session_id, "turn evidence lookup timed out");
+                None
+            }
+        }
+    }
+
     /// Open another native session unless `cancel` is signalled first.
     ///
     /// Cancellation deliberately leaves this handle unchanged: its current
@@ -1920,6 +1981,7 @@ impl SessionHost {
         }
         let mcp_servers = self.options.mcp_servers.clone();
         let terminal_auth = self.options.terminal_auth;
+        let turn_evidence_binding = self.binding.clone();
         let mut session = launch_controlled_with_cancel(
             &self.config,
             &self.agent_id,
@@ -1970,6 +2032,7 @@ impl SessionHost {
             launch_id: self.routed.launch_id,
             capabilities,
             initial_settings: ids.initial_settings,
+            turn_evidence_binding,
             cwd,
             mcp_servers,
             updates,

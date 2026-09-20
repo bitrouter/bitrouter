@@ -60,6 +60,7 @@ async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() ->
             metering: MeteringStore::new(assembled.db.clone()),
             inventory: Some(assembled.evolution.inventory()),
             evolution: Some(assembled.evolution.clone()),
+            panel_activity: Arc::new(bitrouter::panel_activity::AgentActivityRegistry::new()),
         },
     ));
     wait_until_ready(&socket).await;
@@ -373,6 +374,7 @@ async fn api_principal_scoped_acp_routes_roundtrip_over_the_control_socket() {
             metering: MeteringStore::new(assembled.db.clone()),
             inventory: Some(assembled.evolution.inventory()),
             evolution: Some(assembled.evolution.clone()),
+            panel_activity: Arc::new(bitrouter::panel_activity::AgentActivityRegistry::new()),
         },
     ));
     wait_until_ready(&socket).await;
@@ -1008,6 +1010,7 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
             metering: metering.clone(),
             inventory: Some(assembled.evolution.inventory()),
             evolution: Some(assembled.evolution.clone()),
+            panel_activity: Arc::new(bitrouter::panel_activity::AgentActivityRegistry::new()),
         },
     ));
     wait_until_ready(&socket).await;

@@ -96,6 +96,19 @@ providers:
         }
     })
     .await??;
+    daemon::send_command(
+        &socket,
+        &DaemonCommand::PanelAgentUpdate {
+            update: bitrouter::panel_activity::AgentActivityUpdate {
+                instance_id: "managed-process".into(),
+                agent_id: "codex-acp".into(),
+                session_id: "native-session-private".into(),
+                state: bitrouter::panel_activity::AgentLifecycleState::NeedsApproval,
+                activity: "Approval needed".into(),
+            },
+        },
+    )
+    .await?;
     let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
         .args([
             "panel",
@@ -142,12 +155,20 @@ providers:
     ensure!(claude.tokens.value == Some(14));
     ensure!(codex.sessions.len() == 1 && report.session_page.next_offset == Some(1));
     ensure!(codex.sessions[0].tokens.value == Some(14));
+    ensure!(report.agents.len() == 1 && report.agent_events.len() == 1);
+    ensure!(
+        report.agents[0].state == bitrouter::panel_activity::AgentLifecycleState::NeedsApproval
+    );
     let serialized = String::from_utf8(output.stdout)?;
     ensure!(!serialized.contains("panel-private-fixture-key"));
     ensure!(!serialized.contains("private prompt"));
     ensure!(
         !serialized.contains("root-a"),
         "raw session identities crossed UI contract"
+    );
+    ensure!(
+        !serialized.contains("native-session-private"),
+        "raw managed session identity crossed UI contract"
     );
     Ok(())
 }

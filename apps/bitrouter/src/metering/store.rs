@@ -299,6 +299,16 @@ pub struct SpendSummary {
     pub unpriced: u64,
 }
 
+/// Content-free terminal evidence for routed requests attributed to one ACP
+/// session after a turn began.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AcpTurnEvidence {
+    /// Settled requests observed in the turn window.
+    pub requests: u64,
+    /// Requests whose persisted settlement carries an error code.
+    pub failures: u64,
+}
+
 /// One settled request as the live view renders it.
 ///
 /// Deliberately **not** [`MeteringUsageRecord`]: that type is the stable
@@ -838,6 +848,43 @@ impl MeteringStore {
                 BitrouterError::internal(format!("spend_summary_for_acp_session: {e}"))
             })?;
         Ok(summarize(charges))
+    }
+
+    /// Request outcomes for one native ACP session since `started_at`.
+    ///
+    /// This uses the same caller/controller/session isolation as attributed
+    /// spend, but reads only content-free terminal error presence. It lets an
+    /// owner distinguish a real routed failure from an ACP adapter that wraps
+    /// the upstream error in an ordinary `EndTurn` response.
+    pub async fn turn_evidence_for_acp_session(
+        &self,
+        api_principal: &str,
+        controller_instance_id: &str,
+        session_id: &str,
+        started_at: DateTime<Utc>,
+    ) -> Result<AcpTurnEvidence> {
+        let errors: Vec<Option<String>> = requests::Entity::find()
+            .select_only()
+            .column(requests::Column::Error)
+            .filter(requests::Column::RouteScopeId.eq(api_principal))
+            .filter(requests::Column::ControllerInstanceId.eq(controller_instance_id))
+            .filter(
+                Condition::any()
+                    .add(requests::Column::AcpSessionId.eq(session_id))
+                    .add(requests::Column::NativeRootSessionId.eq(session_id))
+                    .add(requests::Column::NativeAgentThreadId.eq(session_id)),
+            )
+            .filter(requests::Column::CreatedAt.gte(started_at.to_rfc3339()))
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(|error| {
+                BitrouterError::internal(format!("turn_evidence_for_acp_session: {error}"))
+            })?;
+        Ok(AcpTurnEvidence {
+            requests: errors.len() as u64,
+            failures: errors.iter().filter(|error| error.is_some()).count() as u64,
+        })
     }
 
     /// Total spend + request count within `window`, across every caller.
