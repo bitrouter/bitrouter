@@ -172,3 +172,10 @@ App 传入 `--since`、`--until`、`--session-limit`、`--session-offset`，读�
 公开发布、Developer ID 签名和 notarization 尚未完成。
 
 产品形态参考：[TokenBar](https://github.com/Nanako0129/TokenBar)。
+
+## 9. 原生菜单修订（UI 仓库）
+
+用户 review 后确认使用原生菜单和会话子菜单，替代固定高度弹出面板及内联展开。
+具体交互以独立 `bitrouter-bar` 仓库的 `docs/MVP.md` 为准；读取契约保持 schema v1。
+菜单关闭可取消正在进行的读取；daemon 已隔离单个 IPC 连接的断开/写回复失败，
+避免正常 UI 取消使路由服务退出。主动 Stop 即使调用方断开也仍生效。
