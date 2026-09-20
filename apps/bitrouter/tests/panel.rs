@@ -173,3 +173,65 @@ async fn invalid_panel_day_fails_before_connecting() -> Result<()> {
     );
     Ok(())
 }
+
+/// Closing a native menu cancels its CLI child. A lost reply must stay local
+/// to that connection, including when the request was malformed.
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelled_panel_reads_do_not_stop_the_daemon() -> Result<()> {
+    use std::io::Write;
+    use std::net::Shutdown;
+    use std::os::unix::net::UnixStream;
+
+    let directory = tempfile::Builder::new()
+        .prefix("br-panel-")
+        .tempdir_in("/tmp")?;
+    let config_path = directory.path().join("bitrouter.yaml");
+    let yaml = "inherit_defaults: false\nserver:\n  skip_auth: true\ndatabase:\n  url: 'sqlite::memory:'\n";
+    tokio::fs::write(&config_path, yaml).await?;
+    let config = config::parse(yaml)?;
+    let assembled = bitrouter::build_app_with_path(&config, Some(&config_path)).await?;
+    let socket = directory.path().join("panel.sock");
+    let server = tokio::spawn(daemon::run_control_socket(
+        socket.clone(),
+        Arc::new(assembled.app),
+        "127.0.0.1:0".into(),
+        Arc::new(NoopReloader),
+        Arc::new(NoopObserveStatus { compiled_in: false }),
+        MeteringStore::new(assembled.db),
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while daemon::probe_status(&socket).await?.is_none() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
+    let until = chrono::Utc::now();
+    let command = serde_json::to_string(&DaemonCommand::Panel {
+        input: bitrouter::actions::panel::PanelInput {
+            since: until - chrono::Duration::hours(1),
+            until,
+            session_limit: 100,
+            session_offset: 0,
+        },
+    })?;
+    let abandon = |request: &str| -> Result<()> {
+        // Synchronous writes avoid yielding to the single-threaded server
+        // until the read side is already closed, making the lost reply certain.
+        let mut stream = UnixStream::connect(&socket)?;
+        writeln!(stream, "{request}")?;
+        stream.shutdown(Shutdown::Both)?;
+        Ok(())
+    };
+    for request in [&command, "{invalid-json"] {
+        abandon(request)?;
+        let status =
+            tokio::time::timeout(Duration::from_secs(5), daemon::probe_status(&socket)).await??;
+        ensure!(status.is_some(), "abandoned read terminated the daemon");
+    }
+    // An explicitly accepted Stop still works even if the CLI goes away.
+    abandon("{\"cmd\":\"stop\"}")?;
+    tokio::time::timeout(Duration::from_secs(5), server).await???;
+    Ok(())
+}

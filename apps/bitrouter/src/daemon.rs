@@ -692,9 +692,17 @@ async fn accept_loop(
         let stream = listener.accept().await?;
         // Handle one command per connection. A `Stop` ends the loop (and thus
         // the whole `serve`); any other command loops for the next client.
-        if handle_connection(stream, app, listen, reloader, observe, acp, administration).await? {
-            tracing::info!("stop command received — shutting down");
-            return Ok(());
+        match handle_connection(stream, app, listen, reloader, observe, acp, administration).await {
+            Ok(true) => {
+                tracing::info!("stop command received — shutting down");
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(error) => {
+                // A caller can cancel a read at any point (for example when a
+                // menu closes). Its connection failure must not stop routing.
+                tracing::debug!(%error, "local control connection ended before completing");
+            }
         }
     }
 }
@@ -737,7 +745,13 @@ where
 
     let is_stop = matches!(command, DaemonCommand::Stop);
     let response = dispatch(command, app, listen, reloader, observe, acp, administration).await;
-    write_response(reader.get_mut(), &response).await?;
+    if let Err(error) = write_response(reader.get_mut(), &response).await {
+        if !is_stop {
+            return Err(error);
+        }
+        // An accepted Stop still takes effect if its caller has disconnected.
+        tracing::debug!(%error, "stop caller disconnected before acknowledgement");
+    }
     Ok(is_stop)
 }
 
