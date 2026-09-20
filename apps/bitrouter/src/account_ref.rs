@@ -12,10 +12,6 @@ const DOMAIN: &[u8] = b"bitrouter.upstream-account-ref.v1";
 pub struct AccountRefKey([u8; 32]);
 
 impl AccountRefKey {
-    pub fn from_bytes(secret: [u8; 32]) -> Self {
-        Self(secret)
-    }
-
     pub fn load(home: &std::path::Path) -> anyhow::Result<Self> {
         crate::paths::get_or_create_account_ref_key(home).map(Self)
     }
@@ -61,8 +57,8 @@ mod tests {
 
     #[test]
     fn refs_are_installation_and_provider_scoped() {
-        let first = AccountRefKey::from_bytes([1; 32]);
-        let second = AccountRefKey::from_bytes([2; 32]);
+        let first = AccountRefKey::ephemeral();
+        let second = AccountRefKey::ephemeral();
         let authority = authority("principal");
         let stable = first.derive("provider-a", &authority);
         assert_eq!(stable, first.derive("provider-a", &authority));

@@ -455,7 +455,7 @@ mod tests {
             .expect(2)
             .mount(&server)
             .await;
-        let key = AccountRefKey::from_bytes([9; 32]);
+        let key = AccountRefKey::ephemeral();
         let authority =
             bitrouter_providers::codex::OpenAiCodexAuthApplier::credential_authority(&token)
                 .ok_or_else(|| anyhow::anyhow!("fixture account claim missing"))?;
