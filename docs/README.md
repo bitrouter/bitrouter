@@ -17,10 +17,11 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
   skills over MCP, the observability TUI, the ACP TUI, the ACP controller,
   the agent registry).
-- [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) — **phases 0–3 implemented, 4–5
-  proposed.** One actions table so the CLI leaf and the MCP tool that answer
-  the same question share one report type, one implementation, and a guard
-  test. Written for
+- [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) — **phases 0–4 implemented; phase 5
+  proposed.** One actions table so the CLI, Code, and typed remote-control
+  surfaces that answer the same question share one report type, one
+  implementation, and a guard test. Its historical origin-MCP analysis is
+  superseded in part. Written for
   [#868](https://github.com/bitrouter/bitrouter/issues/868); stands alone
   from #863 and #866.
 - [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — authoritative boundary
@@ -41,20 +42,14 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`AGENT_INTERFACE_UNIFICATION_SPEC.md`](AGENT_INTERFACE_UNIFICATION_SPEC.md) —
   **proposed for review.** Unifies the public agent UX around native
   `claude`/`codex` shortcuts, the `code` TUI, headless `run`, and one raw
-  `acp serve` bridge; retires visible `spawn`, keeps sessions harness-owned,
-  and reduces MCP CLI to stdio serving plus one diagnostic while direct remote
-  MCP moves into the daemon.
-- [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) — **proposed for
-  review; nothing implemented.** Replaces the OSS first-party origin MCP with
+  `acp serve` bridge; retires visible `spawn` and keeps sessions harness-owned.
+  Its origin-MCP proposal is superseded in part.
+- [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) — **implemented and
+  ready for review.** Replaces the OSS first-party origin MCP with
   the `/bitrouter` Skill plus structured CLI for shell-capable local agents,
   while retaining the MCP gateway, aggregate `/mcp` endpoint, server-side tool
   loop, and Skills-over-MCP relay. Places any multi-tenant BitRouter control
   origin in Cloud rather than this repository.
-- [`CODE_TUI_UX_SPEC.md`](CODE_TUI_UX_SPEC.md) — **implemented.** Builds on
-  merged #900/#901 with a scrollback-native Code surface: no dashboard tabs,
-  one docked transient footer, explicit Enter-to-queue **Next turn** composition
-  with paused recovery, and temporary alternate-screen inspectors for large
-  read-only detail.
 - [`REMOTE_CONTROL_MVP_SPEC.md`](REMOTE_CONTROL_MVP_SPEC.md) — **implemented.**
   Read-only remote status/models/route/requests and operations inspectors over an
   authenticated, loopback-only HTTP control listener; ACP stays local.
