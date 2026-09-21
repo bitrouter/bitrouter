@@ -42,29 +42,26 @@ Verify with `bro --version`; on failure read `references/diagnose.md`.
 
 ### 3. Configure
 
-A human runs `bro` to complete onboarding using searchable Up/Down lists
-of registry providers (including BitRouter Cloud), ACP harnesses and actions.
-After setup the same command opens the saved default ACP TUI. Credentials alone do not mark setup complete.
+A human runs `bro` to complete onboarding using searchable Up/Down lists of registry
+providers (including BitRouter Cloud), ACP harnesses and actions. After setup the same
+command opens the saved default ACP TUI. Credentials alone do not mark setup complete.
 For scripted setup:
 
 ```bash
 bro init --yes --use-detected --harness codex --after exit
 ```
 
-This saves `chat.agent: codex-acp` in the resolved config, or the BitRouter home
-when no config exists. `--model ID` persists the default model too. Existing
-settings are preserved; `--force` resets them. Read
-`providers_skipped_interactive` in the JSON report for logins needing a human.
-No hand-written provider or agent entry is needed for Codex or Claude ACP.
-See `references/cli.md` for flags, config precedence and first-run defaults.
+This saves `chat.agent: codex-acp` in the resolved config, or the BitRouter home when
+no config exists. `--model ID` persists the default model too. Existing settings are
+preserved; `--force` resets them. Read `providers_skipped_interactive` for logins needing
+a human. No hand-written agent entry is needed. See `references/cli.md` for all flags.
 
 ### 4. Choose providers — subscription first
 These logins are interactive, so they are what `providers_skipped_interactive`
 reports. Work the order below: it buys the same tokens for less money.
 
-**a. The subscription they already pay for.** If the user drives Claude Code or
-Codex, log that in first so the harness keeps serving its own models from the
-plan they have already bought instead of from metered API calls.
+**a. The subscription they already pay for.** If the user drives Claude Code or Codex,
+log that in first so the harness keeps serving its models from the plan they already bought.
 
 ```bash
 bro providers login claude-code    # adopts the live Claude Code session
@@ -83,20 +80,25 @@ the daemon auto-enables every provider whose key is present, and
 
 Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not `GOOGLE_API_KEY`), `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY` (zen *and* go).
 
-`providers login` also takes `--api-key` / `--key-stdin`, and
-`references/cloud-setup.md` covers the hosted account, credits, and `brk_*`
-keys. Net effect: the subscription serves its native models; hosted BitRouter
-or BYOK supplements everything it does not cover.
+`providers login` also takes `--api-key` / `--key-stdin`; `references/cloud-setup.md`
+covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supplements subscriptions.
 
 ### 5. Start the desired agent interface
 
-BitRouter's full-screen conversation uses temporary operational inspectors:
+BitRouter's inline conversation uses explicit alternate-screen inspectors:
 
 ```bash
 bro code                    # conversation with Choose agent picker
 bro code codex              # explicit interactive ACP session
 bro run claude "summarize this repo"  # headless ACP turn
+bro run codex "audit this repo" --background  # supervised; returns run id
+bro agents sessions --json  # scriptable supervised-run inventory
+bro agents                 # standalone manager; TTY only
 ```
+
+Background runs survive client exit. Attach with `bro agents attach <run-id>`; stop and
+remove are separate. Foreground `run` denies unmatched permissions; background asks.
+Same-worktree runs require the warned override. Read `references/sessions.md` first.
 
 Both built-in adapters require Node.js 22+ and `npx`; a compatible local CLI is
 selected automatically behind the pinned adapter. For the harness's own native
@@ -163,7 +165,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 | `references/harness-*.md` | Durable per-harness wiring instead of `launch`: `-claude-code`, `-codex`, `-hermes-agent`, `-openclaw`, `-terminus-2` |
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | `bitrouter/auto`, trace projections, policy locks; history-driven quality/cost optimization; cache-aware pricing, charge evidence, usage export |
-| `references/sessions.md`, `references/updating.md` | ACP controller, served vs in-process (`acp serve`, `run`, native sessions, NDJSON, `bro code <agent>`); `bro update` and channels |
+| `references/sessions.md`, `references/updating.md` | ACP controller/supervisor (`acp serve`, foreground/background `run`, `agents`, native sessions, NDJSON, Code); `bro update` and channels |
 
 ## Gotchas
 

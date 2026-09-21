@@ -15,12 +15,15 @@ use crossterm::event::EventStream;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use tokio_util::sync::CancellationToken;
 
-use crate::acp_cli::{SessionHandle, SessionSelection};
+use crate::acp_cli::SessionSelection;
 use crate::actions::code::evolution::candidate::CandidateDraft;
 use crate::actions::code::evolution::manual::ReviewDraft;
 use crate::actions::code::evolution::{Panel, SessionRef};
 use crate::actions::code::{CodeServices, OpenedSession};
+use crate::actions::supervised::SupervisedHandle;
+use crate::agent_sessions::{AgentResult, BackgroundClient};
 use crate::dashboard::SessionRequest;
+use bitrouter_tui::agents::{AgentEffect, NewAgentRunTarget};
 
 use super::code_controls::{picker, row};
 use super::code_wire::{CodeWire, WireEvent};
@@ -29,7 +32,7 @@ enum JobResult {
     Evolution(Box<Panel>),
     Opened(Box<OpenedSession>),
     Selected {
-        handle: Box<SessionHandle>,
+        handle: Box<SupervisedHandle>,
         result: Result<()>,
         resumed: bool,
     },
@@ -58,6 +61,12 @@ struct Runtime {
     selectors: Vec<Selector>,
     editing: bool,
     exit: bool,
+    detach_on_exit: bool,
+    background: Option<BackgroundClient>,
+    background_poll: Option<LocalBoxFuture<'static, Result<AgentResult>>>,
+    background_job: Option<LocalBoxFuture<'static, Result<AgentResult>>>,
+    background_effects: VecDeque<AgentEffect>,
+    background_error: Option<String>,
     cleanup: futures::stream::FuturesUnordered<LocalBoxFuture<'static, bool>>,
     teardown_failed: bool,
     route_probe: Option<LocalBoxFuture<'static, Result<String>>>,
@@ -87,6 +96,7 @@ pub(crate) async fn run(
     services: Arc<CodeServices>,
     initial: Option<SessionRequest>,
 ) -> Result<()> {
+    let background = services.background_client().await?;
     let status = CodeStatus {
         title: services.label.clone(),
         ..Default::default()
@@ -104,6 +114,12 @@ pub(crate) async fn run(
         selectors: Vec::new(),
         editing: false,
         exit: false,
+        detach_on_exit: false,
+        background,
+        background_poll: None,
+        background_job: None,
+        background_effects: VecDeque::new(),
+        background_error: None,
         cleanup: Default::default(),
         teardown_failed: false,
         route_probe: None,
@@ -116,6 +132,11 @@ pub(crate) async fn run(
     runtime
         .state
         .set_operations_only(runtime.services.operations_only);
+    if let Some(client) = &runtime.background {
+        runtime
+            .state
+            .set_agent_client_id(client.client_id().to_string());
+    }
     runtime.refresh_commands();
     if let Some(request) = initial {
         runtime.start(request);
@@ -126,11 +147,18 @@ pub(crate) async fn run(
     }
     let mut view = CodeView::open().context("opening Code terminal")?;
     let result = runtime.drive(&mut view).await;
-    // Session jobs own controlled children. Cancel their lifecycle RPC and
-    // recover the handle for teardown; ordinary effects can be dropped.
+    // Restore terminal ownership before waiting on daemon cleanup: a slow or
+    // unavailable supervisor must not leave the shell in raw/alternate mode.
+    let restored = view.finish();
+    // Accepted lifecycle requests are independently daemon-owned and recorded
+    // before opening the adapter. Client loss must not wait for a hung adapter
+    // handshake; its run remains discoverable and its lease expires normally.
     if let Some(cancel) = runtime.session_job_cancel.take() {
         cancel.cancel();
     } else {
+        runtime.job = None;
+    }
+    if !runtime.exit {
         runtime.job = None;
     }
     let mut session_job_error = None;
@@ -143,11 +171,24 @@ pub(crate) async fn run(
             Err(error) => session_job_error = Some(error),
         }
     }
-    let clean = runtime.wire.shutdown().await;
+    let clean = if runtime.exit && !runtime.detach_on_exit {
+        runtime.wire.shutdown().await
+    } else {
+        runtime.wire.detach(runtime.detach_on_exit).await
+    };
     while let Some(cleanup) = runtime.cleanup.next().await {
         runtime.teardown_failed |= !cleanup;
     }
-    let restored = view.finish();
+    runtime.background_poll = None;
+    if !runtime.exit {
+        runtime.background_job = None;
+    }
+    if let Some(job) = runtime.background_job.take() {
+        let _ = job.await;
+    }
+    if let Some(client) = &runtime.background {
+        client.release_all().await;
+    }
     result?;
     restored?;
     if let Some(error) = session_job_error {
@@ -161,6 +202,62 @@ pub(crate) async fn run(
 }
 
 impl Runtime {
+    fn background_target(&self) -> Option<NewAgentRunTarget> {
+        let launch = self.last_launch.as_ref()?;
+        Some(NewAgentRunTarget {
+            agent: launch.agent.clone(),
+            directory: std::env::current_dir().ok()?.display().to_string(),
+            route: launch.routing.model.clone(),
+            conflict: None,
+        })
+    }
+
+    fn schedule_background(&mut self) {
+        let Some(client) = self.background.clone() else {
+            return;
+        };
+        // A pre-action snapshot must not overwrite an acknowledged lease or
+        // selection. Keep reads and effects ordered, with queued actions first.
+        if self.background_job.is_some() || self.background_poll.is_some() {
+            return;
+        }
+        if let Some(effect) = self.background_effects.pop_front() {
+            let target = self.background_target();
+            let blocked = self.state.foreground_permission_pending()
+                && !self.state.agents().is_inspector()
+                && effect.blocked_by_foreground_permission();
+            self.background_job = Some(
+                async move {
+                    if blocked {
+                        Ok(client
+                            .reject_queued_effect(
+                                &effect,
+                                "Foreground permission waiting; background action was not sent",
+                            )
+                            .await)
+                    } else {
+                        client.handle_effect(effect, target).await
+                    }
+                }
+                .boxed_local(),
+            );
+        } else {
+            let foreground = self
+                .wire
+                .handle
+                .as_ref()
+                .map(|handle| handle.client.run_id.clone());
+            let target = self.background_target();
+            self.background_poll = Some(
+                async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    client.snapshot(foreground.as_deref(), target).await
+                }
+                .boxed_local(),
+            );
+        }
+    }
+
     async fn drive(&mut self, view: &mut CodeView) -> Result<()> {
         let mut events = Some(EventStream::new());
         let mut shutdown = super::signals::Shutdown::install();
@@ -205,6 +302,7 @@ impl Runtime {
                 }
                 dirty = true;
             }
+            self.schedule_background();
             if self.exit {
                 return Ok(());
             }
@@ -219,6 +317,39 @@ impl Runtime {
                 paint_due = None;
             }
             tokio::select! {
+                result = next_background(&mut self.background_poll) => {
+                    self.background_poll = None;
+                    match result {
+                        Ok(result) => {
+                            if self.background_error.take().is_some() {
+                                self.state.set_notice("Background sessions reconnected");
+                                dirty = true;
+                            }
+                            let (effects, repaint) = crate::agent_sessions::apply_code_result(&mut self.state, result);
+                            self.effects.extend(effects);
+                            dirty |= repaint;
+                        }
+                        Err(error) => {
+                            let message = format!("Background sessions unavailable: {error:#}");
+                            if self.background_error.as_ref() != Some(&message) {
+                                self.state.set_notice(message.clone());
+                                self.background_error = Some(message);
+                                dirty = true;
+                            }
+                        }
+                    }
+                }
+                result = next_background(&mut self.background_job) => {
+                    self.background_job = None;
+                    match result {
+                        Ok(result) => {
+                            let (effects, _) = crate::agent_sessions::apply_code_result(&mut self.state, result);
+                            self.effects.extend(effects);
+                        }
+                        Err(error) => self.state.set_notice(format!("Background action failed: {error:#}")),
+                    }
+                    dirty = true;
+                }
                 event = next_input(&mut events) => {
                     let Some(event) = event else { return Ok(()); };
                     self.effects.extend(self.state.step(CodeAction::Event(event?)));
@@ -396,6 +527,31 @@ impl Runtime {
                 self.exit = true;
                 return Ok(());
             }
+            CodeEffect::DetachAndExit => {
+                ensure!(
+                    self.wire.handle.is_some(),
+                    "Choose an agent before detaching"
+                );
+                ensure!(
+                    self.state.queue_len() == 0,
+                    "Resolve queued follow-ups before detaching"
+                );
+                self.detach_on_exit = true;
+                self.exit = true;
+                return Ok(());
+            }
+            CodeEffect::Agent(effect) => {
+                ensure!(
+                    !self.services.operations_only,
+                    "This target is operations-only"
+                );
+                ensure!(
+                    self.background.is_some(),
+                    "Choose an agent to start the local supervisor"
+                );
+                self.background_effects.push_back(effect);
+                return Ok(());
+            }
             CodeEffect::Cancel => {
                 self.wire.cancel();
                 return Ok(());
@@ -504,6 +660,8 @@ impl Runtime {
                 );
             }
             CodeEffect::Exit
+            | CodeEffect::DetachAndExit
+            | CodeEffect::Agent(_)
             | CodeEffect::Cancel
             | CodeEffect::ResolvePermission { .. }
             | CodeEffect::Submit { .. }
@@ -805,6 +963,16 @@ impl Runtime {
                 }
             }
             JobResult::Opened(opened) => {
+                self.state
+                    .set_new_agent_run_choices(opened.background_choices);
+                if self.background.is_none() {
+                    let client = BackgroundClient::new(opened.handle.client.socket.clone());
+                    self.state
+                        .set_agent_client_id(client.client_id().to_string());
+                    self.background = Some(client);
+                }
+                self.state
+                    .set_foreground_agent_run(Some(opened.handle.client.run_id.clone()));
                 if let Some(launch) = &mut self.last_launch {
                     // Use the resolved identity when the original launch used
                     // a friendly alias such as "codex".
@@ -917,7 +1085,7 @@ impl Runtime {
             WireEvent::Permission(permission) => {
                 let context = permission.tool_call;
                 let prompt = bitrouter_tui::permission::Prompt::new(
-                    permission.request_id,
+                    permission.permission_id,
                     context.fields.title.clone(),
                     context.tool_call_id.to_string(),
                     context.fields.kind,
@@ -926,6 +1094,7 @@ impl Runtime {
                 self.effects
                     .extend(self.state.receive_permission_with_context(prompt, context));
             }
+            WireEvent::PermissionResolved(id) => self.state.permission_resolved(&id),
             WireEvent::Settled(result) => {
                 let outcome = match result {
                     Ok(response) => match response.stop_reason {
@@ -938,13 +1107,10 @@ impl Runtime {
                 self.effects
                     .extend(self.state.step(CodeAction::TurnSettled(outcome)));
             }
-            WireEvent::CancellationExpired | WireEvent::Disconnected => {
+            WireEvent::Disconnected => {
                 self.retain_session_details();
-                let activity = if matches!(event, WireEvent::CancellationExpired) {
-                    "disconnected · cancellation did not settle"
-                } else {
-                    "disconnected · adapter closed"
-                };
+                self.state.set_foreground_agent_run(None);
+                let activity = "disconnected · inspect supervised run in Agents";
                 self.route_probe = None;
                 self.effects.extend(
                     self.state
@@ -952,16 +1118,17 @@ impl Runtime {
                 );
                 let mut wire = std::mem::take(&mut self.wire);
                 self.cleanup
-                    .push(async move { wire.shutdown().await }.boxed_local());
+                    .push(async move { wire.detach(false).await }.boxed_local());
                 self.state.set_session_active(false);
                 self.status = self.state.status().clone();
                 self.status.activity = activity.into();
                 self.state.set_status(self.status.clone());
                 self.refresh_commands();
             }
-            WireEvent::CancelFailed(error) => self.state.set_notice(format!(
-                "Cancellation request failed: {error}; waiting for settlement"
-            )),
+            WireEvent::CancelFailed(error) => self
+                .state
+                .set_notice(format!("Session action failed: {error}")),
+            WireEvent::Notice(message) => self.state.set_notice(message),
         }
     }
 
@@ -1046,11 +1213,7 @@ impl Runtime {
             self.status.route = "direct".into();
             return;
         }
-        if !handle
-            .client
-            .route_control()
-            .allows(bitrouter_sdk::acp::client::RouteMethod::List)
-        {
+        if !handle.capabilities.route_list {
             return;
         }
         let client = handle.client.clone();
@@ -1192,7 +1355,7 @@ impl Runtime {
         }
         let typed = self
             .services
-            .commands(self.wire.handle.as_ref().map(|handle| &handle.client));
+            .commands(self.wire.handle.as_ref().map(|handle| &handle.capabilities));
         self.state
             .set_typed_commands(typed.clone(), self.templates.clone());
         {
@@ -1259,6 +1422,15 @@ async fn next_input(
 async fn next_job(
     job: &mut Option<LocalBoxFuture<'static, Result<JobResult>>>,
 ) -> Result<JobResult> {
+    match job {
+        Some(job) => job.await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn next_background(
+    job: &mut Option<LocalBoxFuture<'static, Result<AgentResult>>>,
+) -> Result<AgentResult> {
     match job {
         Some(job) => job.await,
         None => std::future::pending().await,

@@ -34,8 +34,15 @@ async fn serve_control(
         &bitrouter::paths::ConfigSource::File(mock.config_path.clone()),
         config,
     );
+    let administration = bitrouter::actions::administration::Administration {
+        source: bitrouter::paths::ConfigSource::File(mock.config_path.clone()),
+        routing: assembled.routing_table.clone(),
+        policy: assembled.policy_runtime.clone(),
+        observe: assembled.observe.clone(),
+        request_checks: Some(assembled.request_checks.clone()),
+    };
     let server = ControlServer(tokio::spawn(
-        bitrouter::daemon::run_control_socket_with_acp_runtime(
+        bitrouter::daemon::run_control_socket_with_acp_runtime_and_administration(
             socket.clone(),
             Arc::new(assembled.app),
             "127.0.0.1:1".into(),
@@ -47,6 +54,7 @@ async fn serve_control(
                 inventory: Some(evolution.inventory()),
                 evolution: Some(evolution.clone()),
             },
+            Some(administration),
         ),
     ));
     tokio::time::timeout(PTY_TIMEOUT, async {
@@ -138,7 +146,8 @@ fn code_fresh_session_preserves_direct_routing_and_timeout_in_the_terminal() -> 
 #[test]
 fn code_operator_restore_runs_through_terminal_review_and_local_publication() -> Result<()> {
     let mock = MockAcp::new(MockScenario::Minimal)?;
-    let mut config_text = std::fs::read_to_string(&mock.config_path)?;
+    let mut config_text =
+        std::fs::read_to_string(&mock.config_path)?.replace(MOCK_DAEMON_CONFIG, "");
     config_text.push_str(
         r#"
 server:
@@ -317,7 +326,8 @@ fn code_checkpoint_history_displays_recorded_revisions_without_changing_the_curr
         "sqlite://{}?mode=rwc",
         mock._directory.path().join("canonical.db").display()
     );
-    let mut config_text = std::fs::read_to_string(&mock.config_path)?;
+    let mut config_text =
+        std::fs::read_to_string(&mock.config_path)?.replace(MOCK_DAEMON_CONFIG, "");
     config_text.push_str(&format!("\nserver:\n  skip_auth: true\n  control_socket: history.sock\ndatabase:\n  url: {}\nregistry:\n  inherit_defaults: false\nacp_recording:\n  enabled: true\n", serde_json::to_string(&database)?));
     std::fs::write(&mock.config_path, &config_text)?;
     let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
