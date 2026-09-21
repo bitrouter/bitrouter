@@ -356,6 +356,30 @@ struct SequencedSessionNotification {
     notification: SessionNotification,
 }
 
+/// One lossless lifecycle-stream position for an opened native session.
+///
+/// `update` is `None` when the wire position belonged to another session or
+/// is the lifecycle response boundary marker. Consumers still advance through
+/// it so a prompt response boundary can be observed without timing guesses.
+#[derive(Debug, Clone)]
+pub struct SequencedSessionUpdate {
+    /// Monotonic connection-local notification position.
+    pub sequence: u64,
+    /// Update for the selected native session, or `None` for a boundary-only
+    /// position that still advances ordering.
+    pub update: Option<SessionUpdate>,
+}
+
+/// A prompt response paired with the last notification position processed
+/// before that response on the ACP connection.
+#[derive(Debug)]
+pub struct PromptBoundary {
+    /// Typed ACP result returned by the agent.
+    pub response: PromptResponse,
+    /// Last notification position processed before `response`.
+    pub notification_boundary: u64,
+}
+
 /// A reliable notification subscription made before a session lifecycle call.
 ///
 /// [`session_updates`](Self::session_updates) uses the response boundary held
@@ -375,6 +399,7 @@ struct LifecycleUpdateState {
     replay_complete: bool,
     initial_updates: VecDeque<SessionUpdate>,
     pending: Option<SequencedSessionNotification>,
+    boundary_emitted: bool,
 }
 
 impl LifecycleNotifications {
@@ -387,6 +412,19 @@ impl LifecycleNotifications {
         self,
         ids: &SessionIds,
     ) -> std::pin::Pin<Box<dyn Stream<Item = SessionUpdate> + Send>> {
+        Box::pin(
+            self.session_updates_sequenced(ids)
+                .filter_map(|entry| futures::future::ready(entry.update)),
+        )
+    }
+
+    /// Retain the lifecycle stream's reliable wire positions as well as its
+    /// session updates. This lets a process owner consume every update through
+    /// a prompt response's [`PromptBoundary`] before settling the turn.
+    pub fn session_updates_sequenced(
+        self,
+        ids: &SessionIds,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = SequencedSessionUpdate> + Send>> {
         let state = LifecycleUpdateState {
             receiver: self.receiver,
             session_id: ids.acp_session_id.clone(),
@@ -394,13 +432,30 @@ impl LifecycleNotifications {
             replay_complete: ids.response_boundary <= self.subscription_boundary,
             initial_updates: ids.initial_updates.clone().into(),
             pending: None,
+            boundary_emitted: false,
         };
         Box::pin(futures::stream::unfold(state, |mut state| async move {
             loop {
                 if state.replay_complete
                     && let Some(update) = state.initial_updates.pop_front()
                 {
-                    return Some((update, state));
+                    return Some((
+                        SequencedSessionUpdate {
+                            sequence: state.response_boundary,
+                            update: Some(update),
+                        },
+                        state,
+                    ));
+                }
+                if state.replay_complete && !state.boundary_emitted {
+                    state.boundary_emitted = true;
+                    return Some((
+                        SequencedSessionUpdate {
+                            sequence: state.response_boundary,
+                            update: None,
+                        },
+                        state,
+                    ));
                 }
 
                 let entry = match state.pending.take() {
@@ -428,15 +483,28 @@ impl LifecycleNotifications {
                     if entry.sequence == state.response_boundary {
                         state.replay_complete = true;
                     }
-                    if entry.notification.session_id.0.as_ref() == state.session_id.as_str() {
-                        return Some((entry.notification.update, state));
-                    }
-                    continue;
+                    let update = (entry.notification.session_id.0.as_ref()
+                        == state.session_id.as_str())
+                    .then_some(entry.notification.update);
+                    return Some((
+                        SequencedSessionUpdate {
+                            sequence: entry.sequence,
+                            update,
+                        },
+                        state,
+                    ));
                 }
 
-                if entry.notification.session_id.0.as_ref() == state.session_id.as_str() {
-                    return Some((entry.notification.update, state));
-                }
+                let update = (entry.notification.session_id.0.as_ref()
+                    == state.session_id.as_str())
+                .then_some(entry.notification.update);
+                return Some((
+                    SequencedSessionUpdate {
+                        sequence: entry.sequence,
+                        update,
+                    },
+                    state,
+                ));
             }
         }))
     }
@@ -502,7 +570,7 @@ impl RawNotificationSubscribers {
 /// ACP returns these settings in the lifecycle response rather than as a
 /// `session/update`. They therefore need to travel with [`SessionIds`] so a
 /// consumer can render the initial state before handling later updates.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SessionInitialSettings {
     /// The initial current mode and all mode choices, when the agent reports
     /// them. The choices are only available in this response, not in a
@@ -814,7 +882,7 @@ enum Command {
     /// Drive a prompt turn; reply with the typed [`PromptResponse`].
     Prompt {
         req: Box<PromptRequest>,
-        reply: oneshot::Sender<anyhow::Result<PromptResponse>>,
+        reply: oneshot::Sender<anyhow::Result<PromptBoundary>>,
     },
     /// Answer the agent's `authenticate` for one advertised method.
     Authenticate {
@@ -1330,6 +1398,16 @@ impl AcpClient {
     /// The abandoned turn may be parked on a permission nobody will ever
     /// answer, so outstanding requests are denied before the cancel goes out.
     pub async fn prompt_typed(&self, req: PromptRequest) -> anyhow::Result<PromptResponse> {
+        Ok(self.prompt_typed_with_boundary(req).await?.response)
+    }
+
+    /// Send a typed prompt and retain the exact notification boundary observed
+    /// before its response. A supervisor can drain its sequenced lifecycle
+    /// stream through this position before publishing terminal turn state.
+    pub async fn prompt_typed_with_boundary(
+        &self,
+        req: PromptRequest,
+    ) -> anyhow::Result<PromptBoundary> {
         let session_id = req.session_id.0.to_string();
         let run = self.send_prompt(req);
         tokio::pin!(run);
@@ -1365,7 +1443,7 @@ impl AcpClient {
     }
 
     /// The prompt round-trip itself, without the deadline wrapper.
-    async fn send_prompt(&self, req: PromptRequest) -> anyhow::Result<PromptResponse> {
+    async fn send_prompt(&self, req: PromptRequest) -> anyhow::Result<PromptBoundary> {
         let (reply, reply_rx) = oneshot::channel();
         self.cmd_tx
             .unbounded_send(Command::Prompt {
@@ -1407,6 +1485,19 @@ impl AcpClient {
     /// Text convenience over [`prompt_typed`](Self::prompt_typed).
     pub async fn prompt(&self, session_id: &str, text: &str) -> anyhow::Result<PromptResponse> {
         self.prompt_typed(PromptRequest::new(
+            SessionId::new(session_id),
+            vec![ContentBlock::Text(TextContent::new(text.to_string()))],
+        ))
+        .await
+    }
+
+    /// Text convenience over [`prompt_typed_with_boundary`](Self::prompt_typed_with_boundary).
+    pub async fn prompt_with_boundary(
+        &self,
+        session_id: &str,
+        text: &str,
+    ) -> anyhow::Result<PromptBoundary> {
+        self.prompt_typed_with_boundary(PromptRequest::new(
             SessionId::new(session_id),
             vec![ContentBlock::Text(TextContent::new(text.to_string()))],
         ))
@@ -1766,19 +1857,24 @@ async fn drive(
                         })?;
                     }
                     Command::Prompt { req, reply } => {
-                        let turn_connection = connection.clone();
-                        connection.spawn(async move {
-                            let result = turn_connection
-                                .send_request(*req)
-                                .block_task()
-                                .await
-                                .map_err(anyhow::Error::from);
-                            // Returning Err here would tear the whole
-                            // connection down (SDK contract); deliver it over
-                            // the reply oneshot instead.
-                            let _ = reply.send(result);
-                            Ok(())
-                        })?;
+                        let raw_notifications = Arc::clone(&lifecycle_raw_notifications);
+                        connection
+                            .send_request(*req)
+                            .on_receiving_result(move |response| {
+                                let result = response
+                                    .map(|response| PromptBoundary {
+                                        response,
+                                        notification_boundary: raw_notifications
+                                            .response_boundary(),
+                                    })
+                                    .map_err(anyhow::Error::from);
+                                async move {
+                                    // Returning Err here would tear the whole connection down
+                                    // (SDK contract); deliver it over the reply oneshot instead.
+                                    let _ = reply.send(result);
+                                    Ok(())
+                                }
+                            })?;
                     }
                     Command::Cancel { session_id } => {
                         let _ = connection
@@ -1850,6 +1946,7 @@ mod tests {
         ToolCallUpdate, ToolCallUpdateFields,
     };
     use agent_client_protocol::{Agent, Client, ConnectTo, RawJsonRpcMessage, TransportFrame};
+    use anyhow::Context as _;
 
     use super::*;
 
@@ -2309,6 +2406,58 @@ mod tests {
             .map(|error| error.to_string());
         assert!(list.is_some_and(|error| error.contains("session/list")));
         assert!(client.shutdown().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn prompt_boundary_follows_every_prior_session_update() -> anyhow::Result<()> {
+        let (client, _) =
+            connect_to_stub(PromptBehaviour::AskPermission, ClientOptions::default()).await;
+        let lifecycle = client.subscribe_lifecycle_notifications();
+        let ids = client
+            .new_session(PathBuf::from("/workspace"), Vec::new())
+            .await?;
+        let mut updates = lifecycle.session_updates_sequenced(&ids);
+        let mut permissions = client.subscribe_permissions();
+        let broker = tokio::spawn(async move {
+            let permission = permissions
+                .next()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("permission stream ended"))?;
+            permission.resolve(select_option(
+                PermissionOutcome::AllowOnce,
+                &permission.options,
+            ));
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let outcome = client
+            .prompt_with_boundary(&ids.acp_session_id, "boundary")
+            .await?;
+        let mut last_sequence = 0;
+        let mut message = String::new();
+        while last_sequence < outcome.notification_boundary {
+            let entry = tokio::time::timeout(Duration::from_secs(5), updates.next())
+                .await
+                .map_err(|_| anyhow::anyhow!("sequenced update did not arrive"))?
+                .ok_or_else(|| anyhow::anyhow!("sequenced update stream ended"))?;
+            last_sequence = last_sequence.max(entry.sequence);
+            if let Some(SessionUpdate::AgentMessageChunk(chunk)) = entry.update
+                && let ContentBlock::Text(text) = chunk.content
+            {
+                message.push_str(&text.text);
+            }
+        }
+        broker.await.context("joining permission broker")??;
+        anyhow::ensure!(
+            message == "chose:allow",
+            "terminal update was not ordered before prompt response: {message:?}"
+        );
+        anyhow::ensure!(
+            matches!(outcome.response.stop_reason, StopReason::EndTurn),
+            "unexpected prompt stop reason"
+        );
+        client.shutdown().await?;
+        Ok(())
     }
 
     /// Lifecycle responses carry settings directly, while a load may also

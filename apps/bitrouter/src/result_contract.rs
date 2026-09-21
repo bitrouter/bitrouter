@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 /// validator.
 pub struct ResultContract {
     schema_text: String,
+    schema: serde_json::Value,
     validator: jsonschema::Validator,
 }
 
@@ -29,8 +30,16 @@ impl ResultContract {
             .map_err(|e| anyhow::anyhow!("result schema is not a valid JSON Schema: {e}"))?;
         Ok(Self {
             schema_text: serde_json::to_string_pretty(&schema).unwrap_or(text),
+            schema,
             validator,
         })
+    }
+
+    /// Parsed schema for a daemon-supervised turn. The daemon recompiles it at
+    /// its ownership boundary; exposing the value avoids reparsing a flag or
+    /// reading an `@path` twice in the submitting client.
+    pub fn schema(&self) -> &serde_json::Value {
+        &self.schema
     }
 
     /// The contract clause appended to the subagent's task prompt.

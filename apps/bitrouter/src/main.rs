@@ -31,7 +31,8 @@ use bitrouter::output::reports::admin::{
 };
 use bitrouter::output::reports::agents::{
     AgentCheckRow, AgentConformanceReport, AgentConformanceTier, AgentInstallReport,
-    AgentRegistryRow, AgentRow, AgentsCheckReport, AgentsListReport,
+    AgentRegistryRow, AgentRow, AgentSessionMutationReport, AgentSessionsReport, AgentsCheckReport,
+    AgentsListReport, BackgroundRunReport,
 };
 use bitrouter::output::reports::config::{UnsetVar, ValidateReport};
 use bitrouter::output::reports::daemon::DaemonActionReport;
@@ -63,6 +64,7 @@ async fn supervise_http_shutdown<Http, Control, Hup, Term>(
     hup: Hup,
     term: Term,
     shutdown: tokio::sync::oneshot::Sender<()>,
+    control_shutdown: tokio::sync::oneshot::Sender<()>,
 ) -> Result<()>
 where
     Http: std::future::Future<Output = Result<()>> + Send,
@@ -75,10 +77,15 @@ where
     let mut hup = Box::pin(hup);
     let mut term = Box::pin(term);
     let mut hup_open = true;
-    let trigger_result = loop {
+    enum Trigger {
+        Http(Result<()>),
+        Control(Result<()>),
+        Term,
+    }
+    let trigger = loop {
         tokio::select! {
-            result = &mut http => return result,
-            result = &mut control => break result,
+            result = &mut http => break Trigger::Http(result),
+            result = &mut control => break Trigger::Control(result),
             result = &mut term => {
                 if result.is_err() {
                     tracing::warn!(
@@ -86,7 +93,7 @@ where
                         "termination-signal listener unavailable"
                     );
                 }
-                break Ok(());
+                break Trigger::Term;
             }
             result = &mut hup, if hup_open => {
                 if result.is_err() {
@@ -100,12 +107,40 @@ where
         }
     };
 
-    drop(control);
     drop(hup);
     drop(term);
-    let _ = shutdown.send(());
-    http.await?;
-    trigger_result
+    match trigger {
+        Trigger::Http(http_result) => {
+            let _ = control_shutdown.send(());
+            control.await?;
+            http_result
+        }
+        Trigger::Control(control_result) => {
+            let _ = shutdown.send(());
+            http.await?;
+            control_result
+        }
+        Trigger::Term => {
+            let _ = control_shutdown.send(());
+            control.await?;
+            let _ = shutdown.send(());
+            http.await
+        }
+    }
+}
+
+async fn request_daemon_shutdown(socket: &Path) -> Result<DaemonResponse> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match daemon::send_command(socket, &DaemonCommand::Stop).await {
+            Ok(response) => return Ok(response),
+            Err(error) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                tracing::debug!(error = %error, "waiting for local control endpoint before shutdown");
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// BitRouter — an LLM API router.
@@ -470,7 +505,7 @@ enum Command {
     /// Inspect ACP agent adapters, advertised capabilities, and configuration stubs.
     Agents {
         #[command(subcommand)]
-        action: AgentsAction,
+        action: Option<AgentsAction>,
     },
     /// Launch a coding-agent harness as an interactive native-TUI child. Routed
     /// harnesses are pointed at the local BitRouter daemon; own-auth harnesses
@@ -553,8 +588,17 @@ enum Command {
         #[arg(long, value_name = "SECS")]
         turn_timeout: Option<u64>,
         /// Return after the prompt is submitted.
-        #[arg(long, hide = true)]
+        #[arg(long, hide = true, conflicts_with = "background")]
         no_wait: bool,
+        /// Submit the turn to the resident supervisor and return an attachable
+        /// agent run id after it has accepted ownership.
+        #[arg(long)]
+        background: bool,
+        /// Allow another potentially writable run to use the same canonical
+        /// Git worktree or non-Git directory. This is unsafe and emits a
+        /// warning before submission.
+        #[arg(long, requires = "background")]
+        allow_shared_directory: bool,
         /// JSON Schema — inline JSON or `@path` — required of the final reply.
         #[arg(long, value_name = "JSON|@PATH", conflicts_with = "no_wait")]
         result_schema: Option<String>,
@@ -1004,6 +1048,48 @@ enum McpAction {
 
 #[derive(Subcommand)]
 enum AgentsAction {
+    /// List BitRouter-supervised agent runs from the local daemon.
+    Sessions {
+        /// Path to `bitrouter.yaml` (used to locate the local control socket).
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Explicit local control socket path.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+    /// Attach to one supervised run in the alternate-screen inspector.
+    Attach {
+        /// BitRouter agent run id.
+        agent_run_id: String,
+        /// Path to `bitrouter.yaml` (used to locate the local control socket).
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Explicit local control socket path.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+    /// Stop one supervised run without deleting its native harness session.
+    Stop {
+        /// BitRouter agent run id.
+        agent_run_id: String,
+        /// Path to `bitrouter.yaml` (used to locate the local control socket).
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Explicit local control socket path.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
+    /// Remove settled BitRouter run metadata and ephemeral retained events.
+    Remove {
+        /// BitRouter agent run id.
+        agent_run_id: String,
+        /// Path to `bitrouter.yaml` (used to locate the local control socket).
+        #[arg(short, long)]
+        config: Option<PathBuf>,
+        /// Explicit local control socket path.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
     /// Show the bundled catalog of well-known agents and which of them are
     /// present under `agents:` in the loaded config. With `--remote`, also
     /// fetch and list the official ACP agent registry.
@@ -1817,20 +1903,20 @@ async fn async_main() {
     );
     let raw_agent_stream = matches!(
         &cli.command,
-        Some(Command::Run { .. })
-            | Some(Command::Acp {
-                cmd: AcpCmd::Prompt { .. } | AcpCmd::Serve { .. },
-            })
-            | Some(Command::Spawn {
-                prompt: Some(_),
-                legacy_agent: None,
-                ..
-            })
-            | Some(Command::Spawn {
-                serve: true,
-                legacy_agent: None,
-                ..
-            })
+        Some(Command::Run {
+            background: false,
+            ..
+        }) | Some(Command::Acp {
+            cmd: AcpCmd::Prompt { .. } | AcpCmd::Serve { .. },
+        }) | Some(Command::Spawn {
+            prompt: Some(_),
+            legacy_agent: None,
+            ..
+        }) | Some(Command::Spawn {
+            serve: true,
+            legacy_agent: None,
+            ..
+        })
     );
     let output = bitrouter::output::Output::from_flags(cli.json, cli.human || cli.human_short);
     // Box the dispatch future onto the heap. `run` is a large `async fn` whose
@@ -1893,6 +1979,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 | Command::Chat { .. }
                 | Command::Code { .. }
                 | Command::Tui { .. }
+                | Command::Agents {
+                    action: None | Some(AgentsAction::Attach { .. })
+                }
                 | Command::Init { .. }
         )
     );
@@ -1902,6 +1991,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             Command::Chat { .. }
                 | Command::Code { .. }
                 | Command::Tui { .. }
+                | Command::Agents {
+                    action: None | Some(AgentsAction::Attach { .. })
+                }
                 | Command::Init { .. }
         )
     );
@@ -2254,6 +2346,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             routing,
             turn_timeout,
             no_wait,
+            background,
+            allow_shared_directory,
             result_schema,
             headless,
             config,
@@ -2279,6 +2373,56 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     .into());
                 }
             };
+            if background {
+                if headless.format != bitrouter::acp_cli::PromptFormat::Ndjson {
+                    return Err(bitrouter_sdk::BitrouterError::bad_request(
+                        "`--format text|quiet` is unavailable with `--background`; the command returns a structured run report",
+                    )
+                    .into());
+                }
+                let schema = result_schema
+                    .as_deref()
+                    .map(bitrouter::result_contract::ResultContract::from_flag)
+                    .transpose()?
+                    .map(|contract| contract.schema().clone());
+                let permission_policy = headless.supervised_permission_policy()?;
+                let cwd = match cwd {
+                    Some(cwd) => cwd,
+                    None => {
+                        std::env::current_dir().context("resolving the run working directory")?
+                    }
+                };
+                if allow_shared_directory {
+                    eprintln!(
+                        "warning: --allow-shared-directory disables BitRouter's single-writer protection for this supervised run; concurrent agents may overwrite each other's work"
+                    );
+                }
+                let no_start = routing.no_start;
+                let snapshot = bitrouter::agent_sessions::start_background(
+                    &source,
+                    &cfg,
+                    no_start,
+                    bitrouter::supervisor::StartRunRequest {
+                        action_request_id: uuid::Uuid::new_v4().to_string(),
+                        client_id: None,
+                        label: None,
+                        agent_id: agent,
+                        prompt: Some(prompt),
+                        cwd,
+                        routing,
+                        launch: bitrouter::acp_cli::launch_options(turn_timeout),
+                        session,
+                        presentation: bitrouter::supervisor::Presentation::Background,
+                        parent_run_id: None,
+                        allow_shared_directory,
+                        permission_policy,
+                        result_schema: schema,
+                    },
+                )
+                .await?;
+                output.emit(&BackgroundRunReport::from_snapshot(&snapshot))?;
+                return Ok(());
+            }
             run_agent_prompt(
                 &source,
                 cfg,
@@ -3414,23 +3558,23 @@ fn validate_remote_invocation(command: &Command, remote: bool) -> Result<()> {
     match command {
         Command::Agents {
             action:
-                AgentsAction::List {
+                Some(AgentsAction::List {
                     remote: true, ..
-                },
+                }),
         } => Err(bitrouter_sdk::BitrouterError::bad_request(
             "`agents list --remote` fetches the external ACP registry and cannot run against a remote BitRouter context",
         )
         .into()),
         Command::Agents {
             action:
-                AgentsAction::List {
+                Some(AgentsAction::List {
                     remote: false,
                     config,
                     socket,
-                },
+                }),
         } => reject_remote_local_target_flags(config.as_deref(), socket.as_deref()),
         Command::Agents {
-            action: AgentsAction::Check { .. },
+            action: Some(AgentsAction::Check { .. }),
         } => Err(bitrouter_sdk::BitrouterError::bad_request(
             "`agents check` launches an agent and is unavailable for a remote context",
         )
@@ -3487,7 +3631,7 @@ fn remote_cli_leaf(command: &Command) -> Option<&'static str> {
             action: PolicyAction::Show { .. },
         } => Some("policy show"),
         Command::Agents {
-            action: AgentsAction::List { remote: false, .. },
+            action: Some(AgentsAction::List { remote: false, .. }),
         } => Some("agents list"),
         Command::Checks { action: None, .. } => Some("checks"),
         Command::Checks {
@@ -3532,7 +3676,7 @@ fn remote_target_flags(command: &Command) -> Option<(Option<&Path>, Option<&Path
                 PolicyAction::Status { config, socket, .. } | PolicyAction::Show { config, socket, .. },
         }
         | Command::Agents {
-            action: AgentsAction::List { config, socket, .. },
+            action: Some(AgentsAction::List { config, socket, .. }),
         }
         | Command::Checks { config, socket, .. } => Some((config.as_deref(), socket.as_deref())),
         Command::Models { config, .. } => Some((config.as_deref(), None)),
@@ -3771,8 +3915,10 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         }
     };
     let locator_socket = socket_path.clone();
+    let stop_socket = socket_path.clone();
     let locator_source = source.clone();
     let locator_instance = server_instance_id;
+    let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::oneshot::channel();
     let control = daemon::run_control_socket_with_acp_runtime_and_administration(
         socket_path,
         app.clone(),
@@ -3811,6 +3957,27 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
             tokio::select! {
                 result = &mut control => return result,
                 _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+            }
+        }
+    };
+    let control = async move {
+        let mut control = Box::pin(control);
+        tokio::select! {
+            result = &mut control => result,
+            _ = control_shutdown_rx => {
+                let stop = request_daemon_shutdown(&stop_socket);
+                tokio::pin!(stop);
+                let response = tokio::select! {
+                    result = &mut control => return result,
+                    response = &mut stop => response,
+                }?;
+                match response {
+                    DaemonResponse::Ok => control.await,
+                    DaemonResponse::Error { message } => anyhow::bail!(message),
+                    response => anyhow::bail!(
+                        "daemon returned an unexpected shutdown response: {response:?}"
+                    ),
+                }
             }
         }
     };
@@ -3904,7 +4071,15 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         evolution_stop.cancel();
         result
     };
-    let result = supervise_http_shutdown(http, control, hup, term, http_shutdown_tx).await;
+    let result = supervise_http_shutdown(
+        http,
+        control,
+        hup,
+        term,
+        http_shutdown_tx,
+        control_shutdown_tx,
+    )
+    .await;
     evolution_stop.cancel();
     if let Some(worker) = evolution_worker
         && worker.await.is_err()
@@ -4514,17 +4689,26 @@ async fn observe_status(socket: &Path) -> Result<ObserveStatusReport> {
 }
 
 async fn administration_agents(
-    action: AgentsAction,
+    action: Option<AgentsAction>,
     output: &Output,
     remote_context: Option<&bitrouter::contexts::RemoteContext>,
     context_name: Option<&str>,
 ) -> Result<()> {
     match action {
-        AgentsAction::List {
+        None => {
+            if remote_context.is_some() {
+                return Err(bitrouter_sdk::BitrouterError::bad_request(
+                    "the standalone agent manager is local-only for a remote context",
+                )
+                .into());
+            }
+            bitrouter::agent_sessions::run_standalone().await
+        }
+        Some(AgentsAction::List {
             remote: false,
             config,
             socket,
-        } => {
+        }) => {
             let target = inspection_target(
                 remote_context,
                 context_name,
@@ -4535,7 +4719,7 @@ async fn administration_agents(
             output.emit(&target.agents().await?)?;
             Ok(())
         }
-        action => {
+        Some(action) => {
             if remote_context.is_some() {
                 return Err(bitrouter_sdk::BitrouterError::bad_request(
                     "agent launch and external-registry actions are local-only for a remote context",
@@ -5863,6 +6047,54 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
     use bitrouter::agents as agents_cmd;
 
     match action {
+        AgentsAction::Sessions { config, socket } => {
+            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            let runs = bitrouter::agent_sessions::BackgroundClient::list_only(socket)
+                .summaries()
+                .await?;
+            output.emit(&AgentSessionsReport { runs })?;
+            Ok(())
+        }
+        AgentsAction::Attach {
+            agent_run_id,
+            config,
+            socket,
+        } => {
+            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            bitrouter::agent_sessions::run_attached(socket, &agent_run_id).await
+        }
+        AgentsAction::Stop {
+            agent_run_id,
+            config,
+            socket,
+        } => {
+            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            let acknowledgement = bitrouter::agent_sessions::BackgroundClient::stop_only(socket)
+                .stop(&agent_run_id)
+                .await?;
+            output.emit(&AgentSessionMutationReport {
+                action: "stopped",
+                agent_run_id: acknowledgement.snapshot.run_id,
+                state: format!("{:?}", acknowledgement.snapshot.process).to_ascii_lowercase(),
+            })?;
+            Ok(())
+        }
+        AgentsAction::Remove {
+            agent_run_id,
+            config,
+            socket,
+        } => {
+            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            let removed = bitrouter::agent_sessions::BackgroundClient::remove_only(socket)
+                .remove(&agent_run_id)
+                .await?;
+            output.emit(&AgentSessionMutationReport {
+                action: "removed",
+                agent_run_id: removed,
+                state: "removed".to_string(),
+            })?;
+            Ok(())
+        }
         AgentsAction::List { remote, config, .. } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
@@ -6660,6 +6892,83 @@ mod tests {
     }
 
     #[test]
+    fn background_run_is_explicit_and_not_no_wait() -> anyhow::Result<()> {
+        let cli = Cli::try_parse_from([
+            "bitrouter",
+            "run",
+            "codex",
+            "audit this repository",
+            "--background",
+            "--allow-shared-directory",
+        ])?;
+        assert!(matches!(
+            cli.command,
+            Some(Command::Run {
+                background: true,
+                allow_shared_directory: true,
+                no_wait: false,
+                ..
+            })
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "run",
+                "codex",
+                "audit",
+                "--background",
+                "--no-wait",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "bitrouter",
+                "run",
+                "codex",
+                "audit",
+                "--allow-shared-directory",
+            ])
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn agents_keeps_catalog_verbs_and_adds_session_management() -> anyhow::Result<()> {
+        let manager = Cli::try_parse_from(["bitrouter", "agents"])?;
+        assert!(matches!(
+            manager.command,
+            Some(Command::Agents { action: None })
+        ));
+
+        let sessions = Cli::try_parse_from(["bitrouter", "agents", "sessions", "--json"])?;
+        assert!(sessions.json);
+        assert!(matches!(
+            sessions.command,
+            Some(Command::Agents {
+                action: Some(AgentsAction::Sessions { .. })
+            })
+        ));
+
+        for args in [
+            ["bitrouter", "agents", "attach", "run-1"],
+            ["bitrouter", "agents", "stop", "run-1"],
+            ["bitrouter", "agents", "remove", "run-1"],
+            ["bitrouter", "agents", "inspect", "codex"],
+            ["bitrouter", "agents", "check", "codex"],
+            ["bitrouter", "agents", "conformance", "codex"],
+            ["bitrouter", "agents", "scaffold", "codex"],
+        ] {
+            assert!(
+                Cli::try_parse_from(args).is_ok(),
+                "failed to parse {args:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn code_distinguishes_dashboard_from_agent_session() -> anyhow::Result<()> {
         let dashboard = Cli::try_parse_from(["bitrouter", "--context", "work", "code"])?;
         assert_eq!(dashboard.context.as_deref(), Some("work"));
@@ -7217,6 +7526,7 @@ mod tests {
             let inflight_release = Arc::new(tokio::sync::Notify::new());
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
             let (control_tx, control_rx) = tokio::sync::oneshot::channel();
+            let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::oneshot::channel();
             let (term_tx, term_rx) = tokio::sync::oneshot::channel();
 
             let http_accepting = accepting.clone();
@@ -7235,9 +7545,14 @@ mod tests {
                 Ok(())
             };
             let control = async move {
-                control_rx
-                    .await
-                    .map_err(|_| anyhow::anyhow!("test control sender disappeared"))?;
+                tokio::select! {
+                    result = control_rx => {
+                        result.map_err(|_| anyhow::anyhow!("test control sender disappeared"))?;
+                    }
+                    result = control_shutdown_rx => {
+                        result.map_err(|_| anyhow::anyhow!("test control shutdown sender disappeared"))?;
+                    }
+                }
                 Ok(())
             };
             let term = async move {
@@ -7258,6 +7573,7 @@ mod tests {
                 hup,
                 term,
                 shutdown_tx,
+                control_shutdown_tx,
             ));
 
             tokio::task::yield_now().await;
@@ -7302,12 +7618,19 @@ mod tests {
     async fn outer_shutdown_returns_http_errors_without_waiting_for_a_trigger() -> anyhow::Result<()>
     {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::oneshot::channel();
         let error = supervise_http_shutdown(
             async { Err(anyhow::anyhow!("test HTTP failure")) },
-            std::future::pending::<anyhow::Result<()>>(),
+            async move {
+                control_shutdown_rx
+                    .await
+                    .map_err(|_| anyhow::anyhow!("test control shutdown sender disappeared"))?;
+                Ok(())
+            },
             std::future::pending::<anyhow::Result<()>>(),
             std::future::pending::<anyhow::Result<()>>(),
             shutdown_tx,
+            control_shutdown_tx,
         )
         .await
         .err()

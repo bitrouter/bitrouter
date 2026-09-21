@@ -23,6 +23,10 @@ use ratatui::{Frame, Terminal};
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
+use crate::agents::{
+    AgentAction, AgentDeckSnapshot, AgentDeckState, AgentEffect, AgentHistoryEvent,
+    AgentHistorySnapshot, NewAgentRunChoices,
+};
 use crate::cost;
 use crate::editor::{Edit, Editor};
 use crate::journal::{Entry, EntryId, Journal, Voice};
@@ -101,6 +105,10 @@ pub enum CommandTarget {
     },
     /// Explicitly resume a paused next-turn queue.
     ResumeQueue,
+    /// Open the background-agent command center.
+    BackgroundAgents,
+    /// Detach the supervisor-owned foreground run and leave Code.
+    DetachAndExit,
     /// Send an agent command as prompt text without local re-resolution.
     AgentPrompt {
         /// Exact command prompt.
@@ -338,10 +346,14 @@ pub enum CodeEffect {
         /// Exact text.
         text: String,
     },
+    /// Route a typed background-agent action to the supervisor client.
+    Agent(AgentEffect),
     /// Invalidate and repaint the presentation currently owned by Code.
     Redraw,
     /// Exit the interactive Code process.
     Exit,
+    /// Release the foreground control lease and exit without stopping its run.
+    DetachAndExit,
 }
 
 /// A process-local follow-up prompt.
@@ -477,6 +489,7 @@ pub struct CodeState {
     operations_only: bool,
     operations_root: Option<Inspector>,
     viewport: Size,
+    agents: AgentDeckState,
 }
 
 impl Default for CodeState {
@@ -516,7 +529,74 @@ impl CodeState {
             operations_only: false,
             operations_root: None,
             viewport: Size::new(80, 24),
+            agents: AgentDeckState::default(),
         }
+    }
+
+    /// Background-agent client reducer owned by this Code surface.
+    pub fn agents(&self) -> &AgentDeckState {
+        &self.agents
+    }
+
+    /// Replace application-mapped supervisor rows. Returns whether the
+    /// collapsed strip changed meaningfully.
+    pub fn replace_agent_snapshot(&mut self, snapshot: AgentDeckSnapshot) -> bool {
+        self.agents.replace_snapshot(snapshot)
+    }
+
+    /// Bind agent effects to the authenticated supervisor client identity.
+    pub fn set_agent_client_id(&mut self, client_id: impl Into<String>) {
+        self.agents.set_client_id(client_id);
+    }
+
+    /// Exclude the foreground supervised run from background rows/counts.
+    pub fn set_foreground_agent_run(&mut self, run_id: Option<String>) {
+        self.agents.set_foreground_run_id(run_id);
+    }
+
+    /// Supply selectable safe target facts for `N` without giving this crate
+    /// config or filesystem ownership.
+    pub fn set_new_agent_run_choices(&mut self, choices: NewAgentRunChoices) {
+        self.agents.set_new_run_choices(choices);
+    }
+
+    /// Enter the alternate-screen retained-history inspector atomically.
+    pub fn replace_agent_history(&mut self, snapshot: AgentHistorySnapshot) -> bool {
+        self.agents.replace_history(snapshot)
+    }
+
+    /// Reject an in-flight attach result after foreground permission priority
+    /// changed, clearing its replay expectation and returning a fenced detach.
+    pub fn decline_agent_history(&mut self, snapshot: &AgentHistorySnapshot) -> Vec<CodeEffect> {
+        self.agents
+            .decline_inspector_history(snapshot)
+            .into_iter()
+            .map(CodeEffect::Agent)
+            .collect()
+    }
+
+    /// Apply one live retained-history event, requesting resync on any gap.
+    pub fn apply_agent_history_event(&mut self, event: AgentHistoryEvent) -> Vec<CodeEffect> {
+        self.agents
+            .apply_history_event(event)
+            .into_iter()
+            .map(CodeEffect::Agent)
+            .collect()
+    }
+
+    /// Deliver one supervisor/action acknowledgement to the agent reducer.
+    pub fn step_agent(&mut self, action: AgentAction) -> Vec<CodeEffect> {
+        self.agents
+            .step(action, !self.permissions.is_empty())
+            .into_iter()
+            .map(CodeEffect::Agent)
+            .collect()
+    }
+
+    /// Current foreground permission gate for app-side effects that may have
+    /// been queued just before the permission arrived.
+    pub fn foreground_permission_pending(&self) -> bool {
+        !self.permissions.is_empty()
     }
 
     /// Retained ACP transcript projection.
@@ -799,6 +879,45 @@ impl CodeState {
         self.receive_permission_with_optional_context(prompt, Some(context))
     }
 
+    /// Apply a supervisor-observed resolution without emitting a second
+    /// response. This handles policy resolution, another authorized client,
+    /// and replay races while preserving the no-buffered-consent focus rule.
+    pub fn permission_resolved(&mut self, id: &str) {
+        let Some(index) = self
+            .permissions
+            .iter()
+            .position(|pending| pending.prompt.id() == id)
+        else {
+            return;
+        };
+        let was_front = index == 0;
+        let _ = self.permissions.remove(index);
+        if was_front {
+            self.permission_selected = None;
+            let return_to = self.permission_return.take();
+            if matches!(&self.surface, Surface::Permission)
+                || matches!(
+                    &self.surface,
+                    Surface::Inspector(OpenInspector {
+                        return_to_permission: true,
+                        ..
+                    })
+                )
+            {
+                self.surface = return_to.unwrap_or(Surface::Conversation);
+            }
+        }
+        self.notice = if self.permissions.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "Permission needed · F2 focuses oldest pending request ({})",
+                self.permissions.len()
+            ))
+        };
+        self.refresh_open_palettes();
+    }
+
     fn receive_permission_with_optional_context(
         &mut self,
         prompt: Prompt,
@@ -810,6 +929,12 @@ impl CodeState {
                 outcome: RequestPermissionOutcome::Cancelled,
             }];
         }
+        let effects = self
+            .agents
+            .foreground_permission_arrived()
+            .into_iter()
+            .map(CodeEffect::Agent)
+            .collect::<Vec<_>>();
         self.permissions
             .push_back(PendingPermission { prompt, context });
         self.notice = Some(format!(
@@ -817,7 +942,7 @@ impl CodeState {
             self.permissions.len()
         ));
         self.refresh_open_palettes();
-        Vec::new()
+        effects
     }
 }
 
@@ -867,6 +992,17 @@ impl CodeState {
             self.viewport = Size::new(*width, *height);
             return Vec::new();
         }
+        if self.agents.is_inspector() {
+            return self
+                .agents
+                .step(
+                    AgentAction::Event(event.clone()),
+                    !self.permissions.is_empty(),
+                )
+                .into_iter()
+                .map(CodeEffect::Agent)
+                .collect();
+        }
         if let Some(key) = pressed(event)
             && key.code == KeyCode::F(2)
             && !self.permissions.is_empty()
@@ -886,6 +1022,21 @@ impl CodeState {
                 self.surface = Surface::Permission;
             }
             return Vec::new();
+        }
+        if !self.operations_only
+            && matches!(self.surface, Surface::Conversation)
+            && (self.agents.is_expanded()
+                || pressed(event).is_some_and(|key| key.code == KeyCode::F(5)))
+        {
+            return self
+                .agents
+                .step(
+                    AgentAction::Event(event.clone()),
+                    !self.permissions.is_empty(),
+                )
+                .into_iter()
+                .map(CodeEffect::Agent)
+                .collect();
         }
         if crate::editor::is_redraw(event) {
             return vec![CodeEffect::Redraw];
@@ -984,7 +1135,7 @@ impl CodeState {
                         self.submission_rejected(prompt, "submission cancelled".to_string())
                     }
                     TurnState::Cancelling => Vec::new(),
-                    TurnState::Ready if self.editor.text().is_empty() => vec![CodeEffect::Exit],
+                    TurnState::Ready if self.editor.text().is_empty() => self.exit_if_safe(),
                     TurnState::Ready => {
                         self.editor.clear();
                         self.selected_command = None;
@@ -995,7 +1146,7 @@ impl CodeState {
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 return match self.turn {
-                    TurnState::Ready if self.editor.text().is_empty() => vec![CodeEffect::Exit],
+                    TurnState::Ready if self.editor.text().is_empty() => self.exit_if_safe(),
                     TurnState::Ready => {
                         self.notice =
                             Some("Clear the draft or use Ctrl-C before leaving".to_string());
@@ -1053,7 +1204,7 @@ impl CodeState {
                 self.notice = Some("Clear the draft or use Ctrl-C before leaving".to_string());
                 Vec::new()
             }
-            Edit::Ended => vec![CodeEffect::Exit],
+            Edit::Ended => self.exit_if_safe(),
             Edit::Ignored | Edit::Redrawn => Vec::new(),
         }
     }
@@ -1199,6 +1350,11 @@ impl CodeState {
             CommandTarget::Settings => vec![CodeEffect::Settings],
             CommandTarget::Report { id } => vec![CodeEffect::Report { id }],
             CommandTarget::ResumeQueue => self.resume_queue(),
+            CommandTarget::BackgroundAgents => {
+                self.agents.toggle();
+                Vec::new()
+            }
+            CommandTarget::DetachAndExit => vec![CodeEffect::DetachAndExit],
             CommandTarget::AgentPrompt { prompt } => self.begin_prompt(prompt, true),
             CommandTarget::PromptTemplate { prompt } => {
                 self.editor.set_text(prompt);
@@ -1213,6 +1369,17 @@ impl CodeState {
         };
         if control(key, 'c') {
             return self.cancel();
+        }
+        if key.code == KeyCode::F(5) && self.agents.has_background_runs() {
+            self.permission_selected = None;
+            if self.agents.is_collapsed() {
+                self.agents.toggle();
+            }
+            self.surface = Surface::Conversation;
+            self.notice = Some(
+                "Foreground permission waiting · background actions are read-only".to_string(),
+            );
+            return Vec::new();
         }
         if !supported_viewport(self.viewport)
             && (key.code == KeyCode::Enter || matches!(key.code, KeyCode::Char('1'..='9')))
@@ -1962,6 +2129,16 @@ impl CodeState {
         }
     }
 
+    fn exit_if_safe(&mut self) -> Vec<CodeEffect> {
+        if self.agents.has_unsent_drafts() {
+            self.notice =
+                Some("Clear target-bound background drafts before leaving Code".to_string());
+            Vec::new()
+        } else {
+            vec![CodeEffect::Exit]
+        }
+    }
+
     fn palette_commands(&self, slash: bool) -> Vec<Command> {
         let mut commands = self
             .commands
@@ -2014,6 +2191,20 @@ impl CodeState {
                 .unavailable("Agent command list has not arrived"),
             );
         }
+        if !slash && !self.operations_only {
+            commands.push(self.command_with_local_availability(Command::new(
+                "Background agents",
+                "Expand the supervised background-agent command center",
+                CommandOwner::BitRouter,
+                CommandTarget::BackgroundAgents,
+            )));
+            commands.push(self.command_with_local_availability(Command::new(
+                "Detach current session and exit",
+                "Leave this supervised run working in the background",
+                CommandOwner::BitRouter,
+                CommandTarget::DetachAndExit,
+            )));
+        }
         commands
     }
 
@@ -2060,6 +2251,23 @@ impl CodeState {
                     })
             }),
             CommandTarget::ResumeQueue => self.resume_queue_reason(),
+            CommandTarget::BackgroundAgents => None,
+            CommandTarget::DetachAndExit => (!self.session_active)
+                .then_some("Choose an agent before detaching this session".to_string())
+                .or_else(|| {
+                    (!self.editor.is_empty()).then_some(
+                        "Clear or send the foreground draft before detaching".to_string(),
+                    )
+                })
+                .or_else(|| {
+                    self.has_queue_work()
+                        .then_some("Resolve queued foreground prompts before detaching".to_string())
+                })
+                .or_else(|| {
+                    self.agents.has_unsent_drafts().then_some(
+                        "Clear target-bound background drafts before leaving Code".to_string(),
+                    )
+                }),
             _ => None,
         };
         if let Some(reason) = unavailable {
@@ -2627,7 +2835,7 @@ impl CodeView {
         } else {
             self.writer.size()
         };
-        if matches!(state.surface, Surface::Inspector(_)) {
+        if matches!(state.surface, Surface::Inspector(_)) || state.agents.is_inspector() {
             return self.draw_detached(state);
         }
         self.close_detached()?;
@@ -2791,6 +2999,9 @@ fn dock_height(state: &CodeState, size: Size) -> u16 {
         return size.height.max(1);
     }
     let transient_budget = size.height.saturating_mul(2).saturating_div(5).clamp(5, 12);
+    if state.agents.is_expanded() && matches!(state.surface, Surface::Conversation) {
+        return size.height.saturating_mul(2).saturating_div(5).max(1);
+    }
     if matches!(state.surface, Surface::Permission) {
         // Permission identity, complete choices, and its confirmation hints
         // outrank ordinary session status. The extra row is the transient
@@ -2833,8 +3044,10 @@ fn dock_height(state: &CodeState, size: Size) -> u16 {
         }
         _ => transient_budget,
     };
+    let agent_strip = u16::from(state.agents.is_collapsed());
     status
         .saturating_add(content)
+        .saturating_add(agent_strip)
         .saturating_add(hint)
         .min(size.height)
         .max(1)
@@ -2865,8 +3078,27 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
         return None;
     }
     if matches!(state.surface, Surface::Permission) {
-        render_permission(frame, area, state);
+        let strip_height = u16::from(state.agents.has_background_runs());
+        let [permission, agent_strip] =
+            Layout::vertical([Constraint::Min(1), Constraint::Length(strip_height)]).areas(area);
+        render_permission(frame, permission, state);
+        if strip_height > 0 {
+            state.agents.render_collapsed(frame, agent_strip);
+        }
         return None;
+    }
+    if state.agents.is_expanded() && matches!(state.surface, Surface::Conversation) {
+        let foreground_lines = state.editor.text().lines().count().max(1);
+        let cursor = state.agents.render_expanded(
+            frame,
+            area,
+            foreground_lines,
+            !state.permissions.is_empty(),
+        );
+        if let Some(position) = cursor {
+            frame.set_cursor_position(position);
+        }
+        return cursor;
     }
     if state.operations_only {
         let [content, hint_area] =
@@ -2895,9 +3127,11 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
     }
 
     let status_height = if area.width < 68 { 4 } else { 2 };
-    let [status, content, hint_area] = Layout::vertical([
+    let strip_height = u16::from(state.agents.is_collapsed());
+    let [status, content, agent_strip, hint_area] = Layout::vertical([
         Constraint::Length(status_height.min(area.height.saturating_sub(1))),
         Constraint::Min(1),
+        Constraint::Length(strip_height),
         Constraint::Length(1),
     ])
     .areas(area);
@@ -2949,6 +3183,9 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
         Surface::Recovery { selected } => render_recovery_editor(frame, content, state, *selected),
         Surface::Inspector(_) => {}
     }
+    if state.agents.is_collapsed() {
+        state.agents.render_collapsed(frame, agent_strip);
+    }
     frame.render_widget(
         Paragraph::new(hint(state)).style(Style::default().fg(Color::DarkGray)),
         hint_area,
@@ -2961,6 +3198,12 @@ fn supported_viewport(size: Size) -> bool {
 }
 
 fn render_detached_frame(frame: &mut Frame<'_>, state: &CodeState) {
+    if state.agents.is_inspector() {
+        state
+            .agents
+            .render_inspector(frame, !state.permissions.is_empty());
+        return;
+    }
     if let Surface::Inspector(inspector) = &state.surface {
         render_inspector(frame, frame.area(), inspector);
         if !state.permissions.is_empty() {
@@ -3903,16 +4146,23 @@ fn render_permission(frame: &mut Frame<'_>, viewport: Rect, state: &CodeState) {
             Style::default().fg(Color::DarkGray),
         ));
     }
-    let footer = vec![
-        Line::styled(
-            "Press a number to highlight",
+    let footer = if inner.height <= 5 {
+        vec![Line::styled(
+            "1-9 highlight · Enter confirm · Esc reject",
             Style::default().fg(Color::DarkGray),
-        ),
-        Line::styled(
-            "Enter confirms selection · Esc rejects/cancels",
-            Style::default().fg(Color::DarkGray),
-        ),
-    ];
+        )]
+    } else {
+        vec![
+            Line::styled(
+                "Press a number to highlight",
+                Style::default().fg(Color::DarkGray),
+            ),
+            Line::styled(
+                "Enter confirms selection · Esc rejects/cancels",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]
+    };
     let footer_height = u16::try_from(footer.len()).unwrap_or(u16::MAX);
     let option_rows = prompt
         .options()
@@ -4368,6 +4618,24 @@ mod tests {
                 ..
             }] if choice.option_id.0.as_ref() == "reject-once"
         ));
+    }
+
+    #[test]
+    fn externally_resolved_permission_clears_focus_without_selecting_the_next() {
+        let mut state = active_state();
+        let _ = state.receive_permission(question("first"));
+        let _ = state.receive_permission(question("second"));
+        let _ = state.step(press(KeyCode::F(2)));
+        let _ = state.step(press(KeyCode::Char('1')));
+        assert_eq!(state.permission_selected, Some(0));
+
+        state.permission_resolved("first");
+
+        assert!(matches!(state.surface, Surface::Conversation));
+        assert_eq!(state.permission_selected, None);
+        assert_eq!(state.permissions.len(), 1);
+        let _ = state.step(press(KeyCode::F(2)));
+        assert!(state.step(press(KeyCode::Enter)).is_empty());
     }
 
     #[test]
@@ -5798,6 +6066,123 @@ mod tests {
     }
 
     #[test]
+    fn expanded_agents_keep_the_entire_dock_within_forty_percent() -> io::Result<()> {
+        let size = Size::new(40, 16);
+        let mut state = active_state();
+        state.viewport = size;
+        let draft = "foreground line one\nforeground line two\nforeground line three";
+        let _ = state.step(paste(draft));
+        state.queue.push_back(QueuedPrompt {
+            prompt: "queued follow-up".to_string(),
+            owner: None,
+            target: None,
+        });
+        let mut background = crate::agents::AgentRunView::new(
+            "background-1",
+            "auth-review",
+            "codex",
+            "/repo-worktree",
+        );
+        background.attention =
+            crate::agents::AgentAttention::Permission(crate::agents::AgentPermissionView {
+                permission_id: "permission-1".to_string(),
+                title: "Run tests".to_string(),
+                detail: String::new(),
+                options: vec![
+                    crate::agents::AgentPermissionOption {
+                        id: "once".to_string(),
+                        label: "Allow once".to_string(),
+                    },
+                    crate::agents::AgentPermissionOption {
+                        id: "deny".to_string(),
+                        label: "Deny".to_string(),
+                    },
+                ],
+                requires_inspector: false,
+            });
+        let _ = state.replace_agent_snapshot(AgentDeckSnapshot {
+            sequence: 1,
+            runs: vec![background],
+            new_run_target: None,
+        });
+
+        let collapsed_height = dock_height(&state, size);
+        let mut collapsed = Terminal::new(TestBackend::new(40, collapsed_height))?;
+        collapsed.draw(|frame| {
+            let _ = render_dock(frame, &state, size);
+        })?;
+        assert!(grid(collapsed.backend()).contains("BG"));
+
+        let _ = state.step(press(KeyCode::F(5)));
+        let expanded_height = dock_height(&state, size);
+        assert!(expanded_height <= size.height.saturating_mul(2) / 5);
+        assert!(size.height.saturating_sub(expanded_height) >= 10);
+        assert_eq!(state.editor.text(), draft);
+        assert_eq!(state.queue_len(), 1);
+
+        let mut expanded = Terminal::new(TestBackend::new(40, expanded_height))?;
+        expanded.draw(|frame| {
+            let _ = render_dock(frame, &state, size);
+        })?;
+        let rendered = grid(expanded.backend());
+        assert!(
+            rendered.contains("Foreground draft preserved"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("auth-review"), "{rendered}");
+        Ok(())
+    }
+
+    #[test]
+    fn foreground_permission_keeps_background_strip_and_f5_opens_read_only_deck() -> io::Result<()>
+    {
+        let size = Size::new(40, 16);
+        let mut state = active_state();
+        state.viewport = size;
+        let mut background = crate::agents::AgentRunView::new(
+            "background-1",
+            "docs-audit",
+            "codex",
+            "/repo-worktree",
+        );
+        background.attention = crate::agents::AgentAttention::Result {
+            summary: "Ready".to_string(),
+        };
+        background.review = crate::agents::AgentReviewState::Unread;
+        let _ = state.replace_agent_snapshot(AgentDeckSnapshot {
+            sequence: 1,
+            runs: vec![background],
+            new_run_target: None,
+        });
+        assert!(
+            state
+                .receive_permission(question("foreground-permission"))
+                .is_empty()
+        );
+        let _ = state.step(press(KeyCode::F(2)));
+        assert!(matches!(state.surface, Surface::Permission));
+
+        let height = dock_height(&state, size);
+        let mut terminal = Terminal::new(TestBackend::new(40, height))?;
+        terminal.draw(|frame| {
+            let _ = render_dock(frame, &state, size);
+        })?;
+        let rendered = grid(terminal.backend());
+        assert!(rendered.contains("Permission"), "{rendered}");
+        assert!(rendered.contains("BG"), "{rendered}");
+        assert!(rendered.contains("●1"), "{rendered}");
+
+        let _ = state.step(press(KeyCode::Char('1')));
+        assert!(state.permission_selected.is_some());
+        let _ = state.step(press(KeyCode::F(5)));
+        assert!(matches!(state.surface, Surface::Conversation));
+        assert!(state.agents.is_expanded());
+        assert!(state.permission_selected.is_none());
+        assert!(!state.permissions.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn permission_labels_remain_visible_at_minimum_supported_size() -> io::Result<()> {
         let mut state = active_state();
         assert!(
@@ -5934,7 +6319,9 @@ mod tests {
             AvailableCommandsUpdate::new(Vec::new()),
         ));
         let _ = state.step(ctrl('p'));
-        let _ = state.step(press(KeyCode::End));
+        for _ in 0..11 {
+            let _ = state.step(press(KeyCode::Down));
+        }
         let Surface::Palette(list) = &state.surface else {
             return Err(io::Error::other("Ctrl-P did not open the command palette"));
         };
@@ -5947,6 +6334,7 @@ mod tests {
         let rendered = grid(terminal.backend());
         assert!(rendered.contains("› command-12"));
 
+        let _ = state.step(press(KeyCode::Up));
         let _ = state.step(press(KeyCode::Down));
         terminal.draw(|frame| render_frame(frame, &mut state, &registry, &mut cache))?;
         let after_down = grid(terminal.backend());

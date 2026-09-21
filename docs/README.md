@@ -39,6 +39,13 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   Replaces the seven-view Code dashboard with a conversation, contextual
   pickers/inspectors, and agent/route/activity/attributed-cost status; defines
   shared interaction behavior, ACP boundaries, and acceptance criteria.
+- [`BACKGROUND_AGENT_UX_SPEC.md`](BACKGROUND_AGENT_UX_SPEC.md) — **implemented;
+  locally verified.** Keeps foreground history in native scrollback,
+  makes background-agent awareness and routine commands a persistent bottom
+  control deck, and reserves alternate screen for full history or complex
+  detail while preserving supervisor and child-agent truth boundaries.
+- [`BACKGROUND_AGENT_IMPLEMENTATION.md`](BACKGROUND_AGENT_IMPLEMENTATION.md) —
+  implementation phases, ownership, and acceptance evidence for the control deck.
 - [`AGENT_INTERFACE_UNIFICATION_SPEC.md`](AGENT_INTERFACE_UNIFICATION_SPEC.md) —
   **proposed for review.** Unifies the public agent UX around native
   `claude`/`codex` shortcuts, the `code` TUI, headless `run`, and one raw

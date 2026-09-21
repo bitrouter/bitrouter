@@ -11,10 +11,9 @@ use anyhow::{Context, Result, bail, ensure};
 use bitrouter_tui::machine::PromptCommand;
 use tokio_util::sync::CancellationToken;
 
-use crate::acp_cli::{
-    SessionHandle, SessionHost, SessionSelection, SpawnContext, lifecycle_cancelled,
-};
+use crate::acp_cli::{SessionSelection, SpawnContext, lifecycle_cancelled};
 use crate::actions::administration::{PolicyInput, PolicyView};
+use crate::actions::supervised::SupervisedHandle;
 use crate::administration_target::{InspectionTarget, ReloadSubmission};
 use crate::contexts::RemoteContext;
 use crate::dashboard::SessionRequest;
@@ -61,19 +60,51 @@ pub(crate) struct CodeServices {
 
 /// Prepared session plus presentation-safe diagnostics and prompt templates.
 pub(crate) struct OpenedSession {
-    pub handle: SessionHandle,
+    pub handle: SupervisedHandle,
     pub diagnostics: Vec<String>,
     pub prompt_commands: Vec<PromptCommand>,
     pub resumed: bool,
+    pub background_choices: bitrouter_tui::agents::NewAgentRunChoices,
 }
 
 impl CodeServices {
+    /// Observe an already-running local supervisor without starting one for a
+    /// remote or report-only Code target.
+    pub(crate) async fn background_client(
+        &self,
+    ) -> Result<Option<crate::agent_sessions::BackgroundClient>> {
+        if self.operations_only {
+            return Ok(None);
+        }
+        let Some(source) = self.target.local_source() else {
+            return Ok(None);
+        };
+        if let Some(located) = crate::daemon_locator::locate_source(source).await? {
+            return Ok(Some(crate::agent_sessions::BackgroundClient::new(
+                located.socket().to_path_buf(),
+            )));
+        }
+        let Some(socket) = self.target.local_socket() else {
+            return Ok(None);
+        };
+        if crate::daemon::probe_status(socket).await?.is_some() {
+            return Ok(Some(crate::agent_sessions::BackgroundClient::new(
+                socket.to_path_buf(),
+            )));
+        }
+        Ok(None)
+    }
+
     pub fn commands(
         &self,
-        client: Option<&bitrouter_sdk::acp::client::AcpClient>,
+        capabilities: Option<&crate::acp_cli::CapabilitySnapshot>,
     ) -> Vec<bitrouter_tui::machine::Command> {
-        if let Some(client) = client {
-            return super::session::offered_commands(client);
+        if let Some(capabilities) = capabilities {
+            return super::session::offered_route_commands(
+                capabilities.route_list,
+                capabilities.route_set,
+                capabilities.route_reset,
+            );
         }
         crate::actions::ACTIONS
             .iter()
@@ -230,39 +261,36 @@ impl CodeServices {
             }
         };
         let prompt_commands = super::session::prompt_commands(&config.chat)?;
-        let mut diagnostics = Vec::new();
-        let mut record_diagnostic = |message| diagnostics.push(message);
-        let host = tokio::select! {
+        let background_choices = background_choices(&config, Some(&agent_id), true).await?;
+        let socket = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(lifecycle_cancelled()),
-            result = SessionHost::prepare_with_diagnostics(
-                SpawnContext {
-                    source,
-                    config,
-                    agent_id: &agent_id,
-                    options,
-                    routing,
-                },
-                false,
-                &mut record_diagnostic,
-            ) => result?,
+            result = super::supervised::ensure_daemon(source, &config, routing.no_start) => result?,
         };
         let resumed = matches!(
             request.selection,
             crate::acp_cli::SessionSelection::Resume(_)
         );
-        let handle = host
-            .open_with_cancel(
-                &request.selection,
-                std::env::current_dir().context("resolving current directory")?,
-                cancel,
-            )
-            .await?;
+        if cancel.is_cancelled() {
+            return Err(lifecycle_cancelled());
+        }
+        let (handle, diagnostics) = SupervisedHandle::start(
+            socket,
+            super::supervised::ForegroundLaunch {
+                agent_id,
+                cwd: std::env::current_dir().context("resolving current directory")?,
+                routing,
+                options,
+                selection: request.selection,
+            },
+        )
+        .await?;
         Ok(OpenedSession {
             handle,
             diagnostics,
             prompt_commands,
             resumed,
+            background_choices,
         })
     }
 
@@ -354,6 +382,62 @@ impl CodeServices {
         String::from_utf8(Output::new(Format::Human).render_to_vec(report.as_ref()))
             .context("rendering the requested report")
     }
+}
+
+pub(crate) async fn background_choices(
+    config: &bitrouter_sdk::config::Config,
+    current_agent: Option<&str>,
+    foreground_claim: bool,
+) -> Result<bitrouter_tui::agents::NewAgentRunChoices> {
+    use bitrouter_tui::agents::{NewAgentDirectoryChoice, NewAgentRunChoices};
+    let cwd = std::env::current_dir()?;
+    let canonical = tokio::fs::canonicalize(&cwd).await?;
+    let mut paths = vec![canonical.clone()];
+    if let Ok(output) = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(&cwd)
+        .args(["worktree", "list", "--porcelain", "-z"])
+        .output()
+        .await
+        && output.status.success()
+        && let Ok(text) = std::str::from_utf8(&output.stdout)
+    {
+        for path in text
+            .split('\0')
+            .filter_map(|field| field.strip_prefix("worktree "))
+        {
+            if let Ok(path) = tokio::fs::canonicalize(path).await
+                && !paths.contains(&path)
+            {
+                paths.push(path);
+            }
+        }
+    }
+    let mut agents = current_agent
+        .into_iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    for row in crate::agents::list(config)
+        .into_iter()
+        .filter(agent_is_selectable)
+    {
+        if !agents.contains(&row.id) {
+            agents.push(row.id);
+        }
+    }
+    Ok(NewAgentRunChoices {
+        agents,
+        directories: paths
+            .into_iter()
+            .map(|path| NewAgentDirectoryChoice {
+                conflict: (foreground_claim && path == canonical).then(|| {
+                    "The foreground run claims this directory; select another directory".into()
+                }),
+                directory: path.display().to_string(),
+            })
+            .collect(),
+        routes: vec![None],
+    })
 }
 
 fn conversation_label(workspace: &Path) -> String {

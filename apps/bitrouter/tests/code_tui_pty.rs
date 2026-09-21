@@ -36,9 +36,14 @@ const ENTER_ALTERNATE_SCREEN: &str = "\x1b[?1049h";
 const LEAVE_ALTERNATE_SCREEN: &str = "\x1b[?1049l";
 const BEGIN_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026h";
 const END_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026l";
+const MOCK_DAEMON_CONFIG: &str =
+    "server:\n  listen: 127.0.0.1:0\n  skip_auth: true\nregistry:\n  inherit_defaults: false\n";
 
 #[path = "code_tui_pty/evolution.rs"]
 mod evolution;
+
+#[path = "code_tui_pty/background.rs"]
+mod background;
 
 /// A deliberately small ACP agent. Its responses are protocol-shaped JSON, not
 /// terminal snapshots, so test failures describe lifecycle behavior instead of
@@ -194,6 +199,8 @@ with open(capture_path, "ab") as capture:
                 "agentInfo": {"name": "pty-minimal", "version": "1"},
             })
         elif method == "session/new":
+            if scenario == "hanging-session":
+                continue
             if scenario == "fresh-sessions":
                 current_session_id = "pty-fresh-" + str(os.getpid())
             if scenario in ("settings-confirmed", "settings-failure"):
@@ -234,7 +241,10 @@ with open(capture_path, "ab") as capture:
                 respond(request_id, {"configOptions": []})
         elif method == "session/prompt":
             prompt_count += 1
-            if scenario == "fresh-sessions" and "wait-for-timeout" in json.dumps(message):
+            if "background-isolation-fixture" in json.dumps(message):
+                update("BACKGROUND_PRIVATE_OUTPUT")
+                finish(request_id)
+            elif scenario == "fresh-sessions" and "wait-for-timeout" in json.dumps(message):
                 with state_lock:
                     pending_prompt = request_id
                 update("FXWAIT")
@@ -293,6 +303,7 @@ enum MockScenario {
     SettingsFailure,
     SessionLifecycle,
     FreshSessions,
+    HangingSession,
 }
 
 impl MockScenario {
@@ -309,6 +320,7 @@ impl MockScenario {
             Self::SettingsFailure => "settings-failure",
             Self::SessionLifecycle => "session-lifecycle",
             Self::FreshSessions => "fresh-sessions",
+            Self::HangingSession => "hanging-session",
         }
     }
 }
@@ -327,7 +339,78 @@ struct MockAcp {
     scenario: MockScenario,
 }
 
+impl Drop for MockAcp {
+    fn drop(&mut self) {
+        // Code now starts a resident owner. Tear down only this fixture's
+        // explicit endpoint before deleting its temporary configuration.
+        let Ok(text) = std::fs::read_to_string(&self.config_path) else {
+            return;
+        };
+        let Ok(config) = bitrouter_sdk::config::parse_with(&text, |_| None) else {
+            return;
+        };
+        let source = bitrouter::paths::ConfigSource::File(self.config_path.clone());
+        let socket = bitrouter::daemon::socket_path_for(&source, &config);
+        let Ok(mut stream) = UnixStream::connect(&socket) else {
+            return;
+        };
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        if stream.write_all(b"{\"cmd\":\"stop\"}\n").is_err() {
+            return;
+        }
+        let mut acknowledgement = String::new();
+        let _ = BufReader::new(stream).read_line(&mut acknowledgement);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while socket.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
 impl MockAcp {
+    fn bro_command(&self) -> Result<tokio::process::Command> {
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+        command
+            .env_clear()
+            .env("PATH", inherited_path()?)
+            .env("HOME", &self.home_path)
+            .env("BITROUTER_HOME", &self.bitrouter_home_path)
+            .env("TMPDIR", &self.temporary_path)
+            .env("NO_COLOR", "1")
+            .current_dir(self._directory.path())
+            .kill_on_drop(true);
+        Ok(command)
+    }
+
+    async fn supervisor_socket(&self) -> Result<PathBuf> {
+        let source = bitrouter::paths::ConfigSource::File(self.config_path.clone());
+        let config = bitrouter::paths::load_config(&source).await?;
+        Ok(bitrouter::daemon::socket_path_for(&source, &config))
+    }
+
+    async fn supervised_runs(&self) -> Result<Vec<bitrouter::supervisor::RunSnapshot>> {
+        let socket = self.supervisor_socket().await?;
+        let grant = bitrouter::supervisor::authorize(
+            &socket,
+            "pty-observer",
+            [bitrouter::supervisor::SessionScope::Peek]
+                .into_iter()
+                .collect(),
+        )
+        .await?;
+        match bitrouter::supervisor::request(
+            &socket,
+            &grant,
+            bitrouter::supervisor::SessionCommand::PeekAll,
+        )
+        .await?
+        {
+            bitrouter::supervisor::SessionResponse::Runs { runs } => Ok(runs),
+            _ => bail!("supervisor omitted its run inventory"),
+        }
+    }
+
     fn new(scenario: MockScenario) -> Result<Self> {
         let directory = tempfile::tempdir().context("creating PTY fixture directory")?;
         let python = python_executable()?;
@@ -363,7 +446,8 @@ impl MockAcp {
              \u{20} \u{20} \u{20} \u{20} BITROUTER_PTY_CONTROL: {control}\n",
             scenario.name()
         );
-        std::fs::write(&config_path, config).context("writing mock ACP config")?;
+        std::fs::write(&config_path, format!("{MOCK_DAEMON_CONFIG}{config}"))
+            .context("writing mock ACP config")?;
 
         Ok(Self {
             _directory: directory,
@@ -1168,7 +1252,10 @@ impl PtyRunner {
                     )
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    bail!("timed out waiting for visible PTY text {text:?}; screen was {screen:?}")
+                    bail!(
+                        "timed out waiting for visible PTY text {text:?}; screen was {screen:?}; raw output was {:?}",
+                        String::from_utf8_lossy(&self.output)
+                    )
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     bail!("PTY closed while waiting for {text:?}; screen was {screen:?}")
@@ -1836,7 +1923,9 @@ fn code_minimal_agent_preserves_multiline_prompt_history_and_terminal() -> Resul
     let output = code.pty.wait_for_text("Turn completed")?;
     ensure!(output.contains("FXRP1"), "agent reply was not rendered");
     ensure!(
-        !output.contains("Home") && !output.contains("Agents") && !output.contains("Requests"),
+        !output.contains("Home")
+            && !output.replace("F5 Agents", "").contains("Agents")
+            && !output.contains("Requests"),
         "legacy permanent navigation appeared in the Code transcript"
     );
     ensure!(
@@ -1937,6 +2026,34 @@ fn code_detached_backlog_catches_up_once_after_resizes() -> Result<()> {
 }
 
 #[test]
+fn code_agent_deck_expands_inline_and_preserves_multiline_foreground_draft() -> Result<()> {
+    let mut code = CodeFixture::agent(MockScenario::Minimal)?;
+    code.wait_for_agent_ready()?;
+    let draft = "foreground 草稿\nsecond line 🦀";
+    code.pty
+        .send(format!("\x1b[200~{draft}\x1b[201~").as_bytes())?;
+    let _ = code.pty.wait_for_text("second line")?;
+    let expansion = code.pty.checkpoint();
+    code.pty.send(b"\x1b[15~")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&expansion, "Foreground draft preserved")?;
+    assert!(
+        !code.pty.output[expansion.output_len..]
+            .windows(ENTER_ALTERNATE_SCREEN.len())
+            .any(|window| window == ENTER_ALTERNATE_SCREEN.as_bytes())
+    );
+    let collapsed = code.pty.checkpoint();
+    code.pty.send(b"\x1b[15~")?;
+    let _ = code.pty.wait_for_text_since(&collapsed, "second line")?;
+    code.pty.send(b"\r")?;
+    let _ = code.pty.wait_for_text("Turn completed")?;
+    assert_eq!(code.mock.captured_prompts()?, vec![draft.to_string()]);
+    code.pty.send(b"\x04")?;
+    code.assert_terminal_restored()
+}
+
+#[test]
 fn permission_arriving_in_inspector_needs_f2_and_fresh_selection() -> Result<()> {
     let mut code = CodeFixture::agent(MockScenario::PermissionDuringInspector)?;
     code.wait_for_agent_ready()?;
@@ -1996,7 +2113,7 @@ fn code_minimum_and_below_minimum_permission_paths_are_safe() -> Result<()> {
     code.pty.send(b"\x0c")?;
     let _ = code
         .pty
-        .wait_for_raw_text_since(&resize_checkpoint, "\x1b[?2026l")?;
+        .wait_for_text_since(&resize_checkpoint, "Message")?;
     let resized = code.pty.checkpoint();
     code.pty.send("中文 👩‍💻 permission\r".as_bytes())?;
     let _ = code
@@ -2129,7 +2246,7 @@ fn code_signal_exit_restores_terminal(signal: &str) -> Result<()> {
 }
 
 #[test]
-fn code_sigterm_denies_pending_permissions_and_restores_terminal() -> Result<()> {
+fn code_sigterm_detaches_without_answering_pending_permissions() -> Result<()> {
     let mut code = CodeFixture::agent(MockScenario::OverlappingPermissions)?;
     code.wait_for_agent_ready()?;
     code.pty.send(b"permission interrupted by SIGTERM\r")?;
@@ -2143,32 +2260,307 @@ fn code_sigterm_denies_pending_permissions_and_restores_terminal() -> Result<()>
 
     code.signal_child("TERM")?;
     code.assert_terminal_restored()?;
-    let outcomes = code.mock.wait_for_permission_outcomes()?;
-    ensure!(
-        outcomes.len() == 2,
-        "SIGTERM produced duplicate or missing permission outcomes: {outcomes:?}"
-    );
-    for (request_id, option_id) in [("permission-1", "deny-1"), ("permission-2", "deny-2")] {
-        let outcome = outcomes
-            .iter()
-            .find(|(observed_id, _)| observed_id == request_id)
-            .map(|(_, outcome)| outcome)
-            .with_context(|| format!("finding SIGTERM outcome for {request_id}"))?;
-        ensure!(
-            outcome.get("outcome").and_then(serde_json::Value::as_str) == Some("selected"),
-            "SIGTERM must explicitly reject {request_id}, received {outcome}"
-        );
-        ensure!(
-            outcome.get("optionId").and_then(serde_json::Value::as_str) == Some(option_id),
-            "SIGTERM chose the wrong permission option for {request_id}: {outcome}"
-        );
-    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let runs = runtime.block_on(code.mock.supervised_runs())?;
+    let run = runs
+        .first()
+        .context("foreground run disappeared after terminal loss")?;
+    assert_eq!(run.pending_permissions.len(), 2);
+    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
+    assert!(run.lease.is_none());
+    assert!(code.mock.captured_permission_outcomes()?.is_empty());
     Ok(())
 }
 
 #[test]
 fn code_sigint_restores_terminal_and_shell() -> Result<()> {
     code_signal_exit_restores_terminal("INT")
+}
+
+#[tokio::test]
+async fn terminal_loss_during_session_creation_does_not_wait_for_adapter() -> Result<()> {
+    let mut code = CodeFixture::agent(MockScenario::HangingSession)?;
+    let _ = code.mock.wait_for_request("session/new")?;
+    code.signal_child("TERM")?;
+    code.assert_terminal_restored()?;
+    let runs = code.mock.supervised_runs().await?;
+    let starting = runs
+        .iter()
+        .find(|run| run.process == bitrouter::supervisor::ProcessState::Starting)
+        .context("accepted startup was not retained by its daemon owner after client loss")?;
+    use bitrouter::supervisor::{ControlFence, LeaseMode, SessionCommand, SessionResponse};
+    let socket = code.mock.supervisor_socket().await?;
+    let grant = bitrouter::supervisor::authorize(
+        &socket,
+        "recovery-fixture",
+        [bitrouter::supervisor::SessionScope::Stop]
+            .into_iter()
+            .collect(),
+    )
+    .await?;
+    let lease = match bitrouter::supervisor::request(
+        &socket,
+        &grant,
+        SessionCommand::AcquireLease {
+            run_id: starting.run_id.clone(),
+            client_id: "recovery-fixture".into(),
+            mode: LeaseMode::Transient,
+            action_request_id: "confirmed-startup-takeover".into(),
+            takeover: true,
+        },
+    )
+    .await?
+    {
+        SessionResponse::Lease { lease } => lease,
+        _ => bail!("startup takeover omitted its lease"),
+    };
+    let _ = tokio::time::timeout(
+        PTY_TIMEOUT,
+        bitrouter::supervisor::request(
+            &socket,
+            &grant,
+            SessionCommand::Stop {
+                fence: ControlFence {
+                    run_id: starting.run_id.clone(),
+                    client_id: "recovery-fixture".into(),
+                    lease_generation: lease.generation,
+                    action_request_id: "confirmed-startup-stop".into(),
+                },
+                confirmed: true,
+            },
+        ),
+    )
+    .await??;
+    let stopped_runs = code.mock.supervised_runs().await?;
+    ensure!(
+        stopped_runs.iter().any(|run| run.run_id == starting.run_id
+            && run.process == bitrouter::supervisor::ProcessState::Stopped),
+        "initializing run was not conclusively stopped"
+    );
+    ensure!(
+        UnixStream::connect(&code.mock.control_path).is_err(),
+        "stop returned before the initializing adapter was reaped"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn code_explicit_detach_keeps_accepted_foreground_turn_running() -> Result<()> {
+    let mut code = CodeFixture::agent(MockScenario::DelayedNormal)?;
+    code.wait_for_agent_ready()?;
+    code.pty.send(b"continue after explicit detach\r")?;
+    code.mock.wait_for_request("session/prompt")?;
+    code.pty.send(b"\x10")?;
+    code.pty.send(b"Detach current session")?;
+    let _ = code.pty.wait_for_text("Detach current session and exit")?;
+    code.pty.send(b"\r")?;
+    code.assert_terminal_restored()?;
+    let runs = code.mock.supervised_runs().await?;
+    let run = runs
+        .first()
+        .context("detached foreground run disappeared")?;
+    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
+    assert_eq!(run.turn, bitrouter::supervisor::TurnState::Working);
+    assert!(run.lease.is_none());
+    code.mock.release()?;
+    tokio::time::timeout(PTY_TIMEOUT, async {
+        loop {
+            let runs = code.mock.supervised_runs().await?;
+            if runs.iter().any(|candidate| {
+                candidate.run_id == run.run_id
+                    && candidate.review == bitrouter::supervisor::ReviewState::Unread
+                    && candidate.turn == bitrouter::supervisor::TurnState::Idle
+            }) {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn background_cli_returns_before_settlement_and_run_survives_client_exit() -> Result<()> {
+    let mock = MockAcp::new(MockScenario::DelayedNormal)?;
+    let output = tokio::time::timeout(
+        PTY_TIMEOUT,
+        mock.bro_command()?
+            .args([
+                "run",
+                "stub",
+                "work after this client exits",
+                "--direct",
+                "--background",
+                "--json",
+            ])
+            .output(),
+    )
+    .await??;
+    ensure!(
+        output.status.success(),
+        "background launch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let run_id = report
+        .get("agent_run_id")
+        .and_then(serde_json::Value::as_str)
+        .context("successful background launch omitted attachable run ID")?;
+    let runs = mock.supervised_runs().await?;
+    let run = runs
+        .iter()
+        .find(|run| run.run_id == run_id)
+        .context("accepted run missing after CLI exited")?;
+    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
+    assert_eq!(run.turn, bitrouter::supervisor::TurnState::Working);
+    assert!(run.lease.is_none());
+    mock.wait_for_request("session/prompt")?;
+    mock.release()?;
+    tokio::time::timeout(PTY_TIMEOUT, async {
+        loop {
+            let runs = mock.supervised_runs().await?;
+            if runs.iter().any(|run| {
+                run.run_id == run_id
+                    && run.review == bitrouter::supervisor::ReviewState::Unread
+                    && run.turn == bitrouter::supervisor::TurnState::Idle
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+    let stopped = tokio::time::timeout(
+        PTY_TIMEOUT,
+        mock.bro_command()?
+            .args(["agents", "stop", run_id, "--json"])
+            .output(),
+    )
+    .await??;
+    ensure!(
+        stopped.status.success(),
+        "stop failed: {}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    let removed = tokio::time::timeout(
+        PTY_TIMEOUT,
+        mock.bro_command()?
+            .args(["agents", "remove", run_id, "--json"])
+            .output(),
+    )
+    .await??;
+    ensure!(
+        removed.status.success(),
+        "remove failed: {}",
+        String::from_utf8_lossy(&removed.stderr)
+    );
+    assert!(mock.supervised_runs().await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn background_history_is_only_rendered_in_explicit_inspector() -> Result<()> {
+    let mut code = CodeFixture::agent(MockScenario::Minimal)?;
+    code.wait_for_agent_ready()?;
+    let foreground_id = code
+        .mock
+        .supervised_runs()
+        .await?
+        .into_iter()
+        .next()
+        .context("foreground session was not supervisor-owned")?
+        .run_id;
+    code.pty.paste("foreground draft stays here")?;
+    let _ = code.pty.wait_for_text("foreground draft stays here")?;
+    let before_background = code.pty.checkpoint();
+    let worktree = tempfile::tempdir()?;
+    let launched = tokio::time::timeout(
+        PTY_TIMEOUT,
+        code.mock
+            .bro_command()?
+            .args([
+                "run",
+                "stub",
+                "background-isolation-fixture",
+                "--direct",
+                "--background",
+                "--json",
+                "--cwd",
+            ])
+            .arg(worktree.path())
+            .output(),
+    )
+    .await??;
+    ensure!(
+        launched.status.success(),
+        "background launch failed: {}",
+        String::from_utf8_lossy(&launched.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&launched.stdout)?;
+    let background_id = report
+        .get("agent_run_id")
+        .and_then(serde_json::Value::as_str)
+        .context("background dispatch omitted run ID")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&before_background, "1 ready")?;
+    ensure!(
+        !String::from_utf8_lossy(&code.pty.output[before_background.output_len..])
+            .contains("BACKGROUND_PRIVATE_OUTPUT"),
+        "background output leaked into the foreground document"
+    );
+    let expanded = code.pty.checkpoint();
+    code.pty.send(b"\x1b[15~")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&expanded, "Foreground draft preserved")?;
+    let attached = code.pty.checkpoint();
+    code.pty.send(b"\r")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&attached, "BACKGROUND_PRIVATE_OUTPUT")?;
+    ensure!(
+        code.pty.output[attached.output_len..]
+            .windows(ENTER_ALTERNATE_SCREEN.len())
+            .any(|window| window == ENTER_ALTERNATE_SCREEN.as_bytes()),
+        "retained background history was not isolated in alternate screen"
+    );
+    let detached = code.pty.checkpoint();
+    code.pty.send(b"\x1b[15~")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&detached, "Foreground draft preserved")?;
+    let collapsed = code.pty.checkpoint();
+    code.pty.send(b"\x1b[15~")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&collapsed, "foreground draft stays here")?;
+    ensure!(
+        !String::from_utf8_lossy(&code.pty.output[collapsed.output_len..])
+            .contains("BACKGROUND_PRIVATE_OUTPUT"),
+        "detach replayed background history into foreground scrollback"
+    );
+    code.pty.send(b"\x03")?;
+    let _ = code.pty.wait_for_text("Draft cleared")?;
+    code.pty.send(b"\x04")?;
+    code.assert_terminal_restored()?;
+    let runs = code.mock.supervised_runs().await?;
+    ensure!(
+        runs.iter().any(|run| run.run_id == foreground_id
+            && run.process == bitrouter::supervisor::ProcessState::Stopped),
+        "clean Code exit did not stop its foreground controller"
+    );
+    ensure!(
+        runs.iter().any(|run| run.run_id == background_id
+            && run.process == bitrouter::supervisor::ProcessState::Running
+            && run.lease.is_none()),
+        "clean foreground exit affected the detached background controller"
+    );
+    Ok(())
 }
 
 #[test]
@@ -2193,13 +2585,82 @@ fn code_sigtstp_restores_then_sigcont_reacquires_terminal() -> Result<()> {
     code.assert_terminal_restored()
 }
 
+#[tokio::test]
+async fn standalone_agents_and_attach_restore_terminal_without_stopping_runs() -> Result<()> {
+    for attach in [false, true] {
+        let mock = MockAcp::new(MockScenario::Minimal)?;
+        let launched = tokio::time::timeout(
+            PTY_TIMEOUT,
+            mock.bro_command()?
+                .args([
+                    "run",
+                    "stub",
+                    "standalone fixture",
+                    "--background",
+                    "--direct",
+                    "--json",
+                ])
+                .output(),
+        )
+        .await??;
+        ensure!(
+            launched.status.success(),
+            "standalone fixture launch failed: {}",
+            String::from_utf8_lossy(&launched.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&launched.stdout)?;
+        let run_id = report
+            .get("agent_run_id")
+            .and_then(serde_json::Value::as_str)
+            .context("standalone fixture missing run ID")?
+            .to_string();
+        let child_pid_path = mock._directory.path().join("code-child.pid");
+        let mut command = shell_command(&mock, None)?;
+        command.arg("agents");
+        if attach {
+            command.arg("attach");
+            command.arg(&run_id);
+        }
+        let pty = PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?;
+        let mut manager = CodeFixture {
+            mock,
+            child_pid_path,
+            pty,
+        };
+        let _ = manager.pty.wait_for_raw_text(ENTER_ALTERNATE_SCREEN)?;
+        let _ = manager
+            .pty
+            .wait_for_text(if attach { "FXRP1" } else { "Agents ·" })?;
+        let suspended = manager.pty.checkpoint();
+        manager.signal_child("TSTP")?;
+        let _ = manager
+            .pty
+            .wait_for_raw_text_since(&suspended, LEAVE_ALTERNATE_SCREEN)?;
+        let resumed = manager.pty.checkpoint();
+        manager.signal_child("CONT")?;
+        let _ = manager
+            .pty
+            .wait_for_raw_text_since(&resumed, ENTER_ALTERNATE_SCREEN)?;
+        manager.signal_child("TERM")?;
+        manager.assert_terminal_restored()?;
+        let runs = manager.mock.supervised_runs().await?;
+        ensure!(
+            runs.iter().any(|run| run.run_id == run_id
+                && run.process == bitrouter::supervisor::ProcessState::Running
+                && run.lease.is_none()),
+            "manager exit stopped or retained control of the background run"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn code_bare_entry_offers_selection_without_permanent_navigation() -> Result<()> {
     let mut bare = CodeFixture::bare()?;
     let selection = bare.pty.wait_for_text("claude-acp")?;
     ensure!(
         !selection.contains("Home")
-            && !selection.contains("Agents")
+            && !selection.replace("F5 Agents", "").contains("Agents")
             && !selection.contains("Requests"),
         "bare Code entry restored permanent navigation"
     );
@@ -2211,7 +2672,7 @@ fn code_bare_entry_offers_selection_without_permanent_navigation() -> Result<()>
         .pty
         .wait_for_text("Choose an agent before sending this draft")?;
     ensure!(
-        !bare_output.contains("Home") && !bare_output.contains("Agents"),
+        !bare_output.contains("Home") && !bare_output.replace("F5 Agents", "").contains("Agents"),
         "bare Code entry restored permanent navigation"
     );
     let _ = bare
@@ -2237,7 +2698,9 @@ fn code_hidden_chat_shares_palette_permissions_and_terminal_restoration() -> Res
         .pty
         .wait_for_text_since(&palette_checkpoint, "Choose agent")?;
     ensure!(
-        !palette.contains("Home") && !palette.contains("Agents") && !palette.contains("Requests"),
+        !palette.contains("Home")
+            && !palette.replace("F5 Agents", "").contains("Agents")
+            && !palette.contains("Requests"),
         "hidden chat entry restored permanent navigation"
     );
     code.close_to_composer()?;
@@ -2281,7 +2744,7 @@ fn code_hidden_tui_bare_alias_uses_the_shared_empty_composer() -> Result<()> {
     let selection = tui.pty.wait_for_text("claude-acp")?;
     ensure!(
         !selection.contains("Home")
-            && !selection.contains("Agents")
+            && !selection.replace("F5 Agents", "").contains("Agents")
             && !selection.contains("Requests"),
         "hidden tui entry restored permanent navigation"
     );
@@ -2776,7 +3239,7 @@ fn code_late_adapter_disconnect_preserves_terminal_cleanup() -> Result<()> {
     code.mock.disconnect()?;
     let disconnected = code
         .pty
-        .wait_for_text_since(&disconnect_checkpoint, "disconnected · adapter closed")?;
+        .wait_for_text_since(&disconnect_checkpoint, "activity: disconnected")?;
     ensure!(
         disconnected.contains("FXRP1"),
         "late adapter disconnect discarded the completed transcript: {disconnected:?}"

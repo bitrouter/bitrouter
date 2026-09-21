@@ -96,6 +96,10 @@ impl ConfigIdentity {
     }
 }
 
+pub(crate) fn config_identity_digest(source: &ConfigSource) -> Result<String> {
+    Ok(ConfigIdentity::for_source(source)?.digest)
+}
+
 /// A verified running daemon found through its source-specific locator.
 #[derive(Debug, Clone)]
 pub struct LocatedDaemon {
