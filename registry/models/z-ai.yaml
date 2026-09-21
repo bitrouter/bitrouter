@@ -60,3 +60,14 @@
   release_date: 2025-12-23
   open_weights: true
   family: glm
+- id: z-ai/glm-5.3-flashx
+  name: 'Z.ai: GLM 5.3 FlashX'
+  input_modalities:
+  - image
+  - text
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 131072
+  release_date: 2026-09-18

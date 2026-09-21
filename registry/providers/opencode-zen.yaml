@@ -328,6 +328,23 @@ models:
         cache_write: 12.5
       output_tokens:
         text: 50
+  - id: deepseek/deepseek-v4.1-flash
+    provider_model_id: deepseek-v4.1-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.006
+      output_tokens:
+        text: 1.2
+  - id: qwen/qwen3.8-flash
+    provider_model_id: qwen3.8-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.016
+        cache_write: 0.2
+      output_tokens:
+        text: 0.47
 status: active
 weight: 1
 community: false
