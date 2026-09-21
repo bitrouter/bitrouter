@@ -1252,7 +1252,10 @@ impl PtyRunner {
                     )
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    bail!("timed out waiting for visible PTY text {text:?}; screen was {screen:?}")
+                    bail!(
+                        "timed out waiting for visible PTY text {text:?}; screen was {screen:?}; raw output was {:?}",
+                        String::from_utf8_lossy(&self.output)
+                    )
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     bail!("PTY closed while waiting for {text:?}; screen was {screen:?}")
@@ -2110,7 +2113,7 @@ fn code_minimum_and_below_minimum_permission_paths_are_safe() -> Result<()> {
     code.pty.send(b"\x0c")?;
     let _ = code
         .pty
-        .wait_for_raw_text_since(&resize_checkpoint, "\x1b[?2026l")?;
+        .wait_for_text_since(&resize_checkpoint, "Message")?;
     let resized = code.pty.checkpoint();
     code.pty.send("中文 👩‍💻 permission\r".as_bytes())?;
     let _ = code

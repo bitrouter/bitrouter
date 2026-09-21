@@ -189,7 +189,7 @@ impl<B: Backend + SyncSink> Writer<B> {
             Line::default(),
         );
         document.extend_from_slice(footer);
-        self.physical_frame(document)?;
+        self.physical_frame(document, footer.len())?;
         self.footer_rows = footer.len();
         Ok(())
     }
@@ -228,10 +228,14 @@ impl<B: Backend + SyncSink> Writer<B> {
     pub fn frame(&mut self, lines: &[Line<'static>]) -> io::Result<()> {
         let width = self.backend.size()?.width.max(1);
         let next = lines.iter().flat_map(|line| wrap(line, width)).collect();
-        self.physical_frame(next)
+        self.physical_frame(next, 0)
     }
 
-    fn physical_frame(&mut self, next: Vec<Line<'static>>) -> io::Result<()> {
+    fn physical_frame(
+        &mut self,
+        next: Vec<Line<'static>>,
+        minimum_visible_rows: usize,
+    ) -> io::Result<()> {
         let size = self.backend.size()?;
         let width = size.width.max(1);
         let height = size.height.max(1);
@@ -253,7 +257,14 @@ impl<B: Backend + SyncSink> Writer<B> {
             // than the anchor would otherwise leave `capacity` at zero, and a
             // viewport with no room is a viewport that never draws again.
             self.anchor = self.anchor.min(height.saturating_sub(1));
-            self.viewport_top = next.len().saturating_sub(self.capacity());
+            // Keep the complete dock in the paint range. If the old anchor
+            // leaves less room after a shrink, the normal paint/scroll loop
+            // consumes protected rows into scrollback to make that room;
+            // clipping to capacity here would permanently hide the composer.
+            let visible = self
+                .capacity()
+                .max(minimum_visible_rows.min(usize::from(height)));
+            self.viewport_top = next.len().saturating_sub(visible);
         }
         // A document that shrank has rows on screen that are no longer in it.
         let shrank = next.len() < self.prev.len();
@@ -778,6 +789,27 @@ mod tests {
         assert_eq!(screen(&writer)[10], "═".repeat(32));
         assert_eq!(screen(&writer)[11], " Message");
         assert!(scrollback(&writer).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn shrinking_below_the_anchor_keeps_the_entire_dock_visible() -> io::Result<()> {
+        let mut backend = TestBackend::new(80, 24);
+        backend.set_cursor_position(Position::new(0, 23))?;
+        let mut writer = Writer::new(backend)?;
+        let transcript = document(&["session", "ready"]);
+        let footer = document(&["status", "Message", "draft", "agents", "hints"]);
+        writer.docked_frame(&transcript, &footer)?;
+
+        writer.backend.resize(40, 16);
+        writer.docked_frame(&transcript, &footer)?;
+        assert_eq!(
+            screen(&writer)[11..],
+            ["status", "Message", "draft", "agents", "hints"]
+        );
+        let before = screen(&writer);
+        writer.docked_frame(&transcript, &footer)?;
+        assert_eq!(screen(&writer), before);
         Ok(())
     }
 
