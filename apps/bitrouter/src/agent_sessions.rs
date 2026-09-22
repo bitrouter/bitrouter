@@ -967,9 +967,11 @@ async fn run_deck(
     let mut refresh = tokio::time::interval(Duration::from_millis(500));
     refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut pending = VecDeque::new();
-    let mut effect_job = None;
-    let mut snapshot_job = None;
     let result = async {
+        // Keep in-flight work inside this scope so a terminal signal cancels
+        // it before exit cleanup tries to acquire the same client gates.
+        let mut effect_job = None;
+        let mut snapshot_job = None;
         loop {
             view.draw(&state, false)?;
             if effect_job.is_none()
