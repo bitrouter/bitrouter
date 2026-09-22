@@ -1,7 +1,7 @@
 # First-class evaluation models through `/v1/evaluate`
 
 Status: **Phases 0–1 passed local and hosted CI. Phase 2 deterministic local
-checks passed; hosted CI and a credentialed TypeSafe smoke test remain pending.
+and hosted CI checks passed; a credentialed TypeSafe smoke test remains pending.
 Phase 3 remains proposed.**
 
 Date: 2026-09-22
@@ -1100,6 +1100,16 @@ remote service. Record when and against which version it passed; redact the
 credential and input from logs. Do not put this secret-dependent test in
 ordinary public PR CI. Without a passing real-provider smoke test, report
 "deterministic integration passed" rather than "Phase 2 passed".
+
+**Phase 2 evidence to date (2026-09-22):** implementation commit `d2cdc6f6`;
+local `cargo nextest run --workspace --all-features` passed 3,555 tests with
+23 intentional skips. Strict Clippy, formatting, rustdoc, doctests, registry
+validation/build/freshness, and diff whitespace checks passed. [PR #936
+hosted CI](https://github.com/bitrouter/bitrouter/pull/936) passed the Linux,
+macOS, and Windows test and Clippy jobs, plus the applicable MSRV,
+feature-isolation, dist, documentation, and repository checks. The separate
+credentialed TypeSafe smoke test was not run; this is deterministic integration
+evidence, not a Phase 2 pass or production proof.
 
 ### Phase 3 — additional formats and providers
 
