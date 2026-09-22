@@ -5,8 +5,9 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
-- [`EVALUATION_MODELS_SPEC.md`](EVALUATION_MODELS_SPEC.md) — **Phase 0
-  implemented; acceptance requires local and hosted CI. Phases 1–3 proposed.**
+- [`EVALUATION_MODELS_SPEC.md`](EVALUATION_MODELS_SPEC.md) — **Phase 0 passed
+  local and hosted CI; Phase 1 implemented and locally verified, hosted CI
+  pending; Phases 2–3 proposed.**
   Adds Jev and similar typed-decision models as
   first-class model routes through a new OpenRouter Decisions-shaped
   `/v1/evaluate` operation, with concrete provider formats supplied by explicit

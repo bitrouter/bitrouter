@@ -40,6 +40,16 @@ pub struct EvaluationRouteDeclaration {
     pub limits: crate::config::ModelOperationConfig,
 }
 
+/// An executable evaluation route assembled from a positively declared model.
+/// Native format availability is checked separately by the extension host.
+#[derive(Debug, Clone)]
+pub struct EvaluationRoute {
+    /// Canonical route declaration and host-owned endpoint.
+    pub declaration: EvaluationRouteDeclaration,
+    /// Same-provider account chain in configured order.
+    pub targets: Vec<RoutingTarget>,
+}
+
 /// Resolve only declared evaluation-capable models. This does not assert that
 /// the required native extension is registered or that the route is callable.
 pub fn resolve_evaluation_declaration_for(
@@ -118,6 +128,26 @@ pub fn resolve_evaluation_declaration_for(
     }
 }
 
+/// Resolve the declared evaluation route and its same-provider accounts.
+pub fn resolve_evaluation_route_for(config: &Config, selector: &str) -> Result<EvaluationRoute> {
+    let declaration = resolve_evaluation_declaration_for(config, selector)?;
+    let provider = config
+        .providers
+        .get(&declaration.provider)
+        .ok_or_else(|| BitrouterError::internal("resolved evaluation provider disappeared"))?;
+    let targets = build_targets_for_operation(
+        &declaration.provider,
+        provider,
+        &declaration.model,
+        None,
+        InferenceOperation::Evaluate,
+    )?;
+    Ok(EvaluationRoute {
+        declaration,
+        targets,
+    })
+}
+
 fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
     let base = UsagePricingBracket {
         input_micro_usd_per_token: pricing.input_micro_usd_per_token,
@@ -179,6 +209,15 @@ impl ConfigRoutingTable {
             .read()
             .map_err(|_| BitrouterError::internal("evaluation configuration lock poisoned"))?;
         resolve_evaluation_declaration_for(&config, selector)
+    }
+
+    /// Resolve a concrete same-provider account chain for evaluation.
+    pub fn resolve_evaluation_route(&self, selector: &str) -> Result<EvaluationRoute> {
+        let config = self
+            .config
+            .read()
+            .map_err(|_| BitrouterError::internal("evaluation configuration lock poisoned"))?;
+        resolve_evaluation_route_for(&config, selector)
     }
 
     /// Build a routing table from an already-parsed config (no reload source).
@@ -304,14 +343,31 @@ fn build_targets(
     model_id: &str,
     inbound: Option<&ApiProtocol>,
 ) -> Result<Vec<RoutingTarget>> {
-    if provider
-        .model_config(model_id)
-        .is_some_and(|model| !model.supports_operation(InferenceOperation::Generate))
-        || (!provider.models.is_empty()
-            && provider
-                .models
-                .iter()
-                .all(|model| !model.supports_operation(InferenceOperation::Generate)))
+    build_targets_for_operation(
+        provider_id,
+        provider,
+        model_id,
+        inbound,
+        InferenceOperation::Generate,
+    )
+}
+
+fn build_targets_for_operation(
+    provider_id: &str,
+    provider: &crate::config::ProviderConfig,
+    model_id: &str,
+    inbound: Option<&ApiProtocol>,
+    operation: InferenceOperation,
+) -> Result<Vec<RoutingTarget>> {
+    if operation == InferenceOperation::Generate
+        && (provider
+            .model_config(model_id)
+            .is_some_and(|model| !model.supports_operation(InferenceOperation::Generate))
+            || (!provider.models.is_empty()
+                && provider
+                    .models
+                    .iter()
+                    .all(|model| !model.supports_operation(InferenceOperation::Generate))))
     {
         return Err(BitrouterError::ModelOperationMismatch(format!(
             "provider '{provider_id}' model '{model_id}' does not support generate"
@@ -325,7 +381,9 @@ fn build_targets(
     // protocols at different paths (e.g. OpenAI under `/v1`, Anthropic Messages
     // under `/anthropic`). It applies to the provider base, not to an account
     // that pins its own host.
-    let protocol_base = provider.endpoint_for(&protocol);
+    let protocol_base = (operation == InferenceOperation::Generate)
+        .then(|| provider.endpoint_for(&protocol))
+        .flatten();
     // Canonical → upstream id translation: when `model_id` matches a declared
     // model carrying a distinct `provider_model_id` (the registry case, e.g.
     // canonical `anthropic/claude-sonnet-4.6` → upstream `claude-sonnet-4-6`),

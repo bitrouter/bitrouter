@@ -13,6 +13,19 @@ use serde_json::Value;
 
 use crate::error::{BitrouterError, Result};
 
+/// Host-owned non-streaming execution, retries, and terminal evidence.
+pub mod pipeline;
+
+/// Provider/model identity exposed to a format adapter. Transport details,
+/// credentials, account selection, and endpoint choice stay with the host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvaluationRoutingTarget {
+    /// Configured BitRouter provider id.
+    pub provider: String,
+    /// Exact model id sent to the selected provider.
+    pub provider_model_id: String,
+}
+
 /// Question kinds advertised by an evaluation-capable model route.
 #[derive(
     Debug,

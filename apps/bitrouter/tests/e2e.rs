@@ -28,6 +28,9 @@ use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[path = "e2e/evaluation.rs"]
+mod evaluation;
+
 #[tokio::test]
 async fn evaluation_only_model_rejected_on_all_generation_ingresses() -> anyhow::Result<()> {
     use anyhow::Context;
@@ -47,7 +50,7 @@ providers:
     operations:
       evaluate:
         endpoint: /v1/systemone
-        format: {{ extension: typesafe, adapter: system_one, revision: 1 }}
+        format: {{ extension: fixture, adapter: decisions, revision: 1 }}
     models:
       - id: typesafe/jev-1.13
         provider_model_id: jev-1.13.0
@@ -66,7 +69,13 @@ providers:
     let cfg = config::parse(&raw)?;
     let runtime_home = tempfile::tempdir()?;
     let config_path = runtime_home.path().join("bitrouter.yaml");
-    let assembled = bitrouter::build_app_with_path(&cfg, Some(&config_path)).await?;
+    let assembled = bitrouter::assemble::build_app_with_extensions(
+        &cfg,
+        Some(&config_path),
+        &evaluation::registered()?,
+        None,
+    )
+    .await?;
     let state = AppState {
         language_model: assembled
             .app

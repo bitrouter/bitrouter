@@ -32,6 +32,7 @@ pub mod m20240101_000018_create_acp_capture;
 pub mod m20240101_000019_create_acp_checkpoints;
 pub mod m20240101_000020_create_checkpoint_evolution;
 pub mod m20240101_000021_add_router_request_identity;
+pub mod m20240101_000022_create_evaluation_attempts;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -63,6 +64,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000019_create_acp_checkpoints::Migration),
             Box::new(m20240101_000020_create_checkpoint_evolution::Migration),
             Box::new(m20240101_000021_add_router_request_identity::Migration),
+            Box::new(m20240101_000022_create_evaluation_attempts::Migration),
         ]
     }
 }

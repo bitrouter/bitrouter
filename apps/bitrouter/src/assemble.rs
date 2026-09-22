@@ -12,6 +12,9 @@ use sea_orm::DatabaseConnection;
 use bitrouter_sdk::App;
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
+use bitrouter_sdk::evaluation::pipeline::{EvaluationAttemptRecorder, EvaluationPipeline};
+use bitrouter_sdk::extension::ExtensionApi;
+use bitrouter_sdk::inference::InferenceOperation;
 use bitrouter_sdk::invocation;
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
@@ -63,6 +66,7 @@ use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvid
 use crate::eval::EvalService;
 use crate::eval::settlement::{EvalSettlementRecorder, PendingEvalDecisionStore};
 use crate::eval::store::EvalStore;
+use crate::metering::evaluation::MeteringEvaluationAttemptRecorder;
 use crate::metering::{ContextTier, MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 use crate::session_identity::SessionContextHook;
@@ -114,6 +118,11 @@ pub struct Assembled {
     /// Concrete upstream HTTP executor. The pipeline also holds this as a trait
     /// object, but reload needs the concrete handle to replace timeout clients.
     pub upstream_executor: Arc<HttpExecutor>,
+    /// Internal typed-evaluation rail, present only for a configured active
+    /// route. The OSS host owns durable terminal and cost evidence unless a
+    /// custom host supplies its own recorder.
+    /// Phase 1 deliberately exposes no public evaluation HTTP endpoint.
+    pub evaluation_pipeline: Option<Arc<EvaluationPipeline>>,
     /// The live `policy_table:` transform, when one was wired. The built `App`
     /// holds the same `Arc` as a `dyn PromptTransform`; reload needs the
     /// concrete handle to swap a freshly built spec into it, because the
@@ -368,7 +377,7 @@ fn renamed_env_warnings(is_set: impl Fn(&str) -> bool) -> Vec<String> {
 /// plugin's migrations, build the routing table + executor, and wire the
 /// builtin hooks onto the `language_model` pipeline.
 pub async fn build_app(config: &Config) -> Result<Assembled> {
-    build_app_with_path(config, None).await
+    build_app_with_extensions(config, None, &ExtensionApi::new(), None).await
 }
 
 /// Like [`build_app`], but remembering the config's source path so the routing
@@ -377,8 +386,28 @@ pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
+    build_app_with_extensions(config, config_path, &ExtensionApi::new(), None).await
+}
+
+/// Assemble the same app as [`build_app_with_path`] with trusted native
+/// evaluation-format facets explicitly linked by a custom Rust host.
+/// Registration does not configure a provider or expose `/v1/evaluate`.
+pub async fn build_app_with_extensions(
+    config: &Config,
+    config_path: Option<&std::path::Path>,
+    extensions: &ExtensionApi,
+    evaluation_recorder: Option<Arc<dyn EvaluationAttemptRecorder>>,
+) -> Result<Assembled> {
     config.validate_router_config()?;
     config.validate_operations()?;
+    extensions.validate_evaluation_bindings(config)?;
+    let has_evaluation_route = config.providers.values().any(|provider| {
+        provider.active
+            && provider
+                .models
+                .iter()
+                .any(|model| model.supports_operation(InferenceOperation::Evaluate))
+    });
     let request_checks = Arc::new(crate::request_checks::RequestCheckRuntime::activate(
         config,
     )?);
@@ -501,9 +530,24 @@ pub async fn build_app_with_path(
         .context("building the upstream HTTP executor")?,
     );
     let executor_for_reload = executor.clone();
-
     // ---- pricing, metering, policy, guardrails — all derived from config ----
     let pricing = Arc::new(build_pricing_table(config));
+    let evaluation_pipeline = if has_evaluation_route {
+        let recorder = evaluation_recorder.unwrap_or_else(|| {
+            Arc::new(MeteringEvaluationAttemptRecorder::new(
+                db.clone(),
+                Arc::clone(&pricing),
+            ))
+        });
+        Some(Arc::new(EvaluationPipeline::new(
+            Arc::clone(&routing_table),
+            Arc::clone(&executor),
+            extensions.clone(),
+            recorder,
+        )))
+    } else {
+        None
+    };
     let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
@@ -969,6 +1013,7 @@ pub async fn build_app_with_path(
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
+        evaluation_pipeline,
         policy_table_router,
         observe: observe_provider,
         otel_exporter: otel_for_assembled,
