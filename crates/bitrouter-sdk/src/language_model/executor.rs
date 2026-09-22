@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::{BitrouterError, Result};
+#[cfg(feature = "config_file")]
 use crate::evaluation::{EvaluationRequest, EvaluationResult, EvaluationRoutingTarget};
+#[cfg(feature = "config_file")]
 use crate::extension::EvaluationFormatAdapter;
 use crate::language_model::auth::{
     AppliedAuth, AuthAppliers, AuthExtensionOperation, ContinuationAuthority, CredentialAuthority,
@@ -765,6 +767,7 @@ impl HttpExecutor {
     /// applies the provider's authentication and headers, enforces the
     /// deadline and response-size bound, and validates the canonical result.
     /// It does not enter the generation pipeline or its prompt hooks.
+    #[cfg(feature = "config_file")]
     pub async fn execute_evaluation_attempt(
         &self,
         target: &RoutingTarget,

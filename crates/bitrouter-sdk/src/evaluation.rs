@@ -14,6 +14,8 @@ use serde_json::Value;
 use crate::error::{BitrouterError, Result};
 
 /// Host-owned non-streaming execution, retries, and terminal evidence.
+#[cfg(feature = "config_file")]
+#[cfg_attr(docsrs, doc(cfg(feature = "config_file")))]
 pub mod pipeline;
 
 /// Provider/model identity exposed to a format adapter. Transport details,

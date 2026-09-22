@@ -150,6 +150,8 @@ pub mod caller;
 pub mod error;
 pub mod evaluation;
 pub mod event;
+#[cfg(feature = "config_file")]
+#[cfg_attr(docsrs, doc(cfg(feature = "config_file")))]
 pub mod extension;
 pub mod inference;
 // The CLI name a user-facing hint should tell the operator to type. Ungated:
