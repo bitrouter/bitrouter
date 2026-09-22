@@ -113,6 +113,30 @@ models:
         no_cache: 0.05
       output_tokens:
         text: 0.45
+  - id: qwen/qwen3.8-2.4t-a95b
+    provider_model_id: Qwen/Qwen3.8-2.4T-A95B
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.25
+      output_tokens:
+        text: 6
+  - id: moonshotai/kimi-k2.7-code
+    provider_model_id: moonshotai/Kimi-K2.7-Code
+    pricing:
+      input_tokens:
+        no_cache: 0.85916
+        cache_read: 0.17993
+      output_tokens:
+        text: 3.8
+  - id: moonshotai/kimi-k3
+    provider_model_id: moonshotai/Kimi-K3
+    pricing:
+      input_tokens:
+        no_cache: 2.7
+        cache_read: 0.27
+      output_tokens:
+        text: 13.5
 status: active
 weight: 1
 submitted_at: 2026-07-07

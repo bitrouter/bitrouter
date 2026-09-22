@@ -73,6 +73,8 @@ models:
     provider_model_id: gemini-3.8-flash
   - id: openai/gpt-6-astra
     provider_model_id: gpt-6-astra
+  - id: x-ai/grok-4.7
+    provider_model_id: grok-4.7
 status: active
 weight: 1
 community: false
