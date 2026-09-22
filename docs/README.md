@@ -5,6 +5,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [`LOCAL_DAEMON_UPGRADE_SPEC.md`](LOCAL_DAEMON_UPGRADE_SPEC.md) — **implemented
+  and locally verified.** Safe local daemon handoff after a CLI upgrade: version and
+  capability detection, idle-only restart, migration preflight, and truthful
+  recovery states.
 - [`CONFIGURATION_STATE_CONTRACT_SPEC.md`](CONFIGURATION_STATE_CONTRACT_SPEC.md) —
   **implemented and locally verified.** Whole-configuration saved/running/restart
   evidence shared by local and remote status, CLI, and Code inspectors.

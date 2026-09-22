@@ -217,6 +217,31 @@ bro restart [-c <path>] [--socket <path>] [--log <path>]
 ```
 
 Stops the running daemon (waiting up to 30s for in-flight requests to drain), then starts a fresh one.
+For a file SQLite database, restart first validates migration lineage and runs
+pending migrations on a private snapshot. It retains a recovery backup before
+stopping the daemon. The explicit restart may interrupt active agent runs.
+
+### Local daemon after an update
+
+`bro status` reports the installed and running daemon versions when the daemon
+supports that metadata. Its JSON also includes `compatibility`, launcher
+ownership, and observed active-work counts when the daemon can report them.
+These counts are a passive snapshot; the daemon checks them again behind its
+drain gate before stopping. A new `bro` probes the local daemon before supervised
+session commands. When the daemon has the handoff protocol, is idle, and its
+SQLite migration preflight succeeds, `bro` starts the installed binary through
+a graceful daemon handoff. Active agent runs, ACP recordings or route leases,
+and in-flight HTTP responses defer the handoff. A legacy daemon cannot prove
+it is idle; finish its work and run `bro restart` explicitly.
+Foreground `bro serve` remains under its external supervisor; the CLI does not
+take it over automatically.
+
+`bro update` attempts the same safe handoff after a self-managed installation.
+Package-manager installs still delegate the binary update; the next
+daemon-dependent invocation checks compatibility. `bro update --check` and
+`bro status` do not restart the daemon. `bro code --no-start` will diagnose a
+version mismatch without performing the handoff. The former `--restart` flag
+is accepted for compatibility; safe handoff is now the default.
 
 ### `bro reload`
 

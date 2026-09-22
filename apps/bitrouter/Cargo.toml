@@ -57,6 +57,7 @@ tempfile.workspace = true
 thiserror.workspace = true
 http.workspace = true
 axum.workspace = true
+http-body.workspace = true
 futures.workspace = true
 agent-client-protocol.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
@@ -81,6 +82,7 @@ rustix = { workspace = true, features = ["process"] }
 [build-dependencies]
 # Reads the committed registry artifacts to generate the ACP harness catalog.
 serde_json.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

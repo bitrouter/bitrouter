@@ -30,10 +30,12 @@ pub(crate) async fn ensure_daemon(
     no_start: bool,
 ) -> Result<PathBuf> {
     if let Some(located) = crate::daemon_locator::locate_source(source).await? {
+        crate::upgrade::ensure_compatible(source, located.socket(), no_start).await?;
         return Ok(located.socket().to_path_buf());
     }
     let socket = daemon::socket_path_for(source, config);
     if daemon::probe_status(&socket).await?.is_some() {
+        crate::upgrade::ensure_compatible(source, &socket, no_start).await?;
         return Ok(socket);
     }
     ensure!(

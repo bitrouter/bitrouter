@@ -104,6 +104,14 @@ impl DaemonReloader for NoopReloader {
 pub enum DaemonCommand {
     /// Stop the daemon — it finishes the response, then exits.
     Stop,
+    /// Discover the daemon's handoff contract without changing its state.
+    HandoffHello,
+    /// Close admission if all daemon-owned work is idle.
+    HandoffPrepare,
+    /// Reopen admission when pre-stop checks fail.
+    HandoffAbort { token: String },
+    /// Stop only the daemon that issued this short-lived token.
+    HandoffStop { token: String },
     /// Hot-reload the config / routing table. The CLI piggybacks a
     /// snapshot of API-key-style env vars from its own process so a
     /// `export OPENAI_API_KEY=…; bro reload` propagates the new
@@ -257,16 +265,55 @@ pub struct RouteHop {
     pub api_protocol: String,
 }
 
+/// Point-in-time activity observed by the local daemon. Missing counts mean
+/// that subsystem could not prove idleness.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct HandoffActivity {
+    pub operations: usize,
+    pub supervised_runs: Option<usize>,
+    pub route_leases: usize,
+    pub acp_recordings: Option<u64>,
+    pub drain_in_progress: bool,
+}
+
 /// The daemon's reply to a [`DaemonCommand`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "resp", rename_all = "snake_case")]
 pub enum DaemonResponse {
     /// The command succeeded with no payload.
     Ok,
+    HandoffHello {
+        version: String,
+        protocol: u32,
+        instance_id: String,
+        build_id: String,
+        cli_owned: bool,
+    },
+    HandoffReady {
+        token: String,
+    },
+    HandoffBusy {
+        reason: String,
+    },
     /// Status payload.
     Status {
         /// The daemon's process id.
         pid: u32,
+        /// Binary version. Missing on legacy daemons.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        daemon_version: Option<String>,
+        /// Handoff protocol; missing means idle cannot be proven.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_protocol: Option<u32>,
+        /// Fingerprint of the daemon's handoff and migration implementation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_build_id: Option<String>,
+        /// Current activity. Missing on a legacy daemon.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_activity: Option<HandoffActivity>,
+        /// Whether the detached `bro start` launcher owns this process.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cli_owned: Option<bool>,
         /// The HTTP listen address.
         listen: String,
         /// Count of routable models.
@@ -330,9 +377,13 @@ pub enum DaemonResponse {
         payload: ObserveStatusPayload,
     },
     /// Reload coordinator state for the current daemon boot.
-    ReloadState { state: ReloadState },
+    ReloadState {
+        state: ReloadState,
+    },
     /// A typed administration inspection result.
-    Inspection { report: DaemonInspectionReport },
+    Inspection {
+        report: DaemonInspectionReport,
+    },
     Evolution {
         report: Box<crate::evolution::operator::EvolutionReport>,
     },
@@ -666,7 +717,40 @@ pub async fn run_control_socket_with_acp_runtime_and_administration(
     acp: AcpControlPlane,
     administration: Option<Administration>,
 ) -> Result<()> {
-    let supervisor = match &administration {
+    run_control_socket_with_handoff_gate(
+        socket_path,
+        app,
+        listen,
+        reloader,
+        observe,
+        acp,
+        LocalControlOptions {
+            administration,
+            gate: crate::daemon_handoff::HandoffGate::default(),
+            cli_owned: false,
+        },
+    )
+    .await
+}
+
+/// Optional owner-scoped services shared with the HTTP listener.
+pub struct LocalControlOptions {
+    pub administration: Option<Administration>,
+    pub gate: crate::daemon_handoff::HandoffGate,
+    pub cli_owned: bool,
+}
+
+/// Run local control with the same admission gate as the HTTP listener.
+pub async fn run_control_socket_with_handoff_gate(
+    socket_path: PathBuf,
+    app: Arc<App>,
+    listen: String,
+    reloader: Arc<dyn DaemonReloader>,
+    observe: Arc<dyn ObserveStatusProvider>,
+    acp: AcpControlPlane,
+    options: LocalControlOptions,
+) -> Result<()> {
+    let supervisor = match &options.administration {
         Some(administration) => Some(
             crate::supervisor::Supervisor::open(
                 administration.source.clone(),
@@ -677,8 +761,14 @@ pub async fn run_control_socket_with_acp_runtime_and_administration(
         None => None,
     };
     let services = LocalControlServices {
-        administration,
+        administration: options.administration,
         supervisor,
+        gate: options.gate,
+        cli_owned: options.cli_owned,
+        handoff_instance_id: reloader
+            .reload_state()
+            .map(|state| state.server_instance_id)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
     };
     let mut listener = transport::bind(&socket_path).await?;
     let result = accept_loop(
@@ -702,6 +792,22 @@ pub async fn run_control_socket_with_acp_runtime_and_administration(
 struct LocalControlServices {
     administration: Option<Administration>,
     supervisor: Option<crate::supervisor::Supervisor>,
+    gate: crate::daemon_handoff::HandoffGate,
+    cli_owned: bool,
+    handoff_instance_id: String,
+}
+
+async fn active_recording_count(acp: &AcpControlPlane) -> Result<Option<u64>> {
+    use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
+
+    let Some(inventory) = &acp.inventory else {
+        return Ok(None);
+    };
+    let count = crate::acp_trajectory::entities::connections::Entity::find()
+        .filter(crate::acp_trajectory::entities::connections::Column::State.eq("recording"))
+        .count(&inventory.db)
+        .await?;
+    Ok(Some(count))
 }
 
 async fn accept_loop(
@@ -791,10 +897,39 @@ where
         }
     };
 
-    let is_stop = matches!(command, DaemonCommand::Stop);
+    let is_stop = matches!(
+        command,
+        DaemonCommand::Stop | DaemonCommand::HandoffStop { .. }
+    );
+    let admission = if matches!(
+        command,
+        DaemonCommand::Stop
+            | DaemonCommand::Status
+            | DaemonCommand::HandoffHello
+            | DaemonCommand::HandoffPrepare
+            | DaemonCommand::HandoffAbort { .. }
+            | DaemonCommand::HandoffStop { .. }
+    ) {
+        None
+    } else {
+        match services.gate.admit() {
+            Some(admission) => Some(admission),
+            None => {
+                write_response(
+                    reader.get_mut(),
+                    &DaemonResponse::Error {
+                        message: "daemon handoff in progress; retry".to_string(),
+                    },
+                )
+                .await?;
+                return Ok(false);
+            }
+        }
+    };
     let response = dispatch(command, app, listen, reloader, observe, acp, services).await;
     write_response(reader.get_mut(), &response).await?;
-    Ok(is_stop)
+    drop(admission);
+    Ok(is_stop && matches!(response, DaemonResponse::Ok))
 }
 
 async fn dispatch(
@@ -808,6 +943,83 @@ async fn dispatch(
 ) -> DaemonResponse {
     match command {
         DaemonCommand::Stop => DaemonResponse::Ok,
+        DaemonCommand::HandoffHello => DaemonResponse::HandoffHello {
+            version: crate::VERSION.to_string(),
+            protocol: 1,
+            instance_id: services.handoff_instance_id.clone(),
+            build_id: crate::HANDOFF_BUILD_ID.to_string(),
+            cli_owned: services.cli_owned,
+        },
+        DaemonCommand::HandoffPrepare => {
+            if !services.cli_owned {
+                return DaemonResponse::HandoffBusy {
+                    reason: "this daemon is managed by an external process".to_string(),
+                };
+            }
+            let token = match services.gate.prepare() {
+                Ok(token) => token,
+                Err(reason) => {
+                    return DaemonResponse::HandoffBusy {
+                        reason: reason.to_string(),
+                    };
+                }
+            };
+            let active_runs = match &services.supervisor {
+                Some(supervisor) => supervisor.active_run_count().await,
+                None => {
+                    services.gate.abort(&token);
+                    return DaemonResponse::HandoffBusy {
+                        reason: "supervisor activity is unknown".to_string(),
+                    };
+                }
+            };
+            let leases = acp.runtime.active_lease_count();
+            let active_recordings = match active_recording_count(acp).await {
+                Ok(Some(count)) => count,
+                Ok(None) => {
+                    services.gate.abort(&token);
+                    return DaemonResponse::HandoffBusy {
+                        reason: "external ACP controller activity is unknown".to_string(),
+                    };
+                }
+                Err(error) => {
+                    services.gate.abort(&token);
+                    return DaemonResponse::HandoffBusy {
+                        reason: format!(
+                            "external ACP controller activity could not be read: {error}"
+                        ),
+                    };
+                }
+            };
+            if active_runs != 0 || leases != 0 || active_recordings != 0 {
+                services.gate.abort(&token);
+                DaemonResponse::HandoffBusy {
+                    reason: format!(
+                        "{active_runs} active supervised runs, {leases} ACP route leases, {active_recordings} active ACP recordings"
+                    ),
+                }
+            } else {
+                DaemonResponse::HandoffReady { token }
+            }
+        }
+        DaemonCommand::HandoffAbort { token } => {
+            if services.gate.abort(&token) {
+                DaemonResponse::Ok
+            } else {
+                DaemonResponse::Error {
+                    message: "handoff token is invalid".to_string(),
+                }
+            }
+        }
+        DaemonCommand::HandoffStop { token } => {
+            if services.gate.valid(&token) {
+                DaemonResponse::Ok
+            } else {
+                DaemonResponse::Error {
+                    message: "handoff token is invalid or expired".to_string(),
+                }
+            }
+        }
         DaemonCommand::Evolution { operation } => {
             let Some(runtime) = &acp.evolution else {
                 return DaemonResponse::Error {
@@ -874,8 +1086,24 @@ async fn dispatch(
                 .collect();
             let router_state = router_state(&services.administration).await;
             let config_state = reloader.configuration_state().await;
+            let (operations, drain_in_progress) = services.gate.observed_activity();
+            let handoff_activity = HandoffActivity {
+                operations,
+                supervised_runs: match &services.supervisor {
+                    Some(supervisor) => Some(supervisor.active_run_count().await),
+                    None => None,
+                },
+                route_leases: acp.runtime.active_lease_count(),
+                acp_recordings: active_recording_count(acp).await.ok().flatten(),
+                drain_in_progress,
+            };
             DaemonResponse::Status {
                 pid: std::process::id(),
+                daemon_version: Some(crate::VERSION.to_string()),
+                handoff_protocol: Some(1),
+                handoff_build_id: Some(crate::HANDOFF_BUILD_ID.to_string()),
+                handoff_activity: Some(handoff_activity),
+                cli_owned: Some(services.cli_owned),
                 listen: listen.to_string(),
                 models: routable.len(),
                 providers,
@@ -1648,7 +1876,7 @@ fn spawn_detached_serve(
         .context("duplicating log handle for stderr")?;
 
     let mut cmd = std::process::Command::new(&exe);
-    cmd.arg("serve");
+    cmd.arg("serve").arg("--managed-child");
     // For a `File` source pass `--config <abs path>` so the child loads the same
     // file even though it'll chdir to the home. For `Default` (zero-config) skip
     // the flag — the child re-runs `resolve_config` and lands on the same state.
@@ -2081,6 +2309,11 @@ mod tests {
     fn responses_round_trip_as_json() {
         let resp = DaemonResponse::Status {
             pid: 42,
+            daemon_version: Some(crate::VERSION.to_string()),
+            handoff_protocol: Some(1),
+            handoff_build_id: Some(crate::HANDOFF_BUILD_ID.to_string()),
+            handoff_activity: None,
+            cli_owned: Some(true),
             listen: "0.0.0.0:4356".to_string(),
             models: 3,
             providers: vec!["openai".to_string()],
