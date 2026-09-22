@@ -148,7 +148,9 @@
 pub mod app;
 pub mod caller;
 pub mod error;
+pub mod evaluation;
 pub mod event;
+pub mod inference;
 // The CLI name a user-facing hint should tell the operator to type. Ungated:
 // every layer that renders a "run `… <subcommand>`" hint needs it.
 pub mod invocation;

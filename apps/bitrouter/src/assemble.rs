@@ -378,6 +378,7 @@ pub async fn build_app_with_path(
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
     config.validate_router_config()?;
+    config.validate_operations()?;
     let request_checks = Arc::new(crate::request_checks::RequestCheckRuntime::activate(
         config,
     )?);

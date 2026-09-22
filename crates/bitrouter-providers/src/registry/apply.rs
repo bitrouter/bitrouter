@@ -32,7 +32,8 @@ use bitrouter_sdk::language_model::types::ProtocolList;
 use crate::registry::cache::DiskCache;
 use crate::registry::fetch::fetch_registry;
 use crate::registry::types::{
-    Billing, RegistryData, RegistryKind, RegistryPricing, RegistryProvider, RegistryRateLimits,
+    Billing, ProtocolSet, RegistryData, RegistryKind, RegistryPricing, RegistryProvider,
+    RegistryRateLimits,
 };
 
 /// The provider id of the hosted BitRouter Cloud gateway.
@@ -155,6 +156,9 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         if existing.models.is_empty() {
             existing.models = build_models(provider);
         }
+        if existing.operations.is_empty() {
+            existing.operations = provider.operations.clone();
+        }
         if existing.api_base.is_empty()
             && let Some(api_base) = &provider.api_base
         {
@@ -216,6 +220,7 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         api_key,
         api_base,
         api_protocol: protocol_map.unwrap_or_default(),
+        operations: provider.operations.clone(),
         protocol_endpoints: protocol_endpoints(provider),
         models,
         class: Some(class),
@@ -281,7 +286,8 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
         .map(|m| ProviderModel {
             id: m.id.clone(),
             provider_model_id: Some(m.provider_model_id.clone()),
-            api_protocol: Some(m.api_protocol.to_protocol_list()),
+            api_protocol: m.api_protocol.as_ref().map(ProtocolSet::to_protocol_list),
+            operations: m.operations.clone(),
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
             capabilities: m.capabilities.clone(),
@@ -345,6 +351,7 @@ mod tests {
     fn provider(name: &str) -> RegistryProvider {
         RegistryProvider {
             name: name.to_string(),
+            operations: Default::default(),
             display_name: None,
             api_base: Some(format!("https://{name}.example/v1")),
             api_protocol: Vec::new(),
@@ -352,7 +359,8 @@ mod tests {
             models: vec![RegistryModel {
                 id: "deepseek/deepseek-v3.2".to_string(),
                 provider_model_id: "deepseek-v3.2".to_string(),
-                api_protocol: ProtocolSet::One(RegistryProtocol::Openai),
+                operations: None,
+                api_protocol: Some(ProtocolSet::One(RegistryProtocol::Openai)),
                 pricing: Some(RegistryPricing {
                     input_tokens: Some(InputTokenPricing {
                         no_cache: Some(0.27),
@@ -377,6 +385,55 @@ mod tests {
             byok: Some(true),
             billing: Billing::UsageToken,
         }
+    }
+
+    #[test]
+    fn evaluation_operation_metadata_survives_registry_merge_without_generation_protocol()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_sdk::config::{
+            ModelOperationConfig, OperationFormatConfig, ProviderOperationConfig,
+        };
+        use bitrouter_sdk::evaluation::EvaluationQuestionType;
+        use bitrouter_sdk::inference::InferenceOperation;
+
+        let mut registry_provider = provider("regtestprov");
+        registry_provider.operations.insert(
+            InferenceOperation::Evaluate,
+            ProviderOperationConfig {
+                endpoint: "/v1/evaluate".to_string(),
+                format: OperationFormatConfig {
+                    extension: "test-extension".to_string(),
+                    adapter: "test-format".to_string(),
+                    revision: 1,
+                },
+            },
+        );
+        registry_provider.models[0].api_protocol = None;
+        registry_provider.models[0].operations = Some(std::collections::BTreeMap::from([(
+            InferenceOperation::Evaluate,
+            ModelOperationConfig {
+                question_types: vec![EvaluationQuestionType::Noul],
+                max_choice_options: None,
+                max_score_levels: None,
+            },
+        )]));
+        let mut config = Config::default();
+        config.providers.insert(
+            "regtestprov".to_string(),
+            ProviderConfig {
+                api_key: "test-key".to_string(),
+                active: true,
+                ..ProviderConfig::default()
+            },
+        );
+        merge_provider(&mut config, &registry_provider);
+        config.validate_operations()?;
+        let merged = &config.providers["regtestprov"];
+        assert!(merged.models[0].api_protocol.is_none());
+        assert!(merged.models[0].supports_operation(InferenceOperation::Evaluate));
+        assert!(!merged.models[0].supports_operation(InferenceOperation::Generate));
+        assert!(bitrouter_sdk::config::routing_table::list_models_for(&config).is_empty());
+        Ok(())
     }
 
     #[test]
@@ -795,6 +852,7 @@ mod tests {
         user.models = vec![ProviderModel {
             id: "custom/model".to_string(),
             provider_model_id: None,
+            operations: None,
             api_protocol: None,
             rate_limits: None,
             pricing: None,

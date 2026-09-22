@@ -1,0 +1,7 @@
+- id: typesafe/jev-1.13
+  name: Jev 1.13
+  description: Typed evaluation model. Catalog metadata only until the TypeSafe native extension and /v1/evaluate endpoint ship.
+  operations:
+    - evaluate
+  input_modalities:
+    - text

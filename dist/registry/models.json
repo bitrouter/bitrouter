@@ -7611,6 +7611,18 @@
       "release_date": "2026-09-03"
     },
     {
+      "description": "Typed evaluation model. Catalog metadata only until the TypeSafe native extension and /v1/evaluate endpoint ship.",
+      "id": "typesafe/jev-1.13",
+      "input_modalities": [
+        "text"
+      ],
+      "name": "Jev 1.13",
+      "operations": [
+        "evaluate"
+      ],
+      "providers": []
+    },
+    {
       "deprecation_date": "2026-10-22",
       "family": "grok",
       "id": "x-ai/grok-4.20",

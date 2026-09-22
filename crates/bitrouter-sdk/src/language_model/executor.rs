@@ -496,6 +496,9 @@ impl UpstreamErrorScrubber {
             BitrouterError::NotFound(message) => {
                 BitrouterError::NotFound(self.scrub_text(&message))
             }
+            BitrouterError::ModelOperationMismatch(message) => {
+                BitrouterError::ModelOperationMismatch(self.scrub_text(&message))
+            }
             error @ BitrouterError::RateLimited { .. } => error,
             BitrouterError::UpstreamRateLimited {
                 retry_after,

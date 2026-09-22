@@ -1227,7 +1227,14 @@ async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> impl 
     let models = state.language_model.routing_table().list_models();
     let data: Vec<_> = models
         .into_iter()
-        .map(|m| serde_json::json!({ "id": m.id, "object": "model", "providers": m.providers }))
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "object": "model",
+                "providers": m.providers,
+                "operations": m.operations,
+            })
+        })
         .collect();
     let mut body = serde_json::json!({ "object": "list", "data": data });
     if is_codex_user_agent(&headers)

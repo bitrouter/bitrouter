@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::event::PipelineEvent;
+use crate::inference::InferenceOperation;
 use crate::language_model::context::PipelineContext;
 use crate::language_model::hooks::FallbackDecision;
 use crate::language_model::request_checks::RequestCheckBinding;
@@ -77,6 +78,34 @@ pub struct ModelInfo {
     pub id: String,
     /// Providers that declare this model.
     pub providers: Vec<String>,
+    /// Semantic operations this listed selector can currently execute.
+    /// Older control peers omit this field and remain generation-only.
+    #[serde(default = "default_generate_operations")]
+    pub operations: Vec<InferenceOperation>,
+}
+
+fn default_generate_operations() -> Vec<InferenceOperation> {
+    vec![InferenceOperation::Generate]
+}
+
+#[cfg(test)]
+mod model_info_compatibility_tests {
+    use super::{InferenceOperation, ModelInfo};
+
+    #[test]
+    fn legacy_control_model_info_defaults_to_generate()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let model: ModelInfo = serde_json::from_value(serde_json::json!({
+            "id": "legacy/model",
+            "providers": ["legacy"]
+        }))?;
+        assert_eq!(model.operations, vec![InferenceOperation::Generate]);
+        assert_eq!(
+            serde_json::to_value(model)?["operations"],
+            serde_json::json!(["generate"])
+        );
+        Ok(())
+    }
 }
 
 /// Stable identity of the named router selected for one request.
@@ -355,6 +384,7 @@ impl RoutingTable for StaticRoutingTable {
             .map(|(id, chain)| ModelInfo {
                 id: id.clone(),
                 providers: chain.iter().map(|t| t.provider_name.clone()).collect(),
+                operations: vec![InferenceOperation::Generate],
             })
             .collect()
     }
@@ -364,6 +394,7 @@ impl RoutingTable for StaticRoutingTable {
         guard.get(model).map(|chain| ModelInfo {
             id: model.to_string(),
             providers: chain.iter().map(|t| t.provider_name.clone()).collect(),
+            operations: vec![InferenceOperation::Generate],
         })
     }
 

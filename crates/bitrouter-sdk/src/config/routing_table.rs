@@ -19,9 +19,104 @@ use async_trait::async_trait;
 use crate::caller::CallerContext;
 use crate::config::Config;
 use crate::error::{BitrouterError, Result};
+use crate::inference::InferenceOperation;
 use crate::language_model::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
 use crate::language_model::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
 use crate::language_model::types::{ApiProtocol, RoutingTarget};
+
+/// Configured evaluation route metadata, before native-extension availability
+/// and account-level execution are checked by a future evaluation host.
+#[derive(Debug, Clone)]
+pub struct EvaluationRouteDeclaration {
+    /// Provider id owning the configured route.
+    pub provider: String,
+    /// Canonical BitRouter model id.
+    pub model: String,
+    /// Model id sent to the upstream provider.
+    pub provider_model_id: String,
+    /// Host-owned endpoint and required native format key.
+    pub operation: crate::config::ProviderOperationConfig,
+    /// Positively declared question types and provider limits.
+    pub limits: crate::config::ModelOperationConfig,
+}
+
+/// Resolve only declared evaluation-capable models. This does not assert that
+/// the required native extension is registered or that the route is callable.
+pub fn resolve_evaluation_declaration_for(
+    config: &Config,
+    selector: &str,
+) -> Result<EvaluationRouteDeclaration> {
+    config.validate_operations()?;
+    if config.models.contains_key(selector)
+        || config
+            .routers
+            .contains_key(selector.strip_prefix("bitrouter/").unwrap_or(""))
+        || selector.starts_with('@')
+    {
+        return Err(BitrouterError::ModelOperationMismatch(format!(
+            "model '{selector}' is a generation router, not an evaluation model"
+        )));
+    }
+
+    let mut known_for_other_operation = false;
+    let mut candidates = Vec::new();
+    for (provider_id, provider) in &config.providers {
+        if !provider.active {
+            continue;
+        }
+        let wanted = match selector.split_once(':') {
+            Some((pinned_provider, model)) if pinned_provider == provider_id => model,
+            Some(_) => continue,
+            None => selector,
+        };
+        let Some(model) = provider.models.iter().find(|model| model.id == wanted) else {
+            continue;
+        };
+        if !model.supports_operation(InferenceOperation::Evaluate) {
+            known_for_other_operation = true;
+            continue;
+        }
+        let Some(operation) = provider.operations.get(&InferenceOperation::Evaluate) else {
+            return Err(BitrouterError::bad_request(format!(
+                "provider '{provider_id}' has no evaluate operation binding"
+            )));
+        };
+        let Some(limits) = model
+            .operations
+            .as_ref()
+            .and_then(|operations| operations.get(&InferenceOperation::Evaluate))
+        else {
+            return Err(BitrouterError::bad_request(format!(
+                "provider '{provider_id}' model '{}' has no evaluate limits",
+                model.id
+            )));
+        };
+        candidates.push(EvaluationRouteDeclaration {
+            provider: provider_id.clone(),
+            model: model.id.clone(),
+            provider_model_id: model
+                .provider_model_id
+                .clone()
+                .unwrap_or_else(|| model.id.clone()),
+            operation: operation.clone(),
+            limits: limits.clone(),
+        });
+    }
+    match candidates.len() {
+        1 => candidates.pop().ok_or_else(|| {
+            BitrouterError::internal("evaluation candidate disappeared during resolution")
+        }),
+        0 if known_for_other_operation => Err(BitrouterError::ModelOperationMismatch(format!(
+            "model '{selector}' does not support evaluate"
+        ))),
+        0 => Err(BitrouterError::NotFound(format!(
+            "no active evaluation provider declares model '{selector}'"
+        ))),
+        _ => Err(BitrouterError::bad_request(format!(
+            "model '{selector}' has multiple evaluation providers; pin one explicitly"
+        ))),
+    }
+}
 
 fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
     let base = UsagePricingBracket {
@@ -74,6 +169,18 @@ pub struct ConfigRoutingTable {
 }
 
 impl ConfigRoutingTable {
+    /// Resolve an evaluation declaration without claiming executable support.
+    pub fn resolve_evaluation_declaration(
+        &self,
+        selector: &str,
+    ) -> Result<EvaluationRouteDeclaration> {
+        let config = self
+            .config
+            .read()
+            .map_err(|_| BitrouterError::internal("evaluation configuration lock poisoned"))?;
+        resolve_evaluation_declaration_for(&config, selector)
+    }
+
     /// Build a routing table from an already-parsed config (no reload source).
     pub fn from_config(config: Config) -> Self {
         Self {
@@ -166,6 +273,7 @@ impl ConfigRoutingTable {
 
     fn replace_prepared_config_locked(&self, fresh: Config) -> Result<()> {
         fresh.validate_router_config()?;
+        fresh.validate_operations()?;
         let mut current = match self.config.write() {
             Ok(current) => current,
             Err(poisoned) => poisoned.into_inner(),
@@ -196,6 +304,19 @@ fn build_targets(
     model_id: &str,
     inbound: Option<&ApiProtocol>,
 ) -> Result<Vec<RoutingTarget>> {
+    if provider
+        .model_config(model_id)
+        .is_some_and(|model| !model.supports_operation(InferenceOperation::Generate))
+        || (!provider.models.is_empty()
+            && provider
+                .models
+                .iter()
+                .all(|model| !model.supports_operation(InferenceOperation::Generate)))
+    {
+        return Err(BitrouterError::ModelOperationMismatch(format!(
+            "provider '{provider_id}' model '{model_id}' does not support generate"
+        )));
+    }
     // Protocol-native routing: prefer the inbound protocol when this upstream
     // supports it (a faithful same-protocol round-trip), else the provider's
     // configured default head.
@@ -474,6 +595,7 @@ fn resolve_clean_route_chain(
     // one-or-more (account-expanded) targets.
     let order = &config.registry.provider_priority;
     let mut chain: Vec<(i32, String, Vec<RoutingTarget>)> = Vec::new();
+    let mut found_evaluation_only = false;
     for (provider_id, provider) in &config.providers {
         if !provider.active {
             continue;
@@ -499,7 +621,11 @@ fn resolve_clean_route_chain(
         if provider_requires_pin(provider) && !prefs.only.contains(provider_id) {
             continue;
         }
-        if provider.models.iter().any(|m| m.id == clean) {
+        if let Some(model) = provider.models.iter().find(|m| m.id == clean) {
+            if !model.supports_operation(InferenceOperation::Generate) {
+                found_evaluation_only = true;
+                continue;
+            }
             chain.push((
                 provider_rank(provider, order),
                 provider_id.clone(),
@@ -514,6 +640,11 @@ fn resolve_clean_route_chain(
     }
 
     if chain.is_empty() {
+        if found_evaluation_only {
+            return Err(BitrouterError::ModelOperationMismatch(format!(
+                "model '{clean}' does not support generate"
+            )));
+        }
         // No `DEFAULT_PROVIDER` fallback — a clean 404.
         return Err(BitrouterError::NotFound(format!(
             "no active provider declares model '{clean}'"
@@ -596,14 +727,25 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
         let mut models = config
             .models
             .iter()
+            .filter(|(_, vm)| {
+                vm.endpoints.iter().all(|endpoint| {
+                    config
+                        .providers
+                        .get(&endpoint.provider)
+                        .and_then(|provider| provider.model_config(&endpoint.service_id))
+                        .is_none_or(|model| model.supports_operation(InferenceOperation::Generate))
+                })
+            })
             .map(|(id, vm)| ModelInfo {
                 id: id.clone(),
                 providers: vm.endpoints.iter().map(|e| e.provider.clone()).collect(),
+                operations: vec![InferenceOperation::Generate],
             })
             .collect::<Vec<_>>();
         models.extend(config.routers.keys().map(|id| ModelInfo {
             id: format!("bitrouter/{id}"),
             providers: Vec::new(),
+            operations: vec![InferenceOperation::Generate],
         }));
         models.sort_by(|left, right| left.id.cmp(&right.id));
         return models;
@@ -619,6 +761,9 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
             continue;
         }
         for model in &provider.models {
+            if !model.supports_operation(InferenceOperation::Generate) {
+                continue;
+            }
             let selector = if provider_requires_pin(provider) {
                 format!("{provider_id}:{}", model.id)
             } else {
@@ -634,12 +779,17 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
         .into_iter()
         .map(|(id, mut providers)| {
             providers.sort();
-            ModelInfo { id, providers }
+            ModelInfo {
+                id,
+                providers,
+                operations: vec![InferenceOperation::Generate],
+            }
         })
         .collect::<Vec<_>>();
     models.extend(config.routers.keys().map(|id| ModelInfo {
         id: format!("bitrouter/{id}"),
         providers: Vec::new(),
+        operations: vec![InferenceOperation::Generate],
     }));
     models.sort_by(|left, right| left.id.cmp(&right.id));
     models
@@ -793,6 +943,120 @@ mod tests {
 
     fn table(yaml: &str) -> ConfigRoutingTable {
         ConfigRoutingTable::from_config(parse(yaml).unwrap())
+    }
+
+    #[tokio::test]
+    async fn evaluation_declaration_does_not_make_a_generation_route_routable()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let config = parse(
+            r#"
+providers:
+  typesafe:
+    api_base: https://api.typesafe.ai
+    api_key: test-key
+    operations:
+      evaluate:
+        endpoint: /v1/systemone
+        format: { extension: typesafe, adapter: system_one, revision: 1 }
+    models:
+      - id: typesafe/jev-1.13
+        provider_model_id: jev-1.13.0
+        operations:
+          evaluate:
+            question_types: [noul, choice, score]
+            max_choice_options: 255
+            max_score_levels: 10
+  legacy:
+    api_base: https://legacy.example/v1
+    api_key: test-key
+    models: [{ id: legacy/chat }]
+"#,
+        )?;
+        let bare = resolve_evaluation_declaration_for(&config, "typesafe/jev-1.13")?;
+        let pinned = resolve_evaluation_declaration_for(&config, "typesafe:typesafe/jev-1.13")?;
+        assert_eq!(bare.provider, "typesafe");
+        assert_eq!(pinned.provider_model_id, "jev-1.13.0");
+        assert_eq!(bare.operation.format.adapter, "system_one");
+        assert_eq!(bare.limits.question_types.len(), 3);
+        assert!(matches!(
+            resolve_evaluation_declaration_for(&config, "legacy/chat"),
+            Err(BitrouterError::ModelOperationMismatch(_))
+        ));
+        assert!(matches!(
+            resolve_evaluation_declaration_for(&config, "unknown/model"),
+            Err(BitrouterError::NotFound(_))
+        ));
+
+        let models = list_models_for(&config);
+        assert!(models.iter().any(|model| model.id == "legacy/chat"
+            && model.operations == vec![InferenceOperation::Generate]));
+        assert!(!models.iter().any(|model| model.id == "typesafe/jev-1.13"));
+        for selector in ["typesafe/jev-1.13", "typesafe:typesafe/jev-1.13"] {
+            assert!(matches!(
+                resolve_route_chain(&config, selector, &RoutingPrefs::default()),
+                Err(BitrouterError::ModelOperationMismatch(_))
+            ));
+        }
+        let legacy = resolve_route_chain(&config, "legacy/chat", &RoutingPrefs::default())?;
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].provider_name, "legacy");
+        let mut virtual_config = config.clone();
+        virtual_config.models.insert(
+            "evaluation-wrapper".to_string(),
+            crate::config::VirtualModel {
+                strategy: Default::default(),
+                endpoints: vec![crate::config::VirtualEndpoint {
+                    provider: "typesafe".to_string(),
+                    service_id: "typesafe/jev-1.13".to_string(),
+                }],
+                pricing: None,
+            },
+        );
+        assert!(
+            !list_models_for(&virtual_config)
+                .iter()
+                .any(|model| model.id == "evaluation-wrapper")
+        );
+        assert!(matches!(
+            resolve_route_chain(
+                &virtual_config,
+                "evaluation-wrapper",
+                &RoutingPrefs::default()
+            ),
+            Err(BitrouterError::ModelOperationMismatch(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_operation_bindings_fail_config_parse()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let template = r#"
+providers:
+  typesafe:
+    api_base: https://api.typesafe.ai
+    api_key: test-key
+    operations:
+      evaluate:
+        endpoint: ENDPOINT
+        format: { extension: typesafe, adapter: system_one, revision: 1 }
+    models:
+      - id: typesafe/jev-1.13
+        operations:
+          evaluate:
+            question_types: [noul, choice, score]
+"#;
+        for endpoint in [
+            "https://evil.example/v1",
+            "//evil.example",
+            "/v1/../other",
+            "/v1/systemone?debug=1",
+        ] {
+            assert!(parse(&template.replace("ENDPOINT", endpoint)).is_err());
+        }
+        let valid = parse(&template.replace("ENDPOINT", "/v1/systemone"))?;
+        assert!(valid.providers.contains_key("typesafe"));
+        Ok(())
     }
 
     #[tokio::test]
@@ -994,10 +1258,12 @@ providers:
                 ModelInfo {
                     id: "claude-code:shared-model".to_string(),
                     providers: vec!["claude-code".to_string()],
+                    operations: vec![InferenceOperation::Generate],
                 },
                 ModelInfo {
                     id: "shared-model".to_string(),
                     providers: vec!["anthropic".to_string()],
+                    operations: vec![InferenceOperation::Generate],
                 },
             ],
             "the bare selector must not claim an explicit-only provider"
