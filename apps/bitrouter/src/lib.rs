@@ -32,6 +32,7 @@ pub mod conformance;
 pub mod contexts;
 pub mod continuation;
 pub mod daemon;
+pub mod daemon_handoff;
 pub mod daemon_locator;
 pub mod dashboard;
 pub mod db;
@@ -65,9 +66,13 @@ pub mod supervisor;
 pub mod tools;
 pub mod trajectory;
 pub mod update;
+pub mod upgrade;
+pub mod upgrade_preflight;
 pub mod workflow_state;
 
 pub use assemble::{Assembled, build_app, build_app_with_path, merge_registry_into};
 
 /// Crate version string, surfaced by `bro --version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Build fingerprint of the local handoff and migration contract.
+pub const HANDOFF_BUILD_ID: &str = env!("BITROUTER_HANDOFF_BUILD_ID");

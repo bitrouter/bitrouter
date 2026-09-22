@@ -246,6 +246,9 @@ enum Command {
         /// (`bro init` is the explicit way to scaffold a file).
         #[arg(short, long)]
         config: Option<PathBuf>,
+        /// Set only by the `start` launcher for an owned detached daemon.
+        #[arg(long, hide = true)]
+        managed_child: bool,
     },
     /// Spawn `bro serve` as a detached background process.
     Start {
@@ -721,9 +724,8 @@ enum Command {
         /// Only consider stable (non-prerelease) releases.
         #[arg(long)]
         stable: bool,
-        /// After a successful update, restart a running daemon so it serves the
-        /// new binary.
-        #[arg(long)]
+        /// Compatibility flag: a safe handoff is now attempted by default.
+        #[arg(long, hide = true)]
         restart: bool,
         /// Skip the confirmation prompt.
         #[arg(short = 'y', long)]
@@ -2045,9 +2047,12 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     validate_remote_invocation(&command, remote_context.is_some())?;
 
     match command {
-        Command::Serve { config } => {
+        Command::Serve {
+            config,
+            managed_child,
+        } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            serve(&source).await
+            serve(&source, managed_child).await
         }
         Command::Start { config, log } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
@@ -2645,15 +2650,85 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 restart: restart_after,
                 yes,
             };
-            let outcome = bitrouter::update::run(opts, &socket).await?;
+            let mut outcome = bitrouter::update::run(opts, &socket).await?;
             if outcome.restart_needed {
-                // Bring the daemon onto the new binary before emitting, so a
-                // restart failure surfaces as the error envelope. The restart's
-                // own report is folded into `outcome.report.daemon`.
-                let log_path = resolve_log_path(source.home(), None);
-                restart(&source, &socket, &log_path).await?;
+                let before_pid = match daemon::send_command(&socket, &DaemonCommand::Status).await {
+                    Ok(DaemonResponse::Status { pid, .. }) => Some(pid),
+                    _ => None,
+                };
+                // The binary on disk now contains the new migrator. Run its
+                // normal daemon-dependent path so the old in-memory binary
+                // cannot preflight with a stale migration list.
+                let candidate = std::env::current_exe()?;
+                let attempt = tokio::process::Command::new(candidate)
+                    .args(["--json", "agents", "sessions"])
+                    .output()
+                    .await;
+                let (completed, reason) = match attempt {
+                    Ok(result) if result.status.success() => {
+                        let hello =
+                            daemon::send_command(&socket, &DaemonCommand::HandoffHello).await;
+                        let matches_target = matches!(hello,
+                            Ok(DaemonResponse::HandoffHello { ref version, protocol: 1, .. })
+                                if Some(version.as_str()) == outcome.report.target_version.as_deref());
+                        (
+                            matches_target,
+                            "replacement daemon version was not verified".to_string(),
+                        )
+                    }
+                    Ok(result) => {
+                        let message = serde_json::from_slice::<serde_json::Value>(&result.stdout)
+                            .ok()
+                            .and_then(|value| {
+                                value["error"]["message"].as_str().map(str::to_string)
+                            })
+                            .unwrap_or_else(|| {
+                                "the newly installed binary declined safe handoff".to_string()
+                            });
+                        (false, message)
+                    }
+                    Err(error) => (
+                        false,
+                        format!("could not launch the newly installed binary: {error}"),
+                    ),
+                };
+                if let Ok(DaemonResponse::Status {
+                    pid,
+                    listen,
+                    daemon_version,
+                    ..
+                }) = daemon::send_command(&socket, &DaemonCommand::Status).await
+                {
+                    outcome.report.daemon_pid = Some(pid);
+                    outcome.report.daemon_listen = Some(listen);
+                    outcome.report.daemon_version = daemon_version;
+                }
+                if let Ok(DaemonResponse::HandoffHello { instance_id, .. }) =
+                    daemon::send_command(&socket, &DaemonCommand::HandoffHello).await
+                {
+                    outcome.report.daemon_instance_id = Some(instance_id);
+                }
+                let completed = completed
+                    && outcome.report.daemon_pid.is_some()
+                    && outcome.report.daemon_instance_id.is_some();
+                outcome.report.daemon = Some(if !completed {
+                    "deferred"
+                } else if before_pid.is_some()
+                    && outcome.report.daemon_pid.is_some()
+                    && before_pid != outcome.report.daemon_pid
+                {
+                    "restarted"
+                } else {
+                    "compatible"
+                });
+                if !completed {
+                    outcome.report.daemon_reason = Some(reason);
+                }
             }
             output.emit(&outcome.report)?;
+            if outcome.report.exit_code() != 0 {
+                std::process::exit(outcome.report.exit_code());
+            }
             Ok(())
         }
     }
@@ -3523,6 +3598,19 @@ async fn resolve_client_socket_from(
     }
 }
 
+/// Session verbs need the new daemon protocol before sending `sessions`.
+async fn resolve_supervisor_socket(
+    config: Option<&Path>,
+    socket: Option<&Path>,
+) -> Result<PathBuf> {
+    let selected = resolve_client_socket(config, socket).await?;
+    if daemon::probe_status(&selected).await?.is_some() {
+        let source = bitrouter::paths::resolve_config(config)?;
+        bitrouter::upgrade::ensure_compatible(&source, &selected, false).await?;
+    }
+    Ok(selected)
+}
+
 fn reject_remote_local_target_flags(config: Option<&Path>, socket: Option<&Path>) -> Result<()> {
     bitrouter::administration_target::reject_remote_local_flags(config, socket)
 }
@@ -3684,7 +3772,7 @@ fn remote_target_flags(command: &Command) -> Option<(Option<&Path>, Option<&Path
     }
 }
 
-async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
+async fn serve(source: &bitrouter::paths::ConfigSource, cli_owned: bool) -> Result<()> {
     if let Some(located) = bitrouter::daemon_locator::locate_source(source).await? {
         anyhow::bail!(
             "bitrouter is already running (pid {}); use `restart` or `stop` first",
@@ -3824,6 +3912,8 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
 
     let http_app = app.clone();
     let http_listen = listen.clone();
+    let handoff_gate = bitrouter::daemon_handoff::HandoffGate::default();
+    let http_handoff_gate = handoff_gate.clone();
     // The ingress SERVER span is created from the exporter's own tracer — the
     // SDK installs no global `TracerProvider`, so there is nothing to reach
     // for implicitly. With OTel disabled there is no ingress span at all,
@@ -3839,9 +3929,15 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         let (remote_shutdown_tx, remote_shutdown_rx) = tokio::sync::oneshot::channel();
         // Open an OTel SERVER span per inbound request and publish it on the
         // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
-        let otel_wrapper = move |router: axum::Router| match &otel_router_wrapper {
-            Some(wrapper) => wrapper(router),
-            None => router,
+        let otel_wrapper = move |router: axum::Router| {
+            let router = match &otel_router_wrapper {
+                Some(wrapper) => wrapper(router),
+                None => router,
+            };
+            router.layer(axum::middleware::from_fn_with_state(
+                http_handoff_gate.clone(),
+                bitrouter::daemon_handoff::http_admission,
+            ))
         };
         let inference_shutdown = async move {
             let _ = inference_shutdown_rx.await;
@@ -3918,8 +4014,9 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     let stop_socket = socket_path.clone();
     let locator_source = source.clone();
     let locator_instance = server_instance_id;
+    let hup_gate = handoff_gate.clone();
     let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::oneshot::channel();
-    let control = daemon::run_control_socket_with_acp_runtime_and_administration(
+    let control = daemon::run_control_socket_with_handoff_gate(
         socket_path,
         app.clone(),
         listen,
@@ -3931,7 +4028,11 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
             inventory: Some(assembled.evolution.inventory()),
             evolution: Some(assembled.evolution.clone()),
         },
-        Some(administration),
+        daemon::LocalControlOptions {
+            administration: Some(administration),
+            gate: handoff_gate.clone(),
+            cli_owned,
+        },
     );
     let control = async move {
         let mut control = Box::pin(control);
@@ -4000,6 +4101,10 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
                 if hup.recv().await.is_none() {
                     return Ok(());
                 }
+                let Some(_admission) = hup_gate.admit() else {
+                    tracing::info!("SIGHUP reload skipped during daemon handoff");
+                    continue;
+                };
                 match hup_reloader.reload().await {
                     Ok(()) => tracing::info!("SIGHUP — reload succeeded"),
                     Err(e) => tracing::warn!(error = %e, "SIGHUP reload failed"),
@@ -4010,7 +4115,7 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
         {
             // No SIGHUP on this platform — keep the reloader handle alive and
             // park forever so the `select!` arm below never fires.
-            let _keep = &hup_reloader;
+            let _keep = (&hup_reloader, &hup_gate);
             std::future::pending::<()>().await;
             Ok::<(), anyhow::Error>(())
         }
@@ -4057,7 +4162,8 @@ async fn serve(source: &bitrouter::paths::ConfigSource) -> Result<()> {
     let evolution_stop = tokio_util::sync::CancellationToken::new();
     let evolution_worker = app.language_model().cloned().map(|pipeline| {
         let worker =
-            bitrouter::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone());
+            bitrouter::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone())
+                .with_handoff_gate(handoff_gate.clone());
         let stop = evolution_stop.clone();
         tokio::spawn(async move { worker.run(pipeline, stop).await })
     });
@@ -4425,6 +4531,23 @@ async fn restart(
     socket: &Path,
     log_path: &Path,
 ) -> Result<DaemonActionReport> {
+    bitrouter::paths::ensure_home_directory(source.home())?;
+    let _lock = bitrouter::upgrade::lock(source).await?;
+    if daemon::endpoint_in_use(socket) {
+        let cfg = bitrouter::paths::load_config(source).await?;
+        if cfg.database.url.starts_with("sqlite:") && !cfg.database.url.contains(":memory:") {
+            let preflight = bitrouter::upgrade_preflight::Preflight::check_explicit(source).await?;
+            let backup = preflight.backup(source).await?;
+            eprintln!(
+                "note: explicit restart may interrupt active agent runs; SQLite recovery backup: {}",
+                backup.display()
+            );
+        } else {
+            eprintln!(
+                "note: explicit restart may interrupt active agent runs; database migration preflight is unavailable for this backend"
+            );
+        }
+    }
     let pid_path = pid_path_for(socket);
     let pidfile_pid = daemon::read_pid_file(&pid_path)
         .await
@@ -6048,7 +6171,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
 
     match action {
         AgentsAction::Sessions { config, socket } => {
-            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            let socket = resolve_supervisor_socket(config.as_deref(), socket.as_deref()).await?;
             let runs = bitrouter::agent_sessions::BackgroundClient::list_only(socket)
                 .summaries()
                 .await?;
@@ -6060,7 +6183,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
             config,
             socket,
         } => {
-            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            let socket = resolve_supervisor_socket(config.as_deref(), socket.as_deref()).await?;
             bitrouter::agent_sessions::run_attached(socket, &agent_run_id).await
         }
         AgentsAction::Stop {
@@ -6068,7 +6191,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
             config,
             socket,
         } => {
-            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            let socket = resolve_supervisor_socket(config.as_deref(), socket.as_deref()).await?;
             let acknowledgement = bitrouter::agent_sessions::BackgroundClient::stop_only(socket)
                 .stop(&agent_run_id)
                 .await?;
@@ -6084,7 +6207,7 @@ async fn agents_cmd(action: AgentsAction, output: &Output) -> Result<()> {
             config,
             socket,
         } => {
-            let socket = resolve_client_socket(config.as_deref(), socket.as_deref()).await?;
+            let socket = resolve_supervisor_socket(config.as_deref(), socket.as_deref()).await?;
             let removed = bitrouter::agent_sessions::BackgroundClient::remove_only(socket)
                 .remove(&agent_run_id)
                 .await?;
@@ -7363,6 +7486,11 @@ mod tests {
                     RestartCommandKind::Status,
                     Ok(DaemonResponse::Status {
                         pid: 4_249,
+                        daemon_version: None,
+                        handoff_protocol: None,
+                        handoff_build_id: None,
+                        handoff_activity: None,
+                        cli_owned: None,
                         listen: "127.0.0.1:4356".to_string(),
                         models: 0,
                         providers: Vec::new(),
@@ -7402,6 +7530,11 @@ mod tests {
                     RestartCommandKind::Status,
                     Ok(DaemonResponse::Status {
                         pid: 4_250,
+                        daemon_version: None,
+                        handoff_protocol: None,
+                        handoff_build_id: None,
+                        handoff_activity: None,
+                        cli_owned: None,
                         listen: "127.0.0.1:4356".to_string(),
                         models: 0,
                         providers: Vec::new(),
@@ -7432,6 +7565,11 @@ mod tests {
                 "zero pid",
                 Ok(DaemonResponse::Status {
                     pid: 0,
+                    daemon_version: None,
+                    handoff_protocol: None,
+                    handoff_build_id: None,
+                    handoff_activity: None,
+                    cli_owned: None,
                     listen: "127.0.0.1:4356".to_string(),
                     models: 0,
                     providers: Vec::new(),

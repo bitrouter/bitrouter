@@ -150,6 +150,28 @@ pub struct StatusReport {
     /// never means the saved and running configurations match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_state: Option<crate::reload::ConfigurationState>,
+    /// Version of this CLI, only for local status queries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_version: Option<String>,
+    /// Version reported by the local daemon, if supported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_version: Option<String>,
+    /// Safe handoff protocol advertised by the local daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_protocol: Option<u32>,
+    /// Build fingerprint used to distinguish same-version development builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_build_id: Option<String>,
+    /// Observed activity; unknown counts remain absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_activity: Option<crate::daemon::HandoffActivity>,
+    /// Whether the detached CLI launcher owns this daemon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_cli_owned: Option<bool>,
+    /// `compatible`, `handoff_required`, `legacy_unknown`,
+    /// `externally_managed`, or `daemon_newer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compatibility: Option<String>,
 }
 
 impl StatusReport {
@@ -172,6 +194,13 @@ impl StatusReport {
             running_routers: None,
             router_restart_required: None,
             config_state: None,
+            installed_version: None,
+            daemon_version: None,
+            handoff_protocol: None,
+            handoff_build_id: None,
+            handoff_activity: None,
+            daemon_cli_owned: None,
+            compatibility: None,
         }
     }
 
@@ -196,6 +225,13 @@ impl StatusReport {
             running_routers: None,
             router_restart_required: None,
             config_state: None,
+            installed_version: None,
+            daemon_version: None,
+            handoff_protocol: None,
+            handoff_build_id: None,
+            handoff_activity: None,
+            daemon_cli_owned: None,
+            compatibility: None,
         }
     }
 
@@ -215,6 +251,13 @@ impl StatusReport {
             running_routers: None,
             router_restart_required: None,
             config_state: None,
+            installed_version: None,
+            daemon_version: None,
+            handoff_protocol: None,
+            handoff_build_id: None,
+            handoff_activity: None,
+            daemon_cli_owned: None,
+            compatibility: None,
         }
     }
 
@@ -232,6 +275,46 @@ impl StatusReport {
 
     pub fn with_config_state(mut self, state: Option<crate::reload::ConfigurationState>) -> Self {
         self.config_state = state;
+        self
+    }
+
+    pub fn with_local_versions(
+        mut self,
+        daemon_version: Option<String>,
+        protocol: Option<u32>,
+        build_id: Option<String>,
+        activity: Option<crate::daemon::HandoffActivity>,
+        cli_owned: Option<bool>,
+    ) -> Self {
+        self.installed_version = Some(crate::VERSION.to_string());
+        self.compatibility = if !self.running {
+            None
+        } else if protocol != Some(1) || daemon_version.is_none() || build_id.is_none() {
+            Some("legacy_unknown".to_string())
+        } else if daemon_version.as_deref() == Some(crate::VERSION)
+            && build_id.as_deref() == Some(crate::HANDOFF_BUILD_ID)
+        {
+            Some("compatible".to_string())
+        } else if cli_owned != Some(true) {
+            Some("externally_managed".to_string())
+        } else {
+            let candidate = semver::Version::parse(crate::VERSION);
+            let resident = daemon_version.as_deref().map(semver::Version::parse);
+            Some(
+                match (candidate, resident) {
+                    (Ok(candidate), Some(Ok(resident))) if candidate >= resident => {
+                        "handoff_required"
+                    }
+                    _ => "daemon_newer",
+                }
+                .to_string(),
+            )
+        };
+        self.daemon_version = daemon_version;
+        self.handoff_protocol = protocol;
+        self.handoff_build_id = build_id;
+        self.handoff_activity = activity;
+        self.daemon_cli_owned = cli_owned;
         self
     }
 }
@@ -300,6 +383,11 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
     match daemon::send_command(socket, &DaemonCommand::Status).await {
         Ok(DaemonResponse::Status {
             pid,
+            daemon_version,
+            handoff_protocol,
+            handoff_build_id,
+            handoff_activity,
+            cli_owned,
             listen,
             models,
             providers,
@@ -316,7 +404,14 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
             spend,
         )
         .with_router_views(saved_routers, running_routers, router_restart_required)
-        .with_config_state(config_state)),
+        .with_config_state(config_state)
+        .with_local_versions(
+            daemon_version,
+            handoff_protocol,
+            handoff_build_id,
+            handoff_activity,
+            cli_owned,
+        )),
         Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
         Ok(other) => Err(anyhow::anyhow!("unexpected response: {other:?}")),
         // No daemon listening on the socket → report stopped, not error. The
@@ -335,7 +430,8 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
             };
             Ok(StatusReport::stopped(socket.display().to_string(), spend)
                 .with_router_views(saved_routers, None, None)
-                .with_config_state(config_state))
+                .with_config_state(config_state)
+                .with_local_versions(None, None, None, None, None))
         }
         Err(e) => Err(e),
     }
@@ -398,6 +494,49 @@ impl StatusQuery for DaemonStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_status_keeps_legacy_and_external_ownership_unknown_or_explicit() {
+        let base = || {
+            StatusReport::running(
+                7,
+                "127.0.0.1:4356".into(),
+                0,
+                Vec::new(),
+                "/tmp/bitrouter.sock".into(),
+                None,
+            )
+        };
+        let legacy = base().with_local_versions(None, None, None, None, None);
+        assert_eq!(legacy.compatibility.as_deref(), Some("legacy_unknown"));
+        let matching = base().with_local_versions(
+            Some(crate::VERSION.into()),
+            Some(1),
+            Some(crate::HANDOFF_BUILD_ID.into()),
+            None,
+            Some(true),
+        );
+        assert_eq!(matching.compatibility.as_deref(), Some("compatible"));
+        let older = base().with_local_versions(
+            Some("1.0.0-alpha.1".into()),
+            Some(1),
+            Some("another-build".into()),
+            None,
+            Some(true),
+        );
+        assert_eq!(older.compatibility.as_deref(), Some("handoff_required"));
+        let external = base().with_local_versions(
+            Some("1.0.0-alpha.1".into()),
+            Some(1),
+            Some("another-build".into()),
+            None,
+            Some(false),
+        );
+        assert_eq!(
+            external.compatibility.as_deref(),
+            Some("externally_managed")
+        );
+    }
 
     /// A config whose metering database exists on disk, so `open_readonly`
     /// has something to open. No daemon is started: spend is not a liveness

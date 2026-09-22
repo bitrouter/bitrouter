@@ -511,6 +511,11 @@ mod tests {
     fn status(pid: u32, server_instance_id: Option<&str>) -> DaemonResponse {
         DaemonResponse::Status {
             pid,
+            daemon_version: None,
+            handoff_protocol: None,
+            handoff_build_id: None,
+            handoff_activity: None,
+            cli_owned: None,
             listen: "127.0.0.1:4356".to_string(),
             models: 0,
             providers: Vec::new(),

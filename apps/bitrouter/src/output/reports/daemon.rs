@@ -113,6 +113,9 @@ impl CliReport for StatusReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         if !self.running {
             h.status_block(Health::Down, "bitrouter is stopped")?;
+            if let Some(version) = &self.installed_version {
+                h.field("installed version", version)?;
+            }
             if let Some(socket) = &self.socket {
                 h.field("socket", socket)?;
             }
@@ -130,6 +133,15 @@ impl CliReport for StatusReport {
         if let Some(pid) = self.pid {
             h.field("pid", pid)?;
         }
+        if let Some(version) = &self.installed_version {
+            h.field("installed version", version)?;
+        }
+        if self.socket.is_some() {
+            h.field(
+                "daemon version",
+                self.daemon_version.as_deref().unwrap_or("unknown"),
+            )?;
+        }
         if let Some(listen) = &self.listen {
             h.field("listen", listen)?;
         }
@@ -141,6 +153,35 @@ impl CliReport for StatusReport {
         }
         if let Some(socket) = &self.socket {
             h.field("socket", socket)?;
+        }
+        if let Some(compatibility) = &self.compatibility {
+            h.field("compatibility", compatibility)?;
+            if let Some(activity) = &self.handoff_activity {
+                h.field("active operations", activity.operations)?;
+                h.field(
+                    "supervised runs",
+                    activity
+                        .supervised_runs
+                        .map_or_else(|| "unknown".to_string(), |runs| runs.to_string()),
+                )?;
+                h.field("ACP route leases", activity.route_leases)?;
+                h.field(
+                    "ACP recordings",
+                    activity.acp_recordings.map_or_else(
+                        || "unknown".to_string(),
+                        |recordings| recordings.to_string(),
+                    ),
+                )?;
+            } else {
+                h.field("active work", "unknown")?;
+            }
+            match compatibility.as_str() {
+                "legacy_unknown" => h.note("Finish active work, then run `bro restart`; this daemon cannot prove it is idle.")?,
+                "externally_managed" => h.note("Restart this daemon with its service manager after active work finishes.")?,
+                "handoff_required" => h.note("The next supervised command attempts a safe handoff if idle and the database preflight passes.")?,
+                "daemon_newer" => h.note("Install a matching or newer bro binary before using this daemon.")?,
+                _ => {}
+            }
         }
         render_configuration_state(self, h)?;
         render_router_state(self, h)?;
