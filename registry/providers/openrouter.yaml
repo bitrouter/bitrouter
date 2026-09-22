@@ -593,6 +593,38 @@ models:
         cache_read: 0.075
       output_tokens:
         text: 1.25
+  - id: x-ai/grok-4.7
+    provider_model_id: x-ai/grok-4.7
+    pricing:
+      input_tokens:
+        no_cache: 1.6
+        cache_read: 0.4
+      output_tokens:
+        text: 4.8
+  - id: xiaomi/mimo-v2.6-flash
+    provider_model_id: xiaomi/mimo-v2.6-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.0028
+      output_tokens:
+        text: 0.28
+  - id: xiaomi/mimo-v2.6-pro
+    provider_model_id: xiaomi/mimo-v2.6-pro
+    pricing:
+      input_tokens:
+        no_cache: 0.435
+        cache_read: 0.0036
+      output_tokens:
+        text: 0.87
+  - id: xiaomi/mimo-v2.6-pro-ultraspeed
+    provider_model_id: xiaomi/mimo-v2.6-pro-ultraspeed
+    pricing:
+      input_tokens:
+        no_cache: 4.35
+        cache_read: 0.036
+      output_tokens:
+        text: 8.7
 status: active
 weight: 1
 community: false

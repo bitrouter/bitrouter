@@ -3592,6 +3592,21 @@
             }
           },
           "provider_model_id": "deepseek/deepseek-v4.1-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5.3-flashx",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "cache_write": 0.0,
+              "no_cache": 0.37
+            },
+            "output_tokens": {
+              "text": 1.25
+            }
+          },
+          "provider_model_id": "z-ai/glm-5.3-flashx"
         }
       ],
       "name": "bitrouter",
@@ -4250,6 +4265,11 @@
           "api_protocol": "openai",
           "id": "openai/gpt-6-astra",
           "provider_model_id": "gpt-6-astra"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "x-ai/grok-4.7",
+          "provider_model_id": "grok-4.7"
         }
       ],
       "name": "github-copilot",
@@ -5895,6 +5915,21 @@
           "api_protocol": "openai",
           "id": "deepseek/deepseek-v4.1-flash",
           "provider_model_id": "deepseek-v4.1-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "x-ai/grok-4.7",
+          "provider_model_id": "grok-4.7"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "xiaomi/mimo-v2.6-flash",
+          "provider_model_id": "mimo-v2.6-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "xiaomi/mimo-v2.6-pro",
+          "provider_model_id": "mimo-v2.6-pro"
         }
       ],
       "name": "opencode-go",
@@ -7788,6 +7823,78 @@
             }
           },
           "provider_model_id": "z-ai/glm-5.3-flashx"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "x-ai/grok-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.4,
+              "no_cache": 1.6
+            },
+            "output_tokens": {
+              "text": 4.8
+            }
+          },
+          "provider_model_id": "x-ai/grok-4.7"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider_model_id": "xiaomi/mimo-v2.6-flash"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider_model_id": "xiaomi/mimo-v2.6-pro"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.036,
+              "no_cache": 4.35
+            },
+            "output_tokens": {
+              "text": 8.7
+            }
+          },
+          "provider_model_id": "xiaomi/mimo-v2.6-pro-ultraspeed"
         }
       ],
       "name": "openrouter",
@@ -8533,6 +8640,48 @@
             }
           },
           "provider_model_id": "openai/gpt-oss-120b"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.8-2.4t-a95b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "Qwen/Qwen3.8-2.4T-A95B"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k2.7-code",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.17993,
+              "no_cache": 0.85916
+            },
+            "output_tokens": {
+              "text": 3.8
+            }
+          },
+          "provider_model_id": "moonshotai/Kimi-K2.7-Code"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.27,
+              "no_cache": 2.7
+            },
+            "output_tokens": {
+              "text": 13.5
+            }
+          },
+          "provider_model_id": "moonshotai/Kimi-K3"
         }
       ],
       "name": "siliconflow",
@@ -8787,6 +8936,14 @@
           ],
           "id": "x-ai/grok-4.6",
           "provider_model_id": "grok-4.6"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "id": "x-ai/grok-4.7",
+          "provider_model_id": "grok-4.7"
         }
       ],
       "name": "supergrok",
@@ -9845,6 +10002,26 @@
             }
           },
           "provider_model_id": "grok-4.20-multi-agent-0309",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "id": "x-ai/grok-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "grok-4.7",
           "rate_limits": {
             "requests_per_minute": 60
           }
