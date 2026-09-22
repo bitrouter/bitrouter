@@ -1,6 +1,6 @@
 # First-class evaluation models through `/v1/evaluate`
 
-Status: **Phase 0 passed local and hosted CI. Phase 1 implemented and locally verified; hosted CI pending. Phases 2–3 remain proposed.**
+Status: **Phases 0–1 passed local and hosted CI. Phases 2–3 remain proposed.**
 
 Date: 2026-09-22
 
