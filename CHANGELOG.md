@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.32](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.31...v1.0.0-alpha.32)
+
+
+### ⛰️ Features
+
+- *(router)* Add named routers and preset migration ([#916](https://github.com/bitrouter/bitrouter/pull/916)) - ([022f8aa](https://github.com/bitrouter/bitrouter/commit/022f8aa3de2d75d6567b55e08fee405f41ba93a5))
+- *(tui)* Add supervised background agent control deck ([#927](https://github.com/bitrouter/bitrouter/pull/927)) - ([4ac3d62](https://github.com/bitrouter/bitrouter/commit/4ac3d620a0ac0ae7377095cde742b1e60b4a32b3))
+- Add router request checks and receipts ([#919](https://github.com/bitrouter/bitrouter/pull/919)) - ([2b01d2e](https://github.com/bitrouter/bitrouter/commit/2b01d2e6eab72274fb4b3571534fb5c9e656746b))
+
+### 🐛 Bug Fixes
+
+- *(tui)* Cancel deck jobs before exit cleanup ([#928](https://github.com/bitrouter/bitrouter/pull/928)) - ([6c94e60](https://github.com/bitrouter/bitrouter/commit/6c94e6013f3a5699232a4aaad544d49fb9c9472a))
+- Make saved and running config state explicit ([#918](https://github.com/bitrouter/bitrouter/pull/918)) - ([78b6911](https://github.com/bitrouter/bitrouter/commit/78b69112c70bf9fe1f78cb4104790f7faba115ec))
+
+### ⚙️ Miscellaneous Tasks
+
+- Sync registry catalog ([#929](https://github.com/bitrouter/bitrouter/pull/929)) - ([cea232d](https://github.com/bitrouter/bitrouter/commit/cea232dc73b3f676f06f2e9800d59642633cc352))
+- Sync registry catalog ([#920](https://github.com/bitrouter/bitrouter/pull/920)) - ([9dabc10](https://github.com/bitrouter/bitrouter/commit/9dabc10e6d414db9698ee3a7561ead9482bfc1e9))
+- Sync registry catalog ([#915](https://github.com/bitrouter/bitrouter/pull/915)) - ([1521a60](https://github.com/bitrouter/bitrouter/commit/1521a6063afc79ef8ca534f6dec82936ac943196))
+
+
 ## [1.0.0-alpha.31](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.30...v1.0.0-alpha.31)
 
 
