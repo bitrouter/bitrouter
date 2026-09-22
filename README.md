@@ -70,19 +70,26 @@ Keep the clients and workflows you already use:
 
 ## Benchmarks
 
-Today **cost** is the validated objective: on Terminal-Bench 2.1, `gpt-5.5` with BitRouter cut cost **32.8%** at near-parity accuracy (−1.1 pp), by offloading routine steps to a cheaper model. Latency and accuracy objectives — and more base models — are landing next.
+In the latest Terminal-Bench 2.1 study, the G1 routed policy reduced frozen-price
+nominal API cost per accepted valid-path trial by **40.93%** versus the pooled
+`gpt-5.6-sol` baseline. On the strict 80-task common-valid set, observed reward
+was **81.25%** versus **81.56%** for the baseline (−0.31 pp).
 
-| Base model | Cost vs baseline | Latency vs baseline | Accuracy vs baseline |
-| --- | --- | --- | --- |
-| `gpt-5.5` | **−32.8%**¹ | coming soon | coming soon |
-| `gpt-5.6` | coming soon | coming soon | coming soon |
-| `claude-opus-5` | coming soon | coming soon | coming soon |
-| `claude-sonnet-5` | coming soon | coming soon | coming soon |
-| `claude-fable-5` | coming soon | coming soon | coming soon |
+| Configuration | Common-valid trials | Valid-cases reward | Reward Δ | Valid-path cost / trial | Cost vs baseline |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `gpt-5.6-sol` baseline (B1–B4 pooled) | 320 | 81.5625% | baseline | $0.830123 | baseline |
+| **BitRouter G1:** GPT-5.6 + Kimi K3 + DeepSeek V4 Flash | 400 | **81.2500%** | −0.31 pp | **$0.490317** | **−40.93%** |
+| BitRouter G3: GPT-5.6 + DeepSeek V4 Pro + Flash | 400 | 75.5000% | −6.06 pp | $0.497511 | −40.07% |
+| Fixed-proportion random mix of the G1 models | 400 | 76.5000% | −5.06 pp | $0.552670 | −33.42% |
 
-¹ Cost-optimization run on Terminal-Bench 2.1: −32.8% zero-cache imputed cost (audited range 28.6–32.8% by cache share) at near-parity accuracy, −1.1 pp (76.1% vs 77.3%, within single-attempt noise).
-
-This is a mechanism study under a modified protocol, not a Terminal-Bench leaderboard submission — read the [experiment limitations](benchmarks/001-2026-07-10-tbench-v2.1-codex-gpt55-kimi-k27.md#limitations) before citing the numbers. Full reports live in [`benchmarks/`](benchmarks/); complete traces, tool calls, usage, policy decisions, configs, and checksums are in the [`BitRouterAI/benchmarks`](https://huggingface.co/datasets/BitRouterAI/benchmarks) dataset.
+All valid-case figures use the same strict 80-task intersection; the baseline
+has four replicates per task and the routed and random groups have five. Cost
+is accepted valid-path API usage at frozen prices—not provider billing or total
+workflow cost. This is a research artifact, not an official Terminal-Bench
+submission. Read the [full study and limitations](benchmarks/002-2026-09-07-tbench-v2.1-router-random-study.md)
+before citing it; the raw evidence and reproducible joins are in the
+[`BitRouterAI/benchmarks`](https://huggingface.co/datasets/BitRouterAI/benchmarks)
+dataset.
 
 ## Install
 
