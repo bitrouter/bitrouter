@@ -96,10 +96,10 @@ fn code_fresh_session_preserves_direct_routing_and_timeout_in_the_terminal() -> 
     code.pty.wait_for_text("FXRP1")?;
     code.pty.wait_for_text("Turn completed")?;
     let first = code.mock.wait_for_request("session/prompt")?;
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     code.pty.wait_for_text("Commands")?;
     let opening = code.pty.checkpoint();
-    code.pty.send(b"New session\r")?;
+    code.pty.send(b"new\r")?;
     let first_id = first["params"]["sessionId"]
         .as_str()
         .context("native id missing")?;
@@ -205,7 +205,7 @@ models:
     code.pty.send(b"Complete this controlled coding turn\r")?;
     code.pty.wait_for_text("FXRP1")?;
     code.pty.wait_for_text("Turn completed")?;
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     code.pty.wait_for_text("Commands")?;
     code.pty.send(b"evolution\r")?;
     code.pty
@@ -397,7 +397,7 @@ fn code_checkpoint_history_displays_recorded_revisions_without_changing_the_curr
         .await?;
         canonical.effective_assessment(&identity).await
     })?;
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     code.pty.wait_for_text("Commands")?;
     code.pty.send(b"evolution\r")?;
     code.pty

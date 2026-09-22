@@ -497,14 +497,14 @@ corrections to the original trial can also invalidate adoption. Monitoring does
 not add randomized samples or establish continuing comparative savings. Sessions
 first admitted while off are not enrolled retroactively when reenabled.
 
-In a local coding TUI, open **`/evolution`** from the composer or Ctrl-P. It
+In a local coding TUI, press `/` and choose **`/evolution`**. It
 provides status, mode and judge selection, current-session checkpoint review,
 candidate creation and policy-block evidence/reconciliation. A local serving daemon and
 recorded ACP session are required for checkpoint operations. Remote and
 explicit-socket operations-only targets do not offer these controls. Changing
 the judge preserves the current mode, including off.
 
-After trial registration, use Ctrl-P → **New session** to start a fresh native
+After trial registration, choose **`/new`** in the `/` launcher to start a fresh native
 session with the same agent, model, routing flags and turn timeout. Existing
 native sessions keep their assignments. The previous connection closes before
 the new one starts; no load or history replay is requested. Selecting the same

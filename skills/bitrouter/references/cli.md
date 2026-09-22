@@ -225,26 +225,33 @@ one- or two-line background-agent strip. Agent, confirmed route, activity, and
 attributed cost remain persistent foreground fields; missing cost is
 unreported, never zero. Background events never append to foreground history.
 
-`F5` (or Ctrl-P → **Background agents**) expands the command center inside the
+Choose **Background agents** from `/` to expand the command center inside the
 normal-buffer dock. Its entire deck is capped at 40% of viewport rows and shows
-a compact preserved-draft summary while agent focus is active. Use Space for a
-bounded peek, `R` for a target-labelled background reply, `N` for a supervised
-run, and Enter for explicit attach/long detail. Retained history/search and
-long permission/diff review use an alternate-screen inspector; F5 detaches
+a compact preserved-draft summary while agent focus is active. The flat `/`
+launcher offers peek, target-labelled reply, new run, permission review,
+cancel, stop, and detach actions. Enter on a selected run attaches for long
+detail. Retained history/search and long permission/diff review use an
+alternate-screen inspector; **Detach from run** in `/` detaches
 without stopping. Foreground and background drafts never share a send target.
+
+Code has no default action hotkeys. `/` opens a temporary launcher without
+changing the draft; `Esc` restores the draft and prior surface. At the start
+of an editable field, `//` inserts a literal slash. `/new` starts a fresh
+native session, and `/hotkeys` shows active and unbound actions. Optional
+bindings are read from `$XDG_CONFIG_HOME/bitrouter/code-hotkeys.json` or
+`~/.config/bitrouter/code-hotkeys.json` if XDG config home is unset. The JSON
+object maps chords to action IDs, such as
+`{"F2":"review_permission","Ctrl-P":"hotkeys"}`. Invalid keymaps leave
+action hotkeys unbound and show a diagnostic.
 
 | Key | Effect |
 | --- | --- |
 | `Enter` | Send at idle; preserve draft and explain queueing during work |
 | `Shift-Enter` / `Alt-Enter` / `Ctrl-J` | Newline |
-| `Tab` | Complete the open popup, otherwise queue next during work |
-| `Ctrl-P` / leading `/` | Command palette / slash completion, labelled by owner |
+| `/` | Search all available actions, labelled by owner; `Esc` restores the draft |
 | Arrows, Home/End, Up/Down at draft boundaries | Cursor editing and process-local history |
-| `Ctrl-G` | External editor at idle without pending permissions |
 | `PageUp` / `PageDown` | Read history without following new output |
-| `F2` | Focus the oldest pending permission; choose a row, then Enter confirms |
-| `F3` / `F4` | Foreground queued follow-ups / selected detail |
-| `F5` | Expand/collapse agents, or detach from a background inspector |
+| Permission digits/arrows, then `Enter` | Explicitly select and confirm an offered choice |
 | `Esc` / `Ctrl-C` during work | Request cancellation and wait for settlement |
 | `Ctrl-C` at idle | Clear draft; exit when empty |
 | `Ctrl-D` at idle | Exit only with an empty draft |
@@ -267,7 +274,7 @@ background run claims the canonical Git worktree root, so another run in a
 different subdirectory still collides by default.
 
 `--context NAME code` and explicit `code --socket PATH` open operations-only
-inspectors, with no ACP execution or local fallback for remote errors. Ctrl-P
+inspectors, with no ACP execution or local fallback for remote errors. `/`
 offers the typed status, models, requests, route preview, providers, telemetry,
 policy, agent catalog, reload state, and explicit reload actions. Host requests
 remain clearly host-scoped. Hidden interactive `tui` and `chat` aliases share
