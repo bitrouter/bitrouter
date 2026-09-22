@@ -9713,6 +9713,69 @@
     },
     {
       "access": "api_key",
+      "api_base": "https://api.typesafe.ai",
+      "auth": {
+        "env": "TYPESAFE_API_KEY",
+        "kind": "bearer"
+      },
+      "auth_scheme": "bearer",
+      "billing": "usage_token",
+      "byok": true,
+      "community": false,
+      "display_name": "TypeSafe",
+      "doc_url": "https://docs.typesafe.ai/api",
+      "id": "typesafe",
+      "kind": "first_party",
+      "metadata": {
+        "headquarters": "US",
+        "name": "TypeSafe",
+        "slug": "typesafe"
+      },
+      "models": [
+        {
+          "id": "typesafe/jev-1.13",
+          "operations": {
+            "evaluate": {
+              "max_choice_options": 255,
+              "max_score_levels": 10,
+              "question_types": [
+                "noul",
+                "choice",
+                "score"
+              ]
+            }
+          },
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.042
+            },
+            "output_tokens": {
+              "text": 0.0
+            }
+          },
+          "provider_model_id": "jev-1.13.0"
+        }
+      ],
+      "name": "typesafe",
+      "operations": {
+        "evaluate": {
+          "endpoint": "/v1/systemone",
+          "format": {
+            "adapter": "system_one",
+            "extension": "typesafe",
+            "revision": 1
+          }
+        }
+      },
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active",
+      "submitted_at": "2026-09-22",
+      "weight": 1.0
+    },
+    {
+      "access": "api_key",
       "api_base": "https://aiplatform.googleapis.com/v1/publishers/google",
       "auth": {
         "env": "VERTEX_EXPRESS_API_KEY",

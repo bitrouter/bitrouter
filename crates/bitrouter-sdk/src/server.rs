@@ -103,10 +103,46 @@ impl App {
             .await
     }
 
+    /// Serve with host-selected route options, preserving the SDK's graceful
+    /// generation drain. A custom host may omit a built-in route and provide
+    /// its own variant through `options.router_wrapper`.
+    pub async fn serve_with_router_options_and_shutdown<S>(
+        &self,
+        listen: &str,
+        options: RouterOptions,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        S: Future<Output = ()> + Send + 'static,
+    {
+        self.serve_inner_with_options(listen, options, shutdown)
+            .await
+    }
+
     async fn serve_inner<S>(
         &self,
         listen: &str,
         wrapper: Option<RouterWrapper>,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        S: Future<Output = ()> + Send + 'static,
+    {
+        self.serve_inner_with_options(
+            listen,
+            RouterOptions {
+                router_wrapper: wrapper,
+                ..RouterOptions::default()
+            },
+            shutdown,
+        )
+        .await
+    }
+
+    async fn serve_inner_with_options<S>(
+        &self,
+        listen: &str,
+        mut options: RouterOptions,
         shutdown: S,
     ) -> Result<()>
     where
@@ -125,11 +161,9 @@ impl App {
             metrics_renderer: self.metrics_renderer().cloned(),
             prompt_transforms: self.prompt_transforms().to_vec(),
         };
-        let options = RouterOptions {
-            omit_v1_models: false,
-            mcp_aggregate_route: self.mcp_aggregate_route().map(String::from),
-            router_wrapper: wrapper,
-        };
+        if options.mcp_aggregate_route.is_none() {
+            options.mcp_aggregate_route = self.mcp_aggregate_route().map(String::from);
+        }
         let router = build_router_with_options(state, options);
         let listener = tokio::net::TcpListener::bind(listen)
             .await

@@ -669,6 +669,7 @@ dependencies = [
  "bitrouter-sdk",
  "bitrouter-telemetry",
  "bitrouter-tui",
+ "bitrouter-typesafe-extension",
  "chrono",
  "clap",
  "crossterm",
@@ -828,6 +829,27 @@ dependencies = [
  "similar",
  "unicode-segmentation",
  "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "bitrouter-typesafe-extension"
+version = "1.0.0-alpha.32"
+dependencies = [
+ "bitrouter-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bitrouter-typesafe-host"
+version = "1.0.0-alpha.32"
+dependencies = [
+ "anyhow",
+ "bitrouter",
+ "bitrouter-sdk",
+ "bitrouter-typesafe-extension",
+ "clap",
+ "tokio",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 - id: typesafe/jev-1.13
   name: Jev 1.13
-  description: Typed evaluation model. Catalog metadata only until the TypeSafe native extension and /v1/evaluate endpoint ship.
+  description: Typed evaluation model. Routing requires the native TypeSafe extension in the opt-in custom host; stock bro does not expose /v1/evaluate.
   operations:
     - evaluate
   input_modalities:

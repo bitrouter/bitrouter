@@ -33,6 +33,7 @@ pub mod m20240101_000019_create_acp_checkpoints;
 pub mod m20240101_000020_create_checkpoint_evolution;
 pub mod m20240101_000021_add_router_request_identity;
 pub mod m20240101_000022_create_evaluation_attempts;
+pub mod m20240101_000023_add_evaluation_identity;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -65,13 +66,14 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000020_create_checkpoint_evolution::Migration),
             Box::new(m20240101_000021_add_router_request_identity::Migration),
             Box::new(m20240101_000022_create_evaluation_attempts::Migration),
+            Box::new(m20240101_000023_add_evaluation_identity::Migration),
         ]
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    use sea_orm::{ConnectionTrait, DatabaseBackend, EntityTrait, Statement};
     use sea_orm_migration::prelude::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
     use sea_orm_migration::{MigrationTrait, MigratorTrait, SchemaManager};
 
@@ -84,6 +86,37 @@ mod tests {
     use super::m20240101_000013_create_continuation_registry::{
         Migration as ContinuationMigration, provider_continuations_table,
     };
+    use super::m20240101_000022_create_evaluation_attempts::Migration as EvaluationAttemptsMigration;
+    use super::m20240101_000023_add_evaluation_identity::Migration as EvaluationIdentityMigration;
+
+    #[tokio::test]
+    async fn evaluation_identity_migration_preserves_old_rows_as_unknown() -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        let manager = SchemaManager::new(&db);
+        EvaluationAttemptsMigration.up(&manager).await?;
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO evaluation_attempts \
+             (attempt_id, request_id, selector, provider, provider_model_id, \
+              attempt_index, format, duration_ms, terminal, charge_status, created_at) \
+             VALUES ('legacy', 'request', 'typesafe/jev-1.13', 'typesafe', \
+                     'jev-1.13.0', 0, 'typesafe/system_one@1', 1, 'succeeded', \
+                     'unknown', '2026-01-01T00:00:00Z')"
+                .to_owned(),
+        ))
+        .await?;
+
+        EvaluationIdentityMigration.up(&manager).await?;
+        let row = crate::metering::entities::evaluation_attempts::Entity::find_by_id("legacy")
+            .one(&db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("legacy evaluation attempt was lost"))?;
+        assert_eq!(row.selector, "typesafe/jev-1.13");
+        assert_eq!(row.canonical_model, None);
+        assert_eq!(row.caller_api_key_id, None);
+        assert_eq!(row.caller_user_id, None);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn acp_metering_identity_columns_are_nullable_and_content_free() -> anyhow::Result<()> {

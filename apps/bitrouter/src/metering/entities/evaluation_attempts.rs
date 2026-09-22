@@ -9,6 +9,12 @@ pub struct Model {
     pub attempt_id: String,
     pub request_id: String,
     pub selector: String,
+    /// Null on rows recorded before the identity migration.
+    pub canonical_model: Option<String>,
+    /// Null on rows recorded before the identity migration.
+    pub caller_api_key_id: Option<String>,
+    /// Null on rows recorded before the identity migration.
+    pub caller_user_id: Option<String>,
     pub provider: String,
     pub provider_model_id: String,
     pub reported_model: Option<String>,

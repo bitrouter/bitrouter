@@ -1,6 +1,8 @@
 # First-class evaluation models through `/v1/evaluate`
 
-Status: **Phases 0–1 passed local and hosted CI. Phases 2–3 remain proposed.**
+Status: **Phases 0–1 passed local and hosted CI. Phase 2 deterministic local
+checks passed; hosted CI and a credentialed TypeSafe smoke test remain pending.
+Phase 3 remains proposed.**
 
 Date: 2026-09-22
 
@@ -359,10 +361,16 @@ first upstream call in every case:
    validation error.
 7. Invalid local structure produces no upstream attempt and no billable usage.
 
-After the endpoint and extension work, bounded server-side tests will measure
-practical question-count and question-id limits. A future numeric default must
+Bounded server-side tests measure practical question-count and question-id
+limits after the endpoint and extension work. A future numeric default must
 be justified by those measurements; omitting one here does not remove the
 existing HTTP-body bound or known provider-specific constraints.
+
+Phase 2 local mock measurement: one request with 512 Noul questions, including
+a 1,024-byte ASCII question id, passed through `/v1/evaluate` and returned
+matching answers. A body exceeding 16 MiB was rejected before upstream
+dispatch. This demonstrates only BitRouter's local behavior, not TypeSafe's
+practical upstream token or question-count ceiling.
 
 ### 4.5 Response
 

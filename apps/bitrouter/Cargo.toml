@@ -83,6 +83,7 @@ rustix = { workspace = true, features = ["process"] }
 serde_json.workspace = true
 
 [dev-dependencies]
+bitrouter-typesafe-extension = { path = "../../crates/bitrouter-typesafe-extension", version = "=1.0.0-alpha.32" }
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock = "0.6"
 futures.workspace = true

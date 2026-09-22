@@ -9,6 +9,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::caller::CallerContext;
 use crate::config::ConfigRoutingTable;
 use crate::error::{BitrouterError, Result};
 use crate::evaluation::{
@@ -38,6 +39,12 @@ pub struct EvaluationAttemptRecord {
     pub request_id: String,
     /// Requested canonical or pinned selector.
     pub selector: String,
+    /// Canonical model id resolved from the requested selector.
+    pub canonical_model: String,
+    /// Authenticated caller key id, or the explicit local/anonymous sentinel.
+    pub caller_api_key_id: String,
+    /// Authenticated owning user id, or the explicit local/anonymous sentinel.
+    pub caller_user_id: String,
     /// Configured provider id.
     pub provider: String,
     /// Exact provider model id.
@@ -89,6 +96,7 @@ struct EvaluationJob {
     request: EvaluationRequest,
     request_id: String,
     inbound_headers: http::HeaderMap,
+    caller: CallerContext,
     cancellation: CancellationToken,
 }
 
@@ -127,6 +135,24 @@ impl EvaluationPipeline {
         request_id: String,
         inbound_headers: http::HeaderMap,
     ) -> Result<EvaluationResult> {
+        self.evaluate_with_caller(
+            request,
+            request_id,
+            inbound_headers,
+            CallerContext::anonymous(),
+        )
+        .await
+    }
+
+    /// Evaluate after the embedding host has established the inbound caller.
+    /// The caller identity is retained only as content-free attempt evidence.
+    pub async fn evaluate_with_caller(
+        &self,
+        request: EvaluationRequest,
+        request_id: String,
+        inbound_headers: http::HeaderMap,
+        caller: CallerContext,
+    ) -> Result<EvaluationResult> {
         request.validate()?;
         if request_id.is_empty() {
             return Err(BitrouterError::bad_request(
@@ -161,6 +187,7 @@ impl EvaluationPipeline {
                         request,
                         request_id,
                         inbound_headers,
+                        caller,
                         cancellation,
                     },
                 )
@@ -234,6 +261,7 @@ async fn execute_route(
         request,
         request_id,
         inbound_headers,
+        caller,
         cancellation,
     } = job;
     let format = &route.declaration.operation.format;
@@ -243,6 +271,7 @@ async fn execute_route(
     );
     let mut saw_invalid_response = false;
     let count = route.targets.len();
+    let canonical_model = route.declaration.model.clone();
     for (index, target) in route.targets.into_iter().enumerate() {
         if cancellation.is_cancelled() {
             return Err(BitrouterError::UpstreamUnavailable);
@@ -265,6 +294,9 @@ async fn execute_route(
         let base_record = EvaluationAttemptRecord {
             request_id: request_id.clone(),
             selector: request.model.clone(),
+            canonical_model: canonical_model.clone(),
+            caller_api_key_id: caller.api_key_id().to_owned(),
+            caller_user_id: caller.user_id().to_owned(),
             provider: target.provider_name.clone(),
             provider_model_id: target.service_id.clone(),
             reported_model: None,

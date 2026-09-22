@@ -1,0 +1,510 @@
+//! Opt-in TypeSafe host boundary exercised through real HTTP handlers.
+
+use anyhow::Context;
+use axum::Router;
+use axum_test::TestServer;
+use bitrouter::assemble::Assembled;
+use bitrouter_sdk::config;
+use bitrouter_sdk::extension::ExtensionApi;
+use bitrouter_sdk::server::{AppState, RouterOptions, build_router_with_options};
+use serde_json::{Value, json};
+use wiremock::matchers::{header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn fixture_config(base_url: &str, skip_auth: bool) -> anyhow::Result<config::Config> {
+    Ok(config::parse(&format!(
+        r#"
+inherit_defaults: false
+server:
+  skip_auth: {skip_auth}
+database:
+  url: "sqlite::memory:"
+providers:
+  typesafe:
+    api_base: {}
+    api_key: fixture-secret
+    operations:
+      evaluate:
+        endpoint: /v1/systemone
+        format: {{ extension: typesafe, adapter: system_one, revision: 1 }}
+    models:
+      - id: typesafe/jev-1.13
+        provider_model_id: jev-1.13.0
+        operations:
+          evaluate:
+            question_types: [noul, choice, score]
+            max_choice_options: 255
+            max_score_levels: 10
+        pricing:
+          input_micro_usd_per_token: 0.042
+          output_micro_usd_per_token: 0
+  legacy:
+    api_base: {}
+    api_key: fixture-secret
+    models:
+      - id: legacy/chat
+"#,
+        base_url, base_url
+    ))?)
+}
+
+async fn server(upstream: &MockServer, skip_auth: bool) -> anyhow::Result<TestServer> {
+    let config = fixture_config(&upstream.uri(), skip_auth)?;
+    server_for_config(&config).await
+}
+
+async fn server_for_config(config: &config::Config) -> anyhow::Result<TestServer> {
+    let mut extensions = ExtensionApi::new();
+    bitrouter_typesafe_extension::register(&mut extensions)?;
+    let assembled =
+        bitrouter::assemble::build_app_with_extensions(config, None, &extensions, None).await?;
+    Ok(TestServer::new(router_for_assembled(config, &assembled)?))
+}
+
+fn router_for_assembled(config: &config::Config, assembled: &Assembled) -> anyhow::Result<Router> {
+    let state = AppState {
+        language_model: assembled
+            .app
+            .language_model()
+            .context("missing language-model pipeline")?
+            .clone(),
+        mcp: assembled.app.mcp().cloned(),
+        skip_auth: assembled.app.skip_auth(),
+        metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+    };
+    let router = build_router_with_options(
+        state,
+        RouterOptions {
+            omit_v1_models: true,
+            ..RouterOptions::default()
+        },
+    )
+    .merge(bitrouter::evaluation_http::router(config, assembled));
+    Ok(router)
+}
+
+#[tokio::test]
+async fn custom_host_exposes_only_openrouter_shaped_evaluate_and_routable_model()
+-> anyhow::Result<()> {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(header("authorization", "Bearer fixture-secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "jev-1.13.0",
+            "answers": {
+                "approve": {"type": "noul", "noul": 0.94},
+            },
+            "usage": {"input_tokens": 318, "output_tokens": 34}
+        })))
+        .mount(&upstream)
+        .await;
+    let server = server(&upstream, true).await?;
+    let listing: Value = server.get("/v1/models").await.json();
+    let models = listing["data"]
+        .as_array()
+        .context("model listing missing data")?;
+    assert!(models.iter().any(|model| {
+        model["id"] == "typesafe/jev-1.13" && model["operations"] == json!(["evaluate"])
+    }));
+    assert!(
+        !models
+            .iter()
+            .any(|model| model["id"] == "typesafe/jev-latest")
+    );
+    let request = json!({
+        "model": "typesafe/jev-1.13",
+        "state": {"order": 42},
+        "questions": {"approve": {"type": "noul", "instructions": "approve?"}},
+        "provider": {"order": ["untrusted"]},
+        "user": "ignored",
+        "session_id": "ignored",
+        "trace": "ignored",
+        "stream": true
+    });
+    let response = server
+        .post("/v1/evaluate")
+        .add_header("x-bitrouter-request-id", "eval-http-1")
+        .json(&request)
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["id"], "eval-http-1");
+    assert_eq!(body["model"], "jev-1.13.0");
+    assert_eq!(body["provider"], "typesafe");
+    assert_eq!(body["answers"]["approve"]["noul"], 0.94);
+    assert_eq!(body["usage"]["input_tokens"], 318);
+    assert_eq!(body["usage"]["output_tokens"], 34);
+    assert!(
+        body["usage"]["cost"]
+            .as_f64()
+            .is_some_and(|cost| cost > 0.0)
+    );
+    let calls = upstream
+        .received_requests()
+        .await
+        .context("mock upstream request capture unavailable")?;
+    assert_eq!(calls.len(), 1);
+    let sent: Value = serde_json::from_slice(&calls[0].body)?;
+    assert_eq!(sent["model"], "jev-1.13.0");
+    assert!(sent.get("provider").is_none());
+    assert!(sent.get("user").is_none());
+    assert!(sent.get("stream").is_none());
+    let pinned = server
+        .post("/v1/evaluate")
+        .json(
+            &json!({"model": "typesafe:typesafe/jev-1.13", "state": "test", "questions": {
+                "approve": {"type": "noul", "instructions": "approve?"}
+            }}),
+        )
+        .await;
+    pinned.assert_status_ok();
+    assert_eq!(pinned.json::<Value>()["provider"], "typesafe");
+    assert_eq!(server.post("/v1/systemone").await.status_code(), 404);
+    Ok(())
+}
+
+#[tokio::test]
+async fn evaluation_auth_and_invalid_requests_fail_before_upstream() -> anyhow::Result<()> {
+    let upstream = MockServer::start().await;
+    let protected = server(&upstream, false).await?;
+    let request = json!({
+        "model": "typesafe/jev-1.13",
+        "state": "test",
+        "questions": {"approve": {"type": "noul", "instructions": "approve?"}}
+    });
+    let unauthenticated = protected.post("/v1/evaluate").json(&request).await;
+    assert_eq!(unauthenticated.status_code(), 401);
+    let error: Value = unauthenticated.json();
+    assert_eq!(error["error"]["code"], "unauthorized");
+    let open = server(&upstream, true).await?;
+    let invalid = open
+        .post("/v1/evaluate")
+        .json(&json!({"model": "typesafe/jev-1.13", "state": "test", "questions": {}}))
+        .await;
+    assert_eq!(invalid.status_code(), 400);
+    assert_eq!(
+        invalid.json::<Value>()["error"]["code"],
+        "invalid_evaluation_request"
+    );
+    let unknown = open
+        .post("/v1/evaluate")
+        .json(
+            &json!({"model": "typesafe/unknown", "state": "test", "questions": {
+                "approve": {"type": "noul", "instructions": "approve?"}
+            }}),
+        )
+        .await;
+    assert_eq!(unknown.status_code(), 404);
+    assert_eq!(
+        unknown.json::<Value>()["error"]["code"],
+        "evaluation_model_not_found"
+    );
+    let mismatch = open
+        .post("/v1/evaluate")
+        .json(
+            &json!({"model": "legacy/chat", "state": "test", "questions": {
+                "approve": {"type": "noul", "instructions": "approve?"}
+            }}),
+        )
+        .await;
+    assert_eq!(mismatch.status_code(), 409);
+    assert_eq!(
+        mismatch.json::<Value>()["error"]["code"],
+        "model_operation_mismatch"
+    );
+    assert!(
+        upstream
+            .received_requests()
+            .await
+            .context("mock upstream request capture unavailable")?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn authenticated_virtual_key_reaches_typesafe_without_generation_hooks() -> anyhow::Result<()>
+{
+    use bitrouter::auth::{NewApiKey, db as auth_db, generate};
+    use bitrouter::metering::entities::evaluation_attempts;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "jev-1.13.0",
+            "answers": {"approve": {"type": "noul", "noul": 0.8}},
+            "usage": {"input_tokens": 8, "output_tokens": 2}
+        })))
+        .mount(&upstream)
+        .await;
+    let config = fixture_config(&upstream.uri(), false)?;
+    let mut extensions = ExtensionApi::new();
+    bitrouter_typesafe_extension::register(&mut extensions)?;
+    let assembled =
+        bitrouter::assemble::build_app_with_extensions(&config, None, &extensions, None).await?;
+    auth_db::upsert_user(&assembled.db, "evaluation-user").await?;
+    let key = generate();
+    auth_db::insert_api_key(
+        &assembled.db,
+        &NewApiKey {
+            id: "evaluation-key".into(),
+            key_hash: key.hash,
+            user_id: "evaluation-user".into(),
+            spend_limit_micro_usd: None,
+            rpm_limit: None,
+            policy_id: None,
+        },
+    )
+    .await?;
+    let server = TestServer::new(router_for_assembled(&config, &assembled)?);
+    let response = server
+        .post("/v1/evaluate")
+        .add_header("x-bitrouter-request-id", "eval-auth-1")
+        .add_header("authorization", format!("Bearer {}", key.secret))
+        .json(&json!({
+            "model": "typesafe:typesafe/jev-1.13",
+            "state": "synthetic",
+            "questions": {"approve": {"type": "noul", "instructions": "approve?"}}
+        }))
+        .await;
+    response.assert_status_ok();
+    assert_eq!(response.json::<Value>()["provider"], "typesafe");
+    let record = evaluation_attempts::Entity::find()
+        .filter(evaluation_attempts::Column::RequestId.eq("eval-auth-1"))
+        .one(&assembled.db)
+        .await?
+        .context("authenticated evaluation attempt missing")?;
+    assert_eq!(record.selector, "typesafe:typesafe/jev-1.13");
+    assert_eq!(record.canonical_model.as_deref(), Some("typesafe/jev-1.13"));
+    assert_eq!(record.provider_model_id, "jev-1.13.0");
+    assert_eq!(record.caller_api_key_id.as_deref(), Some("evaluation-key"));
+    assert_eq!(record.caller_user_id.as_deref(), Some("evaluation-user"));
+    assert_eq!(
+        upstream
+            .received_requests()
+            .await
+            .context("mock upstream request capture unavailable")?
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn discarded_question_limits_do_not_reject_valid_bounded_requests() -> anyhow::Result<()> {
+    const QUESTION_COUNT: usize = 512;
+    const ID_BYTES: usize = 1024;
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(|request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+            let answers: serde_json::Map<String, Value> = body["questions"]
+                .as_object()
+                .into_iter()
+                .flat_map(|questions| questions.keys())
+                .map(|id| (id.clone(), json!({"type": "noul", "noul": 0.5})))
+                .collect();
+            ResponseTemplate::new(200).set_body_json(json!({
+                "model": "jev-1.13.0",
+                "answers": answers,
+                "usage": {"input_tokens": 20, "output_tokens": 0}
+            }))
+        })
+        .mount(&upstream)
+        .await;
+    let server = server(&upstream, true).await?;
+    let long_id = "q".repeat(ID_BYTES);
+    let mut questions = serde_json::Map::new();
+    for index in 0..QUESTION_COUNT {
+        let id = if index == 0 {
+            long_id.clone()
+        } else {
+            format!("question-{index}")
+        };
+        questions.insert(id, json!({"type": "noul", "instructions": "check"}));
+    }
+    let response = server
+        .post("/v1/evaluate")
+        .json(&json!({"model": "typesafe/jev-1.13", "state": "bounded", "questions": questions}))
+        .await;
+    response.assert_status_ok();
+    let result: Value = response.json();
+    assert_eq!(
+        result["answers"].as_object().map(|answers| answers.len()),
+        Some(QUESTION_COUNT)
+    );
+    assert!(result["answers"].get(&long_id).is_some());
+    let calls = upstream
+        .received_requests()
+        .await
+        .context("mock upstream request capture unavailable")?;
+    assert_eq!(calls.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn oversized_evaluation_body_is_rejected_before_upstream() -> anyhow::Result<()> {
+    let upstream = MockServer::start().await;
+    let server = server(&upstream, true).await?;
+    let response = server
+        .post("/v1/evaluate")
+        .json(&json!({
+            "model": "typesafe/jev-1.13",
+            "state": "x".repeat(16 * 1024 * 1024),
+            "questions": {"approve": {"type": "noul", "instructions": "approve?"}}
+        }))
+        .await;
+    assert_eq!(response.status_code(), 413);
+    assert!(
+        upstream
+            .received_requests()
+            .await
+            .context("mock upstream request capture unavailable")?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn upstream_failures_have_stable_safe_evaluation_errors() -> anyhow::Result<()> {
+    let cases = [
+        (401, 502, "upstream_authentication_failed"),
+        (422, 422, "provider_rejected_evaluation"),
+        (429, 429, "upstream_rate_limited"),
+        (529, 503, "upstream_unavailable"),
+    ];
+    for (upstream_status, expected_status, expected_code) in cases {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/systemone"))
+            .respond_with(
+                ResponseTemplate::new(upstream_status)
+                    .insert_header("retry-after", "4")
+                    .set_body_string("private upstream diagnostic: secret-value"),
+            )
+            .mount(&upstream)
+            .await;
+        let server = server(&upstream, true).await?;
+        let response = server
+            .post("/v1/evaluate")
+            .json(&json!({
+                "model": "typesafe/jev-1.13",
+                "state": "synthetic",
+                "questions": {"approve": {"type": "noul", "instructions": "approve?"}}
+            }))
+            .await;
+        assert_eq!(response.status_code().as_u16(), expected_status);
+        if upstream_status == 429 {
+            assert_eq!(response.header("retry-after"), "4");
+        }
+        let body: Value = response.json();
+        assert_eq!(body["error"]["code"], expected_code);
+        assert!(!body.to_string().contains("secret-value"));
+    }
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"invalid": true})))
+        .mount(&upstream)
+        .await;
+    let server = server(&upstream, true).await?;
+    let response = server
+        .post("/v1/evaluate")
+        .json(&json!({
+            "model": "typesafe/jev-1.13",
+            "state": "synthetic",
+            "questions": {"approve": {"type": "noul", "instructions": "approve?"}}
+        }))
+        .await;
+    assert_eq!(response.status_code(), 502);
+    assert_eq!(
+        response.json::<Value>()["error"]["code"],
+        "upstream_invalid_response"
+    );
+    Ok(())
+}
+
+/// Explicit, credentialed conformance probe. Ordinary PR CI never executes it.
+/// Run with `TYPESAFE_API_KEY_FILE` or `TYPESAFE_API_KEY` set and `cargo test -p bitrouter --test e2e
+/// typesafe_live_smoke -- --ignored` after the deterministic gate is green.
+#[tokio::test]
+#[ignore = "requires an explicit TypeSafe API key and spends one real provider call"]
+async fn typesafe_live_smoke() -> anyhow::Result<()> {
+    let key = match std::env::var("TYPESAFE_API_KEY_FILE") {
+        Ok(path) => std::fs::read_to_string(path).context("read TypeSafe smoke key file")?,
+        Err(_) => std::env::var("TYPESAFE_API_KEY")
+            .context("set TYPESAFE_API_KEY_FILE or TYPESAFE_API_KEY for live smoke")?,
+    };
+    let key = key.trim();
+    anyhow::ensure!(!key.is_empty(), "TYPESAFE_API_KEY is empty");
+    let mut config = fixture_config("https://api.typesafe.ai", true)?;
+    let provider = config
+        .providers
+        .get_mut("typesafe")
+        .context("TypeSafe fixture provider missing")?;
+    provider.api_key = key.to_owned();
+    let server = server_for_config(&config).await?;
+    let response = server
+        .post("/v1/evaluate")
+        .json(&json!({
+            "model": "typesafe/jev-1.13",
+            "state": {"ticket": "A synthetic customer reports a duplicate charge."},
+            "questions": {
+                "billing": {"type": "noul", "instructions": "Is this about billing?"},
+                "team": {
+                    "type": "choice",
+                    "instructions": "Which team handles this?",
+                    "criteria": {"billing": null, "technical": null}
+                },
+                "urgency": {
+                    "type": "score",
+                    "instructions": "How urgent is the ticket?",
+                    "criteria": ["routine", "urgent"]
+                }
+            }
+        }))
+        .await;
+    anyhow::ensure!(
+        response.status_code() == 200,
+        "live TypeSafe evaluation failed with HTTP {}",
+        response.status_code()
+    );
+    let body: Value = response.json();
+    let model = body["model"]
+        .as_str()
+        .context("provider model version missing")?;
+    anyhow::ensure!(
+        model.starts_with("jev-"),
+        "provider did not report a Jev version"
+    );
+    println!("TypeSafe live smoke passed for model {model}");
+    anyhow::ensure!(body["provider"] == "typesafe", "provider identity mismatch");
+    anyhow::ensure!(
+        body["answers"]["billing"]["type"] == "noul",
+        "Noul answer missing"
+    );
+    anyhow::ensure!(
+        body["answers"]["team"]["type"] == "choice",
+        "Choice answer missing"
+    );
+    anyhow::ensure!(
+        body["answers"]["urgency"]["type"] == "score",
+        "Score answer missing"
+    );
+    anyhow::ensure!(
+        body["usage"]["input_tokens"]
+            .as_u64()
+            .is_some_and(|tokens| tokens > 0),
+        "input usage missing"
+    );
+    anyhow::ensure!(
+        body["usage"]["output_tokens"].as_u64().is_some(),
+        "output usage missing"
+    );
+    Ok(())
+}

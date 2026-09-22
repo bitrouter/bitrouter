@@ -15,6 +15,9 @@
 //! 4. Providers carry a [`ProviderClass`]; the auto-cascade orders by it.
 //! 5. A provider is activated **only if its credentials are present**, except
 //!    BitRouter Cloud which may authenticate through the local OAuth flow.
+//! 6. A registry-only native evaluation route is auto-added only when its
+//!    exact format facet is registered by this host. Explicit declarations
+//!    remain visible to startup validation and fail if their facet is absent.
 //!
 //! Precedence is conservative: the merge never overwrites a field the user set
 //! in `bitrouter.yaml`. The providers it configures are no longer compiled-in
@@ -27,6 +30,7 @@ use bitrouter_sdk::config::{
     Config, Pattern, PatternMap, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig,
     ProviderModel, RateLimit, RegistryConfig, env_lookup, substitute_with,
 };
+use bitrouter_sdk::extension::ExtensionApi;
 use bitrouter_sdk::language_model::types::ProtocolList;
 
 use crate::registry::cache::DiskCache;
@@ -95,12 +99,31 @@ pub fn cached_registry() -> Option<RegistryData> {
 /// config changes nothing (every write is guarded by an "is it empty / unset"
 /// check).
 pub fn apply_registry(config: &mut Config, data: &RegistryData) {
+    apply_registry_with_extensions(config, data, &ExtensionApi::new());
+}
+
+/// Merge registry routes executable by this host. Explicitly configured
+/// providers are still merged and validated at assembly, so a missing native
+/// facet cannot silently disable an operator-declared active route.
+pub fn apply_registry_with_extensions(
+    config: &mut Config,
+    data: &RegistryData,
+    extensions: &ExtensionApi,
+) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
     for provider in &data.providers {
         // Principle #2: merge every public, active registry provider.
         if !provider.is_active() || !provider.is_mergeable() {
+            continue;
+        }
+        if !config.providers.contains_key(&provider.name)
+            && provider
+                .operations
+                .values()
+                .any(|operation| extensions.evaluation_format(&operation.format).is_err())
+        {
             continue;
         }
         merge_provider(config, provider);
@@ -433,6 +456,87 @@ mod tests {
         assert!(merged.models[0].supports_operation(InferenceOperation::Evaluate));
         assert!(!merged.models[0].supports_operation(InferenceOperation::Generate));
         assert!(bitrouter_sdk::config::routing_table::list_models_for(&config).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn auto_registry_merge_requires_a_registered_native_format()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use bitrouter_sdk::config::{
+            ModelOperationConfig, OperationFormatConfig, ProviderOperationConfig,
+        };
+        use bitrouter_sdk::evaluation::{
+            EvaluationQuestionType, EvaluationRequest, EvaluationResult, EvaluationRoutingTarget,
+        };
+        use bitrouter_sdk::extension::{
+            EvaluationFormatAdapter, EvaluationFormatDescriptor, ExtensionApi,
+        };
+        use bitrouter_sdk::inference::InferenceOperation;
+
+        struct TestFormat;
+        impl EvaluationFormatAdapter for TestFormat {
+            fn descriptor(&self) -> EvaluationFormatDescriptor {
+                EvaluationFormatDescriptor {
+                    extension_id: "fixture".into(),
+                    adapter_id: "decisions".into(),
+                    revision: 1,
+                }
+            }
+
+            fn render_request(
+                &self,
+                _request: &EvaluationRequest,
+                _target: &EvaluationRoutingTarget,
+            ) -> bitrouter_sdk::Result<serde_json::Value> {
+                Ok(serde_json::json!({}))
+            }
+
+            fn parse_response(
+                &self,
+                _body: serde_json::Value,
+                _request: &EvaluationRequest,
+            ) -> bitrouter_sdk::Result<EvaluationResult> {
+                Err(bitrouter_sdk::error::BitrouterError::bad_request(
+                    "not used by registry merge",
+                ))
+            }
+        }
+
+        let mut registered = ExtensionApi::new();
+        registered.register_evaluation_format(Arc::new(TestFormat))?;
+        let mut registry_provider = provider("regtestprov");
+        registry_provider.operations.insert(
+            InferenceOperation::Evaluate,
+            ProviderOperationConfig {
+                endpoint: "/v1/decide".into(),
+                format: OperationFormatConfig {
+                    extension: "fixture".into(),
+                    adapter: "decisions".into(),
+                    revision: 1,
+                },
+            },
+        );
+        registry_provider.models[0].api_protocol = None;
+        registry_provider.models[0].operations = Some(std::collections::BTreeMap::from([(
+            InferenceOperation::Evaluate,
+            ModelOperationConfig {
+                question_types: vec![EvaluationQuestionType::Noul],
+                ..ModelOperationConfig::default()
+            },
+        )]));
+        with_env("REGTESTPROV_API_KEY", Some("sk-test"), || {
+            let data = data_with(vec![registry_provider], vec![]);
+            let mut stock = Config::default();
+            apply_registry(&mut stock, &data);
+            assert!(!stock.providers.contains_key("regtestprov"));
+
+            let mut custom = Config::default();
+            apply_registry_with_extensions(&mut custom, &data, &registered);
+            assert!(custom.providers.contains_key("regtestprov"));
+            assert!(custom.validate_operations().is_ok());
+        });
         Ok(())
     }
 

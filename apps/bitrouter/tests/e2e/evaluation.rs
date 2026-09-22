@@ -283,6 +283,9 @@ async fn default_host_recorder_persists_content_free_attempt_and_zero_output_pri
         .await?
         .ok_or_else(|| anyhow::anyhow!("evaluation attempt was not persisted"))?;
     assert_eq!(row.terminal, "completed");
+    assert_eq!(row.canonical_model.as_deref(), Some("fixture/model"));
+    assert_eq!(row.caller_api_key_id.as_deref(), Some("anonymous"));
+    assert_eq!(row.caller_user_id.as_deref(), Some("anonymous"));
     assert_eq!(row.charge_status, "computed");
     assert_eq!(row.charge_micro_usd, Some(5));
     assert_eq!(row.input_tokens.as_deref(), Some("5"));

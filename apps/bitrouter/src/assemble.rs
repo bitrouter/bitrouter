@@ -1050,6 +1050,12 @@ fn build_fusion_alias(config: &Config) -> Result<Option<Arc<dyn PromptTransform>
 /// layer (above `bitrouter-providers`) because the SDK's own routing table sits
 /// below the providers crate and cannot fetch the registry itself.
 pub async fn merge_registry_into(config: &mut Config) {
+    merge_registry_into_with_extensions(config, &ExtensionApi::new()).await;
+}
+
+/// Registry merge for an embedding host that explicitly linked native
+/// evaluation-format facets. The stock `bro` host uses an empty registry.
+pub async fn merge_registry_into_with_extensions(config: &mut Config, extensions: &ExtensionApi) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
@@ -1060,7 +1066,7 @@ pub async fn merge_registry_into(config: &mut Config) {
         bitrouter_providers::apply_builtin_defaults(config);
         return;
     };
-    bitrouter_providers::registry::apply::apply_registry(config, &data);
+    bitrouter_providers::registry::apply::apply_registry_with_extensions(config, &data, extensions);
     bitrouter_providers::apply_builtin_defaults(config);
 }
 
