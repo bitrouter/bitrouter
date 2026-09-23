@@ -665,6 +665,7 @@ dependencies = [
  "axum-test",
  "base64 0.22.1",
  "bitrouter-guardrails",
+ "bitrouter-laya-extension",
  "bitrouter-providers",
  "bitrouter-sdk",
  "bitrouter-telemetry",
@@ -720,6 +721,27 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "bitrouter-laya-extension"
+version = "1.0.0-alpha.32"
+dependencies = [
+ "bitrouter-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bitrouter-laya-host"
+version = "1.0.0-alpha.32"
+dependencies = [
+ "anyhow",
+ "bitrouter",
+ "bitrouter-laya-extension",
+ "bitrouter-sdk",
+ "clap",
  "tokio",
 ]
 

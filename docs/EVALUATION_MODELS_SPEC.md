@@ -2,7 +2,9 @@
 
 Status: **Phases 0–1 passed local and hosted CI. Phase 2 deterministic local
 and hosted CI checks passed; a credentialed TypeSafe smoke test remains pending.
-Phase 3 remains proposed.**
+Phase 3 Laya implementation has passed local fixture, process,
+real-checkpoint end-to-end, and full workspace checks; hosted CI remains
+pending.**
 
 Date: 2026-09-22
 
@@ -1123,9 +1125,41 @@ Each additional provider requires:
 - an explicit future decision on whether it can participate in cross-provider
   fallback.
 
-Local Laya support should begin as a separate HTTP provider process speaking a
-supported evaluation format. In-process model runtimes remain outside this
-specification.
+The first Phase 3 provider is local Laya Typed Decisions, kept out of the
+default `bro` binary. The explicit `bro-laya` host registers a native Rust
+`laya/local_system_one@1` format facet. A separate Python HTTP process loads
+`convaiinnovations/laya-typed-decisions` at Hugging Face commit
+`f9ab0b228f0fc0f14d873dbc99038f135c2da1b2` with `laya==0.3.6`, then
+exposes loopback-only `POST /v1/decisions` and readiness `GET /health`. The
+facet uses the existing bearer HTTP transport with a shared operator-generated
+`LAYA_LOCAL_TOKEN`. The local process is not a public inbound API; BitRouter
+still exposes only `/v1/evaluate`. In-process model runtimes remain outside
+this specification.
+
+The operator declares the route explicitly in `bitrouter.yaml`:
+`laya/typed-decisions-f9ab0b2` maps to provider `laya` and exact wire model
+`convaiinnovations/laya-typed-decisions@f9ab0b228f0fc0f14d873dbc99038f135c2da1b2`.
+The form `laya:laya/typed-decisions-f9ab0b2` pins it. No local provider is
+auto-added to the public registry: its current kind/access/billing vocabulary
+cannot faithfully represent an operator-owned process and its unpriced compute.
+This is a deliberate explicit-config first release, not an implicit `$0`
+provider. The shippable setup example is in `skills/bitrouter/references/evaluation.md`.
+
+All three advertised Noul/Choice/Score question shapes map without semantic
+thresholding. The local sidecar retains Laya's original typed answers and
+reported `usage` but identifies the actually loaded pinned snapshot, since
+Laya's own `system_one` response uses the generic `laya-rl-agent` label. The
+Rust facet drops Laya's auxiliary `action` head and derived Noul confidence;
+it preserves Choice/Score distributions and confidence. No monetary cost is
+invented. Provider-specific bounds are 16 questions, 20 Choice options,
+10 Score levels, and a 1 MiB sidecar body; they do not change the global
+evaluation contract. Startup/load failure keeps the process unready; inference
+failure becomes a safe 502 upstream error. A pinned selector never falls back
+to another provider. Any future cross-provider fallback requires separate
+calibration and an explicit design decision.
+
+The wire contract was checked against the [official Laya implementation](https://github.com/NandhaKishorM/laya) and a real run of the pinned
+[model checkpoint](https://huggingface.co/convaiinnovations/laya-typed-decisions).
 
 OpenRouter remains a format reference, not a planned Phase 3 provider. A later
 proposal to route through its gateway would need separate scope and its own
@@ -1140,6 +1174,18 @@ provider also needs its own opt-in real-provider smoke test before its route
 is called complete. A local HTTP provider additionally needs process readiness,
 shutdown, and failure tests. Passing TypeSafe's suite alone does not pass a
 second provider.
+
+**Phase 3 local evidence to date (2026-09-22):** six Laya facet conformance
+tests passed; three fake-process tests covered readiness, authentication,
+bounds, clean shutdown, startup and inference failure; four assembled-app
+mock-upstream tests covered explicit registration, all advertised question
+types, selector mapping, auth, error mapping, and provider pinning; and an
+opt-in offline run of the actual pinned checkpoint through the local process
+and `/v1/evaluate` passed. The workspace all-features run passed 3,566 tests
+with 24 intentional skips. Strict Clippy, formatting, rustdoc, doctests,
+registry/schema freshness, and diff whitespace checks passed. Hosted CI is
+still pending, so this is not yet a Phase 3 pass or production proof.
+TypeSafe's separate credentialed smoke gate is also still pending.
 
 ### Phase 4 — optional future WASM decision gate
 

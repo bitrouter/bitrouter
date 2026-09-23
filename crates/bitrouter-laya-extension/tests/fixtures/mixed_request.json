@@ -1,0 +1,20 @@
+{
+  "model": "laya/typed-decisions-f9ab0b2",
+  "state": {"ticket": "Synthetic duplicate charge"},
+  "questions": {
+    "billing": {
+      "type": "noul",
+      "instructions": "Is this about billing?"
+    },
+    "team": {
+      "type": "choice",
+      "instructions": "Which team?",
+      "criteria": {"billing": null, "technical": null}
+    },
+    "urgency": {
+      "type": "score",
+      "instructions": "How urgent?",
+      "criteria": ["routine", "urgent"]
+    }
+  }
+}

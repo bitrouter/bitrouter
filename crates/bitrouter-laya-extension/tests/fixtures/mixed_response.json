@@ -1,0 +1,27 @@
+{
+  "model": "convaiinnovations/laya-typed-decisions@f9ab0b228f0fc0f14d873dbc99038f135c2da1b2",
+  "answers": {
+    "billing": {
+      "type": "noul",
+      "noul": 0.3868,
+      "confidence": 0.6132,
+      "action": {"act_probability": 1.0}
+    },
+    "team": {
+      "type": "choice",
+      "choice": "billing",
+      "probabilities": {"billing": 0.7013, "technical": 0.2987},
+      "confidence": 0.1203,
+      "action": {"act_probability": 1.0}
+    },
+    "urgency": {
+      "type": "score",
+      "score": 0.5665,
+      "probabilities": {"0": 0.4335, "1": 0.5665},
+      "legend": {"0": "routine", "1": "urgent"},
+      "confidence": 0.0128,
+      "action": {"act_probability": 1.0}
+    }
+  },
+  "usage": {"input_tokens": 92, "output_tokens": 0}
+}

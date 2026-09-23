@@ -29,6 +29,10 @@ section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
 | `typesafe` | `TYPESAFE_API_KEY` | Bearer | Jev evaluation only; requires `bro-typesafe` native host and `/v1/evaluate`, never stock `bro` |
 
+Local Laya is **not** a fetched registry provider: it is an operator-declared
+loopback process with `LAYA_LOCAL_TOKEN` bearer authentication and the separate
+`bro-laya` host. Its inference cost is unknown, not `$0`; see `evaluation.md`.
+
 Zero-config mode auto-enables API-key providers whose env vars are present;
 an API-key provider without its credential gets `active: false` and falls out
 of the routing table. The evaluation-only `typesafe` entry is an exception in

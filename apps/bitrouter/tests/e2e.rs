@@ -32,6 +32,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 mod evaluation;
 #[path = "e2e/evaluation_http.rs"]
 mod evaluation_http;
+#[path = "e2e/evaluation_laya.rs"]
+mod evaluation_laya;
 
 #[tokio::test]
 async fn evaluation_only_model_rejected_on_all_generation_ingresses() -> anyhow::Result<()> {
