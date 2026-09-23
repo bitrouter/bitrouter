@@ -74,6 +74,30 @@ models:
     capabilities:
       - reasoning
       - tools
+  - id: xiaomi/mimo-v2.6-flash
+    provider_model_id: mimo-v2.6-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.0028
+      output_tokens:
+        text: 0.28
+  - id: xiaomi/mimo-v2.6-pro
+    provider_model_id: mimo-v2.6-pro
+    pricing:
+      input_tokens:
+        no_cache: 0.435
+        cache_read: 0.0036
+      output_tokens:
+        text: 0.87
+  - id: xiaomi/mimo-v2.6-pro-ultraspeed
+    provider_model_id: mimo-v2.6-pro-ultraspeed
+    pricing:
+      input_tokens:
+        no_cache: 4.35
+        cache_read: 0.036
+      output_tokens:
+        text: 8.7
 status: active
 weight: 1
 submitted_at: 2026-05-25
