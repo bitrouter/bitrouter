@@ -1159,10 +1159,11 @@ production proof.
 
 **Revised format-first deterministic evidence (2026-09-23):** implementation
 commit `cee9fa74` passed local `cargo nextest run --all-features` with 3,586
-tests passed and 23 intentional skips. Strict workspace Clippy, formatting,
-rustdoc with warnings denied, doctests, registry validation/build/freshness,
-and whitespace checks passed. The final shared-host regression pair passed
-after its last test edit. [PR #938 hosted CI](https://github.com/bitrouter/bitrouter/pull/938)
+tests passed and 23 intentional skips before the final shared-host test was
+added; that regression pair passed separately. Strict workspace Clippy,
+formatting, rustdoc with warnings denied, doctests, registry
+validation/build/freshness, and whitespace checks passed.
+[PR #938 hosted CI](https://github.com/bitrouter/bitrouter/pull/938)
 passed Linux, macOS, and Windows tests and Clippy, plus the applicable MSRV,
 feature-isolation, dist, documentation, SDK API, and repository checks. The
 repository check initially failed before checkout because the runner could not

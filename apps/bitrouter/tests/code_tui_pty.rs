@@ -2199,7 +2199,16 @@ fn code_external_editor_preserves_multiline_prompt_and_terminal() -> Result<()> 
     code.wait_for_agent_ready()?;
     code.pty.paste("draft that the editor replaces")?;
     let editor_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[1;5H/open external editor\r")?;
+    code.pty.send(b"\x1b[1;5H/")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&editor_checkpoint, "Commands ─")?;
+    let selection_checkpoint = code.pty.checkpoint();
+    code.pty.send(b"open external editor")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&selection_checkpoint, "open external editor")?;
+    code.pty.send(b"\r")?;
     let _ = code
         .pty
         .wait_for_text_since(&editor_checkpoint, "external-replacement")?;
@@ -2232,7 +2241,16 @@ fn code_failed_external_editor_retains_draft_and_recovers() -> Result<()> {
     code.wait_for_agent_ready()?;
     code.pty.paste(draft)?;
     let failure_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[1;5H/open external editor\r")?;
+    code.pty.send(b"\x1b[1;5H/")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&failure_checkpoint, "Commands ─")?;
+    let selection_checkpoint = code.pty.checkpoint();
+    code.pty.send(b"open external editor")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&selection_checkpoint, "open external editor")?;
+    code.pty.send(b"\r")?;
     let failure = code
         .pty
         .wait_for_text_since(&failure_checkpoint, "External editor failed")?;
