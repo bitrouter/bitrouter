@@ -2,9 +2,9 @@
 
 Status: **Phases 0–1 passed local and hosted CI. Phase 2 deterministic local
 and hosted CI checks passed; a credentialed TypeSafe smoke test remains pending.
-Phase 3 Laya implementation has passed local fixture, process,
-real-checkpoint end-to-end, and full workspace checks; hosted CI remains
-pending.**
+The Phase 3 Laya-specific gate passed local and hosted CI, including an opt-in
+real-checkpoint smoke test locally. This does not clear the separate TypeSafe
+gate or establish production readiness.**
 
 Date: 2026-09-22
 
@@ -1183,9 +1183,15 @@ types, selector mapping, auth, error mapping, and provider pinning; and an
 opt-in offline run of the actual pinned checkpoint through the local process
 and `/v1/evaluate` passed. The workspace all-features run passed 3,566 tests
 with 24 intentional skips. Strict Clippy, formatting, rustdoc, doctests,
-registry/schema freshness, and diff whitespace checks passed. Hosted CI is
-still pending, so this is not yet a Phase 3 pass or production proof.
-TypeSafe's separate credentialed smoke gate is also still pending.
+registry/schema freshness, and diff whitespace checks passed. At implementation
+commit `46df8402`, [PR #938](https://github.com/bitrouter/bitrouter/pull/938)
+passed its hosted Linux, macOS, and Windows test and Clippy jobs, plus MSRV,
+feature-isolation, dist, documentation, and repository checks. The first macOS
+run exposed an overly short process-readiness test deadline; the corrected
+test passed 30 local stress iterations and the second hosted run. This passes
+the Laya-specific Phase 3 gate, not the overall release gate: TypeSafe's
+separate credentialed smoke remains pending, and none of these tests proves
+production readiness.
 
 ### Phase 4 — optional future WASM decision gate
 
