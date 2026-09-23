@@ -12,6 +12,9 @@ use sea_orm::DatabaseConnection;
 use bitrouter_sdk::App;
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
+use bitrouter_sdk::evaluation::pipeline::{EvaluationAttemptRecorder, EvaluationPipeline};
+use bitrouter_sdk::extension::ExtensionApi;
+use bitrouter_sdk::inference::InferenceOperation;
 use bitrouter_sdk::invocation;
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
@@ -62,6 +65,7 @@ use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvid
 use crate::eval::EvalService;
 use crate::eval::settlement::{EvalSettlementRecorder, PendingEvalDecisionStore};
 use crate::eval::store::EvalStore;
+use crate::metering::evaluation::MeteringEvaluationAttemptRecorder;
 use crate::metering::{ContextTier, MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 use crate::session_identity::SessionContextHook;
@@ -111,6 +115,11 @@ pub struct Assembled {
     /// Concrete upstream HTTP executor. The pipeline also holds this as a trait
     /// object, but reload needs the concrete handle to replace timeout clients.
     pub upstream_executor: Arc<HttpExecutor>,
+    /// Internal typed-evaluation rail, present only for a configured active
+    /// route. The OSS host owns durable terminal and cost evidence unless a
+    /// custom host supplies its own recorder.
+    /// Phase 1 deliberately exposes no public evaluation HTTP endpoint.
+    pub evaluation_pipeline: Option<Arc<EvaluationPipeline>>,
     /// The live `policy_table:` transform, when one was wired. The built `App`
     /// holds the same `Arc` as a `dyn PromptTransform`; reload needs the
     /// concrete handle to swap a freshly built spec into it, because the
@@ -382,7 +391,7 @@ fn renamed_env_warnings(is_set: impl Fn(&str) -> bool) -> Vec<String> {
 /// host's migrations, build the routing table + executor, and wire the
 /// builtin hooks onto the `language_model` pipeline.
 pub async fn build_app(config: &Config) -> Result<Assembled> {
-    build_app_with_path(config, None).await
+    build_app_with_extensions(config, None, |_| Ok(())).await
 }
 
 /// Like [`build_app`], but remembering the config's source path so the routing
@@ -402,26 +411,57 @@ pub async fn build_app_with_path(
 pub async fn build_app_with_extensions(
     config: &Config,
     config_path: Option<&std::path::Path>,
-    register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
+    register: impl FnOnce(&mut ExtensionApi) -> Result<()>,
 ) -> Result<Assembled> {
-    let mut extensions = bitrouter_sdk::extension::ExtensionApi::new();
+    let mut extensions = ExtensionApi::new();
     register(&mut extensions).context("registering extensions")?;
+    build_app_with_registered_extensions(config, config_path, &extensions, None).await
+}
+
+/// Assemble from an already registered capability set. The foreground host
+/// registers before registry enrichment; this entry also permits a test-only
+/// recorder without creating a second extension registration mechanism.
+pub async fn build_app_with_registered_extensions(
+    config: &Config,
+    config_path: Option<&std::path::Path>,
+    extensions: &ExtensionApi,
+    evaluation_recorder: Option<Arc<dyn EvaluationAttemptRecorder>>,
+) -> Result<Assembled> {
     let native = extensions
+        .clone()
         .into_registrations()
         .context("registering extensions")?;
-    assemble_app(config, config_path, native).await
+    assemble_app(
+        config,
+        config_path,
+        extensions.clone(),
+        native,
+        evaluation_recorder,
+    )
+    .await
 }
 
 async fn assemble_app(
     config: &Config,
     config_path: Option<&std::path::Path>,
+    extensions: ExtensionApi,
     native: std::collections::HashMap<
         String,
         bitrouter_sdk::extension::request_check::Registration,
     >,
+    evaluation_recorder: Option<Arc<dyn EvaluationAttemptRecorder>>,
 ) -> Result<Assembled> {
     validate_host_configuration(config)?;
     config.validate_router_config()?;
+    config.validate_operations()?;
+    extensions.validate_evaluation_bindings(config)?;
+    let has_evaluation_route = config.providers.values().any(|provider| {
+        provider.active
+            && provider
+                .models
+                .iter()
+                .any(|model| model.supports_operation(InferenceOperation::Evaluate))
+    });
     let mut inactive = native
         .keys()
         .filter(|id| !config.checkers.contains_key(*id))
@@ -552,9 +592,24 @@ async fn assemble_app(
         .context("building the upstream HTTP executor")?,
     );
     let executor_for_reload = executor.clone();
-
     // ---- pricing, metering, policy — all derived from config ----
     let pricing = Arc::new(build_pricing_table(config));
+    let evaluation_pipeline = if has_evaluation_route {
+        let recorder = evaluation_recorder.unwrap_or_else(|| {
+            Arc::new(MeteringEvaluationAttemptRecorder::new(
+                db.clone(),
+                Arc::clone(&pricing),
+            ))
+        });
+        Some(Arc::new(EvaluationPipeline::new(
+            Arc::clone(&routing_table),
+            Arc::clone(&executor),
+            extensions.clone(),
+            recorder,
+        )))
+    } else {
+        None
+    };
     let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
@@ -1006,6 +1061,7 @@ async fn assemble_app(
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
+        evaluation_pipeline,
         policy_table_router,
         observe: observe_provider,
         otel_exporter: otel_for_assembled,
@@ -1042,6 +1098,12 @@ fn build_fusion_alias(config: &Config) -> Result<Option<Arc<dyn PromptTransform>
 /// layer (above `bitrouter-providers`) because the SDK's own routing table sits
 /// below the providers crate and cannot fetch the registry itself.
 pub async fn merge_registry_into(config: &mut Config) {
+    merge_registry_into_with_extensions(config, &ExtensionApi::new()).await;
+}
+
+/// Registry merge for an embedding host that explicitly linked native
+/// evaluation-format facets. The stock `bro` host uses an empty registry.
+pub async fn merge_registry_into_with_extensions(config: &mut Config, extensions: &ExtensionApi) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
@@ -1052,7 +1114,7 @@ pub async fn merge_registry_into(config: &mut Config) {
         bitrouter_providers::apply_builtin_defaults(config);
         return;
     };
-    bitrouter_providers::registry::apply::apply_registry(config, &data);
+    bitrouter_providers::registry::apply::apply_registry_with_extensions(config, &data, extensions);
     bitrouter_providers::apply_builtin_defaults(config);
 }
 

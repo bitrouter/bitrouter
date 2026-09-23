@@ -1463,6 +1463,9 @@ pub struct AppReloader {
     /// Concrete upstream HTTP executor. Timeout knobs are client-level, so a
     /// config reload must rebuild the live executor's client set too.
     upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
+    /// Compiled native facets available to this host. Every candidate is
+    /// checked before any live reload participant changes.
+    extensions: bitrouter_sdk::extension::ExtensionApi,
     policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>>,
     /// The live `policy_table:` transform, when one was wired at assembly.
     /// Reload rebuilds its spec from the fresh config and swaps it in —
@@ -1569,6 +1572,7 @@ impl AppReloader {
             running_baseline: Mutex::new(None),
             environment_revision: AtomicU64::new(0),
             upstream_executor,
+            extensions: bitrouter_sdk::extension::ExtensionApi::new(),
             policy_runtime: None,
             policy_table_router: None,
             coordinator: ReloadCoordinator::new(),
@@ -1592,6 +1596,13 @@ impl AppReloader {
         self.startup_configuration_source = Some(baseline.source.clone());
         self.startup_unclassified_values = baseline.unclassified_values.clone();
         self.running_baseline = Mutex::new(Some(baseline));
+        self
+    }
+
+    /// Keep evaluation format bindings valid across hot reloads in a custom
+    /// host. The stock host leaves this registry empty.
+    pub fn with_extensions(mut self, extensions: bitrouter_sdk::extension::ExtensionApi) -> Self {
+        self.extensions = extensions;
         self
     }
 
@@ -1741,6 +1752,16 @@ impl AppReloader {
         self.wait_during_prepare().await;
         let baseline = self.prepare_resolved_candidate().await?;
         let config = baseline.config.clone();
+        self.extensions
+            .validate_evaluation_bindings(&config)
+            .map_err(|error| {
+                tracing::warn!(error = %error, "reload native evaluation binding invalid");
+                PreparationError::failed(
+                    ReloadParticipant::RoutingTable,
+                    "evaluation_binding_invalid",
+                    "evaluation format binding is unavailable or incompatible",
+                )
+            })?;
         let changed_unclassified = changed_unclassified_config_paths(
             self.startup_unclassified_values.as_ref(),
             baseline.unclassified_values.as_ref(),

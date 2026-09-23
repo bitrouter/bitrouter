@@ -1,0 +1,36 @@
+name: typesafe
+display_name: TypeSafe
+kind: first_party
+metadata:
+  headquarters: US
+  name: TypeSafe
+  slug: typesafe
+api_base: https://api.typesafe.ai
+doc_url: https://docs.typesafe.ai/api
+auth_scheme: bearer
+auth:
+  kind: bearer
+  env: TYPESAFE_API_KEY
+operations:
+  evaluate:
+    endpoint: /v1/systemone
+    format:
+      extension: system-one
+      adapter: json
+      revision: 1
+models:
+  - id: typesafe/jev-1.13
+    provider_model_id: jev-1.13.0
+    operations:
+      evaluate:
+        question_types: [noul, choice, score]
+        max_choice_options: 255
+        max_score_levels: 10
+    pricing:
+      input_tokens:
+        no_cache: 0.042
+      output_tokens:
+        text: 0
+status: active
+weight: 1
+submitted_at: 2026-09-22

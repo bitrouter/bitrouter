@@ -15,7 +15,7 @@ use bitrouter::reload::RunningConfigState;
 use bitrouter_sdk::extension::request_check::Decision;
 use serde_json::json;
 use tempfile::TempDir;
-use wiremock::matchers::{body_partial_json, method, path};
+use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const CHILD_CONFIG: &str = "BITROUTER_TEST_EXTENSION_HOST_CONFIG";
@@ -31,6 +31,11 @@ async fn extension_host_child() -> Result<()> {
     };
     let mode = std::env::var(CHILD_MODE)?;
     bitrouter::host::serve_with_extensions(&ConfigSource::File(config.into()), move |api| {
+        if mode == "evaluation" {
+            bitrouter_system_one_format::register(api)?;
+            api.request_check("unused", "v1", Arc::new(|_| Decision::Allow))?;
+            return Ok(());
+        }
         if mode == "missing" {
             return Ok(());
         }
@@ -244,6 +249,49 @@ routers:
     Ok(())
 }
 
+fn write_evaluation_config(
+    home: &Path,
+    inference: SocketAddr,
+    control: SocketAddr,
+    upstream: &str,
+) -> Result<()> {
+    std::fs::write(
+        home.join("bitrouter.yaml"),
+        format!(
+            r#"inherit_defaults: false
+registry:
+  enabled: false
+server:
+  listen: {inference}
+  control_socket: host.sock
+  skip_auth: true
+control:
+  enabled: true
+  listen: {control}
+database:
+  url: 'sqlite://host.db?mode=rwc'
+providers:
+  typesafe:
+    api_base: {upstream}
+    api_key: fixture-test-key
+    operations:
+      evaluate:
+        endpoint: /v1/systemone
+        format: {{ extension: system-one, adapter: json, revision: 1 }}
+    models:
+      - id: typesafe/jev-1.13
+        provider_model_id: jev-1.13.0
+        operations:
+          evaluate:
+            question_types: [noul, choice, score]
+            max_choice_options: 255
+            max_score_levels: 10
+"#
+        ),
+    )?;
+    Ok(())
+}
+
 fn ensure_clean(home: &Path) -> Result<()> {
     ensure!(
         !home.join("host.sock").exists(),
@@ -279,6 +327,113 @@ async fn mount_upstream(upstream: &MockServer) {
     Mock::given(method("POST")).and(path("/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"fixture-response","object":"chat.completion","model":"model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}})))
         .with_priority(2).mount(upstream).await;
+}
+
+#[tokio::test]
+async fn evaluation_format_uses_shared_foreground_host_lifecycle() -> Result<()> {
+    let home = temporary_home()?;
+    let (inference, control) = addresses()?;
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(header("authorization", "Bearer fixture-test-key"))
+        .and(body_partial_json(json!({"model":"jev-1.13.0"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "jev-1.13.0",
+            "answers": {"approved": {"type": "noul", "noul": 0.8}},
+            "usage": {"input_tokens": 2, "output_tokens": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    write_evaluation_config(home.path(), inference, control, &upstream.uri())?;
+    let mut host = Host::spawn(home.path(), "evaluation")?;
+    host.ready(home.path(), inference, control).await?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
+    let response = client
+        .post(format!("http://{inference}/v1/evaluate"))
+        .json(&json!({
+            "model": "typesafe/jev-1.13",
+            "state": "synthetic",
+            "questions": {"approved": {"type": "noul", "instructions": "Proceed?"}}
+        }))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        bail!("evaluation returned {status}: {}", response.text().await?);
+    }
+    let body: serde_json::Value = response.json().await?;
+    ensure!(body["provider"] == "typesafe");
+    ensure!(body["model"] == "jev-1.13.0");
+    ensure!(body["answers"]["approved"]["noul"] == 0.8);
+
+    let models: serde_json::Value = client
+        .get(format!("http://{inference}/v1/models"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    ensure!(
+        models["data"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().any(|entry| {
+                entry["id"] == "typesafe/jev-1.13" && entry["operations"] == json!(["evaluate"])
+            }))
+    );
+    ensure!(
+        client
+            .post(format!("http://{inference}/v1/systemone"))
+            .send()
+            .await?
+            .status()
+            == reqwest::StatusCode::NOT_FOUND
+    );
+    ensure!(matches!(
+        daemon::send_command(&home.path().join("host.sock"), &DaemonCommand::Stop).await?,
+        DaemonResponse::Ok
+    ));
+    ensure!(
+        host.exited().await?.success(),
+        "stop failed: {}",
+        host.logs()
+    );
+    ensure_clean(home.path())?;
+    ensure!(
+        upstream
+            .received_requests()
+            .await
+            .context("mock upstream request capture unavailable")?
+            .len()
+            == 1,
+        "evaluation did not make exactly one authenticated upstream call"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn stock_host_rejects_explicit_evaluation_binding_before_database() -> Result<()> {
+    let home = temporary_home()?;
+    let (inference, control) = addresses()?;
+    write_evaluation_config(home.path(), inference, control, "http://127.0.0.1:1")?;
+    let mut host = Host::official(home.path())?;
+    ensure!(
+        !host.exited().await?.success(),
+        "stock host accepted native binding"
+    );
+    ensure!(
+        !home.path().join("host.db").exists(),
+        "stock host opened the database before rejecting the binding"
+    );
+    ensure!(
+        host.logs().contains("missing evaluation format extension"),
+        "wrong startup failure: {}",
+        host.logs()
+    );
+    ensure_clean(home.path())?;
+    Ok(())
 }
 
 #[tokio::test]

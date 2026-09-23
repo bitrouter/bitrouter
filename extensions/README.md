@@ -9,6 +9,7 @@ stay in `apps/`.
 | Extension | Packages | Delivery |
 | --- | --- | --- |
 | [Regex checker](regex-checker/README.md) | `bitrouter-guardrails` | Compiled request-check callback; legacy SDK hooks remain optional |
+| [System One JSON](system-one/README.md) | `bitrouter-system-one-format` | Compiled evaluation format; TypeSafe is the first provider binding |
 
 Beta extensions are linked explicitly into a trusted custom Rust host. Adding
 or updating extension code requires rebuilding that host. There is no remote
@@ -30,7 +31,17 @@ Valid registrations absent from `checkers` stay inactive and produce a sorted
 startup diagnostic. They have no runtime entry or management inventory. Configured
 instances require matching registrations even when no router binds them.
 
-This is one typed author entry point, currently exposing only request-check.
+For an evaluation-format extension, register an
+`extension::evaluation_format::EvaluationFormatAdapter` with
+`ExtensionApi::register_evaluation_format`. An active provider's
+`operations.evaluate.format` binds the exact extension id, adapter id, and
+revision. Missing or mismatched bindings fail before database assembly;
+unbound formats remain inactive. The host owns the provider endpoint,
+credentials, HTTP transport, retries, and settlement. See
+[System One JSON](system-one/README.md).
+
+This is one typed author entry point with request-check and evaluation-format
+capabilities.
 It is not a generic event handler, dynamic loader or permission sandbox, and
 it does not expose the host builder, global hooks, credentials or migrations.
 Capability inputs and decisions live alongside this entry point in
@@ -48,5 +59,6 @@ entry point for new request-check extensions. `PluginId` metadata ownership,
 formats keep their existing purposes and names.
 
 The workspace includes packages at `extensions/<extension>/<package>/`. Keep
-Cargo package names stable when moving source, and verify dependency isolation
-and release configuration separately from directory placement.
+published Cargo package names stable when moving source; an unreleased format
+package can be renamed before its first integration. Verify dependency
+isolation and release configuration separately from directory placement.

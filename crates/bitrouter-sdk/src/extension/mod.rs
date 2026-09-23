@@ -6,19 +6,42 @@
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::Arc;
 
+#[cfg(feature = "config_file")]
+use std::collections::BTreeMap;
+
+#[cfg(feature = "config_file")]
+use crate::config::{Config, OperationFormatConfig};
 use crate::error::{BitrouterError, Result};
+#[cfg(feature = "config_file")]
+use crate::inference::InferenceOperation;
 use request_check::{Callback, Registration};
 
+/// Typed upstream JSON format for the evaluation operation.
+#[cfg(feature = "config_file")]
+#[cfg_attr(docsrs, doc(cfg(feature = "config_file")))]
+pub mod evaluation_format;
 pub mod request_check;
+
+#[cfg(feature = "config_file")]
+use evaluation_format::EvaluationFormatAdapter;
+
+#[cfg(feature = "config_file")]
+#[derive(Clone)]
+struct RegisteredEvaluationFormat {
+    revision: u32,
+    adapter: Arc<dyn EvaluationFormatAdapter>,
+}
 
 /// Collects trusted, statically linked capability implementations for a host.
 ///
 /// Construct this during startup, pass a mutable reference to ordinary Rust
 /// registration functions, then let the host consume it before activating the
 /// application. Registration does not execute callbacks or bind them globally.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ExtensionApi {
     request_checks: HashMap<String, Registration>,
+    #[cfg(feature = "config_file")]
+    evaluation_formats: BTreeMap<(String, String), RegisteredEvaluationFormat>,
     invalid: Option<String>,
 }
 
@@ -70,8 +93,91 @@ impl ExtensionApi {
         }
     }
 
-    /// Finish registration before activating the host. Any prior error prevents
-    /// consumption, even when the caller ignored that registration error.
+    /// Register one exact native evaluation JSON format. Duplicate ids poison
+    /// the registration set even when the caller ignores the error.
+    #[cfg(feature = "config_file")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "config_file")))]
+    pub fn register_evaluation_format(
+        &mut self,
+        adapter: Arc<dyn EvaluationFormatAdapter>,
+    ) -> Result<()> {
+        if let Some(message) = &self.invalid {
+            return Err(BitrouterError::bad_request(message.clone()));
+        }
+        let descriptor = adapter.descriptor();
+        if descriptor.extension_id.trim().is_empty()
+            || descriptor.adapter_id.trim().is_empty()
+            || descriptor.revision == 0
+        {
+            return self.reject(
+                "evaluation format descriptor has an empty id or zero revision".to_owned(),
+            );
+        }
+        let key = (descriptor.extension_id, descriptor.adapter_id);
+        if self.evaluation_formats.contains_key(&key) {
+            return self.reject(format!(
+                "duplicate evaluation format registration '{}/{}'",
+                key.0, key.1
+            ));
+        }
+        self.evaluation_formats.insert(
+            key,
+            RegisteredEvaluationFormat {
+                revision: descriptor.revision,
+                adapter,
+            },
+        );
+        Ok(())
+    }
+
+    /// Resolve a configured evaluation format only on an exact revision match.
+    #[cfg(feature = "config_file")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "config_file")))]
+    pub fn evaluation_format(
+        &self,
+        format: &OperationFormatConfig,
+    ) -> Result<Arc<dyn EvaluationFormatAdapter>> {
+        let key = (format.extension.clone(), format.adapter.clone());
+        let Some(registered) = self.evaluation_formats.get(&key) else {
+            return Err(BitrouterError::bad_request(format!(
+                "missing evaluation format extension '{}/{}@{}'",
+                key.0, key.1, format.revision
+            )));
+        };
+        if registered.revision != format.revision {
+            return Err(BitrouterError::bad_request(format!(
+                "evaluation format revision mismatch for '{}/{}': configured {}, registered {}",
+                key.0, key.1, format.revision, registered.revision
+            )));
+        }
+        Ok(Arc::clone(&registered.adapter))
+    }
+
+    /// Fail active evaluation bindings before database assembly or dispatch.
+    /// Valid registrations without a configured provider remain inactive.
+    #[cfg(feature = "config_file")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "config_file")))]
+    pub fn validate_evaluation_bindings(&self, config: &Config) -> Result<()> {
+        config.validate_operations()?;
+        for (provider_id, provider) in &config.providers {
+            if !provider.active {
+                continue;
+            }
+            if let Some(operation) = provider.operations.get(&InferenceOperation::Evaluate) {
+                self.evaluation_format(&operation.format).map_err(|error| {
+                    BitrouterError::bad_request(format!(
+                        "provider '{provider_id}' evaluation binding: {error}"
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Finish registration before activating the host and return the
+    /// request-check subset. The host can retain a clone for evaluation-format
+    /// lookup. Any prior error prevents consumption, even when the caller
+    /// ignored that registration error.
     pub fn into_registrations(self) -> Result<HashMap<String, Registration>> {
         match self.invalid {
             Some(message) => Err(BitrouterError::bad_request(message)),

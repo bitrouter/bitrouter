@@ -25,6 +25,8 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::{BitrouterError, Result};
+use crate::evaluation::EvaluationQuestionType;
+use crate::inference::InferenceOperation;
 use crate::language_model::HttpTimeouts;
 use crate::language_model::routing::SortOrder;
 use crate::language_model::types::{
@@ -188,6 +190,84 @@ impl Config {
     /// resolution so infallible table constructors cannot bypass validation.
     pub fn validate_router_config(&self) -> Result<()> {
         router::validate_router_config(self)
+    }
+
+    /// Validate operation declarations without requiring a runtime extension.
+    /// Binding a declared format is a separate host-assembly step.
+    pub fn validate_operations(&self) -> Result<()> {
+        for (provider_id, provider) in &self.providers {
+            for (operation, config) in &provider.operations {
+                if *operation == InferenceOperation::Generate {
+                    return Err(BitrouterError::bad_request(format!(
+                        "provider '{provider_id}' must configure generation with api_protocol"
+                    )));
+                }
+                if !config.endpoint.starts_with('/')
+                    || config.endpoint.starts_with("//")
+                    || config.endpoint.contains("..")
+                    || config.endpoint.contains('?')
+                    || config.endpoint.contains('#')
+                {
+                    return Err(BitrouterError::bad_request(format!(
+                        "provider '{provider_id}' has an invalid {operation:?} endpoint"
+                    )));
+                }
+                if config.format.extension.is_empty()
+                    || config.format.adapter.is_empty()
+                    || config.format.revision == 0
+                {
+                    return Err(BitrouterError::bad_request(format!(
+                        "provider '{provider_id}' has an invalid {operation:?} format"
+                    )));
+                }
+            }
+            for model in &provider.models {
+                let Some(operations) = &model.operations else {
+                    continue;
+                };
+                if operations.is_empty() {
+                    return Err(BitrouterError::bad_request(format!(
+                        "provider '{provider_id}' model '{}' has no declared operations",
+                        model.id
+                    )));
+                }
+                for (operation, limits) in operations {
+                    if *operation == InferenceOperation::Evaluate {
+                        if !provider.operations.contains_key(operation) {
+                            return Err(BitrouterError::bad_request(format!(
+                                "provider '{provider_id}' model '{}' has no evaluate endpoint",
+                                model.id
+                            )));
+                        }
+                        if limits.question_types.is_empty()
+                            || limits
+                                .question_types
+                                .iter()
+                                .copied()
+                                .collect::<HashSet<_>>()
+                                .len()
+                                != limits.question_types.len()
+                            || limits.max_choice_options.is_some_and(|limit| limit < 2)
+                            || limits.max_score_levels.is_some_and(|limit| limit < 2)
+                        {
+                            return Err(BitrouterError::bad_request(format!(
+                                "provider '{provider_id}' model '{}' has invalid evaluate limits",
+                                model.id
+                            )));
+                        }
+                    } else if !limits.question_types.is_empty()
+                        || limits.max_choice_options.is_some()
+                        || limits.max_score_levels.is_some()
+                    {
+                        return Err(BitrouterError::bad_request(format!(
+                            "provider '{provider_id}' model '{}' attaches evaluation limits to generate",
+                            model.id
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Resolve a raw model selector through canonical routers and legacy
@@ -1166,6 +1246,9 @@ pub struct ProviderConfig {
     /// host-inferred default. A bare protocol string still parses to a
     /// one-element set, so single-protocol providers are unchanged.
     pub api_protocol: PatternMap<ProtocolList>,
+    /// Non-generation operation endpoints and their required native format.
+    /// Generation continues to use `api_protocol` unchanged.
+    pub operations: BTreeMap<InferenceOperation, ProviderOperationConfig>,
     /// Optional per-protocol base-URL override, keyed by protocol name
     /// ([`ApiProtocol::as_str`]). When one provider serves different protocols
     /// at different paths under a single host — e.g. OpenAI-style under
@@ -1322,6 +1405,7 @@ impl std::fmt::Debug for ProviderConfig {
             )
             .field("headers", &self.headers.keys().collect::<Vec<_>>())
             .field("api_protocol", &self.api_protocol)
+            .field("operations", &self.operations)
             .field("protocol_endpoints", &self.protocol_endpoints)
             .field("rate_limits", &self.rate_limits)
             .field("models", &self.models)
@@ -1344,6 +1428,7 @@ impl Default for ProviderConfig {
             api_key: String::new(),
             headers: BTreeMap::new(),
             api_protocol: PatternMap::new(),
+            operations: BTreeMap::new(),
             protocol_endpoints: HashMap::new(),
             rate_limits: PatternMap::new(),
             models: Vec::new(),
@@ -1488,6 +1573,10 @@ pub struct ProviderModel {
     /// upstream name (e.g. `anthropic/claude-sonnet-4.6` → `claude-sonnet-4-6`).
     #[serde(default)]
     pub provider_model_id: Option<String>,
+    /// Explicit supported operations. Absence retains legacy generation-only
+    /// behavior; an explicit map supports only its declared keys.
+    #[serde(default)]
+    pub operations: Option<BTreeMap<InferenceOperation, ModelOperationConfig>>,
     /// Per-model protocol override (highest precedence) — an ordered set of
     /// supported protocols, or a bare string for a single one.
     #[serde(default)]
@@ -1511,6 +1600,51 @@ pub struct ProviderModel {
     /// Provider/model request-shape quirks that do not change model semantics.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
+}
+
+impl ProviderModel {
+    /// Whether this concrete route supports the requested semantic operation.
+    pub fn supports_operation(&self, operation: InferenceOperation) -> bool {
+        self.operations
+            .as_ref()
+            .map_or(operation == InferenceOperation::Generate, |operations| {
+                operations.contains_key(&operation)
+            })
+    }
+}
+
+/// A non-generation provider operation's host-owned endpoint and format key.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderOperationConfig {
+    /// A relative path joined to the validated provider API base by the host.
+    pub endpoint: String,
+    /// Exact native format facet required to execute the operation.
+    pub format: OperationFormatConfig,
+}
+
+/// Identity of one compiled native format facet.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OperationFormatConfig {
+    /// Native extension package id.
+    pub extension: String,
+    /// Adapter id inside the extension.
+    pub adapter: String,
+    /// Exact format-contract revision.
+    pub revision: u32,
+}
+
+/// Constraints declared by one concrete model operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ModelOperationConfig {
+    /// Positively supported typed question kinds for `evaluate`.
+    pub question_types: Vec<EvaluationQuestionType>,
+    /// Optional provider limit on Choice option count.
+    pub max_choice_options: Option<usize>,
+    /// Optional provider limit on Score level count.
+    pub max_score_levels: Option<usize>,
 }
 
 /// An explicit virtual-model definition (Strategy 2).
@@ -1794,6 +1928,7 @@ where
         .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))?;
     resolve_derivations(&mut config)?;
     config.validate_router_config()?;
+    config.validate_operations()?;
     validate_policy_table(&config)?;
     validate_trajectory_config(&config.trajectory)?;
     validate_continuation_config(&config.continuation)?;
@@ -2033,6 +2168,9 @@ fn resolve_one_derivation(
     if child.api_protocol.is_empty() {
         child.api_protocol = parent.api_protocol.clone();
     }
+    if child.operations.is_empty() {
+        child.operations = parent.operations.clone();
+    }
     if child.headers.is_empty() {
         child.headers = parent.headers.clone();
     }
@@ -2118,6 +2256,7 @@ pub async fn discover_models(config: &mut Config) {
                     .map(|id| ProviderModel {
                         id,
                         provider_model_id: None,
+                        operations: None,
                         api_protocol: None,
                         rate_limits: None,
                         pricing: None,

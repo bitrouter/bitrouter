@@ -28,6 +28,127 @@ use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[path = "e2e/evaluation.rs"]
+mod evaluation;
+#[path = "e2e/evaluation_http.rs"]
+mod evaluation_http;
+
+#[tokio::test]
+async fn evaluation_only_model_rejected_on_all_generation_ingresses() -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let upstream = MockServer::start().await;
+    let raw = format!(
+        r#"
+inherit_defaults: false
+server:
+  skip_auth: true
+database:
+  url: "sqlite::memory:"
+providers:
+  typesafe:
+    api_base: {}
+    api_key: test-key
+    operations:
+      evaluate:
+        endpoint: /v1/systemone
+        format: {{ extension: fixture, adapter: decisions, revision: 1 }}
+    models:
+      - id: typesafe/jev-1.13
+        provider_model_id: jev-1.13.0
+        operations:
+          evaluate:
+            question_types: [noul, choice, score]
+  legacy:
+    api_base: {}
+    api_key: test-key
+    models:
+      - id: legacy/chat
+"#,
+        upstream.uri(),
+        upstream.uri()
+    );
+    let cfg = config::parse(&raw)?;
+    let runtime_home = tempfile::tempdir()?;
+    let config_path = runtime_home.path().join("bitrouter.yaml");
+    let assembled = bitrouter::assemble::build_app_with_registered_extensions(
+        &cfg,
+        Some(&config_path),
+        &evaluation::registered()?,
+        None,
+    )
+    .await?;
+    let state = AppState {
+        language_model: assembled
+            .app
+            .language_model()
+            .context("missing language model pipeline")?
+            .clone(),
+        mcp: assembled.app.mcp().cloned(),
+        skip_auth: assembled.app.skip_auth(),
+        metrics_renderer: assembled.app.metrics_renderer().cloned(),
+        prompt_transforms: assembled.app.prompt_transforms().to_vec(),
+    };
+    let server = TestServer::new(build_router(state));
+    let model = "typesafe/jev-1.13";
+    let requests = [
+        (
+            "/v1/chat/completions".to_string(),
+            json!({"model": model, "messages": [{"role": "user", "content": "hello"}]}),
+        ),
+        (
+            "/v1/messages".to_string(),
+            json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hello"}]}),
+        ),
+        (
+            "/v1/responses".to_string(),
+            json!({"model": model, "input": "hello"}),
+        ),
+        (
+            format!("/v1beta/models/{model}:generateContent"),
+            json!({"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}),
+        ),
+    ];
+    for (path, body) in requests {
+        let response = server.post(&path).json(&body).await;
+        assert_eq!(
+            response.status_code(),
+            axum::http::StatusCode::CONFLICT,
+            "{path}"
+        );
+        let envelope: Value = response.json();
+        assert_eq!(
+            envelope["error"]["code"], "model_operation_mismatch",
+            "{path}"
+        );
+    }
+    assert!(
+        upstream
+            .received_requests()
+            .await
+            .context("upstream request log unavailable")?
+            .is_empty()
+    );
+    let models = server.get("/v1/models").await;
+    models.assert_status_ok();
+    let listing: Value = models.json();
+    assert!(
+        !listing["data"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().any(|entry| entry["id"] == model))
+    );
+    assert!(
+        listing["data"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().any(|entry| {
+                entry["id"] == "legacy/chat"
+                    && entry["providers"] == json!(["legacy"])
+                    && entry["operations"] == json!(["generate"])
+            }))
+    );
+    Ok(())
+}
+
 /// A file migration must preserve real policy routing, request overrides and
 /// settlement through every supported inbound protocol, including SSE.
 #[tokio::test]

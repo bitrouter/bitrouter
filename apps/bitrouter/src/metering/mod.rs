@@ -22,6 +22,7 @@
 
 pub mod db;
 pub mod entities;
+pub mod evaluation;
 pub mod pricing;
 pub mod reader;
 pub mod reconciliation;

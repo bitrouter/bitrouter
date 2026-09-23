@@ -8032,6 +8032,42 @@
       "release_date": "2026-09-21"
     },
     {
+      "description": "Typed evaluation model. Routing requires the native System One format extension in the opt-in evaluation host; stock bro does not expose /v1/evaluate.",
+      "id": "typesafe/jev-1.13",
+      "input_modalities": [
+        "text"
+      ],
+      "name": "Jev 1.13",
+      "operations": [
+        "evaluate"
+      ],
+      "providers": [
+        {
+          "operations": {
+            "evaluate": {
+              "max_choice_options": 255,
+              "max_score_levels": 10,
+              "question_types": [
+                "noul",
+                "choice",
+                "score"
+              ]
+            }
+          },
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.042
+            },
+            "output_tokens": {
+              "text": 0.0
+            }
+          },
+          "provider": "typesafe",
+          "provider_model_id": "jev-1.13.0"
+        }
+      ]
+    },
+    {
       "deprecation_date": "2026-10-22",
       "family": "grok",
       "id": "x-ai/grok-4.20",

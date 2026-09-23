@@ -131,20 +131,25 @@ Because the schema is the contract, it is written down rather than inferred from
 
 ### Extension authors and host assembly
 
-New request-check authors use an ordinary function accepting
+Extension authors use an ordinary function accepting
 `bitrouter_sdk::extension::ExtensionApi` and call
-`request_check(id, revision, callback)`. Business inputs and decisions live in
-`extension::request_check`, without a wire envelope. The custom host passes the
+`request_check(id, revision, callback)` or `register_evaluation_format(adapter)`.
+Request-check business inputs and decisions live in `extension::request_check`;
+the typed evaluation render/parse contract lives in
+`extension::evaluation_format`. Neither receives a provider credential or
+unrestricted host context. The custom host passes the
 registration function to `host::serve_with_extensions` for the shared foreground
 daemon lifecycle, or `assemble::build_app_with_extensions` for low-level embedding.
 Fragment and coverage types also live in `extension::request_check`.
 Router bindings
 control execution scope and order; registration is not global activation.
-Beta supports compiled extensions only: no HTTP checker service, wire crate,
+Beta supports compiled extensions only: no HTTP checker service or remote-checker wire crate,
 probe command, runtime installation or extra extension API crate.
 
-Valid unconfigured registrations are inactive with sorted startup diagnostics;
-configured instances require a matching registration even without bindings.
+Valid unconfigured request-check registrations are inactive with sorted startup
+diagnostics; configured instances require a matching registration even without
+router bindings. Active provider evaluation routes likewise require an exact
+registered format revision before database assembly.
 The regex example uses the same inference, local/remote management, reload and
 shutdown path as `bro serve`. Restart custom hosts with their own executable;
 the example does not implement the default CLI's background-launch protocol.
@@ -153,6 +158,12 @@ The SDK entry does not expose host builders, migrations, credentials or mutable
 pipeline context. The host retains resource bounds, fixed binding identity and
 bounded content-free tracing. Synchronous callbacks cannot be forcibly
 terminated by deadlines; they are trusted in-process code.
+
+The first evaluation format is `system-one/json@1` in
+[`extensions/system-one/`](../extensions/system-one/README.md), verified for the
+TypeSafe Jev provider binding. The opt-in `bro-evaluate` binary links it but
+uses the same foreground host, management, reload, and shutdown path; stock
+`bro` links no evaluation format and does not expose `/v1/evaluate`.
 
 Legacy `Plugin` / `AppBuilder::plugin` and optional `GuardrailsPlugin` retain
 custom-host global, stream/output and migration semantics. Input-only checks do

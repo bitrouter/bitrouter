@@ -15,6 +15,9 @@
 //! 4. Providers carry a [`ProviderClass`]; the auto-cascade orders by it.
 //! 5. A provider is activated **only if its credentials are present**, except
 //!    BitRouter Cloud which may authenticate through the local OAuth flow.
+//! 6. A registry-only native evaluation route is auto-added only when its
+//!    exact format facet is registered by this host. Explicit declarations
+//!    remain visible to startup validation and fail if their facet is absent.
 //!
 //! Precedence is conservative: the merge never overwrites a field the user set
 //! in `bitrouter.yaml`. The providers it configures are no longer compiled-in
@@ -27,12 +30,14 @@ use bitrouter_sdk::config::{
     Config, Pattern, PatternMap, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig,
     ProviderModel, RateLimit, RegistryConfig, env_lookup, substitute_with,
 };
+use bitrouter_sdk::extension::ExtensionApi;
 use bitrouter_sdk::language_model::types::ProtocolList;
 
 use crate::registry::cache::DiskCache;
 use crate::registry::fetch::fetch_registry;
 use crate::registry::types::{
-    Billing, RegistryData, RegistryKind, RegistryPricing, RegistryProvider, RegistryRateLimits,
+    Billing, ProtocolSet, RegistryData, RegistryKind, RegistryPricing, RegistryProvider,
+    RegistryRateLimits,
 };
 
 /// The provider id of the hosted BitRouter Cloud gateway.
@@ -94,12 +99,31 @@ pub fn cached_registry() -> Option<RegistryData> {
 /// config changes nothing (every write is guarded by an "is it empty / unset"
 /// check).
 pub fn apply_registry(config: &mut Config, data: &RegistryData) {
+    apply_registry_with_extensions(config, data, &ExtensionApi::new());
+}
+
+/// Merge registry routes executable by this host. Explicitly configured
+/// providers are still merged and validated at assembly, so a missing native
+/// facet cannot silently disable an operator-declared active route.
+pub fn apply_registry_with_extensions(
+    config: &mut Config,
+    data: &RegistryData,
+    extensions: &ExtensionApi,
+) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
     for provider in &data.providers {
         // Principle #2: merge every public, active registry provider.
         if !provider.is_active() || !provider.is_mergeable() {
+            continue;
+        }
+        if !config.providers.contains_key(&provider.name)
+            && provider
+                .operations
+                .values()
+                .any(|operation| extensions.evaluation_format(&operation.format).is_err())
+        {
             continue;
         }
         merge_provider(config, provider);
@@ -154,6 +178,9 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         }
         if existing.models.is_empty() {
             existing.models = build_models(provider);
+        }
+        if existing.operations.is_empty() {
+            existing.operations = provider.operations.clone();
         }
         if existing.api_base.is_empty()
             && let Some(api_base) = &provider.api_base
@@ -216,6 +243,7 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         api_key,
         api_base,
         api_protocol: protocol_map.unwrap_or_default(),
+        operations: provider.operations.clone(),
         protocol_endpoints: protocol_endpoints(provider),
         models,
         class: Some(class),
@@ -281,7 +309,8 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
         .map(|m| ProviderModel {
             id: m.id.clone(),
             provider_model_id: Some(m.provider_model_id.clone()),
-            api_protocol: Some(m.api_protocol.to_protocol_list()),
+            api_protocol: m.api_protocol.as_ref().map(ProtocolSet::to_protocol_list),
+            operations: m.operations.clone(),
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
             capabilities: m.capabilities.clone(),
@@ -345,6 +374,7 @@ mod tests {
     fn provider(name: &str) -> RegistryProvider {
         RegistryProvider {
             name: name.to_string(),
+            operations: Default::default(),
             display_name: None,
             api_base: Some(format!("https://{name}.example/v1")),
             api_protocol: Vec::new(),
@@ -352,7 +382,8 @@ mod tests {
             models: vec![RegistryModel {
                 id: "deepseek/deepseek-v3.2".to_string(),
                 provider_model_id: "deepseek-v3.2".to_string(),
-                api_protocol: ProtocolSet::One(RegistryProtocol::Openai),
+                operations: None,
+                api_protocol: Some(ProtocolSet::One(RegistryProtocol::Openai)),
                 pricing: Some(RegistryPricing {
                     input_tokens: Some(InputTokenPricing {
                         no_cache: Some(0.27),
@@ -377,6 +408,137 @@ mod tests {
             byok: Some(true),
             billing: Billing::UsageToken,
         }
+    }
+
+    #[test]
+    fn evaluation_operation_metadata_survives_registry_merge_without_generation_protocol()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_sdk::config::{
+            ModelOperationConfig, OperationFormatConfig, ProviderOperationConfig,
+        };
+        use bitrouter_sdk::evaluation::EvaluationQuestionType;
+        use bitrouter_sdk::inference::InferenceOperation;
+
+        let mut registry_provider = provider("regtestprov");
+        registry_provider.operations.insert(
+            InferenceOperation::Evaluate,
+            ProviderOperationConfig {
+                endpoint: "/v1/evaluate".to_string(),
+                format: OperationFormatConfig {
+                    extension: "test-extension".to_string(),
+                    adapter: "test-format".to_string(),
+                    revision: 1,
+                },
+            },
+        );
+        registry_provider.models[0].api_protocol = None;
+        registry_provider.models[0].operations = Some(std::collections::BTreeMap::from([(
+            InferenceOperation::Evaluate,
+            ModelOperationConfig {
+                question_types: vec![EvaluationQuestionType::Noul],
+                max_choice_options: None,
+                max_score_levels: None,
+            },
+        )]));
+        let mut config = Config::default();
+        config.providers.insert(
+            "regtestprov".to_string(),
+            ProviderConfig {
+                api_key: "test-key".to_string(),
+                active: true,
+                ..ProviderConfig::default()
+            },
+        );
+        merge_provider(&mut config, &registry_provider);
+        config.validate_operations()?;
+        let merged = &config.providers["regtestprov"];
+        assert!(merged.models[0].api_protocol.is_none());
+        assert!(merged.models[0].supports_operation(InferenceOperation::Evaluate));
+        assert!(!merged.models[0].supports_operation(InferenceOperation::Generate));
+        assert!(bitrouter_sdk::config::routing_table::list_models_for(&config).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn auto_registry_merge_requires_a_registered_native_format()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use bitrouter_sdk::config::{
+            ModelOperationConfig, OperationFormatConfig, ProviderOperationConfig,
+        };
+        use bitrouter_sdk::evaluation::{
+            EvaluationQuestionType, EvaluationRequest, EvaluationResult, EvaluationRoutingTarget,
+        };
+        use bitrouter_sdk::extension::ExtensionApi;
+        use bitrouter_sdk::extension::evaluation_format::{
+            EvaluationFormatAdapter, EvaluationFormatDescriptor,
+        };
+        use bitrouter_sdk::inference::InferenceOperation;
+
+        struct TestFormat;
+        impl EvaluationFormatAdapter for TestFormat {
+            fn descriptor(&self) -> EvaluationFormatDescriptor {
+                EvaluationFormatDescriptor {
+                    extension_id: "fixture".into(),
+                    adapter_id: "decisions".into(),
+                    revision: 1,
+                }
+            }
+
+            fn render_request(
+                &self,
+                _request: &EvaluationRequest,
+                _target: &EvaluationRoutingTarget,
+            ) -> bitrouter_sdk::Result<serde_json::Value> {
+                Ok(serde_json::json!({}))
+            }
+
+            fn parse_response(
+                &self,
+                _body: serde_json::Value,
+                _request: &EvaluationRequest,
+            ) -> bitrouter_sdk::Result<EvaluationResult> {
+                Err(bitrouter_sdk::error::BitrouterError::bad_request(
+                    "not used by registry merge",
+                ))
+            }
+        }
+
+        let mut registered = ExtensionApi::new();
+        registered.register_evaluation_format(Arc::new(TestFormat))?;
+        let mut registry_provider = provider("regtestprov");
+        registry_provider.operations.insert(
+            InferenceOperation::Evaluate,
+            ProviderOperationConfig {
+                endpoint: "/v1/decide".into(),
+                format: OperationFormatConfig {
+                    extension: "fixture".into(),
+                    adapter: "decisions".into(),
+                    revision: 1,
+                },
+            },
+        );
+        registry_provider.models[0].api_protocol = None;
+        registry_provider.models[0].operations = Some(std::collections::BTreeMap::from([(
+            InferenceOperation::Evaluate,
+            ModelOperationConfig {
+                question_types: vec![EvaluationQuestionType::Noul],
+                ..ModelOperationConfig::default()
+            },
+        )]));
+        with_env("REGTESTPROV_API_KEY", Some("sk-test"), || {
+            let data = data_with(vec![registry_provider], vec![]);
+            let mut stock = Config::default();
+            apply_registry(&mut stock, &data);
+            assert!(!stock.providers.contains_key("regtestprov"));
+
+            let mut custom = Config::default();
+            apply_registry_with_extensions(&mut custom, &data, &registered);
+            assert!(custom.providers.contains_key("regtestprov"));
+            assert!(custom.validate_operations().is_ok());
+        });
+        Ok(())
     }
 
     #[test]
@@ -795,6 +957,7 @@ mod tests {
         user.models = vec![ProviderModel {
             id: "custom/model".to_string(),
             provider_model_id: None,
+            operations: None,
             api_protocol: None,
             rate_limits: None,
             pricing: None,

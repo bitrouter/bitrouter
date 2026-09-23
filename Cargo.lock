@@ -667,6 +667,7 @@ dependencies = [
  "bitrouter-guardrails",
  "bitrouter-providers",
  "bitrouter-sdk",
+ "bitrouter-system-one-format",
  "bitrouter-telemetry",
  "bitrouter-tui",
  "chrono",
@@ -706,6 +707,18 @@ dependencies = [
  "uuid",
  "vt100",
  "wiremock",
+]
+
+[[package]]
+name = "bitrouter-evaluation-host"
+version = "1.0.0-alpha.33"
+dependencies = [
+ "anyhow",
+ "bitrouter",
+ "bitrouter-sdk",
+ "bitrouter-system-one-format",
+ "clap",
+ "tokio",
 ]
 
 [[package]]
@@ -782,6 +795,15 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "bitrouter-system-one-format"
+version = "1.0.0-alpha.33"
+dependencies = [
+ "bitrouter-sdk",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
