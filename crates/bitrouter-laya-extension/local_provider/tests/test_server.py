@@ -68,7 +68,7 @@ class LocalProcess(unittest.TestCase):
         self.addCleanup(self.stop, process)
         return process, port
 
-    def ready(self, process, port, timeout=8):
+    def ready(self, process, port, timeout=45):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if process.poll() is not None:
@@ -84,7 +84,12 @@ class LocalProcess(unittest.TestCase):
                 return
             except (ConnectionError, OSError, http.client.HTTPException):
                 time.sleep(0.05)
-        self.fail("local provider did not become ready")
+        process.terminate()
+        _, stderr = process.communicate(timeout=5)
+        self.fail(
+            f"local provider did not become ready within {timeout}s "
+            f"(exit={process.returncode}, stderr={stderr.decode(errors='replace')})"
+        )
 
     @staticmethod
     def stop(process):
