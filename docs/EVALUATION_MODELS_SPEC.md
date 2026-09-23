@@ -1,11 +1,11 @@
 # First-class evaluation models through `/v1/evaluate`
 
 Status: **Phases 0–1 passed local and hosted CI. The revised format-first
-Phase 2 implementation and shared extension-host integration passed local
-deterministic checks; hosted CI and the credentialed TypeSafe smoke test remain
-pending. Report this as deterministic integration, not Phase 2 completion.
-Laya prototype evidence is retained as history; Laya is not in the current
-delivery scope. None of these results establishes production readiness.**
+Phase 2 implementation and shared extension-host integration passed local and
+hosted deterministic checks. The credentialed TypeSafe smoke test remains
+pending, so this is deterministic integration, not Phase 2 completion. Laya
+prototype evidence is retained as history; Laya is not in the current delivery
+scope. None of these results establishes production readiness.**
 
 Date: 2026-09-23
 
@@ -1156,6 +1156,18 @@ credentialed TypeSafe smoke test was not run. The old provider-named crate and
 parallel host path also predate integration with main's shared extension API.
 These results are regression evidence, not a pass for the revised Phase 2 or
 production proof.
+
+**Revised format-first deterministic evidence (2026-09-23):** implementation
+commit `cee9fa74` passed local `cargo nextest run --all-features` with 3,586
+tests passed and 23 intentional skips. Strict workspace Clippy, formatting,
+rustdoc with warnings denied, doctests, registry validation/build/freshness,
+and whitespace checks passed. The final shared-host regression pair passed
+after its last test edit. [PR #938 hosted CI](https://github.com/bitrouter/bitrouter/pull/938)
+passed Linux, macOS, and Windows tests and Clippy, plus the applicable MSRV,
+feature-isolation, dist, documentation, SDK API, and repository checks. The
+repository check initially failed before checkout because the runner could not
+verify GitHub's TLS certificate; retry attempt 2 passed. The credentialed
+TypeSafe smoke test remains unrun, so the Phase 2 real-provider gate is open.
 
 ### Phase 3 — deferred additional format or provider
 
