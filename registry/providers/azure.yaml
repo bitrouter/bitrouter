@@ -212,6 +212,33 @@ models:
         cache_write: 12.5
       output_tokens:
         text: 50
+  - id: anthropic/claude-opus-5.5
+    provider_model_id: claude-opus-5-5
+    pricing:
+      input_tokens:
+        no_cache: 4
+        cache_read: 0.2
+        cache_write: 5
+      output_tokens:
+        text: 20
+  - id: openai/gpt-6-luna
+    provider_model_id: gpt-6-luna
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+        cache_write: 0.125
+      output_tokens:
+        text: 0.5
+  - id: openai/gpt-6-sol
+    provider_model_id: gpt-6-sol
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
 auto_sync:
   feed: models_dev
   key: azure
