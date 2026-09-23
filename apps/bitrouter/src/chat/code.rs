@@ -738,7 +738,8 @@ impl Runtime {
             );
         } else if action == "commands" {
             self.state.set_notice(
-                "Ctrl-P opens commands; slash completion labels each command's owner".to_string(),
+                "Use / to search Code commands; results identify BitRouter, agent, and template owners"
+                    .to_string(),
             );
         } else {
             self.report(action, args);
@@ -1393,6 +1394,11 @@ impl Runtime {
             .set_typed_commands(typed.clone(), self.templates.clone());
         {
             for command in typed {
+                // These reports already have descriptive launcher rows above.
+                // Keep their direct slash names in the resolver.
+                if matches!(command.action, "status" | "list_models" | "route") {
+                    continue;
+                }
                 let mut row = Command::new(
                     format!("/{}", command.name),
                     command.summary,
