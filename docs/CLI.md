@@ -65,8 +65,10 @@ process starts anyway. Two places report it:
   daemon's `App` but all of which read the same config. This is the path that
   matters: validation is opt-in, the runtime always runs.
 
-The ids the binary reads are `bitrouter-guardrails`, `bitrouter-policy` and
-`bitrouter-telemetry`. A dead sub-key under a live id is reported too, so a
+The supported ids the binary reads are `bitrouter-policy` and
+`bitrouter-telemetry`. The removed `plugins.bitrouter-guardrails` key instead
+fails validation and activation, including empty/null values; see
+[the explicit migration guide](GUARDRAILS_EXTENSION.md). A dead sub-key under a live id is reported too, so a
 rename that carries an obsolete setting along with it is not silent either.
 
 **Renamed in this release** — the old names are ignored, and the daemon warns
@@ -1931,34 +1933,13 @@ rubric editing and existing-block reconciliation through `/evolution` as
 described above. These controls do not establish that automatic promotion is
 safe on real coding tasks.
 
-## Request-check inspection
+## Request-check extensions
 
-`bro checks` inspects checker configuration, running bindings and actual use on
-the selected daemon. `bro checks probe <checker>` sends a fixed synthetic input
-using that daemon's configured credential. Connectivity/protocol success does
-not count as a real request invocation. Both local IPC and remote control query
-the same runtime; remote probes require `control:read` and cannot specify an
-arbitrary URL or input.
-
-`bro checks receipts` lists bounded process-local receipts.
-`bro checks receipt <request-id-or-receipt-id>` looks up an exact receipt id, or
-the newest retained attempt for a request id with its retained-match count. HTTP gateway responses
-expose `x-bitrouter-request-id` for correlation, including checker rejections.
-The receipt separates check decisions, upstream dispatch, execution outcome and
-server-observable delivery. It does not prove that the client consumed a reply.
-
-The default retention is 4,096 records and 15 minutes after completion, with
-completed entries eligible for earlier capacity eviction. Active entries are
-reserved until termination. Receipts disappear on restart and do not depend on
-an exporter. Unknown/old-process lookup must not be interpreted as non-execution
-or success. Existing `bro requests` remains the settled cost/usage interface.
-
-Checkers and router check bindings require restart after changes. Static
-validation and runtime credential readiness are distinct from connectivity.
-See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for the HTTP contract,
-coverage boundary and acceptance ledger.
-
-Actual-use inventory is derived from the latest started invocation's retained
-receipt. When that receipt expires or is evicted, the view reports no retained
-evidence; it does not substitute an older allow or claim the checker was never
-used. Synthetic probe history is separate from receipt retention.
+There is no `bro checks` command or request-check receipt API. Validate native
+declarations with `bro config validate`; custom-host activation additionally
+verifies compiled registrations and revisions. Checker declarations and router
+bindings require restart after changes. Startup logs and bounded invocation
+tracing provide content-free diagnostics; absence of telemetry is not proof that
+a check did not run. Existing `bro requests` remains the settled cost/usage
+interface. See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for the execution
+and coverage contract.

@@ -205,7 +205,7 @@ pub fn resolve_config_with(
 /// reach for a `Config` — every call site goes through here so the
 /// zero-config story is wired in uniformly.
 pub async fn load_config(source: &ConfigSource) -> Result<bitrouter_sdk::config::Config> {
-    match source {
+    let config = match source {
         ConfigSource::File(path) => bitrouter_sdk::config::load(path)
             .await
             .with_context(|| format!("loading {}", path.display())),
@@ -217,7 +217,9 @@ pub async fn load_config(source: &ConfigSource) -> Result<bitrouter_sdk::config:
             crate::cloud::enable_in_zero_config(&mut cfg);
             Ok(cfg)
         }
-    }
+    }?;
+    crate::assemble::validate_host_configuration(&config)?;
+    Ok(config)
 }
 
 /// Ensure the bitrouter home directory exists, creating it with `0o700`

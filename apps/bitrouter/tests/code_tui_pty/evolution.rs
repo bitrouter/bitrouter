@@ -39,7 +39,6 @@ async fn serve_control(
         routing: assembled.routing_table.clone(),
         policy: assembled.policy_runtime.clone(),
         observe: assembled.observe.clone(),
-        request_checks: Some(assembled.request_checks.clone()),
     };
     let server = ControlServer(tokio::spawn(
         bitrouter::daemon::run_control_socket_with_acp_runtime_and_administration(

@@ -144,8 +144,8 @@ jobs:
             retries: "0"
             targets: >-
               --test acp --test acp_checkpoints --test cloud_api --test daemon --test e2e
-              --test full_stack --test configuration_state
-              --test router_continuation --test router_migration_cli --test request_checks
+              --test full_stack --test configuration_state --test extension_host
+              --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration
           - shard: observability
             retries: "0"
             targets: >-
@@ -260,6 +260,14 @@ jobs:
       - run: cargo check -p bitrouter-sdk --no-default-features
       - run: cargo check -p bitrouter-sdk --no-default-features --features config_file
       - run: cargo check -p bitrouter-guardrails
+      - run: cargo check -p bitrouter-guardrails --no-default-features --features sdk
+      - name: guardrails and the default host have separate dependency trees
+        shell: bash
+        run: |
+          cargo tree --locked -p bitrouter -e normal,build --prefix none > host-tree.txt
+          if grep -Eq '^bitrouter-guardrails v' host-tree.txt; then
+            echo '::error::default bro links the guardrails implementation'; exit 1
+          fi
       - run: cargo check -p bitrouter-sdk --no-default-features --features server
       - run: cargo check -p bitrouter-sdk --no-default-features --features acp
       - run: cargo check -p bitrouter-telemetry --no-default-features --features otel-http
@@ -344,15 +352,12 @@ jobs:
         # a real shipped promise and this step guards it: pull the hook crate
         # on its own and no axum, no OpenTelemetry.
         #
-        # It is NOT a claim about building this workspace. `apps/bitrouter`
-        # enables `bitrouter-telemetry/otel-http` unconditionally, and cargo
-        # unifies features across a workspace build, so `cargo build
-        # --workspace` DOES link the OTel stack into every crate here —
-        # `cargo tree --workspace -e normal -i opentelemetry` lists
-        # bitrouter-guardrails among its dependents. Both facts are true at
-        # once; they answer different questions. Do not "strengthen" this step
-        # to assert the workspace case, and do not read its green as evidence
-        # that the stack is absent from a local `cargo build`.
+        # It is NOT a claim that the workspace product has no OTel stack:
+        # `apps/bitrouter` enables `bitrouter-telemetry/otel-http` explicitly.
+        # Cargo unifies enabled features of shared dependencies in a workspace
+        # build. These checks describe each listed package resolved alone;
+        # the separate host/service tree checks above guard their actual
+        # product boundary, and cargo-dist builds each application separately.
         #
         # `bitrouter-sdk` is in the crate loop now that the OTel stack is not
         # its to carry: `cargo add bitrouter-sdk` must pull neither.
