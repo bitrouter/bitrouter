@@ -12,34 +12,28 @@
 
 **The minimal interpretable model router that learns & adapts to your agent workflows.**
 
-> **You're tokenmaxxing in production.**
-> Every step of every loop bills at frontier prices — file reads, tool calls, sub-agent hops, retries. Most don't need it. BitRouter routes each call, tool, and agent to the cheapest path that still reaches the goal, then turns the outcomes you admit into a policy proposal you control.
-
-Works with any harness, any model, any loop. Cost is live today — latency and
-accuracy are next.
-
-## Replace the API. Keep the workflow.
-
-Point any OpenAI-compatible agent at BitRouter, choose `bitrouter/auto`, and
-keep working. Run the router locally or use BitRouter Cloud without running a
-daemon:
+Point any OpenAI-compatible agent at your local BitRouter instance, choose `bitrouter/auto`, and keep working.
 
 ```diff
 - OPENAI_BASE_URL=https://api.openai.com/v1
 + OPENAI_BASE_URL=http://localhost:4356/v1
 ```
 
-For Cloud, use `https://api.bitrouter.ai/v1` instead. Set the request model to
-`bitrouter/auto`.
+Then set the request model to:
 
-Give your coding agent the `/bitrouter` skill so it can install, configure,
-migrate to, and troubleshoot BitRouter for you:
+```text
+bitrouter/auto
+```
+
+BitRouter runs locally and exposes an OpenAI-compatible API, so existing agents and tools can switch over with minimal changes.
+
+You can also give your coding agent the `/bitrouter` skill to install, configure, migrate to, and troubleshoot BitRouter for you:
 
 ```bash
 npx skills add bitrouter/bitrouter
 ```
 
-**[Try BitRouter Cloud →](https://cloud.bitrouter.ai)** · **[Install locally ↓](#install)**
+> **[Try BitRouter Cloud →](https://cloud.bitrouter.ai):** Don’t want to run the router locally? Use `https://api.bitrouter.ai/v1` as your base URL instead.
 
 ## Core features
 
@@ -70,26 +64,21 @@ Keep the clients and workflows you already use:
 
 ## Benchmarks
 
-In the latest Terminal-Bench 2.1 study, the G1 routed policy reduced frozen-price
-nominal API cost per accepted valid-path trial by **40.93%** versus the pooled
-`gpt-5.6-sol` baseline. On the strict 80-task common-valid set, observed reward
-was **81.25%** versus **81.56%** for the baseline (−0.31 pp).
+On **Terminal-Bench 2.1**, BitRouter cut API cost by **40.9%** while achieving nearly the same reward as using `gpt-5.6-sol` alone.
 
-| Configuration | Common-valid trials | Valid-cases reward | Reward Δ | Valid-path cost / trial | Cost vs baseline |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `gpt-5.6-sol` baseline (B1–B4 pooled) | 320 | 81.5625% | baseline | $0.830123 | baseline |
-| **BitRouter G1:** GPT-5.6 + Kimi K3 + DeepSeek V4 Flash | 400 | **81.2500%** | −0.31 pp | **$0.490317** | **−40.93%** |
-| BitRouter G3: GPT-5.6 + DeepSeek V4 Pro + Flash | 400 | 75.5000% | −6.06 pp | $0.497511 | −40.07% |
-| Fixed-proportion random mix of the G1 models | 400 | 76.5000% | −5.06 pp | $0.552670 | −33.42% |
+| Configuration | Reward | Cost / trial | Cost savings |
+| --- | ---: | ---: | ---: |
+| `gpt-5.6-sol` only | **81.56%** | $0.830 | — |
+| **BitRouter** | **81.25%** | **$0.490** | **40.9%** |
+| Random model mix | 76.50% | $0.553 | 33.4% |
 
-All valid-case figures use the same strict 80-task intersection; the baseline
-has four replicates per task and the routed and random groups have five. Cost
-is accepted valid-path API usage at frozen prices—not provider billing or total
-workflow cost. This is a research artifact, not an official Terminal-Bench
-submission. Read the [full study and limitations](benchmarks/002-2026-09-07-tbench-v2.1-router-random-study.md)
-before citing it; the raw evidence and reproducible joins are in the
-[`BitRouterAI/benchmarks`](https://huggingface.co/datasets/BitRouterAI/benchmarks)
-dataset.
+BitRouter dynamically routed between **GPT-5.6, Kimi K3, and DeepSeek V4 Flash**, retaining nearly all of GPT-5.6’s task performance while substantially reducing model cost.
+
+The random baseline used the same model mix, showing that the savings come from **routing decisions—not simply using cheaper models**.
+
+Results use the strict 80-task common-valid set and frozen API prices. This is a research benchmark, not an official Terminal-Bench submission.
+
+See the [full study and limitations](benchmarks/002-2026-09-07-tbench-v2.1-router-random-study.md) and the [`BitRouterAI/benchmarks`](https://huggingface.co/datasets/BitRouterAI/benchmarks) dataset for reproducible results.
 
 ## Install
 
@@ -100,22 +89,19 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bitrouter/bitrouter/rel
 # Homebrew
 brew install bitrouter/tap/bitrouter
 
+# Windows
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.31/bitrouter-installer.ps1 | iex"
+
 # npm
 npm install -g bitrouter
-```
 
-<details>
-<summary>From source (Cargo)</summary>
-
-```bash
+# From source (Cargo)
 cargo install bitrouter
 ```
 
-</details>
+## Quick start
 
-## Quick start with `bro code`
-
-`bro code` is BitRouter's CLI workspace for coding-agent conversations. On the
+`bro code` (aka. BitRouter Orchestrator) is BitRouter's CLI workspace for coding-agent conversations. On the
 first run, `bro` guides you through setup and opens the default agent. Use
 `bro code` directly when you want to choose an agent or resume a session.
 
@@ -150,26 +136,8 @@ inside BitRouter's interface; `bro run <agent>` is the headless equivalent.
 See [`docs/CLI.md`](docs/CLI.md) for the complete command reference, session
 controls, flags, and config resolution.
 
-## Comparison
 
-Automatic model selection is no longer the differentiator — every router below
-picks a model for you. What separates them is **what the decision reads** and
-**whose data makes it better**. Almost all of them classify the prompt. BitRouter
-routes on the *loop step* — where the agent is in its trajectory, keyed by the
-last tool it called — and improves from evaluations you admit, into a lock file
-you own.
-
-|  | **BitRouter** | **[OpenRouter Auto](https://openrouter.ai/blog/announcements/introducing-the-new-auto-router/)** | **[Not Diamond Code](https://www.notdiamond.ai/blog/not-diamond-code-intelligent-model-routing-for-coding-agents)** | **[vLLM Semantic Router](https://github.com/vllm-project/semantic-router)** | **[LiteLLM Auto](https://docs.litellm.ai/docs/proxy/auto_routing_benchmark)** |
-| --- | --- | --- | --- | --- | --- |
-| **Routing signal** | **The loop step** — last tool called, over the agent trace | Prompt classified into ~30 task types | Session state, token counts, task complexity, KV-cache state | Prompt signals: classifiers, embeddings, keyword and metadata rules | Prompt embedding similarity to labeled example routes |
-| **Improves from** | **Your** admitted evaluation outcomes, per loop | The community's last-7-days spend across all of OpenRouter | Your implicit accept/reject feedback, in a hosted model | Router models you train offline and redeploy | Labeled examples plus one fitted score threshold |
-| **Optimizes** | Any objective you submit (cost validated today) | Cost tier vs. capability | Cost and quality jointly | Quality, cost, latency, privacy, safety | Cost vs. quality at a chosen threshold |
-| **Policy you own** | Git-owned `policy-lock.yaml` — readable, diffable, explicit publish | Vendor-side, tunable by knobs | Vendor-side | Config recipes plus trained artifacts | Proxy config plus fitted threshold |
-
-_OpenRouter Auto and Not Diamond are hosted services. BitRouter, vLLM Semantic
-Router, and LiteLLM are open-source and self-hostable; BitRouter is Rust._
-
-## Workflow templates
+## Workflow recipes
 
 Ready-made **policy specs** for common agentic workflows start in [`templates/auto-router/`](templates/auto-router/): a predictive `bitrouter/auto` / `bitrouter/auto:cost` ladder using GPT-5.6 as the strong tier, Kimi K3 as balanced, and DeepSeek V4 Pro as economy. Treat it as a starting point and evaluate it against your own loop before publishing a live policy.
 
