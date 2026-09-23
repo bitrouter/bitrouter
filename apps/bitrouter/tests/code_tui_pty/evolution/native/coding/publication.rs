@@ -36,10 +36,10 @@ fn fresh_session(
         .into_iter()
         .map(|session| session.native_session_id)
         .collect::<BTreeSet<_>>();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     code.pty.wait_for_text("Commands")?;
     let before = code.pty.checkpoint();
-    code.pty.paste("New session")?;
+    code.pty.paste("new")?;
     code.pty.send(b"\r")?;
     code.pty
         .wait_for_screen_inner(Some(&before), "fresh coding session", |screen| {

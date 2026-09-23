@@ -39,6 +39,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   Replaces the seven-view Code dashboard with a conversation, contextual
   pickers/inspectors, and agent/route/activity/attributed-cost status; defines
   shared interaction behavior, ACP boundaries, and acceptance criteria.
+- [`CODE_SLASH_COMMAND_UX_SPEC.md`](CODE_SLASH_COMMAND_UX_SPEC.md) — **implemented
+  locally.** Makes `/` the command input, preserves drafts on cancel,
+  removes default action hotkeys, and adds configurable bindings under
+  `/hotkeys`.
 - [`BACKGROUND_AGENT_UX_SPEC.md`](BACKGROUND_AGENT_UX_SPEC.md) — **implemented;
   locally verified.** Keeps foreground history in native scrollback,
   makes background-agent awareness and routine commands a persistent bottom

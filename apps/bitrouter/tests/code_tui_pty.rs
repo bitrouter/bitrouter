@@ -1487,7 +1487,16 @@ impl CodeFixture {
     fn close_to_composer(&mut self) -> Result<()> {
         let checkpoint = self.pty.checkpoint();
         self.pty.send(b"\x1b")?;
-        let _ = self.pty.wait_for_text_since(&checkpoint, "┃ Message")?;
+        let after = self.pty.wait_for_screen_inner(
+            Some(&checkpoint),
+            "composer or command launcher",
+            |screen| screen.contains("┃ Message") || screen.contains("Commands ─"),
+        )?;
+        if !after.contains("┃ Message") {
+            let launcher = self.pty.checkpoint();
+            self.pty.send(b"\x1b")?;
+            let _ = self.pty.wait_for_text_since(&launcher, "┃ Message")?;
+        }
         Ok(())
     }
 
@@ -1919,12 +1928,20 @@ fn code_minimal_agent_preserves_multiline_prompt_history_and_terminal() -> Resul
         code.mock.captured_prompt()?.is_none(),
         "bracketed paste submitted before Enter"
     );
+    let command_checkpoint = code.pty.checkpoint();
+    code.pty.send(b"\x1b[1;5H/")?;
+    let _ = code
+        .pty
+        .wait_for_text_since(&command_checkpoint, "Commands ─")?;
+    let restored = code.pty.checkpoint();
+    code.pty.send(b"\x1b")?;
+    let _ = code.pty.wait_for_text_since(&restored, "second line")?;
     code.pty.send(b"\r")?;
     let output = code.pty.wait_for_text("Turn completed")?;
     ensure!(output.contains("FXRP1"), "agent reply was not rendered");
     ensure!(
         !output.contains("Home")
-            && !output.replace("F5 Agents", "").contains("Agents")
+            && !output.replace("/ Agents", "").contains("Agents")
             && !output.contains("Requests"),
         "legacy permanent navigation appeared in the Code transcript"
     );
@@ -1964,7 +1981,7 @@ fn code_uses_normal_buffer_until_an_explicit_inspector() -> Result<()> {
     code.pty.send(b"inspect this turn\r")?;
     let _ = code.pty.wait_for_text("Turn completed")?;
     let open = code.pty.checkpoint();
-    code.pty.send(b"\x0f")?;
+    code.pty.send(b"/open transcript\r")?;
     let _ = code
         .pty
         .wait_for_raw_text_since(&open, ENTER_ALTERNATE_SCREEN)?;
@@ -1990,7 +2007,7 @@ fn code_detached_backlog_catches_up_once_after_resizes() -> Result<()> {
     code.wait_for_agent_ready()?;
     code.pty.send(b"produce detached backlog\r")?;
     let _ = code.pty.wait_for_text("FXBG")?;
-    code.pty.send(b"\x0f")?;
+    code.pty.send(b"/open transcript\r")?;
     let _ = code.pty.wait_for_text("Full transcript")?;
 
     let narrow = code.pty.checkpoint();
@@ -2034,7 +2051,7 @@ fn code_agent_deck_expands_inline_and_preserves_multiline_foreground_draft() -> 
         .send(format!("\x1b[200~{draft}\x1b[201~").as_bytes())?;
     let _ = code.pty.wait_for_text("second line")?;
     let expansion = code.pty.checkpoint();
-    code.pty.send(b"\x1b[15~")?;
+    code.pty.send(b"\x1b[1;5H/background agents\r")?;
     let _ = code
         .pty
         .wait_for_text_since(&expansion, "Foreground draft preserved")?;
@@ -2044,7 +2061,7 @@ fn code_agent_deck_expands_inline_and_preserves_multiline_foreground_draft() -> 
             .any(|window| window == ENTER_ALTERNATE_SCREEN.as_bytes())
     );
     let collapsed = code.pty.checkpoint();
-    code.pty.send(b"\x1b[15~")?;
+    code.pty.send(b"\x1b")?;
     let _ = code.pty.wait_for_text_since(&collapsed, "second line")?;
     code.pty.send(b"\r")?;
     let _ = code.pty.wait_for_text("Turn completed")?;
@@ -2054,31 +2071,31 @@ fn code_agent_deck_expands_inline_and_preserves_multiline_foreground_draft() -> 
 }
 
 #[test]
-fn permission_arriving_in_inspector_needs_f2_and_fresh_selection() -> Result<()> {
+fn permission_arriving_in_inspector_needs_slash_and_fresh_selection() -> Result<()> {
     let mut code = CodeFixture::agent(MockScenario::PermissionDuringInspector)?;
     code.wait_for_agent_ready()?;
     code.pty.send(b"permission while detached\r")?;
     let _ = code.pty.wait_for_text("FXPD")?;
-    code.pty.send(b"\x0f")?;
+    code.pty.send(b"/open transcript\r")?;
     let _ = code.pty.wait_for_text("Full transcript")?;
     code.mock.request_permissions()?;
-    let _ = code.pty.wait_for_text("Permission needed · F2 to review")?;
+    let _ = code.pty.wait_for_text("Permission needed · / to review")?;
 
     let ignored = code.pty.checkpoint();
     code.pty.send(b"1\r\x0c")?;
     let _ = code
         .pty
-        .wait_for_text_since(&ignored, "Permission needed · F2 to review")?;
+        .wait_for_text_since(&ignored, "Permission needed · / to review")?;
     ensure!(
         code.mock.captured_permission_outcomes()?.is_empty(),
-        "inspector keys answered a permission before explicit F2 focus"
+        "inspector keys answered a permission before explicit command focus"
     );
 
     code.pty.send(b"\x1b")?;
     let _ = code
         .pty
-        .wait_for_text("Permission needed · F2 focuses oldest pending request")?;
-    code.pty.send(b"\x1b[12~")?;
+        .wait_for_text("Permission needed · / to review oldest pending request")?;
+    code.pty.send(b"/review permission\r")?;
     let _ = code.pty.wait_for_text("Press a number to highlight")?;
     let no_selection = code.pty.checkpoint();
     code.pty.send(b"\r\x0c")?;
@@ -2091,7 +2108,7 @@ fn permission_arriving_in_inspector_needs_f2_and_fresh_selection() -> Result<()>
     );
 
     code.pty.send(b"1\r")?;
-    code.pty.send(b"\x1b[12~")?;
+    code.pty.send(b"/review permission\r")?;
     let _ = code.pty.wait_for_text("Allow fixture 2")?;
     code.pty.send(b"1\r")?;
     let _ = code.pty.wait_for_text("Turn completed")?;
@@ -2118,7 +2135,7 @@ fn code_minimum_and_below_minimum_permission_paths_are_safe() -> Result<()> {
     code.pty.send("中文 👩‍💻 permission\r".as_bytes())?;
     let _ = code
         .pty
-        .wait_for_text_since(&resized, "F2 permission (2)")?;
+        .wait_for_text_since(&resized, "Permission (2) · / to review")?;
 
     let small = code.pty.checkpoint();
     code.pty.resize(30, 10)?;
@@ -2135,7 +2152,7 @@ fn code_minimum_and_below_minimum_permission_paths_are_safe() -> Result<()> {
         "below-minimum safety copy was emitted but not visible; raw={raw_small:?}; screen={:?}",
         code.pty.screen.screen().contents()
     );
-    code.pty.send(b"\x1b[12~1\r")?;
+    code.pty.send(b"/review permission\r1\r")?;
     let guarded = code.pty.checkpoint();
     code.pty.send(b"\x0c")?;
     let _ = code
@@ -2148,7 +2165,7 @@ fn code_minimum_and_below_minimum_permission_paths_are_safe() -> Result<()> {
     code.pty.send(b"\x1b")?;
     let _ = code.pty.wait_for_text("fixture permission 2")?;
     let focus_second = code.pty.checkpoint();
-    code.pty.send(b"\x1b[12~\x0c")?;
+    code.pty.send(b"/review permission\r\x0c")?;
     let _ = code
         .pty
         .wait_for_raw_text_since(&focus_second, "\x1b[?2026h")?;
@@ -2178,7 +2195,7 @@ fn code_external_editor_preserves_multiline_prompt_and_terminal() -> Result<()> 
     code.wait_for_agent_ready()?;
     code.pty.paste("draft that the editor replaces")?;
     let editor_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x07")?;
+    code.pty.send(b"\x1b[1;5H/open external editor\r")?;
     let _ = code
         .pty
         .wait_for_text_since(&editor_checkpoint, "external-replacement")?;
@@ -2211,7 +2228,7 @@ fn code_failed_external_editor_retains_draft_and_recovers() -> Result<()> {
     code.wait_for_agent_ready()?;
     code.pty.paste(draft)?;
     let failure_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x07")?;
+    code.pty.send(b"\x1b[1;5H/open external editor\r")?;
     let failure = code
         .pty
         .wait_for_text_since(&failure_checkpoint, "External editor failed")?;
@@ -2252,9 +2269,9 @@ fn code_sigterm_detaches_without_answering_pending_permissions() -> Result<()> {
     code.pty.send(b"permission interrupted by SIGTERM\r")?;
     let pending = code
         .pty
-        .wait_for_text("Permission needed · F2 focuses oldest pending request (2)")?;
+        .wait_for_text("Permission needed · / to review oldest pending request (2)")?;
     ensure!(
-        pending.contains("Permission needed · F2 focuses oldest pending request (2)"),
+        pending.contains("Permission needed · / to review oldest pending request (2)"),
         "both pending permissions were not visible before SIGTERM"
     );
 
@@ -2352,7 +2369,7 @@ async fn code_explicit_detach_keeps_accepted_foreground_turn_running() -> Result
     code.wait_for_agent_ready()?;
     code.pty.send(b"continue after explicit detach\r")?;
     code.mock.wait_for_request("session/prompt")?;
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     code.pty.send(b"Detach current session")?;
     let _ = code.pty.wait_for_text("Detach current session and exit")?;
     code.pty.send(b"\r")?;
@@ -2514,7 +2531,7 @@ async fn background_history_is_only_rendered_in_explicit_inspector() -> Result<(
         "background output leaked into the foreground document"
     );
     let expanded = code.pty.checkpoint();
-    code.pty.send(b"\x1b[15~")?;
+    code.pty.send(b"\x1b[1;5H/background agents\r")?;
     let _ = code
         .pty
         .wait_for_text_since(&expanded, "Foreground draft preserved")?;
@@ -2530,12 +2547,12 @@ async fn background_history_is_only_rendered_in_explicit_inspector() -> Result<(
         "retained background history was not isolated in alternate screen"
     );
     let detached = code.pty.checkpoint();
-    code.pty.send(b"\x1b[15~")?;
+    code.pty.send(b"/detach from run\r")?;
     let _ = code
         .pty
         .wait_for_text_since(&detached, "Foreground draft preserved")?;
     let collapsed = code.pty.checkpoint();
-    code.pty.send(b"\x1b[15~")?;
+    code.pty.send(b"\x1b")?;
     let _ = code
         .pty
         .wait_for_text_since(&collapsed, "foreground draft stays here")?;
@@ -2660,7 +2677,7 @@ fn code_bare_entry_offers_selection_without_permanent_navigation() -> Result<()>
     let selection = bare.pty.wait_for_text("claude-acp")?;
     ensure!(
         !selection.contains("Home")
-            && !selection.replace("F5 Agents", "").contains("Agents")
+            && !selection.replace("/ Agents", "").contains("Agents")
             && !selection.contains("Requests"),
         "bare Code entry restored permanent navigation"
     );
@@ -2672,7 +2689,7 @@ fn code_bare_entry_offers_selection_without_permanent_navigation() -> Result<()>
         .pty
         .wait_for_text("Choose an agent before sending this draft")?;
     ensure!(
-        !bare_output.contains("Home") && !bare_output.replace("F5 Agents", "").contains("Agents"),
+        !bare_output.contains("Home") && !bare_output.replace("/ Agents", "").contains("Agents"),
         "bare Code entry restored permanent navigation"
     );
     let _ = bare
@@ -2693,13 +2710,13 @@ fn code_hidden_chat_shares_palette_permissions_and_terminal_restoration() -> Res
     let mut code = CodeFixture::chat(MockScenario::OverlappingPermissions)?;
     code.wait_for_agent_ready()?;
     let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     let palette = code
         .pty
         .wait_for_text_since(&palette_checkpoint, "Choose agent")?;
     ensure!(
         !palette.contains("Home")
-            && !palette.replace("F5 Agents", "").contains("Agents")
+            && !palette.replace("/ Agents", "").contains("Agents")
             && !palette.contains("Requests"),
         "hidden chat entry restored permanent navigation"
     );
@@ -2708,9 +2725,9 @@ fn code_hidden_chat_shares_palette_permissions_and_terminal_restoration() -> Res
     code.pty.send(b"compatibility permission test\r")?;
     let _ = code
         .pty
-        .wait_for_text("Permission needed · F2 focuses oldest pending request")?;
+        .wait_for_text("Permission needed · / to review oldest pending request")?;
     let first_permission_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[12~")?;
+    code.pty.send(b"/review permission\r")?;
     let first_permission = code
         .pty
         .wait_for_text_since(&first_permission_checkpoint, "Allow fixture 1")?;
@@ -2720,7 +2737,7 @@ fn code_hidden_chat_shares_palette_permissions_and_terminal_restoration() -> Res
     );
     code.pty.send(b"1\r")?;
     let second_permission_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[12~")?;
+    code.pty.send(b"/review permission\r")?;
     let second_permission = code
         .pty
         .wait_for_text_since(&second_permission_checkpoint, "Allow fixture 2")?;
@@ -2744,7 +2761,7 @@ fn code_hidden_tui_bare_alias_uses_the_shared_empty_composer() -> Result<()> {
     let selection = tui.pty.wait_for_text("claude-acp")?;
     ensure!(
         !selection.contains("Home")
-            && !selection.replace("F5 Agents", "").contains("Agents")
+            && !selection.replace("/ Agents", "").contains("Agents")
             && !selection.contains("Requests"),
         "hidden tui entry restored permanent navigation"
     );
@@ -2835,9 +2852,9 @@ fn code_overlapping_permissions_require_explicit_answers() -> Result<()> {
     code.pty.send(b"permission test\r")?;
     let _ = code
         .pty
-        .wait_for_text("Permission needed · F2 focuses oldest pending request")?;
+        .wait_for_text("Permission needed · / to review oldest pending request")?;
     let first_panel_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[12~")?;
+    code.pty.send(b"/review permission\r")?;
     let panel = code
         .pty
         .wait_for_text_since(&first_panel_checkpoint, "Allow fixture 1")?;
@@ -2849,7 +2866,7 @@ fn code_overlapping_permissions_require_explicit_answers() -> Result<()> {
     let _ = code.pty.wait_for_text("Enter confirms")?;
     code.pty.send(b"1\r")?;
     let second_panel_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[12~")?;
+    code.pty.send(b"/review permission\r")?;
     let second_panel = code
         .pty
         .wait_for_text_since(&second_panel_checkpoint, "Allow fixture 2")?;
@@ -2887,7 +2904,7 @@ fn code_remote_operations_use_authenticated_remote_read_actions() -> Result<()> 
     code.remote.assert_bearer(&status)?;
 
     let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     let palette = code
         .pty
         .wait_for_text_since(&palette_checkpoint, "Routable models")?;
@@ -2908,11 +2925,13 @@ fn code_remote_operations_use_authenticated_remote_read_actions() -> Result<()> 
     let _ = code.pty.wait_for_text("Telemetry")?;
     let palette_return = code.pty.checkpoint();
     code.pty.send(b"\x1b")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&palette_return, "Ctrl-P opens target actions")?;
+    let _ = code.pty.wait_for_screen_inner(
+        Some(&palette_return),
+        "remote operations root after closing commands",
+        |screen| screen.contains("REMOTE_A12_STATUS") && !screen.contains("Commands ─"),
+    )?;
     let models_palette = code.pty.checkpoint();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     let _ = code
         .pty
         .wait_for_text_since(&models_palette, "Routable models")?;
@@ -2931,7 +2950,7 @@ fn code_remote_operations_use_authenticated_remote_read_actions() -> Result<()> 
         .wait_for_text_since(&models_checkpoint, "REMOTE_A12_STATUS")?;
 
     let requests_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     let _ = code
         .pty
         .wait_for_text_since(&requests_checkpoint, "Host requests")?;
@@ -2952,7 +2971,7 @@ fn code_remote_operations_use_authenticated_remote_read_actions() -> Result<()> 
         .wait_for_text_since(&requests_return, "REMOTE_A12_STATUS")?;
 
     let preview_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     let _ = code
         .pty
         .wait_for_text_since(&preview_checkpoint, "Route preview")?;
@@ -3002,7 +3021,7 @@ fn code_remote_errors_do_not_fall_back_to_local_models() -> Result<()> {
     code.remote.assert_bearer(&status)?;
 
     let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     let _ = code
         .pty
         .wait_for_text_since(&palette_checkpoint, "Routable models")?;
@@ -3040,7 +3059,7 @@ fn code_socket_operations_remain_read_only_without_starting_an_agent() -> Result
         "socket-only operations unexpectedly started an ACP agent"
     );
     let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     let palette = code
         .pty
         .wait_for_text_since(&palette_checkpoint, "Routable models")?;
@@ -3065,7 +3084,7 @@ fn code_agent_settings_apply_only_a_confirmed_configuration() -> Result<()> {
     code.wait_for_agent_ready()?;
     let _ = code.pty.wait_for_text("FXSET")?;
     let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     let _ = code
         .pty
         .wait_for_text_since(&palette_checkpoint, "Agent settings")?;
@@ -3087,7 +3106,7 @@ fn code_agent_settings_apply_only_a_confirmed_configuration() -> Result<()> {
     );
 
     let verify_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     let _ = code
         .pty
         .wait_for_text_since(&verify_checkpoint, "Agent settings")?;
@@ -3108,7 +3127,7 @@ fn code_failed_agent_setting_keeps_the_last_confirmed_value() -> Result<()> {
     code.wait_for_agent_ready()?;
     let _ = code.pty.wait_for_text("FXSET")?;
     let palette_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     let _ = code
         .pty
         .wait_for_text_since(&palette_checkpoint, "Agent settings")?;
@@ -3144,7 +3163,7 @@ fn code_failed_agent_setting_keeps_the_last_confirmed_value() -> Result<()> {
     );
 
     let verify_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     let _ = code
         .pty
         .wait_for_text_since(&verify_checkpoint, "Agent settings")?;
@@ -3172,7 +3191,7 @@ fn code_load_replays_history_while_resume_keeps_native_ids_distinct() -> Result<
         "load did not retain the fixture's replayed history: {replay:?}"
     );
     let details_checkpoint = loaded.pty.checkpoint();
-    loaded.pty.send(b"\x10")?;
+    loaded.pty.send(b"/")?;
     let _ = loaded
         .pty
         .wait_for_text_since(&details_checkpoint, "Session details")?;
@@ -3206,7 +3225,7 @@ fn code_load_replays_history_while_resume_keeps_native_ids_distinct() -> Result<
         "resume incorrectly replayed load history: {resumed_notice:?}"
     );
     let resume_details_checkpoint = resumed.pty.checkpoint();
-    resumed.pty.send(b"\x10")?;
+    resumed.pty.send(b"/")?;
     let _ = resumed
         .pty
         .wait_for_text_since(&resume_details_checkpoint, "Session details")?;

@@ -1624,7 +1624,7 @@ mod tests {
         AgentAction, AgentDeckMode, AgentDeckSnapshot, AgentDeckState, AgentEffect,
         AgentHistorySnapshot, AgentLeaseView, AgentRunView,
     };
-    use bitrouter_tui::code::{CodeEffect, CodeState};
+    use bitrouter_tui::code::{CodeAction, CodeEffect, CodeState};
     use bitrouter_tui::permission::Prompt;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
@@ -1684,8 +1684,18 @@ mod tests {
             runs: vec![run.clone()],
             new_run_target: None,
         });
-        let _ = state.step_agent(AgentAction::Event(Event::Key(KeyEvent::new(
-            KeyCode::F(5),
+        let _ = state.step(CodeAction::Event(Event::Key(KeyEvent::new(
+            KeyCode::Char('/'),
+            KeyModifiers::NONE,
+        ))));
+        for character in "background agents".chars() {
+            let _ = state.step(CodeAction::Event(Event::Key(KeyEvent::new(
+                KeyCode::Char(character),
+                KeyModifiers::NONE,
+            ))));
+        }
+        let _ = state.step(CodeAction::Event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
             KeyModifiers::NONE,
         ))));
         let attach = state.step_agent(AgentAction::Event(Event::Key(KeyEvent::new(

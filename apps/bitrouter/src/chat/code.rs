@@ -1,6 +1,7 @@
 //! The shared, asynchronous interactive conversation driver.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::v1::{
@@ -8,8 +9,8 @@ use agent_client_protocol::schema::v1::{
 };
 use anyhow::{Context, Result, ensure};
 use bitrouter_tui::code::{
-    CodeAction, CodeEffect, CodeState, CodeStatus, CodeView, Command, CommandOwner, CommandTarget,
-    Inspector, Selector, TurnOutcome,
+    CodeAction, CodeEffect, CodeHotkey, CodeState, CodeStatus, CodeView, Command, CommandOwner,
+    CommandTarget, Inspector, Selector, TurnOutcome,
 };
 use crossterm::event::EventStream;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
@@ -138,6 +139,17 @@ pub(crate) async fn run(
             .set_agent_client_id(client.client_id().to_string());
     }
     runtime.refresh_commands();
+    if let Some(path) = code_hotkey_path() {
+        let source = path.display().to_string();
+        match read_code_hotkeys(&path)
+            .and_then(|bindings| runtime.state.set_hotkeys(&source, bindings))
+        {
+            Ok(()) => {}
+            Err(error) => runtime
+                .state
+                .set_hotkey_diagnostic(format!("{source}: {error}")),
+        }
+    }
     if let Some(request) = initial {
         runtime.start(request);
     } else if runtime.services.operations_only {
@@ -199,6 +211,27 @@ pub(crate) async fn run(
         "ACP teardown did not confirm; inspect the session log"
     );
     Ok(())
+}
+
+fn code_hotkey_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    Some(base.join("bitrouter").join("code-hotkeys.json"))
+}
+
+fn read_code_hotkeys(path: &std::path::Path) -> Result<Vec<CodeHotkey>, String> {
+    let source = match std::fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("cannot read keymap: {error}")),
+    };
+    let entries: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(&source).map_err(|error| format!("invalid keymap JSON: {error}"))?;
+    entries
+        .into_iter()
+        .map(|(chord, action)| CodeHotkey::parse(&chord, action))
+        .collect()
 }
 
 impl Runtime {
@@ -705,7 +738,8 @@ impl Runtime {
             );
         } else if action == "commands" {
             self.state.set_notice(
-                "Ctrl-P opens commands; slash completion labels each command's owner".to_string(),
+                "Use / to search Code commands; results identify BitRouter, agent, and template owners"
+                    .to_string(),
             );
         } else {
             self.report(action, args);
@@ -1241,7 +1275,7 @@ impl Runtime {
                 CommandTarget::ChooseAgent,
             ));
             let mut fresh = Command::new(
-                "New session",
+                "/new",
                 "Fresh transcript with the same agent and launch settings",
                 CommandOwner::BitRouter,
                 CommandTarget::NewSession,
@@ -1360,6 +1394,11 @@ impl Runtime {
             .set_typed_commands(typed.clone(), self.templates.clone());
         {
             for command in typed {
+                // These reports already have descriptive launcher rows above.
+                // Keep their direct slash names in the resolver.
+                if matches!(command.action, "status" | "list_models" | "route") {
+                    continue;
+                }
                 let mut row = Command::new(
                     format!("/{}", command.name),
                     command.summary,
