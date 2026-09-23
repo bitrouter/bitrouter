@@ -15,6 +15,7 @@ pub mod route;
 pub mod session;
 pub mod skills;
 pub mod status;
+pub(crate) mod supervised;
 
 /// A typed action failed.
 ///

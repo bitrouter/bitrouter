@@ -260,8 +260,14 @@ models:
         &bitrouter::paths::ConfigSource::File(mock.config_path.clone()),
         &config,
     );
+    let administration = bitrouter::actions::administration::Administration {
+        source: bitrouter::paths::ConfigSource::File(mock.config_path.clone()),
+        routing: assembled.routing_table.clone(),
+        policy: assembled.policy_runtime.clone(),
+        observe: assembled.observe.clone(),
+    };
     let control = ControlServer(tokio::spawn(
-        bitrouter::daemon::run_control_socket_with_acp_runtime(
+        bitrouter::daemon::run_control_socket_with_acp_runtime_and_administration(
             socket.clone(),
             app,
             listen,
@@ -273,6 +279,7 @@ models:
                 inventory: Some(evolution.inventory()),
                 evolution: Some(evolution.clone()),
             },
+            Some(administration),
         ),
     ));
     let scheduler = EvolutionScheduler::new(evolution.clone());
@@ -321,7 +328,7 @@ fn choose_at(code: &mut CodeFixture, choice: &str, index: usize, ready: &str) ->
 }
 
 fn open_evolution(code: &mut CodeFixture) -> Result<()> {
-    code.pty.send(b"\x10")?;
+    code.pty.send(b"/")?;
     code.pty.wait_for_text("Commands")?;
     choose(code, "evolution", "Checkpoint evaluation and evolution")
 }
@@ -421,10 +428,10 @@ fn trial_sessions(
         .map(|session| session.native_session_id)
         .collect::<std::collections::BTreeSet<_>>();
     for count in 1..=64 {
-        code.pty.send(b"\x10")?;
+        code.pty.send(b"/")?;
         code.pty.wait_for_text("Commands")?;
         let checkpoint = code.pty.checkpoint();
-        code.pty.paste("New session")?;
+        code.pty.paste("new")?;
         code.pty.send(b"\r")?;
         code.pty.wait_for_screen_inner(
             Some(&checkpoint),

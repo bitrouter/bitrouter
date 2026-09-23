@@ -59,6 +59,11 @@ Configuration status uses the target-owned optional `config_state`: saved input 
 | `bro agents check [agent] [--config PATH]` | Preflight one friendly/catalog agent or spawn each configured ACP agent and verify `initialize`. |
 | `bro agents conformance <id>` | Run the `acp_compat_1` ACP-compatibility suite against a catalog agent and print the `conformance:` block to record in `registry/runtimes/<runtime>.yaml`. `<id>` is `<runtime>/<harness>` or a bare harness id (`local/` is the default runtime and may be elided). Two tiers: **handshake** (the agent answers `initialize` and settles on the ACP version its registry entry declares) and **routability** (the agent's LLM traffic reaches BitRouter when its routing block is applied). Needs **no provider credentials** — the agent is launched with its own routing pointed at an ephemeral loopback gateway that records what arrived; it does spawn the agent, so the package or binary must be installed. Exits non-zero when a tier fails, and prints no record in that case. |
 | `bro agents scaffold <id>` | Print a paste-ready YAML stub for `<id>` — resolved from the bundled catalog first, then the ACP registry (`npx`/`uvx` distributions, version-pinned, `env` included). `agents install` is a hidden compatibility spelling. |
+| `bro agents` | Open the local daemon's standalone supervised-run manager. Requires TTY stdin/stdout and uses the alternate screen; a non-TTY invocation emits no terminal controls and points scripts to `agents sessions --json`. |
+| `bro agents sessions [--json] [--config PATH] [--socket PATH]` | List metadata-only supervised run summaries with typed lifecycle, attention, review, native-session identity, route/cost evidence, and attachment state. Its exact list grant cannot retrieve transcript, prompt/result, raw tool/permission context, or exact failure content. A settled turn is **Ready for review**, not “Completed.” |
+| `bro agents attach <agent-run-id> [--config PATH] [--socket PATH]` | Acquire the generation-fenced control lease and open retained history/live events in the alternate-screen inspector. Detach keeps the run alive. |
+| `bro agents stop <agent-run-id> [--config PATH] [--socket PATH]` | Stop and reap the controller/child without deleting the harness-native saved session. Idempotent cleanup preserves a prior failure. |
+| `bro agents remove <agent-run-id> [--config PATH] [--socket PATH]` | Remove stopped, failed, or interrupted BitRouter metadata and ephemeral retained events after reaping settles. Does not delete native harness history. |
 | `bro observe status [--json] [--config PATH] [--socket PATH]` | OTel exporter snapshot: compiled/wired state, sampler, metric/cardinality counters, and in-flight spans. Local compatibility output retains socket, endpoint, and service fields; named remote contexts and the dashboard use the redacted report, which omits those host details and header values. |
 
 ## Durable trajectory operations
@@ -171,7 +176,7 @@ Two ACP execution modes share one controller and differ only in who drives it. `
 
 | Command | Effect |
 |---|---|
-| `bro run <agent> [prompt\|-] [--prompt-file PATH] [--load ID\|--resume ID] [--cwd PATH] [--turn-timeout SECS] [--approve-all\|--approve-reads\|--deny-all] [--permission-policy JSON\|@PATH] [--format ndjson\|text\|quiet] [routing flags]` | Canonical always-headless entry. Reads a positional prompt, `-`/implicit piped stdin, or a UTF-8 prompt file. Creates a new harness-native session unless `--load` (history replay) or `--resume` (no replay) is capability-advertised and selected. Streams versioned NDJSON by default. |
+| `bro run <agent> [prompt\|-] [--prompt-file PATH] [--load ID\|--resume ID] [--cwd PATH] [--turn-timeout SECS] [--approve-all\|--approve-reads\|--deny-all] [--permission-policy JSON\|@PATH] [--result-schema JSON\|@PATH] [--background [--allow-shared-directory]] [--format ndjson\|text\|quiet] [routing flags]` | Foreground is the canonical one-shot headless entry and streams versioned NDJSON. `--background` instead returns only after the resident local supervisor owns an attachable run ID; it conflicts with hidden `--no-wait`. Load/resume remain capability-gated explicit native-session selections. |
 | `bro acp serve <agent> [--turn-timeout SECS] [routing flags] [--config PATH]` | Expose an ACP-compatible adapter over protocol-pure **stdio** until this ACP client disconnects. The client initializes first, may open multiple harness-native sessions, and owns prompt deadlines. Session IDs, history, and storage remain harness-owned. |
 
 **Controller lifecycle**: ACP client `initialize` capabilities and `_meta` reach the harness exactly. Each `session/new` is forwarded and returns that harness response's opaque `sessionId`; repeated calls may create different sessions. Advertised `session/list|load|resume|fork|close|delete`, prompts, cancellations, callbacks, updates, errors, `_meta`, and extension payloads pass through. BitRouter neither mints a client-facing session alias nor keeps a session catalog.
@@ -204,6 +209,8 @@ never `$0.00`, never a daemon-wide figure.
 
 **Headless permissions** (`run`, plus the hidden compatibility forms): nobody is at the terminal, so the caller states the rule. `--deny-all` (the default) answers every `session/request_permission` with the agent's reject option; `--approve-reads` approves calls the harness labels `read` or `search` (the ACP tool `kind`) and denies the rest, unlabelled calls included; `--approve-all` approves everything. `--permission-policy '{"autoApprove":["read","Grep"],"autoDeny":["execute"],"defaultAction":"deny"}'` (or `@path`) overrides per tool: entries match the tool kind, the tool-call title, or the title's first word, case-insensitively; `autoDeny` beats `autoApprove`, and an unmatched request falls to `defaultAction`, else the mode flag. An approval against a request that offered no allow option still resolves to the reject option and counts as a denial. Each answer is one NDJSON line, `{"type":"permission","decision":"approved"|"denied","title":"…","kind":"edit"|null}`. **Exit status 5** when at least one request was denied and none approved; 0 otherwise (a turn or launch failure is still 1). The retained piped `chat` compatibility path uses this same `Policy` with deny-all. Canonical `code` requires interactive stdin and stdout; use `run` for headless work.
 
+**Background permissions and safety**: `run --background` has an interactive supervisor broker, so no permission flag means unmatched requests use **Ask** and the run becomes Needs input. Explicit `--approve-all`, `--approve-reads`, or `--deny-all` retain the foreground meanings. A policy's `defaultAction` wins; without one, exact list matches apply and an unmatched request uses the explicit mode or background Ask. `--turn-timeout` includes permission wait time and records a timeout failure after cancellation. A result schema is validated before launch and before Ready. The supervisor claims the canonical Git worktree root (or canonical non-Git directory); collisions fail before process launch. Prefer a separate worktree. `--allow-shared-directory` is a background-only warned override of the claim, never a permission expansion.
+
 **Result contract** (`run --result-schema '<JSON Schema>'`, or `@path` to read it from a file; conflicts with `--no-wait`): the schema rides the subagent's prompt as an instruction to end the reply with a ```json fenced block. The reply's **last** ```json block (or a bare-JSON reply) is extracted and validated; on a missing/invalid result the subagent gets **one** repair re-prompt. The terminal line then carries the machine-consumable outcome — success: `{"type":"result","stop_reason":…,"result":{…},"schema_ok":true}`; failure after repair: `…,"result":null,"schema_ok":false,"raw":"<last reply text>"` (the orchestrator is never blocked). Bare `run` output is unchanged (no `result`/`schema_ok`/`raw` keys). A malformed schema fails fast before any session side effect.
 
 See `references/sessions.md` for the controller/native-session boundary and what `run` adds on top of it.
@@ -211,22 +218,40 @@ See `references/sessions.md` for the controller/native-session boundary and what
 ## Interactive interface (`bro code`)
 
 Bare local `bro code` opens an empty conversation and **Choose agent**.
-`bro code <agent>` connects directly through the shared ACP session host.
-There are no permanent tabs: Ctrl-P opens searchable commands and temporary
-pickers/inspectors. Closing them preserves the draft and reading position.
-Agent, confirmed session route, activity, and attributed session cost are the
-persistent status fields. Missing cost remains unreported, never zero.
+`bro code <agent>` asks the daemon supervisor to own the ACP controller from
+creation. There are no permanent tabs: foreground history stays in native
+scrollback, while the bottom control deck keeps the composer/status and a
+one- or two-line background-agent strip. Agent, confirmed route, activity, and
+attributed cost remain persistent foreground fields; missing cost is
+unreported, never zero. Background events never append to foreground history.
+
+Choose **Background agents** from `/` to expand the command center inside the
+normal-buffer dock. Its entire deck is capped at 40% of viewport rows and shows
+a compact preserved-draft summary while agent focus is active. The flat `/`
+launcher offers peek, target-labelled reply, new run, permission review,
+cancel, stop, and detach actions. Enter on a selected run attaches for long
+detail. Retained history/search and long permission/diff review use an
+alternate-screen inspector; **Detach from run** in `/` detaches
+without stopping. Foreground and background drafts never share a send target.
+
+Code has no default action hotkeys. `/` opens a temporary launcher without
+changing the draft; `Esc` restores the draft and prior surface. At the start
+of an editable field, `//` inserts a literal slash. `/new` starts a fresh
+native session, and `/hotkeys` shows active and unbound actions. Optional
+bindings are read from `$XDG_CONFIG_HOME/bitrouter/code-hotkeys.json` or
+`~/.config/bitrouter/code-hotkeys.json` if XDG config home is unset. The JSON
+object maps chords to action IDs, such as
+`{"F2":"review_permission","Ctrl-P":"hotkeys"}`. Invalid keymaps leave
+action hotkeys unbound and show a diagnostic.
 
 | Key | Effect |
 | --- | --- |
 | `Enter` | Send at idle; preserve draft and explain queueing during work |
 | `Shift-Enter` / `Alt-Enter` / `Ctrl-J` | Newline |
-| `Tab` | Complete the open popup, otherwise queue next during work |
-| `Ctrl-P` / leading `/` | Command palette / slash completion, labelled by owner |
+| `/` | Search all available actions, labelled by owner; `Esc` restores the draft |
 | Arrows, Home/End, Up/Down at draft boundaries | Cursor editing and process-local history |
-| `Ctrl-G` | External editor at idle without pending permissions |
 | `PageUp` / `PageDown` | Read history without following new output |
-| `F2` | Focus the oldest pending permission; choose a row, then Enter confirms |
+| Permission digits/arrows, then `Enter` | Explicitly select and confirm an offered choice |
 | `Esc` / `Ctrl-C` during work | Request cancellation and wait for settlement |
 | `Ctrl-C` at idle | Clear draft; exit when empty |
 | `Ctrl-D` at idle | Exit only with an empty draft |
@@ -235,12 +260,21 @@ persistent status fields. Missing cost remains unreported, never zero.
 Paste retains exact line breaks and does not submit. Follow-up queueing is an
 explicit client feature, not native steering; abnormal stops pause the queue.
 Agent settings are ACP-reported and separate from `/route` session overrides.
-Load replays native history; resume does not. No durable BitRouter session store
-is created. Pending permissions use exact offered IDs, have no default approval,
-and resolve as cancelled when the turn is cancelled.
+Load replays native history; resume does not. BitRouter keeps a minimal run
+ledger and a bounded daemon-lifetime journal, not a canonical transcript.
+Pending permissions use exact run/permission/option/lease/action identities,
+have no default approval, and never steal focus. A foreground permission makes
+background controls read-only until resolved. After daemon restart, live rows
+become Interrupted and are not silently relaunched.
+
+Clean Ctrl-C/Ctrl-D from Ready with an empty draft stops the foreground
+controller. Explicit **Detach current session and exit** keeps it running;
+unexpected client loss also detaches after lease expiry. Every foreground and
+background run claims the canonical Git worktree root, so another run in a
+different subdirectory still collides by default.
 
 `--context NAME code` and explicit `code --socket PATH` open operations-only
-inspectors, with no ACP execution or local fallback for remote errors. Ctrl-P
+inspectors, with no ACP execution or local fallback for remote errors. `/`
 offers the typed status, models, requests, route preview, providers, telemetry,
 policy, agent catalog, reload state, and explicit reload actions. Host requests
 remain clearly host-scoped. Hidden interactive `tui` and `chat` aliases share

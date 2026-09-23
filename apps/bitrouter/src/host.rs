@@ -11,6 +11,7 @@ async fn supervise_http_shutdown<Http, Control, Hup, Term>(
     hup: Hup,
     term: Term,
     shutdown: tokio::sync::oneshot::Sender<()>,
+    control_shutdown: tokio::sync::oneshot::Sender<()>,
 ) -> Result<()>
 where
     Http: std::future::Future<Output = Result<()>> + Send,
@@ -23,10 +24,15 @@ where
     let mut hup = Box::pin(hup);
     let mut term = Box::pin(term);
     let mut hup_open = true;
-    let trigger_result = loop {
+    enum Trigger {
+        Http(Result<()>),
+        Control(Result<()>),
+        Term,
+    }
+    let trigger = loop {
         tokio::select! {
-            result = &mut http => return result,
-            result = &mut control => break result,
+            result = &mut http => break Trigger::Http(result),
+            result = &mut control => break Trigger::Control(result),
             result = &mut term => {
                 if result.is_err() {
                     tracing::warn!(
@@ -34,7 +40,7 @@ where
                         "termination-signal listener unavailable"
                     );
                 }
-                break Ok(());
+                break Trigger::Term;
             }
             result = &mut hup, if hup_open => {
                 if result.is_err() {
@@ -48,12 +54,40 @@ where
         }
     };
 
-    drop(control);
     drop(hup);
     drop(term);
-    let _ = shutdown.send(());
-    http.await?;
-    trigger_result
+    match trigger {
+        Trigger::Http(http_result) => {
+            let _ = control_shutdown.send(());
+            control.await?;
+            http_result
+        }
+        Trigger::Control(control_result) => {
+            let _ = shutdown.send(());
+            http.await?;
+            control_result
+        }
+        Trigger::Term => {
+            let _ = control_shutdown.send(());
+            control.await?;
+            let _ = shutdown.send(());
+            http.await
+        }
+    }
+}
+
+async fn request_daemon_shutdown(socket: &std::path::Path) -> Result<daemon::DaemonResponse> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match daemon::send_command(socket, &daemon::DaemonCommand::Stop).await {
+            Ok(response) => return Ok(response),
+            Err(error) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                tracing::debug!(error = %error, "waiting for local control endpoint before shutdown");
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// Install the full tracing subscriber for the `serve` command: fmt plus
@@ -331,8 +365,10 @@ pub async fn serve_with_extensions(
             }
         };
         let locator_socket = socket_path.clone();
+        let stop_socket = socket_path.clone();
         let locator_source = source.clone();
         let locator_instance = server_instance_id;
+        let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::oneshot::channel();
         let control = daemon::run_bound_control_socket(
             control_listener,
             app.clone(),
@@ -382,6 +418,27 @@ pub async fn serve_with_extensions(
                 tokio::select! {
                     result = &mut control => return result,
                     _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+                }
+            }
+        };
+        let control = async move {
+            let mut control = Box::pin(control);
+            tokio::select! {
+                result = &mut control => result,
+                _ = control_shutdown_rx => {
+                    let stop = request_daemon_shutdown(&stop_socket);
+                    tokio::pin!(stop);
+                    let response = tokio::select! {
+                        result = &mut control => return result,
+                        response = &mut stop => response,
+                    }?;
+                    match response {
+                        daemon::DaemonResponse::Ok => control.await,
+                        daemon::DaemonResponse::Error { message } => anyhow::bail!(message),
+                        response => anyhow::bail!(
+                            "daemon returned an unexpected shutdown response: {response:?}"
+                        ),
+                    }
                 }
             }
         };
@@ -475,7 +532,15 @@ pub async fn serve_with_extensions(
             evolution_stop.cancel();
             result
         };
-        let result = supervise_http_shutdown(http, control, hup, term, http_shutdown_tx).await;
+        let result = supervise_http_shutdown(
+            http,
+            control,
+            hup,
+            term,
+            http_shutdown_tx,
+            control_shutdown_tx,
+        )
+        .await;
         evolution_stop.cancel();
         if let Some(worker) = evolution_worker
             && worker.await.is_err()
@@ -785,6 +850,7 @@ mod tests {
             let inflight_release = Arc::new(tokio::sync::Notify::new());
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
             let (control_tx, control_rx) = tokio::sync::oneshot::channel();
+            let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::oneshot::channel();
             let (term_tx, term_rx) = tokio::sync::oneshot::channel();
 
             let http_accepting = accepting.clone();
@@ -803,9 +869,14 @@ mod tests {
                 Ok(())
             };
             let control = async move {
-                control_rx
-                    .await
-                    .map_err(|_| anyhow::anyhow!("test control sender disappeared"))?;
+                tokio::select! {
+                    result = control_rx => {
+                        result.map_err(|_| anyhow::anyhow!("test control sender disappeared"))?;
+                    }
+                    result = control_shutdown_rx => {
+                        result.map_err(|_| anyhow::anyhow!("test control shutdown sender disappeared"))?;
+                    }
+                }
                 Ok(())
             };
             let term = async move {
@@ -826,6 +897,7 @@ mod tests {
                 hup,
                 term,
                 shutdown_tx,
+                control_shutdown_tx,
             ));
 
             tokio::task::yield_now().await;
@@ -870,12 +942,19 @@ mod tests {
     async fn outer_shutdown_returns_http_errors_without_waiting_for_a_trigger() -> anyhow::Result<()>
     {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::oneshot::channel();
         let error = supervise_http_shutdown(
             async { Err(anyhow::anyhow!("test HTTP failure")) },
-            std::future::pending::<anyhow::Result<()>>(),
+            async move {
+                control_shutdown_rx
+                    .await
+                    .map_err(|_| anyhow::anyhow!("test control shutdown sender disappeared"))?;
+                Ok(())
+            },
             std::future::pending::<anyhow::Result<()>>(),
             std::future::pending::<anyhow::Result<()>>(),
             shutdown_tx,
+            control_shutdown_tx,
         )
         .await
         .err()

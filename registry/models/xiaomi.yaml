@@ -24,3 +24,39 @@
   knowledge_cutoff: 2024-12
   open_weights: true
   family: mimo
+- id: xiaomi/mimo-v2.6-flash
+  name: 'Xiaomi: MiMo-V2.6-Flash'
+  input_modalities:
+  - audio
+  - image
+  - text
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 131072
+  release_date: 2026-09-21
+- id: xiaomi/mimo-v2.6-pro
+  name: 'Xiaomi: MiMo-V2.6-Pro'
+  input_modalities:
+  - audio
+  - image
+  - text
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 131072
+  release_date: 2026-09-21
+- id: xiaomi/mimo-v2.6-pro-ultraspeed
+  name: 'Xiaomi: MiMo-V2.6-Pro-UltraSpeed'
+  input_modalities:
+  - audio
+  - image
+  - text
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 131072
+  release_date: 2026-09-21

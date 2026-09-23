@@ -168,3 +168,15 @@
   max_input_tokens: 1000000
   max_output_tokens: 131072
   release_date: 2026-09-03
+- id: qwen/qwen3.8-omni-flash
+  name: 'Qwen: Qwen3.8 Omni Flash'
+  input_modalities:
+  - audio
+  - image
+  - text
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 131072
+  release_date: 2026-09-21

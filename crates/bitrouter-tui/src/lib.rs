@@ -53,6 +53,7 @@
 //! the application, so drawing can never become a second implementation of an
 //! action.
 
+pub mod agents;
 pub mod code;
 pub mod cost;
 pub mod editor;

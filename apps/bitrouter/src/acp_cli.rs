@@ -82,7 +82,9 @@ use crate::paths::ConfigSource;
 
 /// Per-invocation routing decision for a spawned sub-agent. Routing is on by
 /// default; `direct` opts out. See `docs/SPAWN_SPEC.md` §5.
-#[derive(clap::Args, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(
+    clap::Args, Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub struct RoutingOptions {
     /// Do NOT route this session's LLM traffic through the daemon — let the
     /// harness use its own provider auth. Routing is attempted by default
@@ -616,6 +618,20 @@ enum PolicyAction {
 }
 
 impl HeadlessOptions {
+    fn policy_file(&self) -> Result<PolicyFile> {
+        match self.permission_policy.as_deref() {
+            None => Ok(PolicyFile::default()),
+            Some(flag) => {
+                let text = match flag.strip_prefix('@') {
+                    Some(path) => std::fs::read_to_string(path)
+                        .with_context(|| format!("reading --permission-policy from {path}"))?,
+                    None => flag.to_string(),
+                };
+                serde_json::from_str(&text).context("--permission-policy is not a valid policy")
+            }
+        }
+    }
+
     /// The policy these flags describe. A malformed `--permission-policy`
     /// fails here, before any session side effect.
     pub fn policy(&self) -> Result<Policy> {
@@ -626,17 +642,7 @@ impl HeadlessOptions {
         } else {
             Mode::DenyAll
         };
-        let file = match self.permission_policy.as_deref() {
-            None => PolicyFile::default(),
-            Some(flag) => {
-                let text = match flag.strip_prefix('@') {
-                    Some(path) => std::fs::read_to_string(path)
-                        .with_context(|| format!("reading --permission-policy from {path}"))?,
-                    None => flag.to_string(),
-                };
-                serde_json::from_str(&text).context("--permission-policy is not a valid policy")?
-            }
-        };
+        let file = self.policy_file()?;
         Ok(Policy {
             mode,
             auto_approve: file.auto_approve,
@@ -646,6 +652,91 @@ impl HeadlessOptions {
                 PolicyAction::Deny => Decision::Deny,
             }),
         })
+    }
+
+    /// Permission policy for a daemon-supervised run. Unlike ordinary
+    /// headless execution, an unmatched request can remain pending for an
+    /// interactive manager, so no explicit flags means `Ask`.
+    pub fn supervised_permission_policy(&self) -> Result<crate::supervisor::PermissionPolicy> {
+        let file = self.policy_file()?;
+        let unmatched = match file.default_action {
+            Some(PolicyAction::Approve) => crate::supervisor::PermissionDefault::ApproveAll,
+            Some(PolicyAction::Deny) => crate::supervisor::PermissionDefault::DenyAll,
+            None if self.approve_all => crate::supervisor::PermissionDefault::ApproveAll,
+            None if self.approve_reads => crate::supervisor::PermissionDefault::ApproveReads,
+            None if self.deny_all => crate::supervisor::PermissionDefault::DenyAll,
+            None => crate::supervisor::PermissionDefault::Ask,
+        };
+        Ok(crate::supervisor::PermissionPolicy {
+            auto_approve: file.auto_approve,
+            auto_deny: file.auto_deny,
+            unmatched,
+        })
+    }
+}
+
+#[cfg(test)]
+mod supervised_permission_policy_tests {
+    use super::{HeadlessOptions, PromptFormat};
+    use crate::supervisor::PermissionDefault;
+
+    fn options() -> HeadlessOptions {
+        HeadlessOptions {
+            approve_all: false,
+            approve_reads: false,
+            deny_all: false,
+            permission_policy: None,
+            format: PromptFormat::Ndjson,
+        }
+    }
+
+    #[test]
+    fn no_background_permission_flags_ask() -> anyhow::Result<()> {
+        assert_eq!(
+            options().supervised_permission_policy()?.unmatched,
+            PermissionDefault::Ask
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_modes_keep_their_background_meaning() -> anyhow::Result<()> {
+        let mut deny = options();
+        deny.deny_all = true;
+        assert_eq!(
+            deny.supervised_permission_policy()?.unmatched,
+            PermissionDefault::DenyAll
+        );
+        let mut reads = options();
+        reads.approve_reads = true;
+        assert_eq!(
+            reads.supervised_permission_policy()?.unmatched,
+            PermissionDefault::ApproveReads
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_policy_default_outranks_background_ask() -> anyhow::Result<()> {
+        let mut configured = options();
+        configured.permission_policy = Some(r#"{"defaultAction":"approve"}"#.to_string());
+        assert_eq!(
+            configured.supervised_permission_policy()?.unmatched,
+            PermissionDefault::ApproveAll
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn match_lists_without_a_default_preserve_ask() -> anyhow::Result<()> {
+        let mut configured = options();
+        configured.permission_policy =
+            Some(r#"{"autoApprove":["read"],"autoDeny":["execute"]}"#.to_string());
+        let policy = configured.supervised_permission_policy()?;
+        assert_eq!(policy.unmatched, PermissionDefault::Ask);
+        assert_eq!(policy.auto_approve, ["read"]);
+        assert_eq!(policy.auto_deny, ["execute"]);
+        Ok(())
     }
 }
 
@@ -667,7 +758,7 @@ pub struct PromptOptions {
 }
 
 /// Which harness-native session a one-shot driver opens.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SessionSelection {
     /// Create a new harness-native session.
     #[default]
@@ -682,7 +773,7 @@ pub enum SessionSelection {
 ///
 /// Drivers render or reject controls from this value; they do not infer
 /// support from an agent name or optimistically send draft methods.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CapabilitySnapshot {
     pub load: bool,
     pub resume: bool,
@@ -961,7 +1052,7 @@ async fn apply_routing_with_diagnostics(
     agent_id: &str,
     opts: &RoutingOptions,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
-    diagnostics: &mut dyn FnMut(String),
+    diagnostics: &mut (dyn FnMut(String) + Send),
 ) -> std::result::Result<Routed, RoutingError> {
     // Every controlled entrypoint shares this preparation. Preserve the config
     // home's database location even when the coding working directory differs.
@@ -1161,7 +1252,11 @@ async fn apply_routing_with_diagnostics(
     })
 }
 
-fn warn_model_dropped(opts: &RoutingOptions, why: &str, diagnostics: &mut dyn FnMut(String)) {
+fn warn_model_dropped(
+    opts: &RoutingOptions,
+    why: &str,
+    diagnostics: &mut (dyn FnMut(String) + Send),
+) {
     if let Some(model) = &opts.model {
         diagnostics(format!("note: --model '{model}' ignored — {why}"));
     }
@@ -1773,7 +1868,9 @@ pub(crate) struct SessionHandle {
     pub(crate) initial_settings: bitrouter_sdk::acp::client::SessionInitialSettings,
     cwd: PathBuf,
     mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
-    pub(crate) updates: std::pin::Pin<Box<dyn futures::Stream<Item = SessionUpdate> + Send>>,
+    pub(crate) updates: std::pin::Pin<
+        Box<dyn futures::Stream<Item = bitrouter_sdk::acp::client::SequencedSessionUpdate> + Send>,
+    >,
     pub(crate) permissions:
         std::pin::Pin<Box<dyn futures::Stream<Item = PendingPermission> + Send>>,
     session: ControlledSession,
@@ -1806,7 +1903,7 @@ impl SessionHandle {
                 self.mcp_servers.clone(),
             ) => result?,
         };
-        let updates = updates.session_updates(&ids);
+        let updates = updates.session_updates_sequenced(&ids);
         self.session_id = ids.acp_session_id;
         self.agent_session_id = ids.agent_session_id;
         self.initial_settings = ids.initial_settings;
@@ -1817,6 +1914,15 @@ impl SessionHandle {
     pub(crate) fn take_updates(
         &mut self,
     ) -> std::pin::Pin<Box<dyn futures::Stream<Item = SessionUpdate> + Send>> {
+        let updates = self.take_sequenced_updates();
+        Box::pin(updates.filter_map(|entry| futures::future::ready(entry.update)))
+    }
+
+    pub(crate) fn take_sequenced_updates(
+        &mut self,
+    ) -> std::pin::Pin<
+        Box<dyn futures::Stream<Item = bitrouter_sdk::acp::client::SequencedSessionUpdate> + Send>,
+    > {
         std::mem::replace(&mut self.updates, Box::pin(futures::stream::empty()))
     }
 
@@ -1853,7 +1959,7 @@ impl SessionHost {
     pub(crate) async fn prepare_with_diagnostics(
         ctx: SpawnContext<'_>,
         terminal_auth: bool,
-        diagnostics: &mut dyn FnMut(String),
+        diagnostics: &mut (dyn FnMut(String) + Send),
     ) -> Result<Self> {
         let SpawnContext {
             source,
@@ -1941,7 +2047,7 @@ impl SessionHost {
         };
         let ids = match opened {
             None => {
-                return if session.shutdown().await {
+                return if session.abort_startup().await {
                     Err(lifecycle_cancelled())
                 } else {
                     Err(lifecycle_teardown_unconfirmed())
@@ -1952,15 +2058,13 @@ impl SessionHost {
                 return if session.shutdown().await {
                     Err(error.context("opening the harness session"))
                 } else {
-                    Err(error.context(
-                        "opening the harness session; controller teardown did not confirm",
-                    ))
+                    Err(error.context(LifecycleTeardownUnconfirmed))
                 };
             }
         };
         let client = session.client.clone();
         let capabilities = CapabilitySnapshot::from_client(&client, terminal_auth);
-        let updates = updates.session_updates(&ids);
+        let updates = updates.session_updates_sequenced(&ids);
         Ok(SessionHandle {
             client,
             session_id: ids.acp_session_id,
@@ -1993,6 +2097,19 @@ impl std::fmt::Display for LifecycleCancelled {
 
 impl std::error::Error for LifecycleCancelled {}
 
+#[derive(Debug)]
+struct LifecycleTeardownUnconfirmed;
+
+impl std::fmt::Display for LifecycleTeardownUnconfirmed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(
+            "ACP session lifecycle ended, but controller teardown did not confirm; see the session log",
+        )
+    }
+}
+
+impl std::error::Error for LifecycleTeardownUnconfirmed {}
+
 pub(crate) fn lifecycle_cancelled() -> anyhow::Error {
     anyhow::Error::new(LifecycleCancelled)
 }
@@ -2004,13 +2121,17 @@ pub(crate) fn is_lifecycle_cancelled(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| cause.is::<LifecycleCancelled>())
 }
 
+pub(crate) fn is_lifecycle_teardown_unconfirmed(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<LifecycleTeardownUnconfirmed>())
+}
+
 /// Cancellation only counts as clean after the controller child and its
 /// route binding have both settled. Returning this separately keeps an
 /// unconfirmed child from being silently converted into a normal UI exit.
 fn lifecycle_teardown_unconfirmed() -> anyhow::Error {
-    anyhow::anyhow!(
-        "ACP session lifecycle cancelled, but controller teardown did not confirm; see the session log"
-    )
+    anyhow::Error::new(LifecycleTeardownUnconfirmed)
 }
 
 impl LocalControllerBinding {
@@ -2029,7 +2150,7 @@ impl LocalControllerBinding {
         config: &Config,
         routed: &Routed,
         explicit_base_url: bool,
-        diagnostics: &mut dyn FnMut(String),
+        diagnostics: &mut (dyn FnMut(String) + Send),
     ) -> Option<Self> {
         let (Some(_endpoint), Some(controller_instance_id), Some(api_principal)) = (
             routed.endpoint_plan.as_ref(),
@@ -2583,6 +2704,14 @@ struct ControlledCleanup {
 const CONTROLLER_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl ControlledSession {
+    /// Abort a controller whose initialization finished but whose first
+    /// native-session operation was cancelled. No accepted session exists to
+    /// close gracefully, so terminate the controller immediately and retain
+    /// the same child-reaping proof used for cancelled initialization.
+    async fn abort_startup(&mut self) -> bool {
+        self.cleanup.abort().await
+    }
+
     /// Tear the client down (which closes the duplex and so ends the
     /// controller), wait for the controller to confirm, then drop every route
     /// lease in the namespace. Returns whether every step confirmed; failures
@@ -3575,7 +3704,7 @@ fn drain_telemetry_record(r: RequestCompleted) {
 /// stack — `strip_inherited_env` by `AgentProcess`, `turn_timeout` by
 /// `ClientOptions`, `mcp_servers` by `AcpClient::new_session` — so there is no
 /// one SDK type it belongs to.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct LaunchOptions {
     /// Inherited environment names to remove before applying the explicit
     /// transport and launch overlays. This lets isolated callers prevent

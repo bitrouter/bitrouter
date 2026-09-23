@@ -27,7 +27,7 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 `kind` is a stable taxonomy (`bad_request` / `unauthorized` / `forbidden` / `not_found` / `upstream` / `internal` / …). Under `--human`, the result (success object or error block) is rendered to stdout in the human form and no JSON is printed.
 
-> Non-reporting commands are exempt: `serve` is a long-running server; `acp serve` is a stdio JSON-RPC bridge; `run` streams NDJSON by default; `code` and `launch` own the terminal; and `cloud api` streams the remote response body.
+> Non-reporting commands are exempt: `serve` is a long-running server; `acp serve` is a stdio JSON-RPC bridge; foreground `run` streams NDJSON by default; `code`, `launch`, bare `agents`, and `agents attach` own the terminal; and `cloud api` streams the remote response body. `run --background` and `agents sessions|stop|remove` remain ordinary structured reports.
 
 Per-provider credential commands are under `bro providers (login|logout)`; BitRouter Cloud sign-in is `bro cloud (login|logout|whoami)`.
 
@@ -596,6 +596,41 @@ Prints a YAML stub to review and paste under `mcp_servers:`. This legacy helper 
 
 ## ACP agent management
 
+Bare `bro agents` opens the standalone supervised-run manager in an alternate
+screen. It requires TTY stdin and stdout; in a pipe it exits without emitting
+terminal control sequences and points scripts to `bro agents sessions --json`.
+The manager and direct attach operate only against the local daemon/config
+context. They never fall back from a named remote context to local execution.
+
+### Supervised sessions
+
+```console
+bro agents                         # standalone manager (TTY)
+bro agents sessions [--json]       # scriptable run inventory
+bro agents attach <agent-run-id>   # retained history + live inspector
+bro agents stop <agent-run-id>     # stop controller/child; keep native session
+bro agents remove <agent-run-id>   # remove settled BitRouter metadata/events
+```
+
+`attach` acquires the run's generation-fenced interactive lease. Detaching
+keeps the controller, native session, active turn, route lease, and metering
+alive. `stop` is a separate mutation and does not delete harness-native saved
+state. `remove` is accepted only after a stopped, failed, or interrupted child
+has been reaped; it deletes the minimal BitRouter ledger row and ephemeral
+retained events, not native harness history.
+
+The session list derives **Needs input**, **Ready for review**, **Working**,
+**Idle**, and **Stopped** from typed supervisor state. A settled ACP turn is
+Ready for review, not proof that the task is complete. A daemon restart marks
+formerly live ledger rows Interrupted and never silently relaunches them.
+
+The owner-only local session socket issues exact, command-scoped grants.
+`sessions` receives metadata-only list authority: it cannot read transcripts,
+raw tool or permission context, prompt/result content, exact failure text, or
+mutate a run. Peek, retained transcript, attach, respond, stop, remove, and
+start are distinct scopes; interactive clients request only the set their
+surface can actually exercise.
+
 ### `bro agents list`
 
 ```
@@ -662,6 +697,7 @@ bro run <agent> [prompt|-] [--prompt-file PATH] [--load ID|--resume ID]
               [--cwd PATH] [--format ndjson|text|quiet]
               [--approve-all|--approve-reads|--deny-all]
               [--permission-policy JSON|@PATH] [--result-schema JSON|@PATH]
+              [--background [--allow-shared-directory]]
               [--turn-timeout <secs>] [routing flags] [-c <path>]
 ```
 
@@ -674,6 +710,33 @@ temporary format-value alias for `ndjson`.
 Permissions, result validation, routing, timeouts, session identity, and exit
 codes are the same implementation used by the compatibility `acp prompt` and
 `spawn <agent> -p` forms.
+
+`--background` is a different lifecycle, not an alias for hidden `--no-wait`.
+It ensures the local daemon is available, submits the run to its resident
+supervisor, and returns only after the supervisor owns an attachable ACP
+session and can return an agent run ID. The turn continues when this CLI exits.
+`--no-wait` conflicts with `--background`.
+
+Foreground `run` remains deny-all when no permission option answers an
+unmatched request. A background run has an interactive broker, so its unmatched
+default is **Ask**: the run enters Needs input until an authorized client
+responds. `--approve-all`, `--approve-reads`, and `--deny-all` keep their exact
+existing meanings. A permission policy's explicit `defaultAction` wins; a
+policy without `defaultAction` applies its exact matches and otherwise uses an
+explicit mode or background Ask.
+
+`--turn-timeout` includes time waiting for a background permission and records
+a timeout failure after cancellation. `--result-schema` is validated before
+submission and the settled reply must satisfy it before the row becomes Ready.
+`--load` and `--resume` remain capability-gated explicit native-session
+selections; daemon restart never auto-resumes an interrupted row.
+
+Every supervised run claims the canonical Git worktree root, or the canonical
+requested directory outside Git. A second potentially writable run with the
+same claim is rejected even when it requested another subdirectory. Prefer a
+separate worktree. `--allow-shared-directory` is a background-only, explicitly
+warned override; it disables this single-writer protection but does not broaden
+agent permissions.
 
 ### `bro acp`
 
@@ -700,36 +763,84 @@ picker. Explicit `code <agent>` connects directly. Dismissing a picker restores
 the draft and reading position. A draft written before connecting remains a
 draft after agent selection and needs an explicit send.
 
-The conversation, multiline composer, and **agent, route, activity, and
-attributed session cost** stay visible. Ctrl-P opens commands and temporary
-inspectors; there are no permanent page tabs. Reports run on demand through the
-same typed actions as the CLI. Host request history is labelled by its scope;
-it is not presented as the current session's traffic or cost.
+The conversation remains in the normal terminal buffer and native scrollback.
+The multiline composer, **agent, route, activity, and attributed session
+cost**, plus a one- or two-line background-agent strip stay in the bounded
+bottom control deck. Background output is never appended to the foreground
+document plane. `/` opens the searchable command launcher and temporary
+inspectors; there are no
+permanent page tabs.
+
+Every local Code controller is daemon-supervised from creation. Foreground and
+background are presentation states, not different process owners. The current
+foreground run therefore participates in canonical worktree claims. Clean
+Ctrl-C/Ctrl-D from Ready with an empty draft stops it; **Detach current session
+and exit** leaves it running as a background row; terminal loss detaches after
+lease expiry. An active turn is cancelled by Ctrl-C/Escape, while detach is the
+explicit way to leave it running.
+
+Choose **Background agents** from `/` to expand or collapse the command center
+inside the normal-buffer dock. The whole
+expanded deck is capped at 40% of physical rows and replaces the editable
+foreground composer with a one-line draft-preserved summary. Selection, peek,
+target-bound background replies, bounded permission choices, cancel,
+mark-reviewed, and stop stay inside this surface. Retained history, search,
+long output/diffs, and complex permission review open an explicit
+alternate-screen inspector. Detach returns to the same row without replaying
+background history into native scrollback.
 
 Named remote contexts and explicit `--socket` operation targets open an
-operations-only status inspector. Ctrl-P exposes status, models, host requests,
+operations-only status inspector. `/` exposes status, models, host requests,
 route preview, providers, telemetry, active policy, agent catalog, reload state,
 and an explicit **Reload now** action. Remote requests use authenticated HTTP
 and never fall back to local data. These targets have no ACP composer, agent
 launcher, or session route mutation. Closing their root inspector exits.
 
-**Keys**
+**Command input and keys**
+
+`/` opens a temporary, flat command launcher. It searches visible action names,
+descriptions, and owners; it does not append its query to the draft. `Esc`
+restores the exact draft and prior surface. In an editable field, `/` opens the
+launcher at the start of the field; elsewhere it types a literal slash. Type
+`//` for a literal leading slash. Bracketed paste remains draft text. The
+launcher also includes agent-advertised commands and prompt templates, labelled
+by owner. A collision between owners requires an explicit choice. Selecting
+an agent command preserves an unsent human draft; templates ask before replacing
+one. **New session** has the short command `/new`, and `/hotkeys` shows the
+effective keymap. Search `reload` to see separate **View reload state** and
+**Reload now** actions; no nested slash syntax is required.
+
+Code ships with no action hotkeys. Optional user bindings live in
+`$XDG_CONFIG_HOME/bitrouter/code-hotkeys.json`, or
+`~/.config/bitrouter/code-hotkeys.json` when `XDG_CONFIG_HOME` is unset. The
+file is a JSON object mapping chords to action IDs, for example
+`{"F2":"review_permission","Ctrl-P":"hotkeys"}`. `/hotkeys` lists the IDs,
+current bindings, and unbound actions. Invalid bindings produce a visible
+diagnostic and leave the action keymap empty. Bindings invoke the same guarded
+actions as launcher rows; they cannot bypass permission selection or
+confirmation. Terminals differ in which modified keys they deliver, so test
+the requested chord in the terminal you use.
 
 | Key | Effect |
 | --- | --- |
 | `Enter` | Send at idle; while working, preserve the draft and explain queueing |
 | `Shift-Enter` / `Alt-Enter` / `Ctrl-J` | Insert a newline (`Ctrl-J` is the fallback) |
-| `Tab` | Accept open completion; otherwise queue a follow-up during work |
-| `Ctrl-P` / leading `/` | Search the command palette / slash completions |
+| `/` | Open the command launcher at the start of a focused field or from a non-text surface |
 | Arrows, Home/End | Edit at the grapheme cursor; Up/Down at draft boundaries visits process-local history |
-| `Ctrl-G` | Open `$VISUAL` or `$EDITOR` at idle with no pending permission |
 | `PageUp` / `PageDown` | Read transcript history without incoming updates moving the reading position |
-| `F2` | Explicitly focus the oldest pending permission |
 | Permission digits / arrows, then `Enter` | Highlight an offered choice, then explicitly confirm it |
 | `Esc` | Close a temporary surface; in the working composer, request cancellation |
 | `Ctrl-C` | Close a picker/inspector; cancel a working turn; clear an idle draft; exit if idle and empty |
 | `Ctrl-D` | Exit only from an idle, empty composer; preserve nonempty drafts |
 | `Ctrl-L` | Redraw without clearing the conversation |
+
+Background events never auto-expand the command center or steal focus. A
+foreground permission keeps mutation priority: while it is pending, the
+background center is read-only until the user resolves or denies it. A
+background permission starts with no selected choice and binds every response
+to the exact run, permission, option, lease generation, and idempotent action
+request. Foreground and per-background reply drafts are separate; changing a
+selected row can never retarget the foreground composer.
 
 Bracketed paste preserves line breaks and does not submit. Queued prompts are
 local to this UI process, dispatch serially only after normal `end_turn`, and
@@ -737,7 +848,7 @@ pause after refusal, limits, errors, cancellation, or disconnect. Resolve queued
 work before switching agents or sessions. Queueing does not claim native
 mid-turn steering support.
 
-**New session** in Ctrl-P starts a fresh transcript with the same agent and
+**New session** (`/new`) starts a fresh transcript with the same agent and
 retains the launch's `--model`, routing options and `--turn-timeout`. It closes
 the previous ACP connection before opening the replacement; it does not load
 or replay earlier history. Selecting the same agent also retains these launch
@@ -750,6 +861,11 @@ Dismissing a permission uses its offered reject-once option, otherwise the ACP
 cancelled outcome. Cancelling the turn resolves outstanding requests as
 `Cancelled`, retains the original prompt until settlement or bounded teardown,
 and does not imply effects were rolled back.
+
+The supervisor retains a minimal run ledger and a bounded live event journal,
+not a canonical transcript database. After daemon restart, previously live
+rows are Interrupted rather than resumed. An attach replay with evicted early
+events permanently shows **Earlier activity is not retained by BitRouter**.
 
 Agent settings come from initial ACP metadata and later updates. They are
 separate from session `/route` and `/route reset` controls. Route controls need

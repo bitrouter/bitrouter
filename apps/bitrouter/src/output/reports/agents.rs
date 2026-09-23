@@ -4,6 +4,9 @@ use serde::Serialize;
 
 use crate::output::CliReport;
 use crate::output::human::{Human, Table};
+use crate::supervisor::{
+    AttentionState, ProcessState, ReviewState, RunSnapshot, RunSummary, TurnState,
+};
 
 fn yesno(b: bool) -> String {
     if b { "yes".into() } else { "no".into() }
@@ -103,6 +106,112 @@ impl CliReport for AgentsCheckReport {
             ]);
         }
         h.table(&t)
+    }
+}
+
+/// Scriptable inventory returned by `agents sessions`.
+#[derive(Serialize)]
+pub struct AgentSessionsReport {
+    pub runs: Vec<RunSummary>,
+}
+
+impl CliReport for AgentSessionsReport {
+    fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
+        let mut table = Table::new(["RUN", "LABEL", "AGENT", "STATE", "DIRECTORY", "ACTIVITY"]);
+        for run in &self.runs {
+            table.push([
+                run.run_id.clone(),
+                run.label.clone(),
+                run.agent_id.clone(),
+                summary_group(run).to_string(),
+                run.cwd.display().to_string(),
+                run.activity.clone(),
+            ]);
+        }
+        h.table(&table)
+    }
+}
+
+/// Acceptance report for `run --background`.
+#[derive(Serialize)]
+pub struct BackgroundRunReport {
+    pub agent_run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_session_id: Option<String>,
+    pub state: String,
+}
+
+impl BackgroundRunReport {
+    pub fn from_snapshot(snapshot: &RunSnapshot) -> Self {
+        Self {
+            agent_run_id: snapshot.run_id.clone(),
+            native_session_id: snapshot.native_session_id.clone(),
+            state: run_group(snapshot).to_string(),
+        }
+    }
+}
+
+impl CliReport for BackgroundRunReport {
+    fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
+        h.line(&format!("agent run {} · {}", self.agent_run_id, self.state))?;
+        h.line(&format!(
+            "attach: {} agents attach {}",
+            bitrouter_sdk::invocation::name(),
+            self.agent_run_id
+        ))
+    }
+}
+
+/// Result of a stop/remove lifecycle mutation.
+#[derive(Serialize)]
+pub struct AgentSessionMutationReport {
+    pub action: &'static str,
+    pub agent_run_id: String,
+    pub state: String,
+}
+
+impl CliReport for AgentSessionMutationReport {
+    fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
+        h.line(&format!(
+            "{} {} · {}",
+            self.action, self.agent_run_id, self.state
+        ))
+    }
+}
+
+fn run_group(run: &RunSnapshot) -> &'static str {
+    match (run.attention, run.review, run.turn, run.process) {
+        (
+            AttentionState::Question | AttentionState::Permission | AttentionState::Error,
+            _,
+            _,
+            _,
+        ) => "needs_input",
+        (AttentionState::Result, ReviewState::Unread, _, _) => "ready_for_review",
+        (_, _, TurnState::Submitting | TurnState::Working | TurnState::Cancelling, _)
+        | (_, _, _, ProcessState::Starting | ProcessState::Stopping) => "working",
+        (_, _, _, ProcessState::Stopped | ProcessState::Failed | ProcessState::Interrupted) => {
+            "stopped"
+        }
+        _ => "idle",
+    }
+}
+
+fn summary_group(run: &RunSummary) -> &'static str {
+    match (run.attention, run.review, run.turn, run.process) {
+        (
+            AttentionState::Question | AttentionState::Permission | AttentionState::Error,
+            _,
+            _,
+            _,
+        ) => "needs_input",
+        (AttentionState::Result, ReviewState::Unread, _, _) => "ready_for_review",
+        (_, _, TurnState::Submitting | TurnState::Working | TurnState::Cancelling, _)
+        | (_, _, _, ProcessState::Starting | ProcessState::Stopping) => "working",
+        (_, _, _, ProcessState::Stopped | ProcessState::Failed | ProcessState::Interrupted) => {
+            "stopped"
+        }
+        _ => "idle",
     }
 }
 

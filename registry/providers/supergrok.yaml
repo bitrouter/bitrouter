@@ -51,6 +51,8 @@ models:
       - tools
   - id: x-ai/grok-4.6
     provider_model_id: grok-4.6
+  - id: x-ai/grok-4.7
+    provider_model_id: grok-4.7
 status: active
 auth:
   kind: oauth

@@ -55,6 +55,16 @@ pub fn summary_for(action: &str) -> &'static str {
 /// control the session cannot run should say why rather than vanish.
 pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
     let capability = client.route_control();
+    offered_route_commands(
+        capability.allows(RouteMethod::List),
+        capability.allows(RouteMethod::Set),
+        capability.allows(RouteMethod::Reset),
+    )
+}
+
+/// Resolve the same command inventory for a supervised client's negotiated
+/// snapshot without granting that presentation a direct controller handle.
+pub(crate) fn offered_route_commands(list: bool, set: bool, reset: bool) -> Vec<Command> {
     ACTIONS
         .iter()
         .filter_map(|row| {
@@ -63,14 +73,10 @@ pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
                 (Requires::Nothing, _) => None,
                 // `reset` is advertised separately from `list`/`set`, so it is
                 // asked about separately.
-                (Requires::Binding, "route_reset") => {
-                    (!capability.allows(RouteMethod::Reset)).then_some(NOT_RESETTABLE)
-                }
+                (Requires::Binding, "route_reset") => (!reset).then_some(NOT_RESETTABLE),
                 // The picker lists with one method and sets with another, so
                 // both must be there for it to be worth opening.
-                (Requires::Binding, _) => (!(capability.allows(RouteMethod::List)
-                    && capability.allows(RouteMethod::Set)))
-                .then_some(NOT_ROUTABLE),
+                (Requires::Binding, _) => (!(list && set)).then_some(NOT_ROUTABLE),
             };
             Some(Command {
                 name,

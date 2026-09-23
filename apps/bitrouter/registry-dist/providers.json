@@ -378,6 +378,27 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "moonshotai/kimi-k3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider_model_id": "kimi-k3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "alibaba",
@@ -813,6 +834,70 @@
             }
           },
           "provider_model_id": "qwen3.8-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "deepseek/deepseek-v4.1-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01488,
+              "no_cache": 0.29754
+            },
+            "output_tokens": {
+              "text": 1.19015
+            }
+          },
+          "provider_model_id": "deepseek-v4.1-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "z-ai/glm-5.3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.275,
+              "cache_write": 0.0,
+              "no_cache": 1.1
+            },
+            "output_tokens": {
+              "text": 3.851
+            }
+          },
+          "provider_model_id": "glm-5.3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "moonshotai/kimi-k3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.283,
+              "no_cache": 2.827
+            },
+            "output_tokens": {
+              "text": 14.133
+            }
+          },
+          "provider_model_id": "kimi-k3",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -1355,6 +1440,24 @@
             }
           },
           "provider_model_id": "claude-fable-5-1",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "anthropic",
+          "id": "anthropic/claude-opus-5.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "no_cache": 4.0
+            },
+            "output_tokens": {
+              "text": 20.0
+            }
+          },
+          "provider_model_id": "claude-opus-5-5",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -2021,6 +2124,27 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "anthropic/claude-opus-5.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "no_cache": 4.0
+            },
+            "output_tokens": {
+              "text": 20.0
+            }
+          },
+          "provider_model_id": "anthropic.claude-opus-5-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "aws-bedrock",
@@ -2498,6 +2622,69 @@
             }
           },
           "provider_model_id": "gpt-6-astra",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "anthropic/claude-opus-5.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "no_cache": 4.0
+            },
+            "output_tokens": {
+              "text": 20.0
+            }
+          },
+          "provider_model_id": "claude-opus-5-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "openai/gpt-6-luna",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            }
+          },
+          "provider_model_id": "gpt-6-luna",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "openai/gpt-6-sol",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "gpt-6-sol",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -3507,6 +3694,35 @@
             }
           },
           "provider_model_id": "deepseek/deepseek-v4.1-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5.3-flashx",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "cache_write": 0.0,
+              "no_cache": 0.37
+            },
+            "output_tokens": {
+              "text": 1.25
+            }
+          },
+          "provider_model_id": "z-ai/glm-5.3-flashx"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "x-ai/grok-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "x-ai/grok-4.7"
         }
       ],
       "name": "bitrouter",
@@ -3921,6 +4137,11 @@
           "api_protocol": "anthropic",
           "id": "anthropic/claude-fable-5.1",
           "provider_model_id": "claude-fable-5-1"
+        },
+        {
+          "api_protocol": "anthropic",
+          "id": "anthropic/claude-opus-5.5",
+          "provider_model_id": "claude-opus-5-5"
         }
       ],
       "name": "claude-code",
@@ -4165,6 +4386,11 @@
           "api_protocol": "openai",
           "id": "openai/gpt-6-astra",
           "provider_model_id": "gpt-6-astra"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "x-ai/grok-4.7",
+          "provider_model_id": "grok-4.7"
         }
       ],
       "name": "github-copilot",
@@ -5483,6 +5709,48 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "openai/gpt-6-luna",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            }
+          },
+          "provider_model_id": "gpt-6-luna",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "openai/gpt-6-sol",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "gpt-6-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "openai",
@@ -5659,6 +5927,16 @@
               "xhigh"
             ]
           }
+        },
+        {
+          "api_protocol": "responses",
+          "id": "openai/gpt-6-luna",
+          "provider_model_id": "gpt-6-luna"
+        },
+        {
+          "api_protocol": "responses",
+          "id": "openai/gpt-6-sol",
+          "provider_model_id": "gpt-6-sol"
         }
       ],
       "name": "openai-codex",
@@ -5810,6 +6088,21 @@
           "api_protocol": "openai",
           "id": "deepseek/deepseek-v4.1-flash",
           "provider_model_id": "deepseek-v4.1-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "x-ai/grok-4.7",
+          "provider_model_id": "grok-4.7"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "xiaomi/mimo-v2.6-flash",
+          "provider_model_id": "mimo-v2.6-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "xiaomi/mimo-v2.6-pro",
+          "provider_model_id": "mimo-v2.6-pro"
         }
       ],
       "name": "opencode-go",
@@ -6374,6 +6667,94 @@
             }
           },
           "provider_model_id": "gpt-6-astra"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4.1-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.006,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "deepseek-v4.1-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.8-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "cache_write": 0.2,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            }
+          },
+          "provider_model_id": "qwen3.8-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "anthropic/claude-opus-5.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "no_cache": 4.0
+            },
+            "output_tokens": {
+              "text": 20.0
+            }
+          },
+          "provider_model_id": "claude-opus-5-5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "openai/gpt-6-luna",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            }
+          },
+          "provider_model_id": "gpt-6-luna"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "openai/gpt-6-sol",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "gpt-6-sol"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "x-ai/grok-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.35,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.2
+            }
+          },
+          "provider_model_id": "grok-4.7"
         }
       ],
       "name": "opencode-zen",
@@ -7656,6 +8037,209 @@
             }
           },
           "provider_model_id": "deepseek/deepseek-v4.1-flash"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "z-ai/glm-5.3-flashx",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "no_cache": 0.37
+            },
+            "output_tokens": {
+              "text": 1.25
+            }
+          },
+          "provider_model_id": "z-ai/glm-5.3-flashx"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "x-ai/grok-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.4,
+              "no_cache": 1.6
+            },
+            "output_tokens": {
+              "text": 4.8
+            }
+          },
+          "provider_model_id": "x-ai/grok-4.7"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider_model_id": "xiaomi/mimo-v2.6-flash"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider_model_id": "xiaomi/mimo-v2.6-pro"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.036,
+              "no_cache": 4.35
+            },
+            "output_tokens": {
+              "text": 8.7
+            }
+          },
+          "provider_model_id": "xiaomi/mimo-v2.6-pro-ultraspeed"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "anthropic/claude-opus-5.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "no_cache": 4.0
+            },
+            "output_tokens": {
+              "text": 20.0
+            }
+          },
+          "provider_model_id": "anthropic/claude-opus-5.5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "openai/gpt-6-luna",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            }
+          },
+          "provider_model_id": "openai/gpt-6-luna"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "openai/gpt-6-luna-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            }
+          },
+          "provider_model_id": "openai/gpt-6-luna-pro"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "openai/gpt-6-sol",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "openai/gpt-6-sol"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "openai/gpt-6-sol-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "openai/gpt-6-sol-pro"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "qwen/qwen3.8-omni-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            }
+          },
+          "provider_model_id": "qwen/qwen3.8-omni-flash"
         }
       ],
       "name": "openrouter",
@@ -8401,6 +8985,48 @@
             }
           },
           "provider_model_id": "openai/gpt-oss-120b"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.8-2.4t-a95b",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "Qwen/Qwen3.8-2.4T-A95B"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k2.7-code",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.17993,
+              "no_cache": 0.85916
+            },
+            "output_tokens": {
+              "text": 3.8
+            }
+          },
+          "provider_model_id": "moonshotai/Kimi-K2.7-Code"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.27,
+              "no_cache": 2.7
+            },
+            "output_tokens": {
+              "text": 13.5
+            }
+          },
+          "provider_model_id": "moonshotai/Kimi-K3"
         }
       ],
       "name": "siliconflow",
@@ -8655,6 +9281,14 @@
           ],
           "id": "x-ai/grok-4.6",
           "provider_model_id": "grok-4.6"
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "id": "x-ai/grok-4.7",
+          "provider_model_id": "grok-4.7"
         }
       ],
       "name": "supergrok",
@@ -9324,6 +9958,23 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "id": "z-ai/glm-5.3",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.45,
+              "no_cache": 1.8
+            },
+            "output_tokens": {
+              "text": 5.75
+            }
+          },
+          "provider_model_id": "glm-5-3",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "tinfoil",
@@ -9699,6 +10350,26 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "responses",
+            "openai"
+          ],
+          "id": "x-ai/grok-4.7",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider_model_id": "grok-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "xai",
@@ -9852,6 +10523,69 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider_model_id": "mimo-v2.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider_model_id": "mimo-v2.6-pro",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.036,
+              "no_cache": 4.35
+            },
+            "output_tokens": {
+              "text": 8.7
+            }
+          },
+          "provider_model_id": "mimo-v2.6-pro-ultraspeed",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "xiaomi",
@@ -9913,6 +10647,30 @@
           ],
           "id": "xiaomi/mimo-v2.5",
           "provider_model_id": "mimo-v2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-flash",
+          "provider_model_id": "mimo-v2.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-pro",
+          "provider_model_id": "mimo-v2.6-pro",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -9980,6 +10738,30 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-flash",
+          "provider_model_id": "mimo-v2.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-pro",
+          "provider_model_id": "mimo-v2.6-pro",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "xiaomi_token_plan_cn",
@@ -10041,6 +10823,30 @@
           ],
           "id": "xiaomi/mimo-v2.5",
           "provider_model_id": "mimo-v2.5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-flash",
+          "provider_model_id": "mimo-v2.6-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "xiaomi/mimo-v2.6-pro",
+          "provider_model_id": "mimo-v2.6-pro",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -10202,6 +11008,27 @@
             }
           },
           "provider_model_id": "glm-4.7",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "id": "z-ai/glm-5.3-flashx",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "cache_write": 0.0,
+              "no_cache": 0.37
+            },
+            "output_tokens": {
+              "text": 1.25
+            }
+          },
+          "provider_model_id": "glm-5.3-flashx",
           "rate_limits": {
             "requests_per_minute": 60
           }

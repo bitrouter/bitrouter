@@ -4,7 +4,7 @@ How BitRouter's ACP surfaces divide ownership. For CLI flags see
 `references/cli.md` §ACP sessions; for adapter config see
 `references/providers.md` §ACP agents.
 
-## One controller, three drivers
+## Controller and supervisor ownership
 
 `bro acp serve` is a connection-level ACP controller:
 
@@ -21,7 +21,7 @@ BitRouter does not generate an alias or read Claude/Codex private session
 files. Optional local recording mirrors observable ACP content; it does not
 replace the harness's native session catalog or persistence.
 
-`bro run` runs the **same controller**, in-process: it launches the
+Foreground `bro run` runs the **same controller**, in-process: it launches the
 harness behind a connection-level controller and drives it over an in-process
 duplex channel as that controller's own ACP client. Session identity is therefore
 harness-native there too — there is no `record_id` alias. What `prompt` adds on
@@ -29,15 +29,22 @@ top of the controller is client-side: `--turn-timeout` (cooperative
 `session/cancel` plus a three-second grace), headless permission denial, OTel
 turn spans re-derived from the prompt round-trip, and the NDJSON presentation.
 
-`bro code <agent>` drives the same in-process controller through the same
-client, with two additions: it declares a route namespace over the local
-daemon socket (so its traffic meters by controller instance, and the
-controller decorates `usage_update` with attributed cost), and its `/route`
-picker is built on `_bitrouter/route/list|set` — available only when the
-initialize metadata advertises them. There is no local engine, `record_id`,
-or controller-owned FIFO turn queue. Code keeps an explicit process-local
-follow-up queue that dispatches only after normal turn completion; abnormal
-stops pause queued work for explicit action.
+`bro run --background` and target-state `bro code <agent>` instead ask the
+resident local daemon supervisor to own the controller from creation. The
+client receives a BitRouter **agent run ID** only after the controller and a
+harness-native session exist. The run ID identifies that controller lifetime;
+it does not replace the native session ID or native history. Detach and client
+loss leave the controller alive. Explicit stop ends and reaps it without
+deleting the native saved session. A daemon restart records a formerly live
+run as Interrupted and never silently relaunches or resumes it.
+
+Supervisor-owned controllers declare the same route namespace over the local
+daemon (so traffic meters by controller instance and `usage_update` can carry
+attributed cost). Code's `/route` picker remains capability-gated on
+`_bitrouter/route/list|set`. There is no `record_id` or controller-owned FIFO
+turn queue. Code may keep an explicit client draft/follow-up queue; unresolved
+permissions/questions and unread terminal results belong to the supervisor's
+live run state.
 
 ## Controller launch and initialization
 
@@ -47,6 +54,9 @@ bro acp serve <id> [--config PATH]
 
 # One-shot client over the same controller
 bro run <id> "prompt" [routing flags]
+
+# Daemon-supervised run; returns an attachable agent run id
+bro run <id> "prompt" --background [routing flags]
 ```
 
 Stdout is ACP JSON-RPC and logs go to stderr. The ACP client sends `initialize`
@@ -129,10 +139,19 @@ session ID before:
   manager.
 
 Requests, responses, notifications, `_meta`, and unknown extension payloads
-pass through without a BitRouter session alias. On manager disconnect the
-harness child is terminated and live controller state is discarded; the
-controller does not close or delete harness sessions. Whether a session is
-durable is entirely the harness's native behavior.
+pass through without a BitRouter session alias. On an `acp serve` or foreground
+`run` client disconnect, that process-owned controller terminates its harness
+child and discards live state; it does not close or delete native sessions. A
+supervisor-owned Code/background controller follows a different explicit
+lifecycle: client disconnect means detach, while stop terminates the child.
+Whether native session history is durable remains entirely the harness's
+behavior.
+
+The supervisor keeps a minimal run ledger plus an ephemeral, ordered retained
+event journal for its current lifetime. Attach receives an atomic snapshot,
+retained replay bounds, and monotonic live events. A gap is rendered as
+**Earlier activity is not retained by BitRouter** rather than hidden or merged.
+BitRouter does not present this journal as a canonical transcript.
 
 ## Routing and observability boundary
 
@@ -169,7 +188,7 @@ per-session cost; see the `usage` capability above.
 
 ## One-shot NDJSON
 
-`run` emits a first
+Foreground `run` emits a first
 `session` line carrying the
 **harness-native** `session_id` (plus `agent_session_id` when the harness
 exposes one), `agent`, `via`, and `launch_id`. `launch_id` is the one that
@@ -181,10 +200,47 @@ It no longer carries `record_id`; that alias is off the wire. Then come
 lines, a `permission` line for each request the headless policy answered
 (`--deny-all` by default; `--approve-reads`, `--approve-all`, or a per-tool
 `--permission-policy`; exit 5 when something was denied and nothing approved),
-and a `result` line. `--no-wait` emits `submitted`. This NDJSON presentation is
+and a `result` line. Hidden `--no-wait` emits `submitted` but is not detached
+execution. This NDJSON presentation is
 `--format ndjson`, the default (`json` remains an alias); `--format text` and `quiet` print the transcript
 or the assistant text instead. It belongs to `prompt` only; it is not the
 `acp serve` wire format.
+
+`run --background` conflicts with `--no-wait`. It submits a typed start request
+to the supervisor and prints an attachable agent run ID only after ownership is
+accepted. No explicit permission mode means unmatched requests use **Ask** and
+the row moves to Needs input. Foreground `run` remains deny-all. Explicit
+approve/deny modes and policy defaults keep their exact meanings. Turn timeout
+includes time spent waiting for a permission; result-schema failure is a
+reviewable exact error rather than a Ready result.
+
+Every supervisor-owned run claims its canonical Git worktree root, or its
+canonical requested directory outside Git. A second potentially writable run
+with the same claim is blocked before launch, including two subdirectories of
+one worktree. Use a separate worktree, or the explicitly warned
+`--allow-shared-directory` override when shared writes are truly intended.
+
+## Supervised-run commands
+
+```bash
+bro agents                         # standalone alternate-screen manager
+bro agents sessions --json        # scriptable snapshots
+bro agents attach AGENT_RUN_ID     # lease + retained inspector
+bro agents stop AGENT_RUN_ID       # end/reap, keep native session
+bro agents remove AGENT_RUN_ID     # remove settled BitRouter state
+```
+
+Bare `agents` and `attach` require TTY stdin/stdout and emit no terminal
+control sequences to a pipe. Exactly one generation-fenced interactive lease
+may mutate a run. Stop may acquire a transient lease; stale generations are
+rejected. Remove is allowed only after stopped/failed/interrupted reaping has
+settled and never deletes a native harness session.
+
+The local owner-only socket grants start, metadata list, peek, transcript,
+attach, respond, stop, and remove separately. `agents sessions --json` uses
+only the metadata-list grant, so it cannot retrieve prompts, results, exact
+failure text, raw tool/permission context, or mutate a run. Interactive clients
+request only the scopes needed by their visible controls.
 
 ## Local ACP recording
 
@@ -441,14 +497,14 @@ corrections to the original trial can also invalidate adoption. Monitoring does
 not add randomized samples or establish continuing comparative savings. Sessions
 first admitted while off are not enrolled retroactively when reenabled.
 
-In a local coding TUI, open **`/evolution`** from the composer or Ctrl-P. It
+In a local coding TUI, press `/` and choose **`/evolution`**. It
 provides status, mode and judge selection, current-session checkpoint review,
 candidate creation and policy-block evidence/reconciliation. A local serving daemon and
 recorded ACP session are required for checkpoint operations. Remote and
 explicit-socket operations-only targets do not offer these controls. Changing
 the judge preserves the current mode, including off.
 
-After trial registration, use Ctrl-P → **New session** to start a fresh native
+After trial registration, choose **`/new`** in the `/` launcher to start a fresh native
 session with the same agent, model, routing flags and turn timeout. Existing
 native sessions keep their assignments. The previous connection closes before
 the new one starts; no load or history replay is requested. Selecting the same

@@ -512,6 +512,23 @@ models:
         cache_read: 0.13
       output_tokens:
         text: 1.45
+  - id: z-ai/glm-5.3-flashx
+    provider_model_id: z-ai/glm-5.3-flashx
+    pricing:
+      input_tokens:
+        no_cache: 0.37
+        cache_read: 0.075
+        cache_write: 0
+      output_tokens:
+        text: 1.25
+  - id: x-ai/grok-4.7
+    provider_model_id: x-ai/grok-4.7
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.5
+      output_tokens:
+        text: 6
 status: active
 weight: 1
 community: false

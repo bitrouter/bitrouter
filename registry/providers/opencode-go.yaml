@@ -79,6 +79,12 @@ models:
     provider_model_id: qwen3.8-flash
   - id: deepseek/deepseek-v4.1-flash
     provider_model_id: deepseek-v4.1-flash
+  - id: x-ai/grok-4.7
+    provider_model_id: grok-4.7
+  - id: xiaomi/mimo-v2.6-flash
+    provider_model_id: mimo-v2.6-flash
+  - id: xiaomi/mimo-v2.6-pro
+    provider_model_id: mimo-v2.6-pro
 status: active
 auto_sync:
   feed: models_dev

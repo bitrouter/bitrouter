@@ -87,6 +87,10 @@ models:
     provider_model_id: gpt-5.4-mini
     reasoning_effort: *gpt_54_effort
     capabilities: [reasoning, tools]
+  - id: openai/gpt-6-luna
+    provider_model_id: gpt-6-luna
+  - id: openai/gpt-6-sol
+    provider_model_id: gpt-6-sol
 status: active
 auto_sync:
   feed: models_dev

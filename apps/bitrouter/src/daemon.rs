@@ -201,6 +201,12 @@ pub enum DaemonCommand {
         /// Harness-native ACP session identity.
         session_id: String,
     },
+    /// Versioned daemon-owned ACP session control. This variant is accepted
+    /// only on the owner-scoped local transport; the remote control server has
+    /// no corresponding operation.
+    Sessions {
+        request: crate::supervisor::SessionRequest,
+    },
 }
 
 /// Passive live inspection operations accepted over the local control socket.
@@ -336,6 +342,10 @@ pub enum DaemonResponse {
         requests: u64,
         /// Rows without charge evidence, absent from `spend_micro_usd`.
         unpriced: u64,
+    },
+    /// Versioned daemon-owned ACP session response.
+    Sessions {
+        response: crate::supervisor::SessionResponse,
     },
     /// The command failed.
     Error {
@@ -672,6 +682,20 @@ pub(crate) async fn run_bound_control_socket(
     acp: AcpControlPlane,
     administration: Option<Administration>,
 ) -> Result<()> {
+    let supervisor = match &administration {
+        Some(administration) => Some(
+            crate::supervisor::Supervisor::open(
+                administration.source.clone(),
+                administration.routing.clone(),
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let services = LocalControlServices {
+        administration,
+        supervisor,
+    };
     let mut listener = bound.listener;
     let result = accept_loop(
         &mut listener,
@@ -680,11 +704,20 @@ pub(crate) async fn run_bound_control_socket(
         &reloader,
         &observe,
         &acp,
-        &administration,
+        &services,
     )
     .await;
+    if let Some(supervisor) = &services.supervisor {
+        supervisor.shutdown().await;
+    }
     listener.cleanup().await;
     result
+}
+
+#[derive(Clone)]
+struct LocalControlServices {
+    administration: Option<Administration>,
+    supervisor: Option<crate::supervisor::Supervisor>,
 }
 
 async fn accept_loop(
@@ -694,15 +727,46 @@ async fn accept_loop(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     acp: &AcpControlPlane,
-    administration: &Option<Administration>,
+    services: &LocalControlServices,
 ) -> Result<()> {
+    let (stop_tx, mut stop_rx) = tokio::sync::mpsc::unbounded_channel();
     loop {
-        let stream = listener.accept().await?;
-        // Handle one command per connection. A `Stop` ends the loop (and thus
-        // the whole `serve`); any other command loops for the next client.
-        if handle_connection(stream, app, listen, reloader, observe, acp, administration).await? {
-            tracing::info!("stop command received — shutting down");
-            return Ok(());
+        tokio::select! {
+            accepted = listener.accept() => {
+                let stream = accepted?;
+                let app = app.clone();
+                let listen = listen.to_string();
+                let reloader = reloader.clone();
+                let observe = observe.clone();
+                let acp = acp.clone();
+                let services = services.clone();
+                let stop_tx = stop_tx.clone();
+                tokio::spawn(async move {
+                    match handle_connection(
+                        stream,
+                        &app,
+                        &listen,
+                        &reloader,
+                        &observe,
+                        &acp,
+                        &services,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            let _ = stop_tx.send(());
+                        }
+                        Ok(false) => {}
+                        Err(error) => tracing::warn!(%error, "local control connection failed"),
+                    }
+                });
+            }
+            stopped = stop_rx.recv() => {
+                if stopped.is_some() {
+                    tracing::info!("stop command received — shutting down");
+                }
+                return Ok(());
+            }
         }
     }
 }
@@ -719,7 +783,7 @@ async fn handle_connection<S>(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     acp: &AcpControlPlane,
-    administration: &Option<Administration>,
+    services: &LocalControlServices,
 ) -> Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -744,7 +808,7 @@ where
     };
 
     let is_stop = matches!(command, DaemonCommand::Stop);
-    let response = dispatch(command, app, listen, reloader, observe, acp, administration).await;
+    let response = dispatch(command, app, listen, reloader, observe, acp, services).await;
     write_response(reader.get_mut(), &response).await?;
     Ok(is_stop)
 }
@@ -756,7 +820,7 @@ async fn dispatch(
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
     acp: &AcpControlPlane,
-    administration: &Option<Administration>,
+    services: &LocalControlServices,
 ) -> DaemonResponse {
     match command {
         DaemonCommand::Stop => DaemonResponse::Ok,
@@ -824,7 +888,7 @@ async fn dispatch(
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
-            let router_state = router_state(administration).await;
+            let router_state = router_state(&services.administration).await;
             let config_state = reloader.configuration_state().await;
             DaemonResponse::Status {
                 pid: std::process::id(),
@@ -840,7 +904,7 @@ async fn dispatch(
             }
         }
         DaemonCommand::Models => {
-            let routers = router_state(administration)
+            let routers = router_state(&services.administration)
                 .await
                 .and_then(|state| state.running);
             DaemonResponse::Models {
@@ -1018,7 +1082,7 @@ async fn dispatch(
                     };
                 }
             };
-            let router_source = administration.as_ref().and_then(|administration| {
+            let router_source = services.administration.as_ref().and_then(|administration| {
                 resolution.router.as_ref().and_then(|identity| {
                     crate::actions::route::router_source(
                         &administration.routing.snapshot_config(),
@@ -1026,7 +1090,8 @@ async fn dispatch(
                     )
                 })
             });
-            let policy_report = administration
+            let policy_report = services
+                .administration
                 .as_ref()
                 .map(|administration| administration.policy.administration_snapshot());
             let candidate_models = crate::actions::route::policy_candidate_models(
@@ -1076,7 +1141,20 @@ async fn dispatch(
             payload: observe.status(),
         },
         DaemonCommand::Inspect { inspection } => {
-            inspection_response(inspection, administration).await
+            inspection_response(inspection, &services.administration).await
+        }
+        DaemonCommand::Sessions { request } => {
+            let Some(supervisor) = &services.supervisor else {
+                return DaemonResponse::Error {
+                    message: "supervised sessions are unavailable on this daemon".to_string(),
+                };
+            };
+            match supervisor.dispatch(request).await {
+                Ok(response) => DaemonResponse::Sessions { response },
+                Err(error) => DaemonResponse::Error {
+                    message: format!("supervised session request failed: {error:#}"),
+                },
+            }
         }
     }
 }
