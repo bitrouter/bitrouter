@@ -1,12 +1,16 @@
 //! # bitrouter (library)
 //!
 //! Assembly layer: turns a [`bitrouter_sdk::config::Config`] into a running
-//! [`bitrouter_sdk::App`], and carries the management-command logic. This is
-//! the home of v0's `load_builtin_plugins` equivalent.
+//! [`bitrouter_sdk::App`], and carries the management-command logic.
 //!
-//! Assembly sits **above** the SDK and the plugins (`plugins → sdk`, sdk never
-//! depends back) — see. The `bin` target (`main.rs`) is the CLI
-//! entry point and a thin shell over this lib.
+//! Foreground custom hosts register typed capabilities through
+//! [`bitrouter_sdk::extension::ExtensionApi`] and [`host::serve_with_extensions`],
+//! sharing the product's complete service and management lifecycle. Embeddings
+//! that own their listeners can use [`assemble::build_app_with_extensions`].
+//! Router configuration explicitly binds capabilities; host assembly retains
+//! execution and receipt ownership.
+//! The default binary does not link concrete extension implementations. The SDK
+//! never depends back on this product host; `main.rs` is the CLI entry point.
 
 #![forbid(unsafe_code)]
 
@@ -41,6 +45,7 @@ pub mod evaluation_http;
 pub mod evolution;
 pub mod gateways;
 pub mod harness;
+pub mod host;
 mod local_cli;
 pub mod mcp_registry;
 pub mod metering;
@@ -64,6 +69,7 @@ pub mod spawn;
 pub mod style;
 pub mod supervisor;
 pub mod tools;
+mod tracing_filter;
 pub mod trajectory;
 pub mod update;
 pub mod workflow_state;

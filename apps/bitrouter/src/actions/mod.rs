@@ -7,7 +7,6 @@
 //! while the independent upstream MCP gateway remains in `bitrouter-sdk`.
 
 pub mod administration;
-pub mod checks;
 pub(crate) mod code;
 pub mod commands;
 pub mod models;

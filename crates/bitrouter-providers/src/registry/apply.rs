@@ -470,8 +470,9 @@ mod tests {
         use bitrouter_sdk::evaluation::{
             EvaluationQuestionType, EvaluationRequest, EvaluationResult, EvaluationRoutingTarget,
         };
-        use bitrouter_sdk::extension::{
-            EvaluationFormatAdapter, EvaluationFormatDescriptor, ExtensionApi,
+        use bitrouter_sdk::extension::ExtensionApi;
+        use bitrouter_sdk::extension::evaluation_format::{
+            EvaluationFormatAdapter, EvaluationFormatDescriptor,
         };
         use bitrouter_sdk::inference::InferenceOperation;
 

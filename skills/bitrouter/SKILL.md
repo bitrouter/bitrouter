@@ -159,8 +159,9 @@ boundaries. Remote errors never fall back to this machine's configuration.
 |---|---|
 | `references/cli.md` | Full subcommand reference — the primary reference |
 | `references/remote-administration.md` | Remote contexts, operator credentials, and host boundaries |
+| `references/guardrails.md` | Independent input checker, router binding, and blocked legacy guardrails migration |
 | `references/providers.md` | Add / configure providers, multi-account, custom endpoints, model-id spelling |
-| `references/evaluation.md` | Opt-in TypeSafe and local Laya native hosts, `/v1/evaluate`, typed questions, and operation-specific routing |
+| `references/evaluation.md` | Opt-in evaluation host and System One format extension, `/v1/evaluate`, typed questions, and operation-specific routing |
 | `references/cloud-setup.md` | Cloud signup, key mint, billing, wallet path |
 | `references/diagnose.md` | Install issues, daemon won't start, connection refused, model ids |
 | `references/harness-*.md` | Durable per-harness wiring instead of `launch`: `-claude-code`, `-codex`, `-hermes-agent`, `-openclaw`, `-terminus-2` |
@@ -170,6 +171,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 
 ## Gotchas
 
+- Request-check extensions use SDK ExtensionApi and the shared foreground host. Restart the same custom binary, not official `bro restart`. No HTTP service or probe; legacy `plugins.bitrouter-guardrails` blocks startup. See `references/guardrails.md`.
 - **A Skill does not grant command execution.** If the host cannot run local
   processes, explain that this local integration is unavailable; do not suggest
   the removed OSS origin MCP server as a fallback.
@@ -182,8 +184,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 - **Local port is `127.0.0.1:4356`** — old docs saying 8787 are stale. Hosted:
   `https://api.bitrouter.ai/v1` for the OpenAI shape, `https://api.bitrouter.ai`
   (no `/v1`) for the Anthropic SDK — same asymmetry locally.
-- **TypeSafe Jev is not built into stock `bro`.** The fixed `typesafe/jev-1.13` route needs the native host; stock `bro` has no `/v1/evaluate`. See `references/evaluation.md`.
-- **Local Laya is not built into stock `bro`.** It needs a separate loopback model process, an explicit provider config, and `bro-laya`; see `references/evaluation.md`.
+- **TypeSafe Jev is not built into stock `bro`.** The fixed `typesafe/jev-1.13` route needs `bro-evaluate` with the System One format extension; stock `bro` has no `/v1/evaluate`. See `references/evaluation.md`.
 - **Hosted sign-in is `cloud login` or `providers login bitrouter`** (same flow),
   everything else `providers login <id>`; there is no top-level `login`.
 - **Remote control is separate from inference and ACP.** `control.enabled: true`

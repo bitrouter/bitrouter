@@ -252,7 +252,7 @@ fn validate_route_limits(
 
 async fn execute_route(
     http: &HttpExecutor,
-    adapter: &dyn crate::extension::EvaluationFormatAdapter,
+    adapter: &dyn crate::extension::evaluation_format::EvaluationFormatAdapter,
     recorder: &dyn EvaluationAttemptRecorder,
     job: EvaluationJob,
 ) -> Result<EvaluationResult> {

@@ -1015,7 +1015,7 @@ providers:
     operations:
       evaluate:
         endpoint: /v1/systemone
-        format: { extension: typesafe, adapter: system_one, revision: 1 }
+        format: { extension: system-one, adapter: json, revision: 1 }
     models:
       - id: typesafe/jev-1.13
         provider_model_id: jev-1.13.0
@@ -1034,7 +1034,7 @@ providers:
         let pinned = resolve_evaluation_declaration_for(&config, "typesafe:typesafe/jev-1.13")?;
         assert_eq!(bare.provider, "typesafe");
         assert_eq!(pinned.provider_model_id, "jev-1.13.0");
-        assert_eq!(bare.operation.format.adapter, "system_one");
+        assert_eq!(bare.operation.format.adapter, "json");
         assert_eq!(bare.limits.question_types.len(), 3);
         assert!(matches!(
             resolve_evaluation_declaration_for(&config, "legacy/chat"),
@@ -1097,7 +1097,7 @@ providers:
     operations:
       evaluate:
         endpoint: ENDPOINT
-        format: { extension: typesafe, adapter: system_one, revision: 1 }
+        format: { extension: system-one, adapter: json, revision: 1 }
     models:
       - id: typesafe/jev-1.13
         operations:

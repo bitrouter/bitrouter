@@ -65,8 +65,10 @@ process starts anyway. Two places report it:
   daemon's `App` but all of which read the same config. This is the path that
   matters: validation is opt-in, the runtime always runs.
 
-The ids the binary reads are `bitrouter-guardrails`, `bitrouter-policy` and
-`bitrouter-telemetry`. A dead sub-key under a live id is reported too, so a
+The supported ids the binary reads are `bitrouter-policy` and
+`bitrouter-telemetry`. The removed `plugins.bitrouter-guardrails` key instead
+fails validation and activation, including empty/null values; see
+[the explicit migration guide](GUARDRAILS_EXTENSION.md). A dead sub-key under a live id is reported too, so a
 rename that carries an obsolete setting along with it is not silent either.
 
 **Renamed in this release** — the old names are ignored, and the daemon warns
@@ -765,7 +767,8 @@ The conversation remains in the normal terminal buffer and native scrollback.
 The multiline composer, **agent, route, activity, and attributed session
 cost**, plus a one- or two-line background-agent strip stay in the bounded
 bottom control deck. Background output is never appended to the foreground
-document plane. Ctrl-P opens commands and temporary inspectors; there are no
+document plane. `/` opens the searchable command launcher and temporary
+inspectors; there are no
 permanent page tabs.
 
 Every local Code controller is daemon-supervised from creation. Foreground and
@@ -776,8 +779,8 @@ and exit** leaves it running as a background row; terminal loss detaches after
 lease expiry. An active turn is cancelled by Ctrl-C/Escape, while detach is the
 explicit way to leave it running.
 
-`F5` expands/collapses the background command center inside the normal-buffer
-dock; Ctrl-P → **Background agents** is the discoverable equivalent. The whole
+Choose **Background agents** from `/` to expand or collapse the command center
+inside the normal-buffer dock. The whole
 expanded deck is capped at 40% of physical rows and replaces the editable
 foreground composer with a one-line draft-preserved summary. Selection, peek,
 target-bound background replies, bounded permission choices, cancel,
@@ -787,27 +790,44 @@ alternate-screen inspector. Detach returns to the same row without replaying
 background history into native scrollback.
 
 Named remote contexts and explicit `--socket` operation targets open an
-operations-only status inspector. Ctrl-P exposes status, models, host requests,
+operations-only status inspector. `/` exposes status, models, host requests,
 route preview, providers, telemetry, active policy, agent catalog, reload state,
 and an explicit **Reload now** action. Remote requests use authenticated HTTP
 and never fall back to local data. These targets have no ACP composer, agent
 launcher, or session route mutation. Closing their root inspector exits.
 
-**Keys**
+**Command input and keys**
+
+`/` opens a temporary, flat command launcher. It searches visible action names,
+descriptions, and owners; it does not append its query to the draft. `Esc`
+restores the exact draft and prior surface. In an editable field, `/` opens the
+launcher at the start of the field; elsewhere it types a literal slash. Type
+`//` for a literal leading slash. Bracketed paste remains draft text. The
+launcher also includes agent-advertised commands and prompt templates, labelled
+by owner. A collision between owners requires an explicit choice. Selecting
+an agent command preserves an unsent human draft; templates ask before replacing
+one. **New session** has the short command `/new`, and `/hotkeys` shows the
+effective keymap. Search `reload` to see separate **View reload state** and
+**Reload now** actions; no nested slash syntax is required.
+
+Code ships with no action hotkeys. Optional user bindings live in
+`$XDG_CONFIG_HOME/bitrouter/code-hotkeys.json`, or
+`~/.config/bitrouter/code-hotkeys.json` when `XDG_CONFIG_HOME` is unset. The
+file is a JSON object mapping chords to action IDs, for example
+`{"F2":"review_permission","Ctrl-P":"hotkeys"}`. `/hotkeys` lists the IDs,
+current bindings, and unbound actions. Invalid bindings produce a visible
+diagnostic and leave the action keymap empty. Bindings invoke the same guarded
+actions as launcher rows; they cannot bypass permission selection or
+confirmation. Terminals differ in which modified keys they deliver, so test
+the requested chord in the terminal you use.
 
 | Key | Effect |
 | --- | --- |
 | `Enter` | Send at idle; while working, preserve the draft and explain queueing |
 | `Shift-Enter` / `Alt-Enter` / `Ctrl-J` | Insert a newline (`Ctrl-J` is the fallback) |
-| `Tab` | Accept open completion; otherwise queue a follow-up during work |
-| `Ctrl-P` / leading `/` | Search the command palette / slash completions |
+| `/` | Open the command launcher at the start of a focused field or from a non-text surface |
 | Arrows, Home/End | Edit at the grapheme cursor; Up/Down at draft boundaries visits process-local history |
-| `Ctrl-G` | Open `$VISUAL` or `$EDITOR` at idle with no pending permission |
 | `PageUp` / `PageDown` | Read transcript history without incoming updates moving the reading position |
-| `F2` | Explicitly focus the oldest pending permission |
-| `F3` | Inspect queued foreground follow-ups |
-| `F4` | Inspect the selected foreground detail entry |
-| `F5` | Expand/collapse background agents; detach from an attached background inspector |
 | Permission digits / arrows, then `Enter` | Highlight an offered choice, then explicitly confirm it |
 | `Esc` | Close a temporary surface; in the working composer, request cancellation |
 | `Ctrl-C` | Close a picker/inspector; cancel a working turn; clear an idle draft; exit if idle and empty |
@@ -828,7 +848,7 @@ pause after refusal, limits, errors, cancellation, or disconnect. Resolve queued
 work before switching agents or sessions. Queueing does not claim native
 mid-turn steering support.
 
-**New session** in Ctrl-P starts a fresh transcript with the same agent and
+**New session** (`/new`) starts a fresh transcript with the same agent and
 retains the launch's `--model`, routing options and `--turn-timeout`. It closes
 the previous ACP connection before opening the replacement; it does not load
 or replay earlier history. Selecting the same agent also retains these launch
@@ -1913,34 +1933,13 @@ rubric editing and existing-block reconciliation through `/evolution` as
 described above. These controls do not establish that automatic promotion is
 safe on real coding tasks.
 
-## Request-check inspection
+## Request-check extensions
 
-`bro checks` inspects checker configuration, running bindings and actual use on
-the selected daemon. `bro checks probe <checker>` sends a fixed synthetic input
-using that daemon's configured credential. Connectivity/protocol success does
-not count as a real request invocation. Both local IPC and remote control query
-the same runtime; remote probes require `control:read` and cannot specify an
-arbitrary URL or input.
-
-`bro checks receipts` lists bounded process-local receipts.
-`bro checks receipt <request-id-or-receipt-id>` looks up an exact receipt id, or
-the newest retained attempt for a request id with its retained-match count. HTTP gateway responses
-expose `x-bitrouter-request-id` for correlation, including checker rejections.
-The receipt separates check decisions, upstream dispatch, execution outcome and
-server-observable delivery. It does not prove that the client consumed a reply.
-
-The default retention is 4,096 records and 15 minutes after completion, with
-completed entries eligible for earlier capacity eviction. Active entries are
-reserved until termination. Receipts disappear on restart and do not depend on
-an exporter. Unknown/old-process lookup must not be interpreted as non-execution
-or success. Existing `bro requests` remains the settled cost/usage interface.
-
-Checkers and router check bindings require restart after changes. Static
-validation and runtime credential readiness are distinct from connectivity.
-See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for the HTTP contract,
-coverage boundary and acceptance ledger.
-
-Actual-use inventory is derived from the latest started invocation's retained
-receipt. When that receipt expires or is evicted, the view reports no retained
-evidence; it does not substitute an older allow or claim the checker was never
-used. Synthetic probe history is separate from receipt retention.
+There is no `bro checks` command or request-check receipt API. Validate native
+declarations with `bro config validate`; custom-host activation additionally
+verifies compiled registrations and revisions. Checker declarations and router
+bindings require restart after changes. Startup logs and bounded invocation
+tracing provide content-free diagnostics; absence of telemetry is not proof that
+a check did not run. Existing `bro requests` remains the settled cost/usage
+interface. See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for the execution
+and coverage contract.

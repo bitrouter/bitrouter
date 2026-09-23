@@ -28,6 +28,10 @@ models:
     capabilities:
       - reasoning
       - tools
+  - id: xiaomi/mimo-v2.6-flash
+    provider_model_id: mimo-v2.6-flash
+  - id: xiaomi/mimo-v2.6-pro
+    provider_model_id: mimo-v2.6-pro
 status: active
 weight: 1
 submitted_at: 2026-07-06

@@ -17,7 +17,7 @@ use crate::error::{BitrouterError, Result};
 #[cfg(feature = "config_file")]
 use crate::evaluation::{EvaluationRequest, EvaluationResult, EvaluationRoutingTarget};
 #[cfg(feature = "config_file")]
-use crate::extension::EvaluationFormatAdapter;
+use crate::extension::evaluation_format::EvaluationFormatAdapter;
 use crate::language_model::auth::{
     AppliedAuth, AuthAppliers, AuthExtensionOperation, ContinuationAuthority, CredentialAuthority,
     normalize_auth_extension_error,
@@ -800,7 +800,6 @@ impl HttpExecutor {
             .lookup(&target.api_protocol)
             .ok_or_else(|| Self::no_dispatch_error(target))?;
         let adapter_target = EvaluationRoutingTarget {
-            provider: target.provider_name.clone(),
             provider_model_id: target.service_id.clone(),
         };
         let body = adapter

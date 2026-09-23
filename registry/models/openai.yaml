@@ -145,3 +145,47 @@
   max_input_tokens: 1050000
   max_output_tokens: 128000
   release_date: 2026-09-04
+- id: openai/gpt-6-luna
+  name: 'OpenAI: GPT-6 Luna'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1050000
+  max_output_tokens: 128000
+  release_date: 2026-09-22
+- id: openai/gpt-6-luna-pro
+  name: 'OpenAI: GPT-6 Luna Pro'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1050000
+  max_output_tokens: 128000
+  release_date: 2026-09-22
+- id: openai/gpt-6-sol
+  name: 'OpenAI: GPT-6 Sol'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1050000
+  max_output_tokens: 128000
+  release_date: 2026-09-22
+- id: openai/gpt-6-sol-pro
+  name: 'OpenAI: GPT-6 Sol Pro'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1050000
+  max_output_tokens: 128000
+  release_date: 2026-09-22

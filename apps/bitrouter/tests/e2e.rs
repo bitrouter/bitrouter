@@ -32,8 +32,6 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 mod evaluation;
 #[path = "e2e/evaluation_http.rs"]
 mod evaluation_http;
-#[path = "e2e/evaluation_laya.rs"]
-mod evaluation_laya;
 
 #[tokio::test]
 async fn evaluation_only_model_rejected_on_all_generation_ingresses() -> anyhow::Result<()> {
@@ -73,7 +71,7 @@ providers:
     let cfg = config::parse(&raw)?;
     let runtime_home = tempfile::tempdir()?;
     let config_path = runtime_home.path().join("bitrouter.yaml");
-    let assembled = bitrouter::assemble::build_app_with_extensions(
+    let assembled = bitrouter::assemble::build_app_with_registered_extensions(
         &cfg,
         Some(&config_path),
         &evaluation::registered()?,

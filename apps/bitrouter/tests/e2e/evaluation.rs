@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bitrouter::assemble::build_app_with_extensions;
+use bitrouter::assemble::build_app_with_registered_extensions;
 use bitrouter::metering::{ModelPricing, PricingSource, calculate_charge_evidence};
 use bitrouter_sdk::config::{self, Config};
 use bitrouter_sdk::error::{BitrouterError, Result};
@@ -12,7 +12,10 @@ use bitrouter_sdk::evaluation::pipeline::{
     EvaluationAttemptRecord, EvaluationAttemptRecorder, EvaluationAttemptTerminal,
 };
 use bitrouter_sdk::evaluation::{EvaluationRequest, EvaluationResult, EvaluationRoutingTarget};
-use bitrouter_sdk::extension::{EvaluationFormatAdapter, EvaluationFormatDescriptor, ExtensionApi};
+use bitrouter_sdk::extension::ExtensionApi;
+use bitrouter_sdk::extension::evaluation_format::{
+    EvaluationFormatAdapter, EvaluationFormatDescriptor,
+};
 use bitrouter_sdk::language_model::{Usage, UsageOrigin};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
@@ -198,7 +201,8 @@ async fn internal_evaluation_keeps_format_auth_headers_and_metering_host_owned()
     let config = fixture_config(&upstream, "")?;
     let recorder = Arc::new(CapturingRecorder::default());
     let assembled =
-        build_app_with_extensions(&config, None, &registered()?, Some(recorder.clone())).await?;
+        build_app_with_registered_extensions(&config, None, &registered()?, Some(recorder.clone()))
+            .await?;
     let pipeline = assembled
         .evaluation_pipeline
         .as_ref()
@@ -226,11 +230,15 @@ async fn invalid_native_binding_fails_before_database_assembly() -> anyhow::Resu
     let mut config = fixture_config(&upstream, "")?;
     config.database.url = "invalid-scheme://never-open".into();
     let recorder = Arc::new(CapturingRecorder::default());
-    let error =
-        build_app_with_extensions(&config, None, &ExtensionApi::new(), Some(recorder.clone()))
-            .await
-            .err()
-            .ok_or_else(|| anyhow::anyhow!("missing format unexpectedly assembled"))?;
+    let error = build_app_with_registered_extensions(
+        &config,
+        None,
+        &ExtensionApi::new(),
+        Some(recorder.clone()),
+    )
+    .await
+    .err()
+    .ok_or_else(|| anyhow::anyhow!("missing format unexpectedly assembled"))?;
     assert!(
         error
             .to_string()
@@ -248,7 +256,7 @@ async fn invalid_native_binding_fails_before_database_assembly() -> anyhow::Resu
 
     let mut wrong = ExtensionApi::new();
     wrong.register_evaluation_format(Arc::new(FixtureFormat { revision: 2 }))?;
-    let error = build_app_with_extensions(&config, None, &wrong, Some(recorder))
+    let error = build_app_with_registered_extensions(&config, None, &wrong, Some(recorder))
         .await
         .err()
         .ok_or_else(|| anyhow::anyhow!("wrong revision unexpectedly assembled"))?;
@@ -268,7 +276,8 @@ async fn default_host_recorder_persists_content_free_attempt_and_zero_output_pri
         .mount(&upstream)
         .await;
     let config = fixture_config(&upstream, "")?;
-    let assembled = build_app_with_extensions(&config, None, &registered()?, None).await?;
+    let assembled =
+        build_app_with_registered_extensions(&config, None, &registered()?, None).await?;
     let pipeline = assembled
         .evaluation_pipeline
         .as_ref()
@@ -321,7 +330,8 @@ async fn missing_price_remains_unknown_without_erasing_reported_output_usage() -
         .first_mut()
         .ok_or_else(|| anyhow::anyhow!("fixture model missing"))?
         .pricing = None;
-    let assembled = build_app_with_extensions(&config, None, &registered()?, None).await?;
+    let assembled =
+        build_app_with_registered_extensions(&config, None, &registered()?, None).await?;
     let pipeline = assembled
         .evaluation_pipeline
         .as_ref()
@@ -362,7 +372,8 @@ async fn provider_auth_rejection_is_one_terminal_attempt_without_account_retry()
         &upstream,
         "account_strategy: failover\n    accounts:\n      - { api_key: first-secret, label: first }\n      - { api_key: second-secret, label: second }",
     )?;
-    let assembled = build_app_with_extensions(&config, None, &registered()?, None).await?;
+    let assembled =
+        build_app_with_registered_extensions(&config, None, &registered()?, None).await?;
     let pipeline = assembled
         .evaluation_pipeline
         .as_ref()
@@ -411,7 +422,8 @@ async fn malformed_first_account_retries_the_same_provider_and_records_both_atte
     )?;
     let recorder = Arc::new(CapturingRecorder::default());
     let assembled =
-        build_app_with_extensions(&config, None, &registered()?, Some(recorder.clone())).await?;
+        build_app_with_registered_extensions(&config, None, &registered()?, Some(recorder.clone()))
+            .await?;
     let pipeline = assembled
         .evaluation_pipeline
         .as_ref()
@@ -437,7 +449,8 @@ async fn provider_limits_reject_before_http_or_attempt_recording() -> anyhow::Re
     let config = fixture_config(&upstream, "")?;
     let recorder = Arc::new(CapturingRecorder::default());
     let assembled =
-        build_app_with_extensions(&config, None, &registered()?, Some(recorder.clone())).await?;
+        build_app_with_registered_extensions(&config, None, &registered()?, Some(recorder.clone()))
+            .await?;
     let pipeline = assembled
         .evaluation_pipeline
         .as_ref()
@@ -496,7 +509,8 @@ async fn rate_limit_retries_only_the_next_account_and_keeps_retry_after_host_own
     )?;
     let recorder = Arc::new(CapturingRecorder::default());
     let assembled =
-        build_app_with_extensions(&config, None, &registered()?, Some(recorder.clone())).await?;
+        build_app_with_registered_extensions(&config, None, &registered()?, Some(recorder.clone()))
+            .await?;
     let pipeline = assembled
         .evaluation_pipeline
         .as_ref()
@@ -528,7 +542,8 @@ async fn total_deadline_is_host_owned_and_records_timeout() -> anyhow::Result<()
     config.upstream.timeouts.total_secs = Some(1);
     let recorder = Arc::new(CapturingRecorder::default());
     let assembled =
-        build_app_with_extensions(&config, None, &registered()?, Some(recorder.clone())).await?;
+        build_app_with_registered_extensions(&config, None, &registered()?, Some(recorder.clone()))
+            .await?;
     let pipeline = assembled
         .evaluation_pipeline
         .as_ref()
@@ -562,7 +577,8 @@ async fn cancellation_records_unknown_remote_completion_and_shutdown_drains_it()
     let config = fixture_config(&upstream, "")?;
     let recorder = Arc::new(CapturingRecorder::default());
     let assembled =
-        build_app_with_extensions(&config, None, &registered()?, Some(recorder.clone())).await?;
+        build_app_with_registered_extensions(&config, None, &registered()?, Some(recorder.clone()))
+            .await?;
     let pipeline = assembled
         .evaluation_pipeline
         .as_ref()
@@ -611,7 +627,8 @@ async fn graceful_drain_waits_for_started_attempt_and_records_completion() -> an
     let config = fixture_config(&upstream, "")?;
     let recorder = Arc::new(CapturingRecorder::default());
     let assembled =
-        build_app_with_extensions(&config, None, &registered()?, Some(recorder.clone())).await?;
+        build_app_with_registered_extensions(&config, None, &registered()?, Some(recorder.clone()))
+            .await?;
     let pipeline = assembled
         .evaluation_pipeline
         .as_ref()

@@ -119,6 +119,44 @@ impl App {
             .await
     }
 
+    /// Serve an already-bound listener with the normal router and shutdown drain.
+    ///
+    /// Hosts with multiple listeners can bind every required endpoint before
+    /// publishing readiness, without rebuilding the SDK's HTTP lifecycle.
+    pub async fn serve_listener_with_router_wrapper_and_shutdown<F, S>(
+        &self,
+        listener: tokio::net::TcpListener,
+        wrapper: F,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        F: Fn(Router) -> Router + Send + Sync + 'static,
+        S: Future<Output = ()> + Send + 'static,
+    {
+        self.serve_listener_inner(
+            listener,
+            RouterOptions {
+                router_wrapper: Some(Arc::new(wrapper)),
+                ..RouterOptions::default()
+            },
+            shutdown,
+        )
+        .await
+    }
+
+    /// Serve an already-bound listener with host-selected route options.
+    pub async fn serve_listener_with_router_options_and_shutdown<S>(
+        &self,
+        listener: tokio::net::TcpListener,
+        options: RouterOptions,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        S: Future<Output = ()> + Send + 'static,
+    {
+        self.serve_listener_inner(listener, options, shutdown).await
+    }
+
     async fn serve_inner<S>(
         &self,
         listen: &str,
@@ -142,6 +180,21 @@ impl App {
     async fn serve_inner_with_options<S>(
         &self,
         listen: &str,
+        options: RouterOptions,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        S: Future<Output = ()> + Send + 'static,
+    {
+        let listener = tokio::net::TcpListener::bind(listen)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("bind {listen}: {e}")))?;
+        self.serve_listener_inner(listener, options, shutdown).await
+    }
+
+    async fn serve_listener_inner<S>(
+        &self,
+        listener: tokio::net::TcpListener,
         mut options: RouterOptions,
         shutdown: S,
     ) -> Result<()>
@@ -165,10 +218,7 @@ impl App {
             options.mcp_aggregate_route = self.mcp_aggregate_route().map(String::from);
         }
         let router = build_router_with_options(state, options);
-        let listener = tokio::net::TcpListener::bind(listen)
-            .await
-            .map_err(|e| BitrouterError::internal(format!("bind {listen}: {e}")))?;
-        tracing::info!(%listen, "bitrouter listening");
+        tracing::info!(listen = ?listener.local_addr(), "bitrouter listening");
         // Graceful shutdown: on SIGINT/SIGTERM
         // stop accepting new connections and let in-flight requests finish.
         let drain_pipeline = pipeline.clone();
@@ -1461,8 +1511,8 @@ async fn handle(
             Err(e) => e.into_response(),
         }
     };
-    // Every admitted pipeline result, including a pre-request rejection, must
-    // expose the correlation ID used by the daemon's process-local receipts.
+    // Every admitted pipeline result, including a pre-request rejection,
+    // exposes the caller-visible correlation ID.
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response
             .headers_mut()

@@ -26,7 +26,7 @@ providers:
     operations:
       evaluate:
         endpoint: /v1/systemone
-        format: {{ extension: typesafe, adapter: system_one, revision: 1 }}
+        format: {{ extension: system-one, adapter: json, revision: 1 }}
     models:
       - id: typesafe/jev-1.13
         provider_model_id: jev-1.13.0
@@ -55,9 +55,10 @@ async fn server(upstream: &MockServer, skip_auth: bool) -> anyhow::Result<TestSe
 
 async fn server_for_config(config: &config::Config) -> anyhow::Result<TestServer> {
     let mut extensions = ExtensionApi::new();
-    bitrouter_typesafe_extension::register(&mut extensions)?;
+    bitrouter_system_one_format::register(&mut extensions)?;
     let assembled =
-        bitrouter::assemble::build_app_with_extensions(config, None, &extensions, None).await?;
+        bitrouter::assemble::build_app_with_registered_extensions(config, None, &extensions, None)
+            .await?;
     Ok(TestServer::new(router_for_assembled(config, &assembled)?))
 }
 
@@ -243,9 +244,10 @@ async fn authenticated_virtual_key_reaches_typesafe_without_generation_hooks() -
         .await;
     let config = fixture_config(&upstream.uri(), false)?;
     let mut extensions = ExtensionApi::new();
-    bitrouter_typesafe_extension::register(&mut extensions)?;
+    bitrouter_system_one_format::register(&mut extensions)?;
     let assembled =
-        bitrouter::assemble::build_app_with_extensions(&config, None, &extensions, None).await?;
+        bitrouter::assemble::build_app_with_registered_extensions(&config, None, &extensions, None)
+            .await?;
     auth_db::upsert_user(&assembled.db, "evaluation-user").await?;
     let key = generate();
     auth_db::insert_api_key(

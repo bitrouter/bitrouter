@@ -329,33 +329,23 @@
       ]
     },
     "CheckerConfig": {
-      "additionalProperties": false,
-      "description": "One remotely hosted request checker.",
-      "properties": {
-        "contract_version": {
-          "description": "Version of the checker request and response contract.",
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "credential_env": {
-          "description": "Dedicated bearer credential environment variable, if authentication is required.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "endpoint": {
-          "description": "Exact HTTP endpoint receiving versioned checker invocations.",
-          "type": "string"
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "A callback registered under this checker id by the host.",
+          "properties": {
+            "native": {
+              "$ref": "#/$defs/NativeCheckerConfig",
+              "description": "Expected code/rules revision; registration must match exactly."
+            }
+          },
+          "required": [
+            "native"
+          ],
+          "type": "object"
         }
-      },
-      "required": [
-        "endpoint",
-        "contract_version"
       ],
-      "type": "object"
+      "description": "A request-check implementation explicitly linked by a custom host.\n\nThe existing `native.revision` configuration shape remains supported. Former\nHTTP declarations are rejected with a migration diagnostic, never ignored."
     },
     "ContinuationConfig": {
       "description": "Always-active durable provider continuation lifecycle settings.",
@@ -854,6 +844,20 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "NativeCheckerConfig": {
+      "additionalProperties": false,
+      "description": "Startup identity for trusted, compiled-in request-check code.",
+      "properties": {
+        "revision": {
+          "description": "Operator-chosen code/rules revision. Change it when behavior changes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision"
+      ],
       "type": "object"
     },
     "OperationFormatConfig": {
@@ -1648,7 +1652,7 @@
       "properties": {
         "request": {
           "default": [],
-          "description": "Ordered remote checks. Every checker must allow the request.",
+          "description": "Ordered compiled checks. Every checker must allow the request.",
           "items": {
             "$ref": "#/$defs/RouterRequestCheck"
           },
@@ -1724,7 +1728,7 @@
         },
         "timeout_ms": {
           "default": 500,
-          "description": "Total checker deadline, including queue admission and response body reads.",
+          "description": "Total checker deadline, including queue admission and callback execution.",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -2468,7 +2472,7 @@
       "type": "object"
     }
   },
-  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.32/config.schema.json",
+  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.33/config.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "The top-level configuration.",
   "properties": {
@@ -2496,7 +2500,7 @@
         "$ref": "#/$defs/CheckerConfig"
       },
       "default": {},
-      "description": "Remote request checkers, keyed by the ids referenced from named routers.",
+      "description": "Compiled request-check extensions, keyed by the ids referenced from named routers.",
       "type": "object"
     },
     "continuation": {

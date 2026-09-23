@@ -18,12 +18,11 @@ use crate::error::{BitrouterError, Result};
 #[cfg_attr(docsrs, doc(cfg(feature = "config_file")))]
 pub mod pipeline;
 
-/// Provider/model identity exposed to a format adapter. Transport details,
-/// credentials, account selection, and endpoint choice stay with the host.
+/// Wire model identity exposed to a format adapter. Provider identity,
+/// transport details, credentials, account selection, and endpoint choice stay
+/// with the host so one format cannot branch on a provider id.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluationRoutingTarget {
-    /// Configured BitRouter provider id.
-    pub provider: String,
     /// Exact model id sent to the selected provider.
     pub provider_model_id: String,
 }

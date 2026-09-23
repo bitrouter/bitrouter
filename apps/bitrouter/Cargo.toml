@@ -26,7 +26,6 @@ bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", 
 # `otel-http` alone.
 bitrouter-telemetry = { workspace = true, features = ["otel-http", "server"] }
 bitrouter-providers = { workspace = true, features = ["hosted", "pkce"] }
-bitrouter-guardrails.workspace = true
 chrono.workspace = true
 sha2.workspace = true
 hmac.workspace = true
@@ -65,7 +64,7 @@ semver = "1"
 # Everything drawn by this binary. There is deliberately no `ratatui` here:
 # the app may touch the terminal but may not draw on it, and the absence of the
 # dependency is what makes that a compile error rather than a convention.
-bitrouter-tui = { path = "../../crates/bitrouter-tui", version = "=1.0.0-alpha.32" }
+bitrouter-tui = { path = "../../crates/bitrouter-tui", version = "=1.0.0-alpha.33" }
 # Terminal *I/O*, which is this process's: owning stdin, bracketed paste, and
 # reading key events for `bro chat`. Not drawing — see above.
 crossterm.workspace = true
@@ -83,8 +82,8 @@ rustix = { workspace = true, features = ["process"] }
 serde_json.workspace = true
 
 [dev-dependencies]
-bitrouter-typesafe-extension = { path = "../../crates/bitrouter-typesafe-extension", version = "=1.0.0-alpha.32" }
-bitrouter-laya-extension = { path = "../../crates/bitrouter-laya-extension", version = "=1.0.0-alpha.32" }
+bitrouter-system-one-format = { path = "../../extensions/system-one/format", version = "=1.0.0-alpha.33" }
+bitrouter-guardrails.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock = "0.6"
 futures.workspace = true

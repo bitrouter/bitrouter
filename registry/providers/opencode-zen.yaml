@@ -345,6 +345,41 @@ models:
         cache_write: 0.2
       output_tokens:
         text: 0.47
+  - id: anthropic/claude-opus-5.5
+    provider_model_id: claude-opus-5-5
+    pricing:
+      input_tokens:
+        no_cache: 4
+        cache_read: 0.2
+        cache_write: 5
+      output_tokens:
+        text: 20
+  - id: openai/gpt-6-luna
+    provider_model_id: gpt-6-luna
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+        cache_write: 0.125
+      output_tokens:
+        text: 0.5
+  - id: openai/gpt-6-sol
+    provider_model_id: gpt-6-sol
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+  - id: x-ai/grok-4.7
+    provider_model_id: grok-4.7
+    pricing:
+      input_tokens:
+        no_cache: 1.4
+        cache_read: 0.35
+      output_tokens:
+        text: 4.2
 status: active
 weight: 1
 community: false

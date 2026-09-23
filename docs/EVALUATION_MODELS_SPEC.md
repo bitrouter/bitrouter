@@ -1,11 +1,11 @@
 # First-class evaluation models through `/v1/evaluate`
 
-Status: **Phases 0–1 passed local and hosted CI. The earlier provider-named
-Phase 2 implementation passed deterministic local and hosted checks, but its
-format-first packaging, integration with the shared extension host on main,
-and credentialed TypeSafe smoke test remain pending. Laya prototype evidence
-is retained as history; Laya is not in the current delivery scope. None of
-these results establishes production readiness.**
+Status: **Phases 0–1 passed local and hosted CI. The revised format-first
+Phase 2 implementation and shared extension-host integration passed local
+deterministic checks; hosted CI and the credentialed TypeSafe smoke test remain
+pending. Report this as deterministic integration, not Phase 2 completion.
+Laya prototype evidence is retained as history; Laya is not in the current
+delivery scope. None of these results establishes production readiness.**
 
 Date: 2026-09-23
 
@@ -644,8 +644,10 @@ impl ExtensionApi {
 
 Evaluation is non-streaming, so the trait has no stream encoder or decoder.
 The adapter returns or consumes bounded JSON only. It does not receive an API
-key, OAuth store, arbitrary URL, `reqwest::Client`, database handle, full config,
-policy runtime, or unrestricted pipeline context. Endpoint construction,
+key, provider id, OAuth store, arbitrary URL, `reqwest::Client`, database
+handle, full config, policy runtime, or unrestricted pipeline context. Its
+`EvaluationRoutingTarget` exposes only the configured provider wire model id.
+Endpoint construction,
 authentication/signing, HTTP execution, timeouts, retries, cancellation,
 settlement, and metering remain host concerns.
 

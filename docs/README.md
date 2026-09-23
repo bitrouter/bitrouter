@@ -12,6 +12,17 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   first-class model routes through a new OpenRouter Decisions-shaped
   `/v1/evaluate` operation, with upstream wire formats supplied by explicit
   custom-host native Rust extension facets rather than the core/default host.
+- [`GUARDRAILS_EXTENSION.md`](GUARDRAILS_EXTENSION.md) — Independent input checker
+  setup, migration boundaries, distribution and process-level validation.
+- [`GUARDRAILS_EXTENSION_ACCEPTANCE.md`](GUARDRAILS_EXTENSION_ACCEPTANCE.md) —
+  Local implementation, test/artifact evidence and remaining release gates.
+
+- [`ROUTER_EXTENSION_SPEC.md`](ROUTER_EXTENSION_SPEC.md) — **v0.7, compile-only
+  extensions implemented locally; public release pending.** Current router,
+  SDK author API, execution and migration contracts.
+- [`HOST_EXTENSION_DX_SPEC.md`](HOST_EXTENSION_DX_SPEC.md) — **v0.2, implementation
+  in this worktree; see acceptance evidence.** Shared foreground host startup, capability-owned
+  author types and inactive unused registrations, informed by Zed's extension design.
 - [`CONFIGURATION_STATE_CONTRACT_SPEC.md`](CONFIGURATION_STATE_CONTRACT_SPEC.md) —
   **implemented and locally verified.** Whole-configuration saved/running/restart
   evidence shared by local and remote status, CLI, and Code inspectors.
@@ -46,6 +57,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   Replaces the seven-view Code dashboard with a conversation, contextual
   pickers/inspectors, and agent/route/activity/attributed-cost status; defines
   shared interaction behavior, ACP boundaries, and acceptance criteria.
+- [`CODE_SLASH_COMMAND_UX_SPEC.md`](CODE_SLASH_COMMAND_UX_SPEC.md) — **implemented
+  locally.** Makes `/` the command input, preserves drafts on cancel,
+  removes default action hotkeys, and adds configurable bindings under
+  `/hotkeys`.
 - [`BACKGROUND_AGENT_UX_SPEC.md`](BACKGROUND_AGENT_UX_SPEC.md) — **implemented;
   locally verified.** Keeps foreground history in native scrollback,
   makes background-agent awareness and routine commands a persistent bottom
