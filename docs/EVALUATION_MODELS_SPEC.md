@@ -1,14 +1,15 @@
 # First-class evaluation models through `/v1/evaluate`
 
-Status: **Phases 0–1 passed local and hosted CI. Phase 2 deterministic local
-and hosted CI checks passed; a credentialed TypeSafe smoke test remains pending.
-The Phase 3 Laya-specific gate passed local and hosted CI, including an opt-in
-real-checkpoint smoke test locally. This does not clear the separate TypeSafe
-gate or establish production readiness.**
+Status: **Phases 0–1 passed local and hosted CI. The earlier provider-named
+Phase 2 implementation passed deterministic local and hosted checks, but its
+format-first packaging, integration with the shared extension host on main,
+and credentialed TypeSafe smoke test remain pending. Laya prototype evidence
+is retained as history; Laya is not in the current delivery scope. None of
+these results establishes production readiness.**
 
-Date: 2026-09-22
+Date: 2026-09-23
 
-Baseline: `e2a8c644`
+Initial baseline: `e2a8c644`
 
 This specification adds Jev and similar typed-decision models as first-class
 BitRouter model routes. It does not disguise them as chat models. Clients use
@@ -24,10 +25,12 @@ The public question-and-answer shape uses OpenRouter Decisions as a format
 reference, while the endpoint, authentication, provider selection, tracing,
 and routing remain BitRouter-owned. OpenRouter is not a provider route in this
 increment. The first implementation targets the TypeSafe-hosted,
-version-pinned Jev model through a compiled native Rust extension. The
-architecture permits later format, authentication, transport, and runtime
-facets without making one universal provider hook or Jev-specific provider
-implementation part of the core contract.
+version-pinned Jev model through a compiled native Rust **System One wire-format
+extension**. Provider configuration binds that format to TypeSafe's endpoint,
+credentials, model id, and limits. The architecture permits later format,
+authentication, transport, and runtime facets without making one universal
+provider hook or Jev-specific provider implementation part of the core
+contract.
 
 The external facts used by this specification were checked on 2026-09-22:
 
@@ -44,10 +47,6 @@ The external facts used by this specification were checked on 2026-09-22:
 - OpenRouter's AI SDK provider exposes the same operation through
   `evaluationModel()` rather than treating it as Chat Completions:
   <https://github.com/OpenRouterTeam/ai-sdk-provider/blob/main/CHANGELOG.md>.
-- Laya Typed Decisions is evidence that the operation is a category rather
-  than a Jev-only special case, but it is not assumed to be behaviorally or
-  wire-compatible with Jev:
-  <https://huggingface.co/convaiinnovations/laya-typed-decisions>.
 
 ---
 
@@ -84,10 +83,12 @@ The external facts used by this specification were checked on 2026-09-22:
    across multiple accounts of that same provider/model. Cross-provider
    fallback is outside this increment; no OpenRouter gateway route or
    provider-model equivalence claim is required.
-10. Concrete provider support is not built into the core or registered by the
-    default `bro` host. A custom host compiles and registers a native Rust
-    provider extension through a revisioned `ExtensionApi` hook.
-11. A provider extension is a package that may register typed facets. The first
+10. Concrete upstream wire-format support is not built into the core or
+    registered by the default `bro` host. A custom host compiles and registers
+    a native Rust format extension through a revisioned `ExtensionApi` hook.
+    Provider routes bind to that format through configuration and registry data.
+11. An extension is a package that may register typed facets; it is organized
+    by the wire contract it implements, not by a provider name. The first
     implemented facet is `EvaluationFormatAdapter`; no universal
     `ProviderAdapter::execute(json)` is introduced.
 12. The first release does not add a WASM runtime, dynamic Rust library loading,
@@ -130,7 +131,7 @@ The required separation is:
 | canonical model | `typesafe/jev-1.13` | Stable BitRouter model identity |
 | provider | `typesafe` | Account, credentials, endpoint, limits, and billing source |
 | operation | `evaluate` | Canonical request and result semantics |
-| format adapter | `typesafe/system_one@1` | Provider-specific HTTP representation |
+| format adapter | `system-one/json@1` | Revisioned upstream JSON wire contract, initially verified with TypeSafe |
 
 Provider and model remain shared control-plane concepts. Operation and the
 registered format facet determine the typed data-plane contract; host-owned
@@ -160,9 +161,10 @@ transport and auth perform the call.
    by that provider.
 8. Keep the first implementation additive. Existing generation APIs and
    provider configurations must retain their behavior.
-9. Keep provider extension packaging distinct from typed operation facets so a
-   future extension can register more than one format/auth/transport capability
-   without gaining an opaque execute-anything hook.
+9. Organize concrete extensions by upstream wire contract, independently of
+   provider identity and typed operation facets. A future extension may register
+   multiple closely related typed facets without gaining an opaque
+   execute-anything hook.
 10. Keep endpoint selection, credentials, HTTP execution, deadlines, usage,
     metering, and candidate legality host-owned when a native format adapter is
     invoked.
@@ -174,7 +176,8 @@ transport and auth perform the call.
 - Adding a natural-language wrapper that asks Jev to emit prose.
 - Adding an inbound `/v1/systemone` TypeSafe SDK compatibility endpoint in the
   first release.
-- Embedding Python, PyTorch, ONNX, or a Laya runtime in `bro`.
+- Embedding a local model runtime in `bro` or shipping a Laya provider in this
+  increment.
 - Using evaluation answers as a BitRouter route selector, request checker,
   guardrail, or tool authorization policy in this increment.
 - Calibrating application-specific confidence thresholds.
@@ -318,7 +321,7 @@ The canonical API uses a tagged union.
 - `instructions` and `criteria` are required.
 - `criteria` must contain at least two uniquely named options.
 - An option's description may be a string, object, array, or `null`.
-- The first TypeSafe adapter permits at most 255 options, matching the upstream
+- The first TypeSafe binding permits at most 255 options, matching the upstream
   limit. A stricter provider limit is enforced before dispatch.
 
 #### Score
@@ -333,7 +336,7 @@ The canonical API uses a tagged union.
 
 - `instructions` and `criteria` are required.
 - `criteria` is ordered and must contain between 2 and 10 levels for the first
-  TypeSafe adapter.
+  TypeSafe binding.
 - Each level may be a string, object, or array.
 
 The public endpoint does not accept `type: "boolean"`. `noul` is the selected
@@ -553,12 +556,15 @@ The Rust type may use an internal semantic helper named `BooleanProbability`,
 but its public serde tag and answer field are `noul`, matching the selected HTTP
 contract.
 
-### 5.3 Provider extension packages and typed facets
+### 5.3 Wire-format extensions and typed facets
 
-A provider extension is a compiled Rust package and registration unit, not one
-universal execution callback. One package may register one or more typed facets
-through `ExtensionApi`; the host continues to own operation dispatch and invokes
-only the facet selected by validated provider/model configuration.
+A wire-format extension is a compiled Rust package and registration unit, not
+one universal execution callback or one package per provider. One package may
+register closely related typed facets through `ExtensionApi`; the host continues
+to own operation dispatch and invokes only the facet selected by validated
+provider/model configuration. The package is organized around an independently
+versioned upstream wire contract. TypeSafe is the first binding to the System
+One JSON contract, not the owner of that format identity.
 
 One resolved provider/model route is composed rather than owned wholesale by an
 extension:
@@ -567,11 +573,18 @@ extension:
 provider route = operation + format facet + transport + auth + registry metadata
 ```
 
-A provider using an existing operation, format, transport, and auth scheme needs
-registry data only. A new wire dialect for an existing operation adds a format
-facet. A new semantic operation requires a core endpoint and typed contract
-before any provider extension can implement it. Non-standard authentication or
-transport uses its own trusted facet rather than expanding the format adapter.
+A provider using an existing operation, registered format, transport, and auth
+scheme needs registry data only. A new wire dialect for an existing operation
+adds a format facet. A new semantic operation requires a core endpoint and
+typed contract before any extension can implement it. Non-standard
+authentication or transport uses its own trusted facet rather than expanding
+the format adapter.
+Sharing a format facet across providers requires separate request/response
+conformance evidence for each binding. Similar question types, endpoint names,
+or model behavior are insufficient. Provider-specific limits, endpoint, auth,
+pricing, and model mapping remain provider/model configuration. If a second
+provider's wire behavior differs, use a separate format identity or revision;
+do not branch on provider id inside the shared adapter.
 
 The architectural facet families are:
 
@@ -636,30 +649,41 @@ policy runtime, or unrestricted pipeline context. Endpoint construction,
 authentication/signing, HTTP execution, timeouts, retries, cancellation,
 settlement, and metering remain host concerns.
 
-Adapter ids are open strings scoped by a stable extension/package identity;
-revisions are exact compatibility boundaries. Duplicate registrations, missing
-registrations, and configured revision mismatches fail before database assembly
-and before any provider call. A valid registered adapter with no configured
-provider binding remains inactive.
+Adapter ids are open strings scoped by a stable format-extension/package
+identity; revisions are exact compatibility boundaries. The initial identity
+is `system-one/json@1` (`extension_id = "system-one"`, `adapter_id = "json"`,
+`revision = 1`). This is the TypeSafe-verified System One JSON dialect, not a
+claim that every future provider using that name is wire-compatible. Duplicate
+registrations, missing registrations, and configured revision mismatches fail
+before database assembly and before any provider call. A valid registered
+adapter with no configured provider binding remains inactive.
 
-The current baseline does not contain this `ExtensionApi`. The implementation
-must establish or reuse the PR #923-shaped compiled custom-host registration and
-lifecycle boundary without importing request-check-specific types:
-<https://github.com/bitrouter/bitrouter/pull/923>.
-PR #923 was still open when this spec was revised and is architectural evidence,
-not a merged or released capability claim.
+PR #923 has since established the shared compiled-extension registration and
+custom-host lifecycle on main:
+<https://github.com/bitrouter/bitrouter/pull/923>. The implementation branches
+must add the evaluation facet to that `ExtensionApi` and host composition,
+without retaining a parallel evaluation-only registrar or replacing the
+request-check contract. The concrete package belongs under
+`extensions/system-one/format/` (the `extensions/<extension>/<package>/`
+convention). Before this unmerged package is released, give its Cargo package
+the format-owned name `bitrouter-system-one-format`; this is a rename of the
+existing crate, not an additional crate. Shared typed host contracts stay in
+`crates/`, and a custom host, if needed, stays in `apps/`. Moving the
+implementation does not make it dynamically installable. A custom host may
+register more than one format and must not be created anew for every provider
+binding.
 
-The default `bro` host does not register a concrete TypeSafe evaluation format.
-A custom host explicitly links the extension crate and calls
+The default `bro` host does not register the System One evaluation format. A
+custom host explicitly links the extension crate and calls
 `register_evaluation_format`. This is a compile-time native extension, not a
 runtime-installable plugin and not a stable Rust dynamic-library ABI.
 
-### 5.5 TypeSafe System One format facet
+### 5.5 System One JSON format and TypeSafe binding
 
-The first concrete native extension registers the
-`typesafe/system_one` evaluation-format facet. Because the public contract has
-adopted OpenRouter Decisions' `noul` spelling, the TypeSafe adapter preserves the
-question and answer semantics rather than translating Boolean terminology:
+The first concrete native extension registers the `system-one/json@1`
+evaluation-format facet. Because the public contract has adopted OpenRouter
+Decisions' `noul` spelling, the format adapter preserves the question and
+answer semantics rather than translating Boolean terminology:
 
 | OpenRouter-shaped `/v1/evaluate` | TypeSafe `/v1/systemone` |
 | --- | --- |
@@ -671,12 +695,15 @@ question and answer semantics rather than translating Boolean terminology:
 Choice and score instructions, criteria, distributions, confidence, and legend
 retain their meaning and structure. The adapter does not threshold a Noul
 probability, choose an option independently, recalculate a score, or synthesize
-confidence.
+confidence. The initial fixtures establish this contract only against TypeSafe.
+TypeSafe-observed probability rounding must be verified as a wire-format rule
+before it is generalized; otherwise it stays a TypeSafe binding constraint or
+requires a distinct format revision.
 
 OpenRouter's Decisions shape is a reference for the canonical public contract,
 not a configured upstream route or a second format facet in this increment.
-Adding an OpenRouter route later would require its own independently specified
-provider adapter; direct TypeSafe support does not imply gateway support.
+Adding an OpenRouter route later would require its own wire-contract review and
+provider binding; direct TypeSafe support does not imply gateway support.
 
 ### 5.6 Pipeline boundary
 
@@ -720,8 +747,8 @@ providers:
       evaluate:
         endpoint: /v1/systemone
         format:
-          extension: typesafe
-          adapter: system_one
+          extension: system-one
+          adapter: json
           revision: 1
     models:
       - id: typesafe/jev-1.13
@@ -741,7 +768,8 @@ The exact Rust storage types may differ, but the serialized contract is fixed:
 - provider-level `operations.<operation>.endpoint` supplies a host-validated
   relative endpoint for that operation;
 - `operations.<operation>.format` names the exact extension, typed adapter
-  facet, and revision the host must have registered;
+  facet, and revision the host must have registered; it does not name the
+  provider, whose identity remains the enclosing provider key;
 - model-level `operations` positively declares which operations that concrete
   route supports;
 - operation-specific constraints live under that operation rather than in the
@@ -766,7 +794,7 @@ serialization, and performs the HTTP call.
 Registry/catalog presence and executable support are separate facts:
 
 - a future provider route may declare that it requires
-  `typesafe/system_one@1`; the Phase 0 canonical catalog entry alone creates
+  `system-one/json@1`; the Phase 0 canonical catalog entry alone creates
   no provider route;
 - the default `bro` host, which does not register that facet, must not report the
   route as routable;
@@ -816,7 +844,7 @@ route remains. Administrative/local model inspection may separately show:
   "operation": "evaluate",
   "available": false,
   "reason": "missing_extension",
-  "extension": "typesafe/system_one@1"
+  "extension": "system-one/json@1"
 }
 ```
 
@@ -975,8 +1003,9 @@ tracing levels.
 
 ### Shared completion rule for implementation phases
 
-Phase 0–3 are accepted incrementally: each phase must pass its own tests and
-keep all earlier phase tests green. Passing a unit test or compiling a mock
+Phases 0–2 are accepted incrementally; Phase 3 is a deferred template for
+future additions. Each implemented phase must pass its own tests and keep all
+earlier phase tests green. Passing a unit test or compiling a mock
 adapter does not imply that a public route or the real TypeSafe service works.
 Before submitting source changes for any phase, run the workspace all-feature
 test suite, strict Clippy, formatting, rustdoc with warnings denied, and
@@ -1050,13 +1079,19 @@ tests do not infer that client cancellation prevented remote execution. The
 default `bro` host remains free of a concrete evaluation adapter. This phase
 does not claim a working public `/v1/evaluate` endpoint.
 
-### Phase 2 — TypeSafe native extension and public endpoint
+### Phase 2 — System One format extension, TypeSafe binding, and public endpoint
 
 - Add the TypeSafe provider route, metadata, and `TYPESAFE_API_KEY` credential
   declaration without compiling the format implementation into the core or
   default host.
-- Add a separate native Rust extension crate that registers
-  `typesafe/system_one@1` in an explicit custom-host composition.
+- Move the existing native Rust format crate into
+  `extensions/system-one/format/`, rename its unreleased Cargo package to
+  `bitrouter-system-one-format`, and register `system-one/json@1` in an
+  explicit custom-host composition. The package owns the System One JSON
+  render/parse contract, not TypeSafe account or transport configuration.
+- Integrate its registration with main's shared `ExtensionApi` and custom-host
+  lifecycle from PR #923; do not ship a second evaluation-only registration
+  surface or a new host per provider.
 - Implement `/v1/evaluate`.
 - Do not register an inbound `/v1/systemone` route or advertise TypeSafe SDK
   compatibility. The extension's outbound provider call remains
@@ -1073,25 +1108,29 @@ does not claim a working public `/v1/evaluate` endpoint.
   same change so the shipped skill distinguishes stock `bro` from the custom
   host and does not advertise an unavailable route as built in.
 
-**Pass gate — deterministic:** Adapter conformance fixtures cover Noul,
-Choice, Score, mixed requests, structured state, choice descriptions including
-`null`, provider model-id mapping, actual returned version, usage/cost, and
-malformed upstream answers. A full assembled-app HTTP test sends
-`/v1/evaluate` requests through a custom host to a mock TypeSafe
+**Pass gate — deterministic:** The format extension's conformance fixtures
+cover Noul, Choice, Score, mixed requests, structured state, choice
+descriptions including `null`, provider model-id mapping, actual returned
+version, usage/cost, and malformed upstream answers. A full assembled-app HTTP
+test sends `/v1/evaluate` requests through a custom host to a mock TypeSafe
 `/v1/systemone` server and verifies auth, routing, response, metering, and
-error behavior. It proves the canonical and provider-pinned selectors work,
-the moving alias is not listed, generation/evaluation mismatches fail before
-dispatch, and no inbound `/v1/systemone` route exists. Server tests show that
-unknown top-level fields, including gateway-style controls, have no routing,
+error behavior. Tests prove the descriptor is format-owned, TypeSafe binds to
+it through provider config, and no second provider binding is advertised in
+the first release. They also prove the canonical and provider-pinned selectors
+work, the moving alias is not listed, generation/evaluation mismatches fail
+before dispatch, and no inbound `/v1/systemone` route exists. Server tests show
+that unknown top-level fields, including gateway-style controls, have no routing,
 trace, or upstream-body effect. Requests above the previously proposed 256
 questions or 128-byte question-id length are not rejected by those discarded
 defaults when otherwise valid and within the existing body bound; oversized
 bodies fail before upstream dispatch. Bounded measurements record practical
 question-count and id-length behavior without claiming a universal maximum.
-The TypeSafe-specific probability-precision rule in section 4.6 is fixed from
-direct evidence and tested with both valid rounding drift and invalid sums.
-The custom-host test target is included in all applicable CI matrices, and the
-shipped skill and generated artifacts match the implementation.
+The TypeSafe-evidenced probability-precision rule in section 4.6 is tested with
+both valid rounding drift and invalid sums; its presence in the first format
+crate does not certify another provider's wire behavior. The custom-host test
+target is included in all applicable CI matrices, the shared extension host
+remains functional for existing request-check extensions, and the shipped skill
+and generated artifacts match the implementation.
 
 **Pass gate — real provider:** A separately gated smoke test uses an explicit
 TypeSafe credential, synthetic non-sensitive input, and a bounded request
@@ -1103,95 +1142,51 @@ credential and input from logs. Do not put this secret-dependent test in
 ordinary public PR CI. Without a passing real-provider smoke test, report
 "deterministic integration passed" rather than "Phase 2 passed".
 
-**Phase 2 evidence to date (2026-09-22):** implementation commit `d2cdc6f6`;
+**Historical Phase 2 evidence (2026-09-22, before format-first repackaging):**
+implementation commit `d2cdc6f6`;
 local `cargo nextest run --workspace --all-features` passed 3,555 tests with
 23 intentional skips. Strict Clippy, formatting, rustdoc, doctests, registry
 validation/build/freshness, and diff whitespace checks passed. [PR #936
 hosted CI](https://github.com/bitrouter/bitrouter/pull/936) passed the Linux,
 macOS, and Windows test and Clippy jobs, plus the applicable MSRV,
 feature-isolation, dist, documentation, and repository checks. The separate
-credentialed TypeSafe smoke test was not run; this is deterministic integration
-evidence, not a Phase 2 pass or production proof.
+credentialed TypeSafe smoke test was not run. The old provider-named crate and
+parallel host path also predate integration with main's shared extension API.
+These results are regression evidence, not a pass for the revised Phase 2 or
+production proof.
 
-### Phase 3 — additional formats and providers
+### Phase 3 — deferred additional format or provider
 
-Each additional provider requires:
+No second provider or format is committed for the first release. In particular,
+Laya is not a Phase 3 deliverable or a release gate. OpenRouter remains a
+reference for the public contract, not a planned upstream route. A later
+proposal for either requires its own scope and wire-contract review.
 
-- a verified wire contract and format/auth/transport facet decision;
-- exact canonical-to-provider model mapping;
-- evidence that every advertised question type is preserved;
-- usage and model-version truthfulness;
-- provider-specific bounds and error mapping; and
-- an explicit future decision on whether it can participate in cross-provider
-  fallback.
+An added provider may bind an existing format extension only after independent
+fixtures and an assembled-app test demonstrate exact request and response wire
+compatibility, including probability precision and error behavior. If it is not
+compatible, add a new format identity or revision under
+`extensions/<format>/<package>/` rather than branching on provider id inside a
+nominally shared adapter. Each provider still requires canonical-to-wire model
+mapping, authentication, advertised question types, provider-specific limits,
+actual version, usage/cost evidence, and an explicit decision on cross-provider
+fallback. An external provider needs a separately gated real-provider smoke;
+a local process also needs readiness, shutdown, and failure tests. Passing
+TypeSafe's suite alone does not pass another binding.
 
-The first Phase 3 provider is local Laya Typed Decisions, kept out of the
-default `bro` binary. The explicit `bro-laya` host registers a native Rust
-`laya/local_system_one@1` format facet. A separate Python HTTP process loads
-`convaiinnovations/laya-typed-decisions` at Hugging Face commit
-`f9ab0b228f0fc0f14d873dbc99038f135c2da1b2` with `laya==0.3.6`, then
-exposes loopback-only `POST /v1/decisions` and readiness `GET /health`. The
-facet uses the existing bearer HTTP transport with a shared operator-generated
-`LAYA_LOCAL_TOKEN`. The local process is not a public inbound API; BitRouter
-still exposes only `/v1/evaluate`. In-process model runtimes remain outside
-this specification.
+**Pass gate when Phase 3 is scheduled:** Format conformance and provider-binding
+tests independently cover the requirements above, followed by a full
+assembled-app mock-upstream test, applicable real-provider/process tests, and
+the shared local and hosted checks. No Phase 3 pass is asserted while no new
+format or provider is selected.
 
-The operator declares the route explicitly in `bitrouter.yaml`:
-`laya/typed-decisions-f9ab0b2` maps to provider `laya` and exact wire model
-`convaiinnovations/laya-typed-decisions@f9ab0b228f0fc0f14d873dbc99038f135c2da1b2`.
-The form `laya:laya/typed-decisions-f9ab0b2` pins it. No local provider is
-auto-added to the public registry: its current kind/access/billing vocabulary
-cannot faithfully represent an operator-owned process and its unpriced compute.
-This is a deliberate explicit-config first release, not an implicit `$0`
-provider. The shippable setup example is in `skills/bitrouter/references/evaluation.md`.
-
-All three advertised Noul/Choice/Score question shapes map without semantic
-thresholding. The local sidecar retains Laya's original typed answers and
-reported `usage` but identifies the actually loaded pinned snapshot, since
-Laya's own `system_one` response uses the generic `laya-rl-agent` label. The
-Rust facet drops Laya's auxiliary `action` head and derived Noul confidence;
-it preserves Choice/Score distributions and confidence. No monetary cost is
-invented. Provider-specific bounds are 16 questions, 20 Choice options,
-10 Score levels, and a 1 MiB sidecar body; they do not change the global
-evaluation contract. Startup/load failure keeps the process unready; inference
-failure becomes a safe 502 upstream error. A pinned selector never falls back
-to another provider. Any future cross-provider fallback requires separate
-calibration and an explicit design decision.
-
-The wire contract was checked against the [official Laya implementation](https://github.com/NandhaKishorM/laya) and a real run of the pinned
-[model checkpoint](https://huggingface.co/convaiinnovations/laya-typed-decisions).
-
-OpenRouter remains a format reference, not a planned Phase 3 provider. A later
-proposal to route through its gateway would need separate scope and its own
-wire-contract review.
-
-**Pass gate, per added provider:** Independently test its format fixtures,
-advertised question types, canonical-to-wire model mapping, authentication,
-provider-specific limits, error mapping, actual version, and usage/cost
-evidence. An assembled-app mock-upstream test proves provider-pinned routing
-and that no automatic cross-provider fallback is introduced. An external
-provider also needs its own opt-in real-provider smoke test before its route
-is called complete. A local HTTP provider additionally needs process readiness,
-shutdown, and failure tests. Passing TypeSafe's suite alone does not pass a
-second provider.
-
-**Phase 3 local evidence to date (2026-09-22):** six Laya facet conformance
-tests passed; three fake-process tests covered readiness, authentication,
-bounds, clean shutdown, startup and inference failure; four assembled-app
-mock-upstream tests covered explicit registration, all advertised question
-types, selector mapping, auth, error mapping, and provider pinning; and an
-opt-in offline run of the actual pinned checkpoint through the local process
-and `/v1/evaluate` passed. The workspace all-features run passed 3,566 tests
-with 24 intentional skips. Strict Clippy, formatting, rustdoc, doctests,
-registry/schema freshness, and diff whitespace checks passed. At implementation
-commit `46df8402`, [PR #938](https://github.com/bitrouter/bitrouter/pull/938)
-passed its hosted Linux, macOS, and Windows test and Clippy jobs, plus MSRV,
-feature-isolation, dist, documentation, and repository checks. The first macOS
-run exposed an overly short process-readiness test deadline; the corrected
-test passed 30 local stress iterations and the second hosted run. This passes
-the Laya-specific Phase 3 gate, not the overall release gate: TypeSafe's
-separate credentialed smoke remains pending, and none of these tests proves
-production readiness.
+**Historical prototype evidence, not current-scope acceptance:** The earlier
+Laya-specific implementation at commit `46df8402` passed local format,
+fake-process, assembled-app, and opt-in real-checkpoint tests, as well as the
+applicable hosted checks in [PR #938](https://github.com/bitrouter/bitrouter/pull/938).
+That evidence remains available for a future proposal; it does not add Laya to
+the registry, satisfy the revised format-first Phase 2, or clear the pending
+TypeSafe smoke test.
 
 ### Phase 4 — optional future WASM decision gate
 
@@ -1242,17 +1237,18 @@ WASM-runtime pass.
 | EV13 | Client cancellation and daemon shutdown never claim remote non-execution; admitted attempts end with completed, failed, cancelled, or unknown-remote evidence. |
 | EV14 | No automatic cross-provider evaluation fallback is constructed in this increment; an ambiguous unpinned multi-provider route fails validation. |
 | EV15 | Evaluation does not run generation prompt transforms, tool loops, continuation handling, reasoning filters, or generation hooks. |
-| EV16 | Each implementation phase retains earlier tests and passes the shared all-feature tests, strict Clippy, formatting, rustdoc, doctest, generated-artifact, and applicable cross-platform CI gates in section 10. |
+| EV16 | Each implemented phase retains earlier tests and passes the shared all-feature tests, strict Clippy, formatting, rustdoc, doctest, generated-artifact, and applicable cross-platform CI gates in section 10. |
 | EV17 | The shipped `/bitrouter` skill documents `/v1/evaluate`, selector syntax, non-streaming behavior, operation mismatch, the lack of inbound `/v1/systemone` compatibility, and the fact that direct TypeSafe support requires the matching custom-host native extension. |
-| EV18 | The default `bro` host contains no concrete TypeSafe evaluation-format registration; a custom host explicitly links and registers the native extension. |
+| EV18 | The default `bro` host contains no concrete System One evaluation-format registration; a custom host explicitly links and registers the native extension. |
 | EV19 | Duplicate adapter ids, missing configured adapters, and revision mismatches fail before database assembly and before any upstream call; an unconfigured valid registration remains inactive. |
 | EV20 | `EvaluationFormatAdapter` receives bounded typed evaluation data and JSON only; endpoint choice, credentials, HTTP execution, timeout, retries, cancellation, settlement, and metering remain host-owned. |
 | EV21 | No universal `ProviderAdapter::execute(json)`, Rust dynamic-library loader, WASM runtime, extension installer, lockfile, or marketplace is introduced. |
-| EV22 | A provider extension package may register typed facets, but this increment implements only the evaluation-format facet and adds no unused hooks for hypothetical operations. |
+| EV22 | The concrete extension is organized by a versioned wire format, not by provider; this increment implements only the evaluation-format facet and adds no unused hooks for hypothetical operations. |
 | EV23 | Unknown top-level `/v1/evaluate` fields are accepted but ignored, do not override known fields or change provider requests, and are covered by server-side tests; post-implementation measurements inform any later numeric question-count or id-length caps. |
 | EV24 | No inbound `/v1/systemone` route is registered; an evaluation through `/v1/evaluate` still calls TypeSafe's outbound `/v1/systemone` endpoint. |
 | EV25 | Phase 2 is not reported complete until a separately gated real-TypeSafe smoke test passes with an explicit credential and recorded model version; ordinary public PR CI remains credential-free. |
-| EV26 | A Phase 3 provider passes its own fixture, assembled-app, and applicable real-provider/process gates rather than inheriting TypeSafe's result; Phase 4 is a documented go/no-go decision, not a WASM implementation pass. |
+| EV26 | Phase 3 has no first-release provider target. Any later format or provider binding passes its own conformance, assembled-app, and applicable real-provider/process gates rather than inheriting TypeSafe's result; Phase 4 is a documented go/no-go decision, not a WASM implementation pass. |
+| EV27 | The TypeSafe route binds to `system-one/json@1` through provider configuration; the format crate lives under `extensions/system-one/format/` and registers through main's shared `ExtensionApi` and custom-host lifecycle without a parallel registrar. |
 
 Real-provider smoke evidence proves only that the configured test account could
 reach one provider/model version at that time. It does not replace fixture-based
@@ -1312,9 +1308,9 @@ validation, let provider code invent unsupported semantics, weaken metering and
 error guarantees, and make extension authority impossible to bound. Provider
 extensions are packages of typed facets, not universal callbacks.
 
-### 12.9 Compile the TypeSafe adapter into core or register it in default `bro`
+### 12.9 Compile the System One adapter into core or register it in default `bro`
 
-Rejected for this increment. Provider-specific format code lives in a separate
+Rejected for this increment. Concrete wire-format code lives in a separate
 native Rust extension crate and is linked by an explicit custom host. This keeps
 the core and stock host free of the concrete adapter, at the cost of requiring a
 custom build rather than runtime installation.
@@ -1325,12 +1321,20 @@ Rejected because Rust has no stable plugin ABI and an in-process dynamic library
 would have the daemon's ambient authority without a meaningful sandbox. Native
 extensions remain lockstep compiled hooks.
 
-### 12.11 Require WASM provider extensions now
+### 12.11 Require WASM format extensions now
 
 Rejected because one official format adapter does not yet justify the runtime,
 WIT, package, installer, signature, resource-control, and compatibility surface.
 The future decision gate in Phase 4 preserves the option for pure format facets
 without committing authentication, transport, or local-runtime facets to WASM.
+
+### 12.12 Create one evaluation-format extension per provider
+
+Rejected because a provider owns credentials, endpoint, model mapping, limits,
+and pricing, while the adapter owns a versioned upstream wire contract. A
+provider-named format package obscures reuse and encourages provider branches
+inside render/parse. Format reuse still requires independent conformance for
+each provider; it is never inferred from shared terminology or model behavior.
 
 ---
 
@@ -1342,10 +1346,14 @@ The core product direction is already decided by this specification:
 - existing canonical/provider-pinned model selection;
 - OpenRouter Decisions-shaped `noul`, `choice`, and `score` request/response;
 - separate typed evaluation pipeline;
-- faceted provider extensions rather than one universal provider adapter;
+- format-owned native extensions and provider-configured bindings rather than
+  one extension per provider or one universal provider adapter;
 - compiled native Rust registration through `ExtensionApi`, with no concrete
   adapter in the default `bro` host;
-- TypeSafe Jev as the first provider/model route through a custom-host extension;
+- TypeSafe Jev as the first provider/model route, bound to the
+  `system-one/json@1` native format extension in a custom host;
+- Laya outside the current delivery scope; Phase 3 is deferred until a new
+  format or provider binding is explicitly selected;
 - unknown top-level fields accepted but ignored, with server-side verification
   after implementation;
 - no default question-count or question-id byte-length cap before measurements;

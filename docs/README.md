@@ -6,10 +6,11 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 ## Contents
 
 - [`EVALUATION_MODELS_SPEC.md`](EVALUATION_MODELS_SPEC.md) — **Phases 0–1
-  passed local and hosted CI; Phases 2–3 proposed.**
+  passed local and hosted CI; format-first Phase 2 and TypeSafe smoke pending;
+  Phase 3 deferred.**
   Adds Jev and similar typed-decision models as
   first-class model routes through a new OpenRouter Decisions-shaped
-  `/v1/evaluate` operation, with concrete provider formats supplied by explicit
+  `/v1/evaluate` operation, with upstream wire formats supplied by explicit
   custom-host native Rust extension facets rather than the core/default host.
 - [`CONFIGURATION_STATE_CONTRACT_SPEC.md`](CONFIGURATION_STATE_CONTRACT_SPEC.md) —
   **implemented and locally verified.** Whole-configuration saved/running/restart
