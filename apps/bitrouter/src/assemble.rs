@@ -1175,6 +1175,7 @@ fn apply_evaluation_provider_defaults(
                 api_protocol: None,
                 rate_limits: None,
                 pricing: None,
+                pricing_origin: bitrouter_sdk::config::ModelPricingOrigin::Configured,
                 capabilities: Vec::new(),
                 reasoning_effort: None,
                 compatibility: Default::default(),
@@ -1524,11 +1525,24 @@ pub(crate) fn build_pricing_table(config: &Config) -> PricingTable {
                         output_micro_usd_per_token: t.output_micro_usd_per_token,
                     })
                     .collect();
-                table.insert(provider_id.clone(), model.id.clone(), model_pricing.clone());
+                let source = match model.pricing_origin {
+                    bitrouter_sdk::config::ModelPricingOrigin::Configured => {
+                        crate::metering::PricingSource::Configured
+                    }
+                    bitrouter_sdk::config::ModelPricingOrigin::Registry => {
+                        crate::metering::PricingSource::Registry
+                    }
+                };
+                table.insert_with_source(
+                    provider_id.clone(),
+                    model.id.clone(),
+                    model_pricing.clone(),
+                    source,
+                );
                 if let Some(native_id) = model.provider_model_id.as_deref()
                     && native_id != model.id
                 {
-                    table.insert(provider_id.clone(), native_id, model_pricing);
+                    table.insert_with_source(provider_id.clone(), native_id, model_pricing, source);
                 }
             }
         }

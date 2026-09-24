@@ -10,6 +10,7 @@ rust-version.workspace = true
 
 [dependencies]
 bitrouter-sdk = { workspace = true }
+http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

@@ -836,6 +836,7 @@ name = "bitrouter-typesafe-provider"
 version = "1.0.0-alpha.33"
 dependencies = [
  "bitrouter-sdk",
+ "http",
  "serde",
  "serde_json",
 ]

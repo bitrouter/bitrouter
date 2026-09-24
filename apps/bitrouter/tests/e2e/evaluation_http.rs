@@ -392,6 +392,140 @@ async fn authenticated_virtual_key_reaches_typesafe_without_generation_hooks() -
 }
 
 #[tokio::test]
+async fn typesafe_attempt_evidence_preserves_registry_pricing_origin() -> anyhow::Result<()> {
+    use bitrouter::metering::entities::evaluation_attempts;
+    use bitrouter_sdk::config::ModelPricingOrigin;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "jev-1.13.0",
+            "answers": {"approve": {"type": "noul", "noul": 0.8}},
+            "usage": {"input_tokens": 318, "output_tokens": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    let mut config = fixture_config(&upstream.uri(), true)?;
+    let model = config
+        .providers
+        .get_mut("typesafe")
+        .and_then(|provider| provider.models.first_mut())
+        .context("TypeSafe fixture model missing")?;
+    model.pricing_origin = ModelPricingOrigin::Registry;
+    let mut extensions = ExtensionApi::new();
+    bitrouter_typesafe_provider::register(&mut extensions)?;
+    let assembled =
+        bitrouter::assemble::build_app_with_registered_extensions(&config, None, &extensions, None)
+            .await?;
+    let server = TestServer::new(router_for_assembled(&config, &assembled)?);
+    server
+        .post("/v1/evaluate")
+        .add_header("x-bitrouter-request-id", "eval-registry-price")
+        .json(&json!({
+            "model": "typesafe/jev-1.13",
+            "state": "synthetic",
+            "questions": {"approve": {"type": "noul", "instructions": "approve?"}}
+        }))
+        .await
+        .assert_status_ok();
+    let row = evaluation_attempts::Entity::find()
+        .filter(evaluation_attempts::Column::RequestId.eq("eval-registry-price"))
+        .one(&assembled.db)
+        .await?
+        .context("TypeSafe evaluation attempt missing")?;
+    let evidence: Value = serde_json::from_str(
+        row.charge_evidence_json
+            .as_deref()
+            .context("TypeSafe charge evidence missing")?,
+    )?;
+    assert_eq!(evidence["pricing_source"], "registry");
+    assert!(row.charge_micro_usd.is_some_and(|charge| charge > 0));
+    Ok(())
+}
+
+#[tokio::test]
+async fn typesafe_retries_next_account_and_settles_once() -> anyhow::Result<()> {
+    use bitrouter::metering::entities::evaluation_attempts;
+    use bitrouter_sdk::config::{AccountStrategy, ProviderAccount};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(header("authorization", "Bearer first-secret"))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "0"))
+        .mount(&upstream)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(header("authorization", "Bearer second-secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "jev-1.13.0",
+            "answers": {"approve": {"type": "noul", "noul": 0.8}},
+            "usage": {"input_tokens": 318, "output_tokens": 2}
+        })))
+        .mount(&upstream)
+        .await;
+    let mut config = fixture_config(&upstream.uri(), true)?;
+    let provider = config
+        .providers
+        .get_mut("typesafe")
+        .context("TypeSafe fixture provider missing")?;
+    provider.account_strategy = AccountStrategy::Failover;
+    provider.accounts = [("first-secret", "first"), ("second-secret", "second")]
+        .into_iter()
+        .map(|(api_key, label)| ProviderAccount {
+            api_key: api_key.into(),
+            label: label.into(),
+            ..ProviderAccount::default()
+        })
+        .collect();
+    let mut extensions = ExtensionApi::new();
+    bitrouter_typesafe_provider::register(&mut extensions)?;
+    let assembled =
+        bitrouter::assemble::build_app_with_registered_extensions(&config, None, &extensions, None)
+            .await?;
+    let server = TestServer::new(router_for_assembled(&config, &assembled)?);
+    let response = server
+        .post("/v1/evaluate")
+        .add_header("x-bitrouter-request-id", "eval-typesafe-failover")
+        .json(&json!({
+            "model": "typesafe/jev-1.13",
+            "state": "synthetic",
+            "questions": {"approve": {"type": "noul", "instructions": "approve?"}}
+        }))
+        .await;
+    response.assert_status_ok();
+    let rows = evaluation_attempts::Entity::find()
+        .filter(evaluation_attempts::Column::RequestId.eq("eval-typesafe-failover"))
+        .all(&assembled.db)
+        .await?;
+    assert_eq!(rows.len(), 2);
+    let first = rows.iter().find(|row| row.attempt_index == 1);
+    let second = rows.iter().find(|row| row.attempt_index == 2);
+    let first = first.context("first TypeSafe attempt missing")?;
+    let second = second.context("second TypeSafe attempt missing")?;
+    assert_eq!(first.account_label.as_deref(), Some("first"));
+    assert_eq!(first.terminal, "failed");
+    assert_eq!(first.error_code.as_deref(), Some("upstream_rate_limited"));
+    assert_eq!(first.charge_micro_usd, None);
+    assert_eq!(second.account_label.as_deref(), Some("second"));
+    assert_eq!(second.terminal, "completed");
+    assert!(second.charge_micro_usd.is_some_and(|charge| charge > 0));
+    assert_eq!(
+        upstream
+            .received_requests()
+            .await
+            .context("mock upstream request capture unavailable")?
+            .len(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn discarded_question_limits_do_not_reject_valid_bounded_requests() -> anyhow::Result<()> {
     const QUESTION_COUNT: usize = 512;
     const ID_BYTES: usize = 1024;

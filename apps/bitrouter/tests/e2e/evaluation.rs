@@ -15,7 +15,7 @@ use bitrouter_sdk::evaluation::{EvaluationRequest, EvaluationResult, EvaluationR
 use bitrouter_sdk::extension::ExtensionApi;
 use bitrouter_sdk::extension::provider::{
     EvaluationProvider, EvaluationProviderDescriptor, EvaluationProviderModel,
-    EvaluationProviderOutput,
+    EvaluationProviderOutput, EvaluationProviderWireRequest,
 };
 use bitrouter_sdk::language_model::{Usage, UsageOrigin};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -25,6 +25,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 struct FixtureProvider {
     endpoint: &'static str,
+    wire_method: http::Method,
+    wire_header: Option<(&'static str, &'static str)>,
 }
 
 impl EvaluationProvider for FixtureProvider {
@@ -52,12 +54,23 @@ impl EvaluationProvider for FixtureProvider {
         &self,
         request: &EvaluationRequest,
         target: &EvaluationRoutingTarget,
-    ) -> Result<Value> {
-        Ok(json!({
-            "model": target.provider_model_id,
-            "state": request.state,
-            "questions": request.questions,
-        }))
+    ) -> Result<EvaluationProviderWireRequest> {
+        let mut headers = http::HeaderMap::new();
+        if let Some((name, value)) = self.wire_header {
+            headers.insert(
+                http::HeaderName::from_static(name),
+                http::HeaderValue::from_static(value),
+            );
+        }
+        Ok(EvaluationProviderWireRequest {
+            method: self.wire_method.clone(),
+            headers,
+            body: json!({
+                "model": target.provider_model_id,
+                "state": request.state,
+                "questions": request.questions,
+            }),
+        })
     }
 
     fn parse_response(
@@ -172,6 +185,8 @@ pub(super) fn registered() -> Result<ExtensionApi> {
     let mut extensions = ExtensionApi::new();
     extensions.register_evaluation_provider(Arc::new(FixtureProvider {
         endpoint: "/v1/decide",
+        wire_method: http::Method::POST,
+        wire_header: None,
     }))?;
     Ok(extensions)
 }
@@ -244,6 +259,75 @@ async fn internal_evaluation_keeps_auth_headers_and_metering_host_owned() -> any
 }
 
 #[tokio::test]
+async fn provider_wire_method_and_non_auth_header_reach_upstream() -> anyhow::Result<()> {
+    let upstream = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(path("/v1/decide"))
+        .and(header("authorization", "Bearer fixture-secret"))
+        .and(header("x-dialect-version", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(valid_upstream_answer()))
+        .mount(&upstream)
+        .await;
+    let mut extensions = ExtensionApi::new();
+    extensions.register_evaluation_provider(Arc::new(FixtureProvider {
+        endpoint: "/v1/decide",
+        wire_method: http::Method::PATCH,
+        wire_header: Some(("x-dialect-version", "2")),
+    }))?;
+    let assembled = build_app_with_registered_extensions(
+        &fixture_config(&upstream, "")?,
+        None,
+        &extensions,
+        None,
+    )
+    .await?;
+    let pipeline = assembled
+        .evaluation_pipeline
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("evaluation pipeline was not assembled"))?;
+    let result = pipeline
+        .evaluate(question()?, "eval-patch".into(), http::HeaderMap::new())
+        .await?;
+    assert_eq!(result.provider, "fixture");
+    assert_upstream_calls(&upstream, 1).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn provider_wire_cannot_replace_host_authentication() -> anyhow::Result<()> {
+    let upstream = MockServer::start().await;
+    let mut extensions = ExtensionApi::new();
+    extensions.register_evaluation_provider(Arc::new(FixtureProvider {
+        endpoint: "/v1/decide",
+        wire_method: http::Method::POST,
+        wire_header: Some(("authorization", "Bearer extension-secret")),
+    }))?;
+    let assembled = build_app_with_registered_extensions(
+        &fixture_config(&upstream, "")?,
+        None,
+        &extensions,
+        None,
+    )
+    .await?;
+    let pipeline = assembled
+        .evaluation_pipeline
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("evaluation pipeline was not assembled"))?;
+    let error = pipeline
+        .evaluate(
+            question()?,
+            "eval-reserved-header".into(),
+            http::HeaderMap::new(),
+        )
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("reserved header unexpectedly succeeded"))?;
+    assert!(error.to_string().contains("reserved HTTP header"));
+    assert_upstream_calls(&upstream, 0).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_native_binding_fails_before_database_assembly() -> anyhow::Result<()> {
     let upstream = MockServer::start().await;
     let mut config = fixture_config(&upstream, "")?;
@@ -276,6 +360,8 @@ async fn invalid_native_binding_fails_before_database_assembly() -> anyhow::Resu
     let mut wrong = ExtensionApi::new();
     wrong.register_evaluation_provider(Arc::new(FixtureProvider {
         endpoint: "/v1/different",
+        wire_method: http::Method::POST,
+        wire_header: None,
     }))?;
     let error = build_app_with_registered_extensions(&config, None, &wrong, Some(recorder))
         .await

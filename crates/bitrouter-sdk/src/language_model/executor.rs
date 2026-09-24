@@ -17,7 +17,7 @@ use crate::error::{BitrouterError, Result};
 #[cfg(feature = "config_file")]
 use crate::evaluation::{EvaluationRequest, EvaluationResult, EvaluationRoutingTarget};
 #[cfg(feature = "config_file")]
-use crate::extension::provider::EvaluationProvider;
+use crate::extension::provider::{EvaluationProvider, EvaluationProviderWireRequest};
 use crate::language_model::auth::{
     AppliedAuth, AuthAppliers, AuthExtensionOperation, ContinuationAuthority, CredentialAuthority,
     normalize_auth_extension_error,
@@ -823,10 +823,11 @@ impl HttpExecutor {
         let adapter_target = EvaluationRoutingTarget {
             provider_model_id: target.service_id.clone(),
         };
-        let body = provider
+        let wire = provider
             .render_request(canonical, &adapter_target)
             .map_err(|_| BitrouterError::bad_request("evaluation provider rejected request"))?;
-        let encoded = serde_json::to_vec(&body)
+        validate_evaluation_wire_request(&wire)?;
+        let encoded = serde_json::to_vec(&wire.body)
             .map_err(|_| BitrouterError::bad_request("evaluation body is not JSON"))?;
         if encoded.len() > MAX_EVALUATION_JSON_BYTES {
             return Err(BitrouterError::bad_request(
@@ -838,7 +839,7 @@ impl HttpExecutor {
         scrubber.capture_effective_target_key(target);
         let response_body = {
             let mut request = client
-                .post(url.clone())
+                .request(wire.method.clone(), url.clone())
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(encoded.clone())
                 .timeout(timeouts.total.unwrap_or(timeouts.read))
@@ -846,6 +847,9 @@ impl HttpExecutor {
                 .map_err(|error| {
                     BitrouterError::internal(format!("building evaluation request: {error}"))
                 })?;
+            for (name, value) in &wire.headers {
+                request.headers_mut().append(name, value.clone());
+            }
             let applied = self
                 .apply_auth(request, target, transport)
                 .await
@@ -1333,6 +1337,39 @@ impl HttpExecutor {
             server_tool_calls: Vec::new(),
         })
     }
+}
+
+#[cfg(feature = "config_file")]
+fn validate_evaluation_wire_request(wire: &EvaluationProviderWireRequest) -> Result<()> {
+    const MAX_HEADERS: usize = 32;
+    const MAX_HEADER_BYTES: usize = 8 * 1024;
+    if !matches!(
+        wire.method,
+        http::Method::POST | http::Method::PUT | http::Method::PATCH
+    ) {
+        return Err(BitrouterError::bad_request(
+            "evaluation provider selected an unsupported HTTP method",
+        ));
+    }
+    let mut count = 0_usize;
+    let mut bytes = 0_usize;
+    for (name, value) in &wire.headers {
+        if crate::language_model::types::is_reserved_provider_header(name)
+            || matches!(name.as_str(), "cookie" | "set-cookie")
+        {
+            return Err(BitrouterError::bad_request(
+                "evaluation provider selected a reserved HTTP header",
+            ));
+        }
+        count += 1;
+        bytes = bytes.saturating_add(name.as_str().len().saturating_add(value.as_bytes().len()));
+        if count > MAX_HEADERS || bytes > MAX_HEADER_BYTES {
+            return Err(BitrouterError::bad_request(
+                "evaluation provider headers exceed size limit",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Apply the selected provider's header rules after authentication. This lets

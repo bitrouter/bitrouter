@@ -1,10 +1,10 @@
 # Native provider extensions for evaluation models
 
 Status: **approved architecture; implementation in progress on PR #942.**
-Local deterministic validation passed (3,590 nextest tests; strict CI-form
-Clippy; format and registry/schema checks). Hosted CI and the credentialed
-TypeSafe smoke remain outstanding; this document does not authorize merging
-or releasing the implementation.
+The current branch passed 3,596 local nextest tests, strict CI-form Clippy,
+format, registry/schema checks, SDK no-config compilation and warning-free
+public docs. Hosted CI and credentialed TypeSafe smoke remain outstanding;
+this document does not authorize merging or releasing the implementation.
 
 Date: 2026-09-23
 
@@ -76,9 +76,9 @@ one provider work. It also makes a third-party provider difficult to add
 without editing BitRouter's central registry.
 
 The new unit is `typesafe`, not `system-one`. The extension owns TypeSafe's
-upstream API semantics, including request/response translation and any
-provider-specific status/body interpretation. The host still owns common
-routing policy and resource authority. Reuse of a wire codec can be a private
+upstream API semantics, including request rendering and successful-response
+interpretation. The host still owns common HTTP error classification, routing
+policy and resource authority. Reuse of a wire codec can be a private
 Rust module or ordinary dependency; it does not imply that another provider
 is safe to route until its semantics are independently verified.
 
@@ -116,9 +116,10 @@ current circular-seeming responsibility where registry application consults
 
 ## 4. Minimal native author contract
 
-The first facet accepts a typed canonical evaluation request, a resolved
-provider-model wire id, and a bounded execution context; it returns a typed
-canonical evaluation result or a classified provider error. Its registration
+The first facet accepts a typed canonical evaluation request and a resolved
+provider-model wire id; it returns constrained HTTP request details, then
+parses a successful JSON response into typed provider data. The host executes
+the request and classifies standard HTTP failures. Its registration
 also declares the provider id and executable model/operation claims. The exact
 Rust spelling is implementation work, but these semantics are normative:
 
@@ -145,9 +146,11 @@ Rust spelling is implementation work, but these semantics are normative:
    cancellation, transport-level payload limits and instrumentation. The
    extension can choose TypeSafe's relative path, method, and provider-specific
    non-auth headers/body, but cannot redirect to another origin, select another
-   account or bypass the host's resource limits. It maps
-   TypeSafe response/error semantics; the host decides whether a classified
-   failure is retried or another eligible account is selected.
+   account, override authentication/framing headers, or bypass the host's
+   resource limits. It maps TypeSafe's successful response semantics. The host
+   sanitizes and classifies HTTP failures, then decides whether another
+   eligible account is selected. Add a provider-specific error classifier only
+   when a concrete upstream error fixture requires different semantics.
 6. **Typed accounting:** the facet returns the provider-reported model version
    and usage when present, plus the raw answer values needed by the canonical
    result. It does not fabricate probability/confidence/usage values or settle

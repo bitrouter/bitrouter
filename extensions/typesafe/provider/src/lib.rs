@@ -17,8 +17,9 @@ use bitrouter_sdk::evaluation::{
 use bitrouter_sdk::extension::ExtensionApi;
 use bitrouter_sdk::extension::provider::{
     EvaluationProvider, EvaluationProviderDescriptor, EvaluationProviderModel,
-    EvaluationProviderOutput,
+    EvaluationProviderOutput, EvaluationProviderWireRequest,
 };
+use http::{HeaderMap, Method};
 use serde::Deserialize;
 use serde_json::{Number, Value, json};
 
@@ -67,18 +68,22 @@ impl EvaluationProvider for TypeSafeProvider {
         &self,
         request: &EvaluationRequest,
         target: &EvaluationRoutingTarget,
-    ) -> Result<Value> {
+    ) -> Result<EvaluationProviderWireRequest> {
         request.validate()?;
         if target.provider_model_id.is_empty() {
             return Err(BitrouterError::bad_request(
                 "provider model id must be non-empty",
             ));
         }
-        Ok(json!({
-            "model": target.provider_model_id,
-            "state": request.state,
-            "questions": request.questions,
-        }))
+        Ok(EvaluationProviderWireRequest {
+            method: Method::POST,
+            headers: HeaderMap::new(),
+            body: json!({
+                "model": target.provider_model_id,
+                "state": request.state,
+                "questions": request.questions,
+            }),
+        })
     }
 
     fn parse_response(

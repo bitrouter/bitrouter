@@ -7,6 +7,8 @@
 use crate::error::Result;
 use std::collections::BTreeMap;
 
+use http::{HeaderMap, Method};
+
 use crate::evaluation::{
     EvaluationAnswer, EvaluationQuestionType, EvaluationRequest, EvaluationRoutingTarget,
     EvaluationUsage,
@@ -22,6 +24,18 @@ pub struct EvaluationProviderOutput {
     pub answers: BTreeMap<String, EvaluationAnswer>,
     /// Provider-reported usage; cost remains host-owned.
     pub usage: EvaluationUsage,
+}
+
+/// Provider-owned HTTP request details that do not grant transport authority.
+/// The host still fixes the origin, endpoint, authentication and deadlines.
+#[derive(Debug, Clone)]
+pub struct EvaluationProviderWireRequest {
+    /// HTTP method for the provider's evaluation endpoint.
+    pub method: Method,
+    /// Non-authentication headers required by the provider dialect.
+    pub headers: HeaderMap,
+    /// Provider-specific JSON body.
+    pub body: serde_json::Value,
 }
 
 impl EvaluationProviderOutput {
@@ -74,12 +88,13 @@ pub trait EvaluationProvider: Send + Sync {
     /// Describe this provider's executable models and upstream requirements.
     fn descriptor(&self) -> EvaluationProviderDescriptor;
 
-    /// Render one selected model's canonical request into upstream JSON.
+    /// Render one selected model's canonical request into constrained HTTP
+    /// details. Credentials, origin and endpoint are never passed here.
     fn render_request(
         &self,
         request: &EvaluationRequest,
         target: &EvaluationRoutingTarget,
-    ) -> Result<serde_json::Value>;
+    ) -> Result<EvaluationProviderWireRequest>;
 
     /// Parse one successful upstream JSON response into canonical answers.
     fn parse_response(
@@ -95,7 +110,7 @@ mod tests {
 
     use super::{
         EvaluationProvider, EvaluationProviderDescriptor, EvaluationProviderModel,
-        EvaluationProviderOutput,
+        EvaluationProviderOutput, EvaluationProviderWireRequest,
     };
     use crate::error::{BitrouterError, Result};
     use crate::evaluation::{EvaluationQuestionType, EvaluationRequest, EvaluationRoutingTarget};
@@ -127,7 +142,7 @@ mod tests {
             &self,
             _request: &EvaluationRequest,
             _target: &EvaluationRoutingTarget,
-        ) -> Result<serde_json::Value> {
+        ) -> Result<EvaluationProviderWireRequest> {
             Err(BitrouterError::internal("fixture does not execute"))
         }
 

@@ -1550,6 +1550,16 @@ pub fn infer_protocol(api_base: &str) -> ApiProtocol {
     }
 }
 
+/// Provenance of effective model pricing after registry enrichment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ModelPricingOrigin {
+    /// Pricing was supplied in operator configuration or by a host.
+    #[default]
+    Configured,
+    /// Pricing was filled from public registry metadata.
+    Registry,
+}
+
 /// One model entry under a provider.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct ProviderModel {
@@ -1579,6 +1589,10 @@ pub struct ProviderModel {
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<PricingConfig>,
+    /// In-process provenance of effective pricing; never accepted from YAML.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub pricing_origin: ModelPricingOrigin,
     /// Features this concrete provider/model route explicitly advertises.
     /// An empty list means unknown, not unsupported. Runtime routing preserves
     /// legacy unknown entries; policy code that grants a capability-specific
@@ -2238,6 +2252,7 @@ pub async fn discover_models(config: &mut Config) {
                         api_protocol: None,
                         rate_limits: None,
                         pricing: None,
+                        pricing_origin: ModelPricingOrigin::Configured,
                         capabilities: Vec::new(),
                         reasoning_effort: None,
                         compatibility: ModelCompatibility::default(),

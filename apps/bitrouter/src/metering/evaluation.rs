@@ -15,9 +15,7 @@ use bitrouter_sdk::language_model::{Usage, UsageOrigin};
 use sea_orm::{ActiveValue::Set, DatabaseConnection, EntityTrait};
 
 use super::entities::evaluation_attempts;
-use super::pricing::{
-    PricingSource, PricingTable, calculate_charge_evidence, unavailable_charge_evidence,
-};
+use super::pricing::{PricingTable, calculate_charge_evidence, unavailable_charge_evidence};
 
 /// The OSS host's append-only evaluation attempt and cost recorder.
 pub struct MeteringEvaluationAttemptRecorder {
@@ -44,10 +42,10 @@ impl EvaluationAttemptRecorder for MeteringEvaluationAttemptRecorder {
             };
             match self
                 .pricing
-                .resolve(&record.provider, &record.provider_model_id)
+                .resolve_with_source(&record.provider, &record.provider_model_id)
             {
-                Some(pricing) if !pricing.is_unconfigured() => {
-                    calculate_charge_evidence(&normalized, &pricing, PricingSource::Configured)
+                Some((pricing, source)) if !pricing.is_unconfigured() => {
+                    calculate_charge_evidence(&normalized, &pricing, source)
                 }
                 _ => unavailable_charge_evidence(&normalized, "pricing_not_found"),
             }

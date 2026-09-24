@@ -26,8 +26,9 @@
 //! the fetched-or-cached registry data.
 
 use bitrouter_sdk::config::{
-    Config, Pattern, PatternMap, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig,
-    ProviderModel, RateLimit, RegistryConfig, env_lookup, substitute_with,
+    Config, ModelPricingOrigin, Pattern, PatternMap, PricingConfig, PricingTierConfig,
+    ProviderClass, ProviderConfig, ProviderModel, RateLimit, RegistryConfig, env_lookup,
+    substitute_with,
 };
 use bitrouter_sdk::language_model::types::ProtocolList;
 
@@ -171,6 +172,9 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
                 };
                 if model.pricing.is_none() {
                     model.pricing = catalog.pricing.as_ref().and_then(map_pricing);
+                    if model.pricing.is_some() {
+                        model.pricing_origin = ModelPricingOrigin::Registry;
+                    }
                 }
                 if model.rate_limits.is_none() {
                     model.rate_limits = catalog.rate_limits.as_ref().map(map_rate_limits);
@@ -311,6 +315,7 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
             operations: m.operations.clone(),
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
+            pricing_origin: ModelPricingOrigin::Registry,
             capabilities: m.capabilities.clone(),
             reasoning_effort: m.reasoning_effort.clone(),
             compatibility: m.compatibility.clone(),
@@ -406,6 +411,59 @@ mod tests {
             byok: Some(true),
             billing: Billing::UsageToken,
         }
+    }
+
+    #[test]
+    fn registry_pricing_provenance_does_not_erase_an_operator_override() {
+        let registry_provider = provider("regtestprov");
+        let data = data_with(vec![registry_provider.clone()], vec![]);
+        let mut catalog_config = Config::default();
+        catalog_config.providers.insert(
+            "regtestprov".to_string(),
+            ProviderConfig {
+                api_key: "fixture-key".to_string(),
+                ..ProviderConfig::default()
+            },
+        );
+        apply_registry(&mut catalog_config, &data);
+        let catalog_model = &catalog_config.providers["regtestprov"].models[0];
+        assert_eq!(catalog_model.pricing_origin, ModelPricingOrigin::Registry);
+        assert_eq!(
+            catalog_model
+                .pricing
+                .as_ref()
+                .and_then(|price| price.input_micro_usd_per_token),
+            Some(0.27)
+        );
+
+        let mut override_config = Config::default();
+        let mut override_model = build_models(&registry_provider)[0].clone();
+        override_model.pricing = Some(PricingConfig {
+            input_micro_usd_per_token: Some(9.0),
+            ..PricingConfig::default()
+        });
+        override_model.pricing_origin = ModelPricingOrigin::Configured;
+        override_config.providers.insert(
+            "regtestprov".to_string(),
+            ProviderConfig {
+                api_key: "fixture-key".to_string(),
+                models: vec![override_model],
+                ..ProviderConfig::default()
+            },
+        );
+        apply_registry(&mut override_config, &data);
+        let override_model = &override_config.providers["regtestprov"].models[0];
+        assert_eq!(
+            override_model.pricing_origin,
+            ModelPricingOrigin::Configured
+        );
+        assert_eq!(
+            override_model
+                .pricing
+                .as_ref()
+                .and_then(|price| price.input_micro_usd_per_token),
+            Some(9.0)
+        );
     }
 
     #[test]
@@ -913,6 +971,7 @@ mod tests {
             api_protocol: None,
             rate_limits: None,
             pricing: None,
+            pricing_origin: ModelPricingOrigin::Configured,
             capabilities: Vec::new(),
             reasoning_effort: None,
             compatibility: Default::default(),

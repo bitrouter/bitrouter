@@ -35,6 +35,9 @@ fn mixed_request_preserves_structure_nulls_and_provider_model_mapping()
             provider_model_id: "jev-1.13.0".into(),
         },
     )?;
+    assert_eq!(wire.method, http::Method::POST);
+    assert!(wire.headers.is_empty());
+    let wire = wire.body;
     assert_eq!(wire["model"], "jev-1.13.0");
     assert_eq!(wire["state"]["account"]["attempts"], json!([1, 2]));
     assert_eq!(
