@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.34](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.33...v1.0.0-alpha.34)
+
+
+### ⚙️ Miscellaneous Tasks
+
+- Sync registry catalog ([#943](https://github.com/bitrouter/bitrouter/pull/943)) - ([d7abbb4](https://github.com/bitrouter/bitrouter/commit/d7abbb42a536fcb1a00210cc20ebb67aa455c8bd))
+
+
 ## [1.0.0-alpha.33](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.32...v1.0.0-alpha.33)
 
 
