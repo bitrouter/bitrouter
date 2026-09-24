@@ -12,6 +12,9 @@ use sea_orm::DatabaseConnection;
 use bitrouter_sdk::App;
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
+use bitrouter_sdk::evaluation::pipeline::{EvaluationAttemptRecorder, EvaluationPipeline};
+use bitrouter_sdk::extension::ExtensionApi;
+use bitrouter_sdk::inference::InferenceOperation;
 use bitrouter_sdk::invocation;
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
@@ -62,6 +65,7 @@ use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvid
 use crate::eval::EvalService;
 use crate::eval::settlement::{EvalSettlementRecorder, PendingEvalDecisionStore};
 use crate::eval::store::EvalStore;
+use crate::metering::evaluation::MeteringEvaluationAttemptRecorder;
 use crate::metering::{ContextTier, MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 use crate::session_identity::SessionContextHook;
@@ -111,6 +115,11 @@ pub struct Assembled {
     /// Concrete upstream HTTP executor. The pipeline also holds this as a trait
     /// object, but reload needs the concrete handle to replace timeout clients.
     pub upstream_executor: Arc<HttpExecutor>,
+    /// Internal typed-evaluation rail. It is present even without an active
+    /// provider so a validated reload can activate an evaluation route without
+    /// replacing the HTTP server. The host owns durable terminal and cost
+    /// evidence unless a custom host supplies its own recorder.
+    pub evaluation_pipeline: Option<Arc<EvaluationPipeline>>,
     /// The live `policy_table:` transform, when one was wired. The built `App`
     /// holds the same `Arc` as a `dyn PromptTransform`; reload needs the
     /// concrete handle to swap a freshly built spec into it, because the
@@ -382,7 +391,7 @@ fn renamed_env_warnings(is_set: impl Fn(&str) -> bool) -> Vec<String> {
 /// host's migrations, build the routing table + executor, and wire the
 /// builtin hooks onto the `language_model` pipeline.
 pub async fn build_app(config: &Config) -> Result<Assembled> {
-    build_app_with_path(config, None).await
+    build_app_with_extensions(config, None, |_| Ok(())).await
 }
 
 /// Like [`build_app`], but remembering the config's source path so the routing
@@ -402,26 +411,50 @@ pub async fn build_app_with_path(
 pub async fn build_app_with_extensions(
     config: &Config,
     config_path: Option<&std::path::Path>,
-    register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
+    register: impl FnOnce(&mut ExtensionApi) -> Result<()>,
 ) -> Result<Assembled> {
-    let mut extensions = bitrouter_sdk::extension::ExtensionApi::new();
+    let mut extensions = ExtensionApi::new();
     register(&mut extensions).context("registering extensions")?;
+    build_app_with_registered_extensions(config, config_path, &extensions, None).await
+}
+
+/// Assemble from an already registered capability set. The foreground host
+/// registers before registry enrichment; this entry also permits a test-only
+/// recorder without creating a second extension registration mechanism.
+pub async fn build_app_with_registered_extensions(
+    config: &Config,
+    config_path: Option<&std::path::Path>,
+    extensions: &ExtensionApi,
+    evaluation_recorder: Option<Arc<dyn EvaluationAttemptRecorder>>,
+) -> Result<Assembled> {
     let native = extensions
+        .clone()
         .into_registrations()
         .context("registering extensions")?;
-    assemble_app(config, config_path, native).await
+    assemble_app(
+        config,
+        config_path,
+        extensions.clone(),
+        native,
+        evaluation_recorder,
+    )
+    .await
 }
 
 async fn assemble_app(
     config: &Config,
     config_path: Option<&std::path::Path>,
+    extensions: ExtensionApi,
     native: std::collections::HashMap<
         String,
         bitrouter_sdk::extension::request_check::Registration,
     >,
+    evaluation_recorder: Option<Arc<dyn EvaluationAttemptRecorder>>,
 ) -> Result<Assembled> {
     validate_host_configuration(config)?;
     config.validate_router_config()?;
+    config.validate_operations()?;
+    extensions.validate_evaluation_bindings(config)?;
     let mut inactive = native
         .keys()
         .filter(|id| !config.checkers.contains_key(*id))
@@ -552,9 +585,20 @@ async fn assemble_app(
         .context("building the upstream HTTP executor")?,
     );
     let executor_for_reload = executor.clone();
-
     // ---- pricing, metering, policy — all derived from config ----
     let pricing = Arc::new(build_pricing_table(config));
+    let recorder = evaluation_recorder.unwrap_or_else(|| {
+        Arc::new(MeteringEvaluationAttemptRecorder::new(
+            db.clone(),
+            Arc::clone(&pricing),
+        ))
+    });
+    let evaluation_pipeline = Some(Arc::new(EvaluationPipeline::new(
+        Arc::clone(&routing_table),
+        Arc::clone(&executor),
+        extensions.clone(),
+        recorder,
+    )));
     let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
@@ -1006,6 +1050,7 @@ async fn assemble_app(
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
+        evaluation_pipeline,
         policy_table_router,
         observe: observe_provider,
         otel_exporter: otel_for_assembled,
@@ -1035,12 +1080,10 @@ fn build_fusion_alias(config: &Config) -> Result<Option<Arc<dyn PromptTransform>
 /// cloud gateway) are routable. Network to the registry is expected to be
 /// stable, so this empty state is a rare first-run edge.
 ///
-/// Called by the `serve` entry point (before [`build_app`]) and by
-/// [`crate::reload`], the two paths that build a production routing config.
 /// Kept out of `build_app` itself so that function stays free of network I/O —
-/// integration tests assemble explicit configs through it. Lives in the app
-/// layer (above `bitrouter-providers`) because the SDK's own routing table sits
-/// below the providers crate and cannot fetch the registry itself.
+/// integration tests assemble explicit configs through it. This metadata-only
+/// helper is also used by generation policy tooling; it does not infer or
+/// validate executable provider-extension claims.
 pub async fn merge_registry_into(config: &mut Config) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
@@ -1054,6 +1097,94 @@ pub async fn merge_registry_into(config: &mut Config) {
     };
     bitrouter_providers::registry::apply::apply_registry(config, &data);
     bitrouter_providers::apply_builtin_defaults(config);
+}
+
+/// Merge executable provider declarations before optional catalog metadata.
+/// An extension remains usable with registry fetching disabled.
+pub async fn merge_registry_into_with_extensions(
+    config: &mut Config,
+    extensions: &ExtensionApi,
+) -> Result<()> {
+    apply_evaluation_provider_defaults(config, extensions)?;
+    merge_registry_into(config).await;
+    extensions.validate_evaluation_bindings(config)?;
+    Ok(())
+}
+
+fn apply_evaluation_provider_defaults(
+    config: &mut Config,
+    extensions: &ExtensionApi,
+) -> Result<()> {
+    use std::collections::BTreeMap;
+
+    use bitrouter_sdk::config::{
+        ModelOperationConfig, ProviderConfig, ProviderModel, ProviderOperationConfig, env_lookup,
+    };
+
+    for descriptor in extensions.evaluation_provider_descriptors() {
+        bitrouter_sdk::url_validator::validate_upstream_url(&descriptor.api_base)
+            .with_context(|| format!("provider '{}' default API base", descriptor.provider_id))?;
+        let credential = env_lookup(&descriptor.credential_env).filter(|value| !value.is_empty());
+        let provider = match config.providers.entry(descriptor.provider_id.clone()) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let Some(key) = credential.clone() else {
+                    continue;
+                };
+                entry.insert(ProviderConfig {
+                    api_key: key,
+                    ..ProviderConfig::default()
+                })
+            }
+        };
+        if provider.api_base.is_empty() {
+            provider.api_base = descriptor.api_base.clone();
+        }
+        if provider.api_key.is_empty() && provider.accounts.is_empty() {
+            if let Some(key) = credential {
+                provider.api_key = key;
+            } else if provider.active {
+                anyhow::bail!(
+                    "provider '{}' is explicitly active but has no {} credential",
+                    descriptor.provider_id,
+                    descriptor.credential_env
+                );
+            }
+        }
+        provider
+            .operations
+            .entry(InferenceOperation::Evaluate)
+            .or_insert_with(|| ProviderOperationConfig {
+                endpoint: descriptor.endpoint.clone(),
+            });
+        for declared in &descriptor.models {
+            if provider.models.iter().any(|model| model.id == declared.id) {
+                continue;
+            }
+            provider.models.push(ProviderModel {
+                id: declared.id.clone(),
+                provider_model_id: Some(declared.provider_model_id.clone()),
+                operations: Some(BTreeMap::from([(
+                    InferenceOperation::Evaluate,
+                    ModelOperationConfig {
+                        question_types: declared.question_types.clone(),
+                        max_choice_options: declared.max_choice_options,
+                        max_score_levels: declared.max_score_levels,
+                    },
+                )])),
+                api_protocol: None,
+                rate_limits: None,
+                pricing: None,
+                pricing_origin: bitrouter_sdk::config::ModelPricingOrigin::Configured,
+                capabilities: Vec::new(),
+                reasoning_effort: None,
+                compatibility: Default::default(),
+            });
+        }
+    }
+    config.validate_operations()?;
+    extensions.validate_evaluation_bindings(config)?;
+    Ok(())
 }
 
 /// Build the server-side tool loop from `config.server_tools`. Returns `None`
@@ -1394,11 +1525,24 @@ pub(crate) fn build_pricing_table(config: &Config) -> PricingTable {
                         output_micro_usd_per_token: t.output_micro_usd_per_token,
                     })
                     .collect();
-                table.insert(provider_id.clone(), model.id.clone(), model_pricing.clone());
+                let source = match model.pricing_origin {
+                    bitrouter_sdk::config::ModelPricingOrigin::Configured => {
+                        crate::metering::PricingSource::Configured
+                    }
+                    bitrouter_sdk::config::ModelPricingOrigin::Registry => {
+                        crate::metering::PricingSource::Registry
+                    }
+                };
+                table.insert_with_source(
+                    provider_id.clone(),
+                    model.id.clone(),
+                    model_pricing.clone(),
+                    source,
+                );
                 if let Some(native_id) = model.provider_model_id.as_deref()
                     && native_id != model.id
                 {
-                    table.insert(provider_id.clone(), native_id, model_pricing);
+                    table.insert_with_source(provider_id.clone(), native_id, model_pricing, source);
                 }
             }
         }

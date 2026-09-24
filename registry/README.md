@@ -109,6 +109,9 @@ Source lives in two places; `dist/registry/` is generated — never hand-edit it
   canonical models. Every id is `<vendor>/<model>` (lowercase). Include only
   facts you can verify (modalities, context/output limits, release date,
   `open_weights`); omit what you can't.
+  A canonical entry with `operations: [evaluate]` is catalog metadata, not an
+  executable route; it needs a provider declaration and matching native format
+  registration before it can appear in the public inference model list.
 - **`registry/providers/<name>.yaml`** — one provider per file: the models it
   serves, transport, auth, pricing, and `billing`. A provider **may list models
   beyond the curated catalog** (BYOK / BYO-subscription extras) — those are

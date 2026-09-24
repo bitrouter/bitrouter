@@ -27,10 +27,15 @@ section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 | `google-ai` | — (local OAuth) | Google AI (Antigravity) subscription | `bro providers login google-ai`; imports the `agy` CLI keyring session, custom cloudcode-pa protocol, distinct from `google` API-key billing. Unofficial — uses your own Google account |
 | `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Per-family protocol routing |
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
+| `typesafe` | `TYPESAFE_API_KEY` | Bearer | Jev evaluation only; default `bro` registers the native TypeSafe provider extension and serves `/v1/evaluate` |
 
-Zero-config mode auto-enables every API-key provider whose env var is present;
-an API-key provider without its credential gets `active: false` and falls out of
-the routing table. Local-OAuth/PKCE providers (`claude-code`, `github-copilot`,
+Zero-config mode auto-enables API-key providers whose env vars are present;
+an API-key provider without its credential gets `active: false` and falls out
+of the routing table. The evaluation-only `typesafe` route requires its
+compiled provider extension; registry metadata alone does not
+auto-activate it. An explicit active TypeSafe route fails startup if its
+adapter is missing or has the wrong revision. See `evaluation.md` for the
+opt-in host. Local-OAuth/PKCE providers (`claude-code`, `github-copilot`,
 `openai-codex`, `supergrok`, `google-ai`) are enabled by `bro providers login`, not an env var. **First run with no network
 and no cache**: the registry is empty, so only fully-specified local providers
 and the in-binary `bitrouter` cloud gateway are available — the known-provider
@@ -67,8 +72,9 @@ gate.
 
 Rules:
 
-- **Public providers only.** Every public registry provider is merged; only
-  `private` ones (invite-only entries, no public registration) are skipped. The
+- **Public, executable providers only.** Public registry providers are merged
+  when the host has their required native facets; `private` ones (invite-only
+  entries, no public registration) are skipped. The
   registry classifies each provider by how a caller obtains
   access: `api_key` (a portable key), `local_oauth` / `local_pkce` (a local
   interactive login — e.g. `github-copilot`, `openai-codex`), or `private`.

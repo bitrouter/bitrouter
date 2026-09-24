@@ -1,0 +1,7 @@
+- id: typesafe/jev-1.13
+  name: Jev 1.13
+  description: Typed evaluation model. Default bro serves /v1/evaluate; the TypeSafe provider extension activates this route when a TypeSafe credential is available.
+  operations:
+    - evaluate
+  input_modalities:
+    - text

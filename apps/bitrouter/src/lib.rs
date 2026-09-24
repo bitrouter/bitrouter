@@ -41,6 +41,7 @@ pub mod dashboard;
 pub mod db;
 pub mod error_report;
 pub mod eval;
+pub mod evaluation_http;
 pub mod evolution;
 pub mod gateways;
 pub mod harness;

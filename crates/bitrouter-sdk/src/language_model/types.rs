@@ -2267,7 +2267,7 @@ impl std::fmt::Debug for OutboundHeaderRule {
     }
 }
 
-fn is_reserved_provider_header(name: &http::HeaderName) -> bool {
+pub(crate) fn is_reserved_provider_header(name: &http::HeaderName) -> bool {
     matches!(
         name.as_str(),
         "authorization"

@@ -164,7 +164,14 @@ pub async fn serve_with_extensions(
     // Fetch + merge the public provider registry before assembly, so the daemon
     // routes every credentialed provider's registered models. Best-effort and
     // cache-backed; a no-op when disabled or unreachable with no cache.
-    crate::merge_registry_into(&mut cfg).await;
+    let mut extensions = bitrouter_sdk::extension::ExtensionApi::new();
+    register(&mut extensions).context("registering extensions")?;
+    // Catch an ignored registration error before provider discovery or DB I/O.
+    extensions
+        .clone()
+        .into_registrations()
+        .context("registering extensions")?;
+    crate::assemble::merge_registry_into_with_extensions(&mut cfg, &extensions).await?;
     announce_zero_config(source, &cfg);
     maybe_announce_telemetry(home);
     let listen = cfg.server.listen.clone();
@@ -183,10 +190,16 @@ pub async fn serve_with_extensions(
         crate::paths::ConfigSource::File(path) => Some(path.as_path()),
         crate::paths::ConfigSource::Default { .. } => None,
     };
-    let assembled =
-        crate::assemble::build_app_with_extensions(&cfg, config_path_for_reload, register).await?;
+    let assembled = crate::assemble::build_app_with_registered_extensions(
+        &cfg,
+        config_path_for_reload,
+        &extensions,
+        None,
+    )
+    .await?;
     let observe_for_shutdown = assembled.observe.clone();
     let trajectory_outbox_for_shutdown = assembled.trajectory_outbox_publisher.clone();
+    let evaluation_for_shutdown = assembled.evaluation_pipeline.clone();
     // Every failure after assembly follows the same flush/drain path, including
     // listener conflicts and locator/PID publication failures.
     let mut pid_guard = None;
@@ -214,12 +227,13 @@ pub async fn serve_with_extensions(
                 "workflow trace capture enabled"
             );
         }
-        let app = Arc::new(assembled.app);
         let eval_router = crate::eval::api::router(
             assembled.eval_service.clone(),
             assembled.db.clone(),
             cfg.server.skip_auth,
         );
+        let typed_eval_router = crate::evaluation_http::router(&cfg, &assembled);
+        let app = Arc::new(assembled.app);
         let policy_store = assembled.policy_store;
         // Clone before moving the original into `run_control_socket` — we
         // need a handle here too so the shutdown path below can drive the
@@ -245,6 +259,7 @@ pub async fn serve_with_extensions(
             reload_source,
         )
         .with_startup_configuration(startup_configuration)
+        .with_extensions(extensions.clone())
         .with_policy_runtime(assembled.policy_runtime)
         .with_policy_table_router(assembled.policy_table_router);
         let server_instance_id = daemon::DaemonReloader::reload_state(&reloader)
@@ -295,33 +310,28 @@ pub async fn serve_with_extensions(
                 let _ = inference_shutdown_rx.await;
             };
             let inference = async move {
-                match workflow_trace_capture {
-                    Some(capture) => {
-                        let workflow_wrapper = capture.router_wrapper();
-                        let eval_router = eval_router.clone();
-                        http_app
-                            .serve_listener_with_router_wrapper_and_shutdown(
-                                inference_listener,
-                                move |router| {
-                                    workflow_wrapper(otel_wrapper(
-                                        router.merge(eval_router.clone()),
-                                    ))
-                                },
-                                inference_shutdown,
-                            )
-                            .await
-                    }
-                    None => {
-                        http_app
-                            .serve_listener_with_router_wrapper_and_shutdown(
-                                inference_listener,
-                                move |router| otel_wrapper(router.merge(eval_router.clone())),
-                                inference_shutdown,
-                            )
-                            .await
-                    }
+                let omit_v1_models = true;
+                let options = bitrouter_sdk::server::RouterOptions {
+                    omit_v1_models,
+                    ..bitrouter_sdk::server::RouterOptions::default()
                 }
-                .map_err(anyhow::Error::from)
+                .with_router_wrapper(move |router| {
+                    let router = router.merge(eval_router.clone());
+                    let router = router.merge(typed_eval_router.clone());
+                    let router = otel_wrapper(router);
+                    match &workflow_trace_capture {
+                        Some(capture) => capture.router_wrapper()(router),
+                        None => router,
+                    }
+                });
+                http_app
+                    .serve_listener_with_router_options_and_shutdown(
+                        inference_listener,
+                        options,
+                        inference_shutdown,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
             };
             let remote = async move {
                 match remote_control {
@@ -551,6 +561,10 @@ pub async fn serve_with_extensions(
         result
     }
     .await;
+
+    if let Some(pipeline) = evaluation_for_shutdown {
+        pipeline.drain().await;
+    }
 
     if let Some(publisher) = trajectory_outbox_for_shutdown {
         match publisher.drain_after_active_worker().await {

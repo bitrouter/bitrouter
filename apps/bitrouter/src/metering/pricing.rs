@@ -217,8 +217,10 @@ impl ChargeStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PricingSource {
-    /// Rates came from the effective provider/model configuration.
+    /// Rates came from operator or host provider/model configuration.
     Configured,
+    /// Rates were filled from public registry metadata.
+    Registry,
     /// Rates came from an explicit benchmark/export override.
     Override,
     /// Final cost came directly from an authenticated authoritative receipt.
@@ -265,7 +267,7 @@ pub struct ChargeEvidence {
 /// directly (and by tests).
 #[derive(Debug, Clone, Default)]
 pub struct PricingTable {
-    entries: HashMap<(String, String), ModelPricing>,
+    entries: HashMap<(String, String), (ModelPricing, PricingSource)>,
 }
 
 impl PricingTable {
@@ -281,8 +283,19 @@ impl PricingTable {
         service_id: impl Into<String>,
         pricing: ModelPricing,
     ) {
+        self.insert_with_source(provider, service_id, pricing, PricingSource::Configured);
+    }
+
+    /// Register effective pricing with its origin for settlement evidence.
+    pub fn insert_with_source(
+        &mut self,
+        provider: impl Into<String>,
+        service_id: impl Into<String>,
+        pricing: ModelPricing,
+        source: PricingSource,
+    ) {
         self.entries
-            .insert((provider.into(), service_id.into()), pricing);
+            .insert((provider.into(), service_id.into()), (pricing, source));
     }
 
     /// Resolve pricing for a `(provider, service_id)` pair. Returns `None` when
@@ -295,6 +308,17 @@ impl PricingTable {
     /// under the standard `Hash` derivation, so `HashMap::get` with the
     /// `BorrowedKey` newtype reuses the borrow.
     pub fn resolve(&self, provider: &str, service_id: &str) -> Option<ModelPricing> {
+        self.entries
+            .get(&BorrowedKey(provider, service_id) as &dyn KeyLike)
+            .map(|(pricing, _)| pricing.clone())
+    }
+
+    /// Resolve pricing and its provenance without losing registry enrichment.
+    pub fn resolve_with_source(
+        &self,
+        provider: &str,
+        service_id: &str,
+    ) -> Option<(ModelPricing, PricingSource)> {
         self.entries
             .get(&BorrowedKey(provider, service_id) as &dyn KeyLike)
             .cloned()
@@ -790,6 +814,26 @@ mod tests {
         assert!(table.resolve("openai", "gpt-5-2026-01").is_some());
         assert!(table.resolve("openai", "gpt-5").is_none());
         assert!(table.resolve("anthropic", "gpt-5-2026-01").is_none());
+    }
+
+    #[test]
+    fn table_keeps_pricing_origin_for_wire_ids() {
+        let mut table = PricingTable::new();
+        table.insert_with_source(
+            "typesafe",
+            "jev-1.13.0",
+            ModelPricing::new(0.042, 0.0),
+            PricingSource::Registry,
+        );
+        assert!(matches!(
+            table.resolve_with_source("typesafe", "jev-1.13.0"),
+            Some((_, PricingSource::Registry))
+        ));
+        assert!(
+            table
+                .resolve_with_source("typesafe", "jev-latest")
+                .is_none()
+        );
     }
 
     /// Base ≤128k = 1.3/7.8 µ$/token; higher bracket >128k = 2.0/12.0.

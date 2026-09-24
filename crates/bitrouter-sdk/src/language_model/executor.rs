@@ -14,6 +14,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::{BitrouterError, Result};
+#[cfg(feature = "config_file")]
+use crate::evaluation::{EvaluationRequest, EvaluationResult, EvaluationRoutingTarget};
+#[cfg(feature = "config_file")]
+use crate::extension::provider::{EvaluationProvider, EvaluationProviderWireRequest};
 use crate::language_model::auth::{
     AppliedAuth, AuthAppliers, AuthExtensionOperation, ContinuationAuthority, CredentialAuthority,
     normalize_auth_extension_error,
@@ -496,6 +500,9 @@ impl UpstreamErrorScrubber {
             BitrouterError::NotFound(message) => {
                 BitrouterError::NotFound(self.scrub_text(&message))
             }
+            BitrouterError::ModelOperationMismatch(message) => {
+                BitrouterError::ModelOperationMismatch(self.scrub_text(&message))
+            }
             error @ BitrouterError::RateLimited { .. } => error,
             BitrouterError::UpstreamRateLimited {
                 retry_after,
@@ -691,11 +698,16 @@ struct HttpClientSet {
     /// timeouts (for the per-request `total` cap, which is not a client
     /// setting).
     default_client: reqwest::Client,
+    /// Evaluation never follows an upstream redirect with a scoped bearer.
+    #[cfg(feature = "config_file")]
+    evaluation_default_client: reqwest::Client,
     default_timeouts: HttpTimeouts,
     /// Per-provider clients keyed by `provider_name`, each paired with the
     /// resolved timeouts it was built from. Built once at construction; empty
     /// in the common single-timeout deployment.
     provider_clients: HashMap<String, (HttpTimeouts, reqwest::Client)>,
+    #[cfg(feature = "config_file")]
+    evaluation_provider_clients: HashMap<String, reqwest::Client>,
 }
 
 /// A fully constructed upstream-client replacement that has not yet become
@@ -723,8 +735,12 @@ struct RequestBuildInput<'a> {
 /// Build a reqwest client from the connection-level timeout knobs. `total` is
 /// deliberately not applied here — it is a per-request deadline set via
 /// [`reqwest::RequestBuilder::timeout`], not a client-builder setting.
-fn build_http_client(timeouts: &HttpTimeouts) -> Result<reqwest::Client> {
-    reqwest::Client::builder()
+fn build_http_client(timeouts: &HttpTimeouts, evaluation: bool) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    if evaluation {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
+    builder
         .connect_timeout(timeouts.connect)
         .read_timeout(timeouts.read)
         .pool_idle_timeout(timeouts.pool_idle)
@@ -737,23 +753,178 @@ fn build_http_client_set(
     default_timeouts: HttpTimeouts,
     per_provider: HashMap<String, HttpTimeouts>,
 ) -> Result<HttpClientSet> {
-    let default_client = build_http_client(&default_timeouts)?;
+    let default_client = build_http_client(&default_timeouts, false)?;
+    #[cfg(feature = "config_file")]
+    let evaluation_default_client = build_http_client(&default_timeouts, true)?;
     let mut provider_clients = HashMap::new();
+    #[cfg(feature = "config_file")]
+    let mut evaluation_provider_clients = HashMap::new();
     for (name, timeouts) in per_provider {
         if timeouts == default_timeouts {
             continue;
         }
-        let client = build_http_client(&timeouts)?;
+        let client = build_http_client(&timeouts, false)?;
+        #[cfg(feature = "config_file")]
+        let evaluation_client = build_http_client(&timeouts, true)?;
+        #[cfg(feature = "config_file")]
+        evaluation_provider_clients.insert(name.clone(), evaluation_client);
         provider_clients.insert(name, (timeouts, client));
     }
     Ok(HttpClientSet {
         default_client,
+        #[cfg(feature = "config_file")]
+        evaluation_default_client,
         default_timeouts,
         provider_clients,
+        #[cfg(feature = "config_file")]
+        evaluation_provider_clients,
     })
 }
 
 impl HttpExecutor {
+    /// Execute one host-owned, non-streaming evaluation HTTP attempt.
+    ///
+    /// The provider renders/parses its own JSON. This method selects the URL,
+    /// applies the provider's authentication and headers, enforces the
+    /// deadline and response-size bound, and validates the canonical result.
+    /// It does not enter the generation pipeline or its prompt hooks.
+    #[cfg(feature = "config_file")]
+    pub async fn execute_evaluation_attempt(
+        &self,
+        target: &RoutingTarget,
+        endpoint: &str,
+        provider: &dyn EvaluationProvider,
+        canonical: &EvaluationRequest,
+        request_id: &str,
+        inbound_headers: &http::HeaderMap,
+    ) -> Result<EvaluationResult> {
+        const MAX_EVALUATION_JSON_BYTES: usize = 16 * 1024 * 1024;
+        if !endpoint.starts_with('/')
+            || endpoint.starts_with("//")
+            || endpoint.contains("..")
+            || endpoint.contains(['?', '#'])
+        {
+            return Err(BitrouterError::bad_request("invalid evaluation endpoint"));
+        }
+        let base = reqwest::Url::parse(&target.api_base)
+            .map_err(|_| BitrouterError::bad_request("invalid provider API base"))?;
+        let url = base
+            .join(endpoint)
+            .map_err(|_| BitrouterError::bad_request("invalid evaluation endpoint"))?;
+        if base.origin() != url.origin() {
+            return Err(BitrouterError::bad_request(
+                "evaluation endpoint changed provider origin",
+            ));
+        }
+        let (_, transport) = self
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| Self::no_dispatch_error(target))?;
+        let adapter_target = EvaluationRoutingTarget {
+            provider_model_id: target.service_id.clone(),
+        };
+        let wire = provider
+            .render_request(canonical, &adapter_target)
+            .map_err(|_| BitrouterError::bad_request("evaluation provider rejected request"))?;
+        validate_evaluation_wire_request(&wire)?;
+        let encoded = serde_json::to_vec(&wire.body)
+            .map_err(|_| BitrouterError::bad_request("evaluation body is not JSON"))?;
+        if encoded.len() > MAX_EVALUATION_JSON_BYTES {
+            return Err(BitrouterError::bad_request(
+                "evaluation body exceeds size limit",
+            ));
+        }
+        let (client, timeouts) = self.evaluation_client_for(target);
+        let mut scrubber = UpstreamErrorScrubber::new(None);
+        scrubber.capture_effective_target_key(target);
+        let response_body = {
+            let mut request = client
+                .request(wire.method.clone(), url.clone())
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(encoded.clone())
+                .timeout(timeouts.total.unwrap_or(timeouts.read))
+                .build()
+                .map_err(|error| {
+                    BitrouterError::internal(format!("building evaluation request: {error}"))
+                })?;
+            for (name, value) in &wire.headers {
+                request.headers_mut().append(name, value.clone());
+            }
+            let applied = self
+                .apply_auth(request, target, transport)
+                .await
+                .map_err(|error| scrubber.scrub_error(error))?;
+            request = applied.into_parts().0;
+            apply_provider_headers(&mut request, target, inbound_headers);
+            let header_value = reqwest::header::HeaderValue::from_str(request_id)
+                .map_err(|_| BitrouterError::bad_request("invalid evaluation request id"))?;
+            request
+                .headers_mut()
+                .insert("x-bitrouter-request-id", header_value);
+            scrubber.capture_request_credentials(&request, target);
+            let response = client.execute(request).await.map_err(|error| {
+                scrubber.scrub_error(if error.is_timeout() {
+                    BitrouterError::UpstreamTimeout
+                } else {
+                    BitrouterError::Upstream {
+                        status: 502,
+                        message: format!(
+                            "evaluation request to {} failed: {error}",
+                            target.provider_name
+                        ),
+                    }
+                })
+            })?;
+            let status = response.status();
+            let retry_after =
+                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
+            let mut chunks = response.bytes_stream();
+            let mut bytes = Vec::new();
+            while let Some(chunk) = chunks.next().await {
+                let chunk = chunk.map_err(|error| {
+                    scrubber.scrub_error(upstream_body_error("reading evaluation body", error))
+                })?;
+                if bytes.len().saturating_add(chunk.len()) > MAX_EVALUATION_JSON_BYTES {
+                    return Err(BitrouterError::UpstreamInvalidResponse {
+                        message: "evaluation response exceeds size limit".into(),
+                    });
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            if !status.is_success() {
+                let raw = String::from_utf8_lossy(&bytes);
+                let detail = scrubber.scrub_body(&raw);
+                return Err(classify_upstream_error(
+                    status.as_u16(),
+                    &truncate_upstream_message(&detail),
+                    retry_after,
+                ));
+            }
+            bytes
+        };
+        let json = serde_json::from_slice(&response_body).map_err(|_| {
+            BitrouterError::UpstreamInvalidResponse {
+                message: "evaluation upstream returned invalid JSON".into(),
+            }
+        })?;
+        let output = provider.parse_response(json, canonical).map_err(|_| {
+            BitrouterError::UpstreamInvalidResponse {
+                message: "evaluation provider returned an invalid response".into(),
+            }
+        })?;
+        output.validate_against(canonical)?;
+        let mut result = EvaluationResult {
+            id: request_id.to_string(),
+            model: output.model,
+            provider: target.provider_name.clone(),
+            answers: output.answers,
+            usage: output.usage,
+        };
+        result.usage.cost = None;
+        result.validate_against(canonical)?;
+        Ok(result)
+    }
+
     /// Build an executor with the given upstream timeout configuration and the
     /// default [`OutboundDispatch::builtin`] registry. Use
     /// [`with_dispatch`](Self::with_dispatch) instead when you want to
@@ -851,6 +1022,28 @@ impl HttpExecutor {
         }
     }
 
+    #[cfg(feature = "config_file")]
+    fn evaluation_client_for(&self, target: &RoutingTarget) -> (reqwest::Client, HttpTimeouts) {
+        let guard = match self.clients.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match guard.provider_clients.get(&target.provider_name) {
+            Some((timeouts, _)) => (
+                guard
+                    .evaluation_provider_clients
+                    .get(&target.provider_name)
+                    .cloned()
+                    .unwrap_or_else(|| guard.evaluation_default_client.clone()),
+                timeouts.clone(),
+            ),
+            None => (
+                guard.evaluation_default_client.clone(),
+                guard.default_timeouts.clone(),
+            ),
+        }
+    }
+
     /// Build an executor with default timeouts and the built-in dispatch.
     pub fn with_defaults() -> Result<Self> {
         Self::new(HttpTimeouts::default())
@@ -921,7 +1114,7 @@ impl HttpExecutor {
             .apply_auth(request, input.target, input.transport)
             .await?;
         let (mut request, mut credential_authority) = applied.into_parts();
-        apply_provider_headers(&mut request, input.target, input.ctx);
+        apply_provider_headers(&mut request, input.target, input.ctx.headers());
         merge_outbound_trace_headers(&mut request, input.trace_headers);
         inject_outbound_request_id(&mut request, input.ctx)?;
         credential_authority =
@@ -1146,6 +1339,39 @@ impl HttpExecutor {
     }
 }
 
+#[cfg(feature = "config_file")]
+fn validate_evaluation_wire_request(wire: &EvaluationProviderWireRequest) -> Result<()> {
+    const MAX_HEADERS: usize = 32;
+    const MAX_HEADER_BYTES: usize = 8 * 1024;
+    if !matches!(
+        wire.method,
+        http::Method::POST | http::Method::PUT | http::Method::PATCH
+    ) {
+        return Err(BitrouterError::bad_request(
+            "evaluation provider selected an unsupported HTTP method",
+        ));
+    }
+    let mut count = 0_usize;
+    let mut bytes = 0_usize;
+    for (name, value) in &wire.headers {
+        if crate::language_model::types::is_reserved_provider_header(name)
+            || matches!(name.as_str(), "cookie" | "set-cookie")
+        {
+            return Err(BitrouterError::bad_request(
+                "evaluation provider selected a reserved HTTP header",
+            ));
+        }
+        count += 1;
+        bytes = bytes.saturating_add(name.as_str().len().saturating_add(value.as_bytes().len()));
+        if count > MAX_HEADERS || bytes > MAX_HEADER_BYTES {
+            return Err(BitrouterError::bad_request(
+                "evaluation provider headers exceed size limit",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Apply the selected provider's header rules after authentication. This lets
 /// explicit provider compatibility headers replace transport defaults while
 /// reserved authentication, framing, tracing, and request-id fields remain
@@ -1156,14 +1382,13 @@ impl HttpExecutor {
 fn apply_provider_headers(
     request: &mut reqwest::Request,
     target: &RoutingTarget,
-    ctx: &PipelineContext,
+    inbound_headers: &http::HeaderMap,
 ) {
     for rule in &target.headers {
         let name = rule.name();
         request.headers_mut().remove(name);
         if rule.passthrough() {
-            let inbound = ctx
-                .headers()
+            let inbound = inbound_headers
                 .get_all(name)
                 .iter()
                 .cloned()
@@ -2018,7 +2243,7 @@ mod beta_forward_tests {
             .headers_mut()
             .insert("x-rejected", http::HeaderValue::from_static("transport"));
 
-        apply_provider_headers(&mut request, &target, &ctx);
+        apply_provider_headers(&mut request, &target, ctx.headers());
 
         let sessions = request
             .headers()

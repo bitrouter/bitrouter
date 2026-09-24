@@ -151,7 +151,9 @@ fn derive_protocol_mapping(p: &RegistryProvider) -> ProtocolMapping {
     // Curated provider: rebuild from the per-model resolved protocols.
     let mut per_model: BTreeMap<String, ProtocolList> = BTreeMap::new();
     for m in &p.models {
-        per_model.insert(m.id.clone(), m.api_protocol.to_protocol_list());
+        if let Some(protocols) = &m.api_protocol {
+            per_model.insert(m.id.clone(), protocols.to_protocol_list());
+        }
     }
     if per_model.is_empty() {
         return ProtocolMapping::Single(ProtocolList(vec![ApiProtocol::ChatCompletions]));
