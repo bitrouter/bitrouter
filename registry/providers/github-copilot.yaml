@@ -75,6 +75,12 @@ models:
     provider_model_id: gpt-6-astra
   - id: x-ai/grok-4.7
     provider_model_id: grok-4.7
+  - id: anthropic/claude-opus-5.5
+    provider_model_id: claude-opus-5.5
+  - id: openai/gpt-6-luna
+    provider_model_id: gpt-6-luna
+  - id: openai/gpt-6-sol
+    provider_model_id: gpt-6-sol
 status: active
 weight: 1
 community: false
