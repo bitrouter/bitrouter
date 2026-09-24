@@ -17,7 +17,7 @@ use crate::error::{BitrouterError, Result};
 #[cfg(feature = "config_file")]
 use crate::evaluation::{EvaluationRequest, EvaluationResult, EvaluationRoutingTarget};
 #[cfg(feature = "config_file")]
-use crate::extension::evaluation_format::EvaluationFormatAdapter;
+use crate::extension::provider::EvaluationProvider;
 use crate::language_model::auth::{
     AppliedAuth, AuthAppliers, AuthExtensionOperation, ContinuationAuthority, CredentialAuthority,
     normalize_auth_extension_error,
@@ -698,11 +698,16 @@ struct HttpClientSet {
     /// timeouts (for the per-request `total` cap, which is not a client
     /// setting).
     default_client: reqwest::Client,
+    /// Evaluation never follows an upstream redirect with a scoped bearer.
+    #[cfg(feature = "config_file")]
+    evaluation_default_client: reqwest::Client,
     default_timeouts: HttpTimeouts,
     /// Per-provider clients keyed by `provider_name`, each paired with the
     /// resolved timeouts it was built from. Built once at construction; empty
     /// in the common single-timeout deployment.
     provider_clients: HashMap<String, (HttpTimeouts, reqwest::Client)>,
+    #[cfg(feature = "config_file")]
+    evaluation_provider_clients: HashMap<String, reqwest::Client>,
 }
 
 /// A fully constructed upstream-client replacement that has not yet become
@@ -730,8 +735,12 @@ struct RequestBuildInput<'a> {
 /// Build a reqwest client from the connection-level timeout knobs. `total` is
 /// deliberately not applied here — it is a per-request deadline set via
 /// [`reqwest::RequestBuilder::timeout`], not a client-builder setting.
-fn build_http_client(timeouts: &HttpTimeouts) -> Result<reqwest::Client> {
-    reqwest::Client::builder()
+fn build_http_client(timeouts: &HttpTimeouts, evaluation: bool) -> Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder();
+    if evaluation {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
+    builder
         .connect_timeout(timeouts.connect)
         .read_timeout(timeouts.read)
         .pool_idle_timeout(timeouts.pool_idle)
@@ -744,26 +753,38 @@ fn build_http_client_set(
     default_timeouts: HttpTimeouts,
     per_provider: HashMap<String, HttpTimeouts>,
 ) -> Result<HttpClientSet> {
-    let default_client = build_http_client(&default_timeouts)?;
+    let default_client = build_http_client(&default_timeouts, false)?;
+    #[cfg(feature = "config_file")]
+    let evaluation_default_client = build_http_client(&default_timeouts, true)?;
     let mut provider_clients = HashMap::new();
+    #[cfg(feature = "config_file")]
+    let mut evaluation_provider_clients = HashMap::new();
     for (name, timeouts) in per_provider {
         if timeouts == default_timeouts {
             continue;
         }
-        let client = build_http_client(&timeouts)?;
+        let client = build_http_client(&timeouts, false)?;
+        #[cfg(feature = "config_file")]
+        let evaluation_client = build_http_client(&timeouts, true)?;
+        #[cfg(feature = "config_file")]
+        evaluation_provider_clients.insert(name.clone(), evaluation_client);
         provider_clients.insert(name, (timeouts, client));
     }
     Ok(HttpClientSet {
         default_client,
+        #[cfg(feature = "config_file")]
+        evaluation_default_client,
         default_timeouts,
         provider_clients,
+        #[cfg(feature = "config_file")]
+        evaluation_provider_clients,
     })
 }
 
 impl HttpExecutor {
     /// Execute one host-owned, non-streaming evaluation HTTP attempt.
     ///
-    /// The adapter only renders/parses JSON. This method selects the URL,
+    /// The provider renders/parses its own JSON. This method selects the URL,
     /// applies the provider's authentication and headers, enforces the
     /// deadline and response-size bound, and validates the canonical result.
     /// It does not enter the generation pipeline or its prompt hooks.
@@ -772,7 +793,7 @@ impl HttpExecutor {
         &self,
         target: &RoutingTarget,
         endpoint: &str,
-        adapter: &dyn EvaluationFormatAdapter,
+        provider: &dyn EvaluationProvider,
         canonical: &EvaluationRequest,
         request_id: &str,
         inbound_headers: &http::HeaderMap,
@@ -802,9 +823,9 @@ impl HttpExecutor {
         let adapter_target = EvaluationRoutingTarget {
             provider_model_id: target.service_id.clone(),
         };
-        let body = adapter
+        let body = provider
             .render_request(canonical, &adapter_target)
-            .map_err(|_| BitrouterError::bad_request("evaluation format rejected request"))?;
+            .map_err(|_| BitrouterError::bad_request("evaluation provider rejected request"))?;
         let encoded = serde_json::to_vec(&body)
             .map_err(|_| BitrouterError::bad_request("evaluation body is not JSON"))?;
         if encoded.len() > MAX_EVALUATION_JSON_BYTES {
@@ -812,7 +833,7 @@ impl HttpExecutor {
                 "evaluation body exceeds size limit",
             ));
         }
-        let (client, timeouts) = self.client_for(target);
+        let (client, timeouts) = self.evaluation_client_for(target);
         let mut scrubber = UpstreamErrorScrubber::new(None);
         scrubber.capture_effective_target_key(target);
         let response_body = {
@@ -882,16 +903,19 @@ impl HttpExecutor {
                 message: "evaluation upstream returned invalid JSON".into(),
             }
         })?;
-        let mut result = adapter.parse_response(json, canonical).map_err(|_| {
+        let output = provider.parse_response(json, canonical).map_err(|_| {
             BitrouterError::UpstreamInvalidResponse {
-                message: "evaluation format returned an invalid response".into(),
+                message: "evaluation provider returned an invalid response".into(),
             }
         })?;
-        result.id = request_id.to_string();
-        result.provider = target.provider_name.clone();
-        if result.model.is_empty() {
-            result.model = target.service_id.clone();
-        }
+        output.validate_against(canonical)?;
+        let mut result = EvaluationResult {
+            id: request_id.to_string(),
+            model: output.model,
+            provider: target.provider_name.clone(),
+            answers: output.answers,
+            usage: output.usage,
+        };
         result.usage.cost = None;
         result.validate_against(canonical)?;
         Ok(result)
@@ -991,6 +1015,28 @@ impl HttpExecutor {
         match guard.provider_clients.get(&target.provider_name) {
             Some((timeouts, client)) => (client.clone(), timeouts.clone()),
             None => (guard.default_client.clone(), guard.default_timeouts.clone()),
+        }
+    }
+
+    #[cfg(feature = "config_file")]
+    fn evaluation_client_for(&self, target: &RoutingTarget) -> (reqwest::Client, HttpTimeouts) {
+        let guard = match self.clients.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match guard.provider_clients.get(&target.provider_name) {
+            Some((timeouts, _)) => (
+                guard
+                    .evaluation_provider_clients
+                    .get(&target.provider_name)
+                    .cloned()
+                    .unwrap_or_else(|| guard.evaluation_default_client.clone()),
+                timeouts.clone(),
+            ),
+            None => (
+                guard.evaluation_default_client.clone(),
+                guard.default_timeouts.clone(),
+            ),
         }
     }
 

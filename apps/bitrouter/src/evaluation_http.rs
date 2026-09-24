@@ -1,4 +1,4 @@
-//! Opt-in HTTP surface for native evaluation hosts. Stock `bro` never mounts it.
+//! Canonical evaluation HTTP surface mounted by default `bro`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use axum::extract::{DefaultBodyLimit, State, rejection::JsonRejection};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use bitrouter_sdk::config::Config;
+use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::error::BitrouterError;
 use bitrouter_sdk::evaluation::EvaluationRequest;
 use bitrouter_sdk::evaluation::pipeline::EvaluationPipeline;
@@ -25,20 +25,20 @@ const REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
 #[derive(Clone)]
 struct EvaluationHttpState {
     pipeline: Option<Arc<EvaluationPipeline>>,
+    routing_table: Arc<ConfigRoutingTable>,
     auth: Arc<AuthHook>,
     skip_auth: bool,
-    models: serde_json::Value,
 }
 
-/// Build the native evaluation HTTP routes for an explicitly linked host.
+/// Build the native evaluation HTTP routes for the product host.
 /// The caller omits the SDK's default `/v1/models` route before merging this
 /// router, so advertised operations match the executable evaluation rail.
-pub fn router(config: &Config, assembled: &Assembled) -> Router {
+pub fn router(_config: &Config, assembled: &Assembled) -> Router {
     let state = EvaluationHttpState {
         pipeline: assembled.evaluation_pipeline.clone(),
+        routing_table: Arc::clone(&assembled.routing_table),
         auth: Arc::new(AuthHook::new(assembled.db.clone())),
         skip_auth: assembled.app.skip_auth(),
-        models: model_list(config, assembled),
     };
     Router::new()
         .route("/v1/evaluate", post(evaluate))
@@ -111,7 +111,7 @@ async fn evaluate(
 }
 
 async fn list_models(State(state): State<EvaluationHttpState>, headers: HeaderMap) -> Response {
-    let mut body = state.models;
+    let mut body = model_list(&state.routing_table);
     if headers
         .get(header::USER_AGENT)
         .and_then(|value| value.to_str().ok())
@@ -247,46 +247,44 @@ fn error_response(error: &BitrouterError, request_id: Option<&str>) -> Response 
     response
 }
 
-fn model_list(config: &Config, assembled: &Assembled) -> serde_json::Value {
-    let mut entries: BTreeMap<String, (Vec<String>, Vec<InferenceOperation>)> = assembled
-        .routing_table
+fn model_list(routing_table: &ConfigRoutingTable) -> serde_json::Value {
+    let (_, config) = routing_table.versioned_snapshot();
+    let mut entries: BTreeMap<String, (Vec<String>, Vec<InferenceOperation>)> = routing_table
         .list_models()
         .into_iter()
         .map(|model| (model.id, (model.providers, model.operations)))
         .collect();
-    if assembled.evaluation_pipeline.is_some() {
-        let mut by_model: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-        for (provider_id, provider) in &config.providers {
-            if !provider.active
-                || !provider
-                    .operations
-                    .contains_key(&InferenceOperation::Evaluate)
-            {
-                continue;
-            }
-            for model in &provider.models {
-                if model.supports_operation(InferenceOperation::Evaluate) {
-                    by_model.entry(&model.id).or_default().push(provider_id);
-                }
+    let mut by_model: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (provider_id, provider) in &config.providers {
+        if !provider.active
+            || !provider
+                .operations
+                .contains_key(&InferenceOperation::Evaluate)
+        {
+            continue;
+        }
+        for model in &provider.models {
+            if model.supports_operation(InferenceOperation::Evaluate) {
+                by_model.entry(&model.id).or_default().push(provider_id);
             }
         }
-        for (model, providers) in by_model {
-            let selectors: Vec<_> = if providers.len() == 1 {
-                vec![(model.to_owned(), providers[0].to_owned())]
-            } else {
-                providers
-                    .iter()
-                    .map(|provider| (format!("{provider}:{model}"), (*provider).to_owned()))
-                    .collect()
-            };
-            for (selector, provider) in selectors {
-                let entry = entries.entry(selector).or_default();
-                if !entry.0.contains(&provider) {
-                    entry.0.push(provider);
-                }
-                if !entry.1.contains(&InferenceOperation::Evaluate) {
-                    entry.1.push(InferenceOperation::Evaluate);
-                }
+    }
+    for (model, providers) in by_model {
+        let selectors: Vec<_> = if providers.len() == 1 {
+            vec![(model.to_owned(), providers[0].to_owned())]
+        } else {
+            providers
+                .iter()
+                .map(|provider| (format!("{provider}:{model}"), (*provider).to_owned()))
+                .collect()
+        };
+        for (selector, provider) in selectors {
+            let entry = entries.entry(selector).or_default();
+            if !entry.0.contains(&provider) {
+                entry.0.push(provider);
+            }
+            if !entry.1.contains(&InferenceOperation::Evaluate) {
+                entry.1.push(InferenceOperation::Evaluate);
             }
         }
     }

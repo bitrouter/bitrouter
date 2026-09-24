@@ -220,7 +220,8 @@ pub enum Billing {
 pub struct RegistryProvider {
     /// Provider id (equals the registry filename stem and the `name` field).
     pub name: String,
-    /// Non-generation operation endpoints and required native format facets.
+    /// Non-generation operation endpoints, executable only with a matching
+    /// compiled provider extension.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub operations: BTreeMap<InferenceOperation, ProviderOperationConfig>,
     /// Human-readable display name (UI only), if declared.
@@ -446,8 +447,7 @@ mod tests {
             "status": "active",
             "operations": {
                 "evaluate": {
-                    "endpoint": "/v1/decisions",
-                    "format": {"extension": "decision-extension", "adapter": "decisions", "revision": 1}
+                    "endpoint": "/v1/decisions"
                 }
             },
             "models": [{

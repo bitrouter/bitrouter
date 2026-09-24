@@ -9,10 +9,12 @@ stay in `apps/`.
 | Extension | Packages | Delivery |
 | --- | --- | --- |
 | [Regex checker](regex-checker/README.md) | `bitrouter-guardrails` | Compiled request-check callback; legacy SDK hooks remain optional |
-| [System One JSON](system-one/README.md) | `bitrouter-system-one-format` | Compiled evaluation format; TypeSafe is the first provider binding |
+| [TypeSafe](typesafe/README.md) | `bitrouter-typesafe-provider` | Compiled provider-owned Jev evaluation; registered in default `bro` |
 
-Beta extensions are linked explicitly into a trusted custom Rust host. Adding
-or updating extension code requires rebuilding that host. There is no remote
+Beta extensions are linked explicitly into a trusted Rust host. Default `bro`
+links the reviewed TypeSafe provider extension; other extension packages need
+explicit composition by a custom host. Adding or updating extension code
+requires rebuilding that host. There is no remote
 extension protocol, independent extension process manager or dynamic loader.
 Directory placement does not provide runtime isolation or automatic installation.
 
@@ -31,16 +33,14 @@ Valid registrations absent from `checkers` stay inactive and produce a sorted
 startup diagnostic. They have no runtime entry or management inventory. Configured
 instances require matching registrations even when no router binds them.
 
-For an evaluation-format extension, register an
-`extension::evaluation_format::EvaluationFormatAdapter` with
-`ExtensionApi::register_evaluation_format`. An active provider's
-`operations.evaluate.format` binds the exact extension id, adapter id, and
-revision. Missing or mismatched bindings fail before database assembly;
-unbound formats remain inactive. The host owns the provider endpoint,
-credentials, HTTP transport, retries, and settlement. See
-[System One JSON](system-one/README.md).
+For an evaluation provider extension, implement
+`extension::provider::EvaluationProvider` and call
+`ExtensionApi::register_evaluation_provider`. The extension declares exact
+models, question kinds, wire ids, and upstream path; registry data cannot
+invent executable support. The host owns credentials, HTTP transport, retries,
+and settlement. See [TypeSafe](typesafe/README.md).
 
-This is one typed author entry point with request-check and evaluation-format
+This is one typed author entry point with request-check and evaluation-provider
 capabilities.
 It is not a generic event handler, dynamic loader or permission sandbox, and
 it does not expose the host builder, global hooks, credentials or migrations.
@@ -59,6 +59,6 @@ entry point for new request-check extensions. `PluginId` metadata ownership,
 formats keep their existing purposes and names.
 
 The workspace includes packages at `extensions/<extension>/<package>/`. Keep
-published Cargo package names stable when moving source; an unreleased format
+published Cargo package names stable when moving source; an unreleased provider
 package can be renamed before its first integration. Verify dependency
 isolation and release configuration separately from directory placement.

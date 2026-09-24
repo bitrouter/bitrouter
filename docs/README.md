@@ -5,13 +5,14 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
-- [`EVALUATION_MODELS_SPEC.md`](EVALUATION_MODELS_SPEC.md) — **Phases 0–1
-  passed local and hosted CI; format-first Phase 2 and TypeSafe smoke pending;
-  Phase 3 deferred.**
-  Adds Jev and similar typed-decision models as
-  first-class model routes through a new OpenRouter Decisions-shaped
-  `/v1/evaluate` operation, with upstream wire formats supplied by explicit
-  custom-host native Rust extension facets rather than the core/default host.
+- [`PROVIDER_EXTENSION_SPEC.md`](PROVIDER_EXTENSION_SPEC.md) — **approved
+  architecture; implementation in PR #942, validation pending.** Reframes Jev
+  support as a compiled, provider-owned TypeSafe extension in default `bro`; keeps a
+  stable `/v1/evaluate` and the unified model selector, with no separate
+  evaluation-only host after migration.
+- [`EVALUATION_MODELS_SPEC.md`](EVALUATION_MODELS_SPEC.md) — public
+  `/v1/evaluate` contract and historical format-first phase evidence; its
+  extension architecture is superseded by the provider-extension spec above.
 - [`GUARDRAILS_EXTENSION.md`](GUARDRAILS_EXTENSION.md) — Independent input checker
   setup, migration boundaries, distribution and process-level validation.
 - [`GUARDRAILS_EXTENSION_ACCEPTANCE.md`](GUARDRAILS_EXTENSION_ACCEPTANCE.md) —

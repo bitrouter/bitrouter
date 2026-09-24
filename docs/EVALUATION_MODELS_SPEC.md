@@ -1,5 +1,17 @@
 # First-class evaluation models through `/v1/evaluate`
 
+Architecture update (2026-09-23):
+[`PROVIDER_EXTENSION_SPEC.md`](PROVIDER_EXTENSION_SPEC.md) is the approved
+provider-owned native extension boundary and the implementation acceptance
+contract for PR #942. This document remains the public `/v1/evaluate` contract
+and a historical record of the format-first candidate. Its format adapter,
+registry binding, default-`bro` exclusion, separate evaluation-host packaging,
+conditional endpoint mounting, and corresponding phase/acceptance statements
+are superseded. The current implementation links the TypeSafe provider
+extension into default `bro`, keeps `/v1/evaluate` mounted without an active
+provider, and removes the evaluation-only host. Credentialed smoke remains a
+separate, pending gate.
+
 Status: **Phases 0–1 passed local and hosted CI. The revised format-first
 Phase 2 implementation and shared extension-host integration passed local and
 hosted deterministic checks. The credentialed TypeSafe smoke test remains

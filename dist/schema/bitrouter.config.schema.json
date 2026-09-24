@@ -860,32 +860,6 @@
       ],
       "type": "object"
     },
-    "OperationFormatConfig": {
-      "additionalProperties": false,
-      "description": "Identity of one compiled native format facet.",
-      "properties": {
-        "adapter": {
-          "description": "Adapter id inside the extension.",
-          "type": "string"
-        },
-        "extension": {
-          "description": "Native extension package id.",
-          "type": "string"
-        },
-        "revision": {
-          "description": "Exact format-contract revision.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "extension",
-        "adapter",
-        "revision"
-      ],
-      "type": "object"
-    },
     "PatternMap_for_ProtocolList": {
       "description": "Glob-prefix pattern list; each entry is a single-key object mapping a pattern (`*`, `prefix*`, or an exact literal) to its value.",
       "items": {
@@ -1341,7 +1315,7 @@
             "$ref": "#/$defs/ProviderOperationConfig"
           },
           "default": {},
-          "description": "Non-generation operation endpoints and their required native format.\nGeneration continues to use `api_protocol` unchanged.",
+          "description": "Non-generation operation endpoints supplied by provider extensions.\nGeneration continues to use `api_protocol` unchanged.",
           "type": "object"
         },
         "priority": {
@@ -1512,20 +1486,15 @@
     },
     "ProviderOperationConfig": {
       "additionalProperties": false,
-      "description": "A non-generation provider operation's host-owned endpoint and format key.",
+      "description": "A non-generation provider operation's extension-owned endpoint.",
       "properties": {
         "endpoint": {
           "description": "A relative path joined to the validated provider API base by the host.",
           "type": "string"
-        },
-        "format": {
-          "$ref": "#/$defs/OperationFormatConfig",
-          "description": "Exact native format facet required to execute the operation."
         }
       },
       "required": [
-        "endpoint",
-        "format"
+        "endpoint"
       ],
       "type": "object"
     },

@@ -1,6 +1,6 @@
 - id: typesafe/jev-1.13
   name: Jev 1.13
-  description: Typed evaluation model. Routing requires the native System One format extension in the opt-in evaluation host; stock bro does not expose /v1/evaluate.
+  description: Typed evaluation model. Default bro serves /v1/evaluate; the TypeSafe provider extension activates this route when a TypeSafe credential is available.
   operations:
     - evaluate
   input_modalities:

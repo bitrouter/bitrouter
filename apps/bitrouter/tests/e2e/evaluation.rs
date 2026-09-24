@@ -13,8 +13,9 @@ use bitrouter_sdk::evaluation::pipeline::{
 };
 use bitrouter_sdk::evaluation::{EvaluationRequest, EvaluationResult, EvaluationRoutingTarget};
 use bitrouter_sdk::extension::ExtensionApi;
-use bitrouter_sdk::extension::evaluation_format::{
-    EvaluationFormatAdapter, EvaluationFormatDescriptor,
+use bitrouter_sdk::extension::provider::{
+    EvaluationProvider, EvaluationProviderDescriptor, EvaluationProviderModel,
+    EvaluationProviderOutput,
 };
 use bitrouter_sdk::language_model::{Usage, UsageOrigin};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -22,16 +23,28 @@ use serde_json::{Value, json};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-struct FixtureFormat {
-    revision: u32,
+struct FixtureProvider {
+    endpoint: &'static str,
 }
 
-impl EvaluationFormatAdapter for FixtureFormat {
-    fn descriptor(&self) -> EvaluationFormatDescriptor {
-        EvaluationFormatDescriptor {
-            extension_id: "fixture".into(),
-            adapter_id: "decisions".into(),
-            revision: self.revision,
+impl EvaluationProvider for FixtureProvider {
+    fn descriptor(&self) -> EvaluationProviderDescriptor {
+        EvaluationProviderDescriptor {
+            provider_id: "fixture".into(),
+            api_base: "https://fixture.example".into(),
+            credential_env: "FIXTURE_API_KEY".into(),
+            endpoint: self.endpoint.into(),
+            models: vec![EvaluationProviderModel {
+                id: "fixture/model".into(),
+                provider_model_id: "upstream-model".into(),
+                question_types: vec![
+                    bitrouter_sdk::evaluation::EvaluationQuestionType::Noul,
+                    bitrouter_sdk::evaluation::EvaluationQuestionType::Choice,
+                    bitrouter_sdk::evaluation::EvaluationQuestionType::Score,
+                ],
+                max_choice_options: Some(3),
+                max_score_levels: Some(3),
+            }],
         }
     }
 
@@ -51,9 +64,15 @@ impl EvaluationFormatAdapter for FixtureFormat {
         &self,
         body: Value,
         _request: &EvaluationRequest,
-    ) -> Result<EvaluationResult> {
-        serde_json::from_value(body).map_err(|_| BitrouterError::UpstreamInvalidResponse {
-            message: "fixture response is invalid".into(),
+    ) -> Result<EvaluationProviderOutput> {
+        let result: EvaluationResult =
+            serde_json::from_value(body).map_err(|_| BitrouterError::UpstreamInvalidResponse {
+                message: "fixture response is invalid".into(),
+            })?;
+        Ok(EvaluationProviderOutput {
+            model: result.model,
+            answers: result.answers,
+            usage: result.usage,
         })
     }
 }
@@ -112,7 +131,6 @@ providers:
     operations:
       evaluate:
         endpoint: /v1/decide
-        format: {{ extension: fixture, adapter: decisions, revision: 1 }}
     models:
       - id: fixture/model
         provider_model_id: upstream-model
@@ -152,7 +170,9 @@ fn valid_upstream_answer() -> Value {
 
 pub(super) fn registered() -> Result<ExtensionApi> {
     let mut extensions = ExtensionApi::new();
-    extensions.register_evaluation_format(Arc::new(FixtureFormat { revision: 1 }))?;
+    extensions.register_evaluation_provider(Arc::new(FixtureProvider {
+        endpoint: "/v1/decide",
+    }))?;
     Ok(extensions)
 }
 
@@ -186,8 +206,7 @@ async fn assert_upstream_calls(upstream: &MockServer, expected: usize) -> anyhow
 }
 
 #[tokio::test]
-async fn internal_evaluation_keeps_format_auth_headers_and_metering_host_owned()
--> anyhow::Result<()> {
+async fn internal_evaluation_keeps_auth_headers_and_metering_host_owned() -> anyhow::Result<()> {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/decide"))
@@ -238,11 +257,11 @@ async fn invalid_native_binding_fails_before_database_assembly() -> anyhow::Resu
     )
     .await
     .err()
-    .ok_or_else(|| anyhow::anyhow!("missing format unexpectedly assembled"))?;
+    .ok_or_else(|| anyhow::anyhow!("missing provider unexpectedly assembled"))?;
     assert!(
         error
             .to_string()
-            .contains("missing evaluation format extension")
+            .contains("missing evaluation provider extension")
     );
     let error = bitrouter::build_app(&config)
         .await
@@ -251,16 +270,37 @@ async fn invalid_native_binding_fails_before_database_assembly() -> anyhow::Resu
     assert!(
         error
             .to_string()
-            .contains("missing evaluation format extension")
+            .contains("missing evaluation provider extension")
     );
 
     let mut wrong = ExtensionApi::new();
-    wrong.register_evaluation_format(Arc::new(FixtureFormat { revision: 2 }))?;
+    wrong.register_evaluation_provider(Arc::new(FixtureProvider {
+        endpoint: "/v1/different",
+    }))?;
     let error = build_app_with_registered_extensions(&config, None, &wrong, Some(recorder))
         .await
         .err()
-        .ok_or_else(|| anyhow::anyhow!("wrong revision unexpectedly assembled"))?;
-    assert!(error.to_string().contains("revision mismatch"));
+        .ok_or_else(|| anyhow::anyhow!("wrong endpoint unexpectedly assembled"))?;
+    assert!(error.to_string().contains("endpoint conflicts"));
+
+    let mut generation_claim = config.clone();
+    let provider = generation_claim
+        .providers
+        .get_mut("fixture")
+        .ok_or_else(|| anyhow::anyhow!("fixture provider missing"))?;
+    let mut generation_model = provider
+        .models
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("fixture model missing"))?
+        .clone();
+    generation_model.id = "fixture/unregistered-chat".into();
+    generation_model.operations = None;
+    provider.models.push(generation_model);
+    let error = build_app_with_registered_extensions(&generation_claim, None, &registered()?, None)
+        .await
+        .err()
+        .ok_or_else(|| anyhow::anyhow!("unregistered provider operation unexpectedly assembled"))?;
+    assert!(error.to_string().contains("does not implement"));
     Ok(())
 }
 

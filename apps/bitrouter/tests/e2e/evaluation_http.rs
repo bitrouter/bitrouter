@@ -1,4 +1,4 @@
-//! Opt-in TypeSafe host boundary exercised through real HTTP handlers.
+//! TypeSafe provider boundary exercised through real HTTP handlers.
 
 use anyhow::Context;
 use axum::Router;
@@ -26,7 +26,6 @@ providers:
     operations:
       evaluate:
         endpoint: /v1/systemone
-        format: {{ extension: system-one, adapter: json, revision: 1 }}
     models:
       - id: typesafe/jev-1.13
         provider_model_id: jev-1.13.0
@@ -55,7 +54,7 @@ async fn server(upstream: &MockServer, skip_auth: bool) -> anyhow::Result<TestSe
 
 async fn server_for_config(config: &config::Config) -> anyhow::Result<TestServer> {
     let mut extensions = ExtensionApi::new();
-    bitrouter_system_one_format::register(&mut extensions)?;
+    bitrouter_typesafe_provider::register(&mut extensions)?;
     let assembled =
         bitrouter::assemble::build_app_with_registered_extensions(config, None, &extensions, None)
             .await?;
@@ -167,6 +166,102 @@ async fn custom_host_exposes_only_openrouter_shaped_evaluate_and_routable_model(
 }
 
 #[tokio::test]
+async fn evaluation_route_and_model_listing_follow_a_validated_reload() -> anyhow::Result<()> {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "jev-1.13.0",
+            "answers": {"approve": {"type": "noul", "noul": 0.8}},
+            "usage": {"input_tokens": 8, "output_tokens": 0}
+        })))
+        .mount(&upstream)
+        .await;
+    let active = fixture_config(&upstream.uri(), true)?;
+    let mut inactive = active.clone();
+    inactive.providers.remove("typesafe");
+    let mut extensions = ExtensionApi::new();
+    bitrouter_typesafe_provider::register(&mut extensions)?;
+    let assembled = bitrouter::assemble::build_app_with_registered_extensions(
+        &inactive,
+        None,
+        &extensions,
+        None,
+    )
+    .await?;
+    let server = TestServer::new(router_for_assembled(&inactive, &assembled)?);
+    let request = json!({
+        "model": "typesafe/jev-1.13",
+        "state": "synthetic",
+        "questions": {"approve": {"type": "noul", "instructions": "approve?"}}
+    });
+    assert_eq!(
+        server
+            .post("/v1/evaluate")
+            .json(&request)
+            .await
+            .status_code(),
+        404
+    );
+    let before: Value = server.get("/v1/models").await.json();
+    assert!(before["data"].as_array().is_some_and(|models| {
+        models
+            .iter()
+            .all(|model| model["id"] != "typesafe/jev-1.13")
+    }));
+
+    extensions.validate_evaluation_bindings(&active)?;
+    assembled
+        .routing_table
+        .replace_prepared_config(active)
+        .await?;
+    let after: Value = server.get("/v1/models").await.json();
+    assert!(after["data"].as_array().is_some_and(|models| {
+        models
+            .iter()
+            .any(|model| model["id"] == "typesafe/jev-1.13")
+    }));
+    server
+        .post("/v1/evaluate")
+        .json(&request)
+        .await
+        .assert_status_ok();
+    Ok(())
+}
+
+#[tokio::test]
+async fn evaluation_does_not_forward_a_bearer_across_redirects() -> anyhow::Result<()> {
+    let upstream = MockServer::start().await;
+    let redirected = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(
+            ResponseTemplate::new(307)
+                .insert_header("location", format!("{}/capture", redirected.uri())),
+        )
+        .mount(&upstream)
+        .await;
+    let server = server(&upstream, true).await?;
+    let response = server
+        .post("/v1/evaluate")
+        .json(&json!({
+            "model": "typesafe/jev-1.13",
+            "state": "synthetic",
+            "questions": {"approve": {"type": "noul", "instructions": "approve?"}}
+        }))
+        .await;
+    assert_ne!(response.status_code(), 200);
+    assert!(
+        redirected
+            .received_requests()
+            .await
+            .context("redirect capture unavailable")?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn evaluation_auth_and_invalid_requests_fail_before_upstream() -> anyhow::Result<()> {
     let upstream = MockServer::start().await;
     let protected = server(&upstream, false).await?;
@@ -244,7 +339,7 @@ async fn authenticated_virtual_key_reaches_typesafe_without_generation_hooks() -
         .await;
     let config = fixture_config(&upstream.uri(), false)?;
     let mut extensions = ExtensionApi::new();
-    bitrouter_system_one_format::register(&mut extensions)?;
+    bitrouter_typesafe_provider::register(&mut extensions)?;
     let assembled =
         bitrouter::assemble::build_app_with_registered_extensions(&config, None, &extensions, None)
             .await?;

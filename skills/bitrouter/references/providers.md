@@ -27,12 +27,12 @@ section). The one in-binary exception is the hosted `bitrouter` cloud gateway.
 | `google-ai` | — (local OAuth) | Google AI (Antigravity) subscription | `bro providers login google-ai`; imports the `agy` CLI keyring session, custom cloudcode-pa protocol, distinct from `google` API-key billing. Unofficial — uses your own Google account |
 | `opencode-zen` | `OPENCODE_ZEN_API_KEY` | Bearer | Per-family protocol routing |
 | `opencode-go` | `OPENCODE_ZEN_API_KEY` (shared) | Bearer | Low-cost subscription tier — same credential as Zen |
-| `typesafe` | `TYPESAFE_API_KEY` | Bearer | Jev evaluation only; requires `bro-evaluate` native host with System One format and `/v1/evaluate`, never stock `bro` |
+| `typesafe` | `TYPESAFE_API_KEY` | Bearer | Jev evaluation only; default `bro` registers the native TypeSafe provider extension and serves `/v1/evaluate` |
 
 Zero-config mode auto-enables API-key providers whose env vars are present;
 an API-key provider without its credential gets `active: false` and falls out
-of the routing table. The evaluation-only `typesafe` entry is an exception in
-stock `bro`: without its registered native format, the registry does not
+of the routing table. The evaluation-only `typesafe` route requires its
+compiled provider extension; registry metadata alone does not
 auto-activate it. An explicit active TypeSafe route fails startup if its
 adapter is missing or has the wrong revision. See `evaluation.md` for the
 opt-in host. Local-OAuth/PKCE providers (`claude-code`, `github-copilot`,

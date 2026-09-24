@@ -18,9 +18,8 @@ use crate::error::{BitrouterError, Result};
 #[cfg_attr(docsrs, doc(cfg(feature = "config_file")))]
 pub mod pipeline;
 
-/// Wire model identity exposed to a format adapter. Provider identity,
-/// transport details, credentials, account selection, and endpoint choice stay
-/// with the host so one format cannot branch on a provider id.
+/// Wire model identity exposed to a provider extension. Transport details,
+/// credentials, account selection, and endpoint choice stay with the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluationRoutingTarget {
     /// Exact model id sent to the selected provider.
@@ -295,75 +294,82 @@ pub struct EvaluationResult {
 impl EvaluationResult {
     /// Check provider-independent answer invariants against the submitted
     /// question set. Provider-specific probability precision is checked by
-    /// the concrete format adapter, not by this canonical contract.
+    /// the concrete provider extension, not by this canonical contract.
     pub fn validate_against(&self, request: &EvaluationRequest) -> Result<()> {
-        request.validate()?;
         if self.id.is_empty() || self.model.is_empty() || self.provider.is_empty() {
             return Err(invalid_result("evaluation identity is incomplete"));
         }
-        if self.answers.keys().ne(request.questions.keys()) {
-            return Err(invalid_result("answer keys do not match question keys"));
-        }
-        if self
-            .usage
-            .cost
-            .is_some_and(|cost| !cost.is_finite() || cost < 0.0)
-        {
-            return Err(invalid_result("evaluation cost is invalid"));
-        }
-        for (id, question) in &request.questions {
-            let Some(answer) = self.answers.get(id) else {
-                return Err(invalid_result("answer is missing"));
-            };
-            match (question, answer) {
-                (EvaluationQuestion::Noul { .. }, EvaluationAnswer::Noul { noul }) => {
-                    if !valid_probability(*noul) {
-                        return Err(invalid_result("noul probability is invalid"));
-                    }
-                }
-                (
-                    EvaluationQuestion::Choice { criteria, .. },
-                    EvaluationAnswer::Choice {
-                        choice,
-                        probabilities,
-                        confidence,
-                    },
-                ) => {
-                    if !criteria.contains_key(choice)
-                        || criteria.keys().ne(probabilities.keys())
-                        || probabilities
-                            .values()
-                            .any(|value| !valid_probability(*value))
-                        || confidence.is_some_and(|value| !valid_probability(value))
-                    {
-                        return Err(invalid_result("choice answer is invalid"));
-                    }
-                }
-                (
-                    EvaluationQuestion::Score { criteria, .. },
-                    EvaluationAnswer::Score {
-                        score,
-                        probabilities,
-                        legend,
-                        confidence,
-                    },
-                ) => {
-                    if !score.is_finite()
-                        || probabilities.len() != criteria.len()
-                        || probabilities.keys().ne(legend.keys())
-                        || probabilities
-                            .values()
-                            .any(|value| !valid_probability(*value))
-                        || confidence.is_some_and(|value| !valid_probability(value))
-                    {
-                        return Err(invalid_result("score answer is invalid"));
-                    }
-                }
-                _ => return Err(invalid_result("answer type does not match question type")),
-            }
-        }
-        Ok(())
+        validate_answers_and_usage(&self.answers, &self.usage, request)
     }
+}
+
+pub(crate) fn validate_answers_and_usage(
+    answers: &BTreeMap<String, EvaluationAnswer>,
+    usage: &EvaluationUsage,
+    request: &EvaluationRequest,
+) -> Result<()> {
+    request.validate()?;
+    if answers.keys().ne(request.questions.keys()) {
+        return Err(invalid_result("answer keys do not match question keys"));
+    }
+    if usage
+        .cost
+        .is_some_and(|cost| !cost.is_finite() || cost < 0.0)
+    {
+        return Err(invalid_result("evaluation cost is invalid"));
+    }
+    for (id, question) in &request.questions {
+        let Some(answer) = answers.get(id) else {
+            return Err(invalid_result("answer is missing"));
+        };
+        match (question, answer) {
+            (EvaluationQuestion::Noul { .. }, EvaluationAnswer::Noul { noul }) => {
+                if !valid_probability(*noul) {
+                    return Err(invalid_result("noul probability is invalid"));
+                }
+            }
+            (
+                EvaluationQuestion::Choice { criteria, .. },
+                EvaluationAnswer::Choice {
+                    choice,
+                    probabilities,
+                    confidence,
+                },
+            ) => {
+                if !criteria.contains_key(choice)
+                    || criteria.keys().ne(probabilities.keys())
+                    || probabilities
+                        .values()
+                        .any(|value| !valid_probability(*value))
+                    || confidence.is_some_and(|value| !valid_probability(value))
+                {
+                    return Err(invalid_result("choice answer is invalid"));
+                }
+            }
+            (
+                EvaluationQuestion::Score { criteria, .. },
+                EvaluationAnswer::Score {
+                    score,
+                    probabilities,
+                    legend,
+                    confidence,
+                },
+            ) => {
+                if !score.is_finite()
+                    || probabilities.len() != criteria.len()
+                    || probabilities.keys().ne(legend.keys())
+                    || probabilities
+                        .values()
+                        .any(|value| !valid_probability(*value))
+                    || confidence.is_some_and(|value| !valid_probability(value))
+                {
+                    return Err(invalid_result("score answer is invalid"));
+                }
+            }
+            _ => return Err(invalid_result("answer type does not match question type")),
+        }
+    }
+    Ok(())
 }
 
 fn valid_probability(value: f64) -> bool {

@@ -171,7 +171,7 @@ pub async fn serve_with_extensions(
         .clone()
         .into_registrations()
         .context("registering extensions")?;
-    crate::assemble::merge_registry_into_with_extensions(&mut cfg, &extensions).await;
+    crate::assemble::merge_registry_into_with_extensions(&mut cfg, &extensions).await?;
     announce_zero_config(source, &cfg);
     maybe_announce_telemetry(home);
     let listen = cfg.server.listen.clone();
@@ -232,10 +232,7 @@ pub async fn serve_with_extensions(
             assembled.db.clone(),
             cfg.server.skip_auth,
         );
-        let typed_eval_router = assembled
-            .evaluation_pipeline
-            .as_ref()
-            .map(|_| crate::evaluation_http::router(&cfg, &assembled));
+        let typed_eval_router = crate::evaluation_http::router(&cfg, &assembled);
         let app = Arc::new(assembled.app);
         let policy_store = assembled.policy_store;
         // Clone before moving the original into `run_control_socket` — we
@@ -313,17 +310,14 @@ pub async fn serve_with_extensions(
                 let _ = inference_shutdown_rx.await;
             };
             let inference = async move {
-                let omit_v1_models = typed_eval_router.is_some();
+                let omit_v1_models = true;
                 let options = bitrouter_sdk::server::RouterOptions {
                     omit_v1_models,
                     ..bitrouter_sdk::server::RouterOptions::default()
                 }
                 .with_router_wrapper(move |router| {
                     let router = router.merge(eval_router.clone());
-                    let router = match &typed_eval_router {
-                        Some(extra) => router.merge(extra.clone()),
-                        None => router,
-                    };
+                    let router = router.merge(typed_eval_router.clone());
                     let router = otel_wrapper(router);
                     match &workflow_trace_capture {
                         Some(capture) => capture.router_wrapper()(router),

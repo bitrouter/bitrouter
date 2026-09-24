@@ -115,10 +115,10 @@ pub struct Assembled {
     /// Concrete upstream HTTP executor. The pipeline also holds this as a trait
     /// object, but reload needs the concrete handle to replace timeout clients.
     pub upstream_executor: Arc<HttpExecutor>,
-    /// Internal typed-evaluation rail, present only for a configured active
-    /// route. The OSS host owns durable terminal and cost evidence unless a
-    /// custom host supplies its own recorder.
-    /// Phase 1 deliberately exposes no public evaluation HTTP endpoint.
+    /// Internal typed-evaluation rail. It is present even without an active
+    /// provider so a validated reload can activate an evaluation route without
+    /// replacing the HTTP server. The host owns durable terminal and cost
+    /// evidence unless a custom host supplies its own recorder.
     pub evaluation_pipeline: Option<Arc<EvaluationPipeline>>,
     /// The live `policy_table:` transform, when one was wired. The built `App`
     /// holds the same `Arc` as a `dyn PromptTransform`; reload needs the
@@ -455,13 +455,6 @@ async fn assemble_app(
     config.validate_router_config()?;
     config.validate_operations()?;
     extensions.validate_evaluation_bindings(config)?;
-    let has_evaluation_route = config.providers.values().any(|provider| {
-        provider.active
-            && provider
-                .models
-                .iter()
-                .any(|model| model.supports_operation(InferenceOperation::Evaluate))
-    });
     let mut inactive = native
         .keys()
         .filter(|id| !config.checkers.contains_key(*id))
@@ -594,22 +587,18 @@ async fn assemble_app(
     let executor_for_reload = executor.clone();
     // ---- pricing, metering, policy — all derived from config ----
     let pricing = Arc::new(build_pricing_table(config));
-    let evaluation_pipeline = if has_evaluation_route {
-        let recorder = evaluation_recorder.unwrap_or_else(|| {
-            Arc::new(MeteringEvaluationAttemptRecorder::new(
-                db.clone(),
-                Arc::clone(&pricing),
-            ))
-        });
-        Some(Arc::new(EvaluationPipeline::new(
-            Arc::clone(&routing_table),
-            Arc::clone(&executor),
-            extensions.clone(),
-            recorder,
-        )))
-    } else {
-        None
-    };
+    let recorder = evaluation_recorder.unwrap_or_else(|| {
+        Arc::new(MeteringEvaluationAttemptRecorder::new(
+            db.clone(),
+            Arc::clone(&pricing),
+        ))
+    });
+    let evaluation_pipeline = Some(Arc::new(EvaluationPipeline::new(
+        Arc::clone(&routing_table),
+        Arc::clone(&executor),
+        extensions.clone(),
+        recorder,
+    )));
     let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
@@ -1091,19 +1080,11 @@ fn build_fusion_alias(config: &Config) -> Result<Option<Arc<dyn PromptTransform>
 /// cloud gateway) are routable. Network to the registry is expected to be
 /// stable, so this empty state is a rare first-run edge.
 ///
-/// Called by the `serve` entry point (before [`build_app`]) and by
-/// [`crate::reload`], the two paths that build a production routing config.
 /// Kept out of `build_app` itself so that function stays free of network I/O —
-/// integration tests assemble explicit configs through it. Lives in the app
-/// layer (above `bitrouter-providers`) because the SDK's own routing table sits
-/// below the providers crate and cannot fetch the registry itself.
+/// integration tests assemble explicit configs through it. This metadata-only
+/// helper is also used by generation policy tooling; it does not infer or
+/// validate executable provider-extension claims.
 pub async fn merge_registry_into(config: &mut Config) {
-    merge_registry_into_with_extensions(config, &ExtensionApi::new()).await;
-}
-
-/// Registry merge for an embedding host that explicitly linked native
-/// evaluation-format facets. The stock `bro` host uses an empty registry.
-pub async fn merge_registry_into_with_extensions(config: &mut Config, extensions: &ExtensionApi) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
@@ -1114,8 +1095,95 @@ pub async fn merge_registry_into_with_extensions(config: &mut Config, extensions
         bitrouter_providers::apply_builtin_defaults(config);
         return;
     };
-    bitrouter_providers::registry::apply::apply_registry_with_extensions(config, &data, extensions);
+    bitrouter_providers::registry::apply::apply_registry(config, &data);
     bitrouter_providers::apply_builtin_defaults(config);
+}
+
+/// Merge executable provider declarations before optional catalog metadata.
+/// An extension remains usable with registry fetching disabled.
+pub async fn merge_registry_into_with_extensions(
+    config: &mut Config,
+    extensions: &ExtensionApi,
+) -> Result<()> {
+    apply_evaluation_provider_defaults(config, extensions)?;
+    merge_registry_into(config).await;
+    extensions.validate_evaluation_bindings(config)?;
+    Ok(())
+}
+
+fn apply_evaluation_provider_defaults(
+    config: &mut Config,
+    extensions: &ExtensionApi,
+) -> Result<()> {
+    use std::collections::BTreeMap;
+
+    use bitrouter_sdk::config::{
+        ModelOperationConfig, ProviderConfig, ProviderModel, ProviderOperationConfig, env_lookup,
+    };
+
+    for descriptor in extensions.evaluation_provider_descriptors() {
+        bitrouter_sdk::url_validator::validate_upstream_url(&descriptor.api_base)
+            .with_context(|| format!("provider '{}' default API base", descriptor.provider_id))?;
+        let credential = env_lookup(&descriptor.credential_env).filter(|value| !value.is_empty());
+        let provider = match config.providers.entry(descriptor.provider_id.clone()) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let Some(key) = credential.clone() else {
+                    continue;
+                };
+                entry.insert(ProviderConfig {
+                    api_key: key,
+                    ..ProviderConfig::default()
+                })
+            }
+        };
+        if provider.api_base.is_empty() {
+            provider.api_base = descriptor.api_base.clone();
+        }
+        if provider.api_key.is_empty() && provider.accounts.is_empty() {
+            if let Some(key) = credential {
+                provider.api_key = key;
+            } else if provider.active {
+                anyhow::bail!(
+                    "provider '{}' is explicitly active but has no {} credential",
+                    descriptor.provider_id,
+                    descriptor.credential_env
+                );
+            }
+        }
+        provider
+            .operations
+            .entry(InferenceOperation::Evaluate)
+            .or_insert_with(|| ProviderOperationConfig {
+                endpoint: descriptor.endpoint.clone(),
+            });
+        for declared in &descriptor.models {
+            if provider.models.iter().any(|model| model.id == declared.id) {
+                continue;
+            }
+            provider.models.push(ProviderModel {
+                id: declared.id.clone(),
+                provider_model_id: Some(declared.provider_model_id.clone()),
+                operations: Some(BTreeMap::from([(
+                    InferenceOperation::Evaluate,
+                    ModelOperationConfig {
+                        question_types: declared.question_types.clone(),
+                        max_choice_options: declared.max_choice_options,
+                        max_score_levels: declared.max_score_levels,
+                    },
+                )])),
+                api_protocol: None,
+                rate_limits: None,
+                pricing: None,
+                capabilities: Vec::new(),
+                reasoning_effort: None,
+                compatibility: Default::default(),
+            });
+        }
+    }
+    config.validate_operations()?;
+    extensions.validate_evaluation_bindings(config)?;
+    Ok(())
 }
 
 /// Build the server-side tool loop from `config.server_tools`. Returns `None`

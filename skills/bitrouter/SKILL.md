@@ -184,7 +184,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 - **Local port is `127.0.0.1:4356`** — old docs saying 8787 are stale. Hosted:
   `https://api.bitrouter.ai/v1` for the OpenAI shape, `https://api.bitrouter.ai`
   (no `/v1`) for the Anthropic SDK — same asymmetry locally.
-- **TypeSafe Jev is not built into stock `bro`.** The fixed `typesafe/jev-1.13` route needs `bro-evaluate` with the System One format extension; stock `bro` has no `/v1/evaluate`. See `references/evaluation.md`.
+- **`bro` serves `/v1/evaluate`.** Its compiled TypeSafe provider extension routes fixed `typesafe/jev-1.13` only with an active `TYPESAFE_API_KEY` account; no separate evaluation host is needed. See `references/evaluation.md`.
 - **Hosted sign-in is `cloud login` or `providers login bitrouter`** (same flow),
   everything else `providers login <id>`; there is no top-level `login`.
 - **Remote control is separate from inference and ACP.** `control.enabled: true`

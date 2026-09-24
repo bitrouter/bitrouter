@@ -1,23 +1,25 @@
-# Typed evaluation (opt-in native hosts)
+# Typed evaluation
 
-Stock `bro` serves generation and does **not** mount `/v1/evaluate` or link a
-typed-evaluation format. The `bro-evaluate` host explicitly registers the
-native `system-one/json@1` Rust format extension and retains normal BitRouter
-generation routes. TypeSafe is a provider binding to that format, not the
-extension identity. `TYPESAFE_API_KEY` alone does not enable Jev in stock `bro`.
+Default `bro` serves `/v1/evaluate` and compiles the native TypeSafe provider
+extension. Jev becomes routable only when a TypeSafe account is active and
+credentialed. The public endpoint remains available without an evaluation
+provider and returns `evaluation_model_not_found` for a valid but unavailable
+model. System One JSON is private to the TypeSafe extension, not a separate
+format binding in configuration.
 
-From this repository, start the opt-in host with a config file:
+From this repository, start the normal host with a config file:
 
 ```bash
-TYPESAFE_API_KEY=... cargo run -p bitrouter-evaluation-host -- --config /absolute/path/bitrouter.yaml
+TYPESAFE_API_KEY=... cargo run -p bitrouter --bin bro -- serve --config /absolute/path/bitrouter.yaml
 ```
 
-The host uses the configured `server.listen` (normally `127.0.0.1:4356`) and
-the shared foreground daemon lifecycle. A public registry merge activates
-the fixed `typesafe/jev-1.13` route only when the key and exact registered
-extension are available. An explicitly configured active route with a missing
-or wrong-revision extension fails startup. The moving `jev-latest` alias is not
-listed.
+For an installed CLI, use `bro serve` or `bro start` with the same
+`TYPESAFE_API_KEY` environment. The host uses the configured `server.listen`
+(normally `127.0.0.1:4356`). The fixed `typesafe/jev-1.13` model is declared
+by the provider extension; the public registry only enriches metadata. It
+remains usable when registry fetching is disabled. An explicitly configured
+active route with a conflicting model, wire id, or endpoint fails startup.
+The moving `jev-latest` alias is not listed.
 
 Send a non-streaming request to `/v1/evaluate`:
 

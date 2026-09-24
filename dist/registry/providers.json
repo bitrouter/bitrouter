@@ -10104,12 +10104,7 @@
       "name": "typesafe",
       "operations": {
         "evaluate": {
-          "endpoint": "/v1/systemone",
-          "format": {
-            "adapter": "json",
-            "extension": "system-one",
-            "revision": 1
-          }
+          "endpoint": "/v1/systemone"
         }
       },
       "required_config": [

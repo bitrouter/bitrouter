@@ -1,7 +1,8 @@
-//! Native System One JSON facet for explicitly linked custom hosts.
+//! Native TypeSafe evaluation provider for BitRouter hosts.
 //!
-//! This crate owns no HTTP client, endpoint, credential, retry policy, or
-//! settlement store. The stock `bro` binary does not link or register it.
+//! This crate owns TypeSafe's executable model declarations and System One
+//! JSON dialect. The host owns HTTP transport, credentials, retries, and
+//! settlement. Default `bro` explicitly registers it at startup.
 
 #![forbid(unsafe_code)]
 
@@ -10,30 +11,29 @@ use std::sync::Arc;
 
 use bitrouter_sdk::error::{BitrouterError, Result};
 use bitrouter_sdk::evaluation::{
-    EvaluationAnswer, EvaluationQuestion, EvaluationRequest, EvaluationResult,
-    EvaluationRoutingTarget, EvaluationUsage,
+    EvaluationAnswer, EvaluationQuestion, EvaluationRequest, EvaluationRoutingTarget,
+    EvaluationUsage,
 };
 use bitrouter_sdk::extension::ExtensionApi;
-use bitrouter_sdk::extension::evaluation_format::{
-    EvaluationFormatAdapter, EvaluationFormatDescriptor,
+use bitrouter_sdk::extension::provider::{
+    EvaluationProvider, EvaluationProviderDescriptor, EvaluationProviderModel,
+    EvaluationProviderOutput,
 };
 use serde::Deserialize;
 use serde_json::{Number, Value, json};
 
-/// The exact native format registered by this crate.
-pub const EXTENSION_ID: &str = "system-one";
-/// The facet scoped to [`EXTENSION_ID`].
-pub const ADAPTER_ID: &str = "json";
-/// Contract revision initially verified against the TypeSafe provider route.
-pub const REVISION: u32 = 1;
+/// Stable TypeSafe provider id.
+pub const PROVIDER_ID: &str = "typesafe";
+/// Pinned canonical Jev model id.
+pub const MODEL_ID: &str = "typesafe/jev-1.13";
 
-/// Register the System One facet into a trusted custom host.
+/// Register TypeSafe's evaluated-model implementation into a trusted host.
 pub fn register(api: &mut ExtensionApi) -> Result<()> {
-    api.register_evaluation_format(Arc::new(SystemOneFormat))
+    api.register_evaluation_provider(Arc::new(TypeSafeProvider))
 }
 
-/// System One's non-streaming JSON dialect, initially verified with TypeSafe.
-pub struct SystemOneFormat;
+/// Direct TypeSafe System One API for Jev evaluation models.
+pub struct TypeSafeProvider;
 
 #[derive(Deserialize)]
 struct SystemOneResponse {
@@ -42,12 +42,24 @@ struct SystemOneResponse {
     usage: EvaluationUsage,
 }
 
-impl EvaluationFormatAdapter for SystemOneFormat {
-    fn descriptor(&self) -> EvaluationFormatDescriptor {
-        EvaluationFormatDescriptor {
-            extension_id: EXTENSION_ID.to_owned(),
-            adapter_id: ADAPTER_ID.to_owned(),
-            revision: REVISION,
+impl EvaluationProvider for TypeSafeProvider {
+    fn descriptor(&self) -> EvaluationProviderDescriptor {
+        EvaluationProviderDescriptor {
+            provider_id: PROVIDER_ID.to_owned(),
+            api_base: "https://api.typesafe.ai".to_owned(),
+            credential_env: "TYPESAFE_API_KEY".to_owned(),
+            endpoint: "/v1/systemone".to_owned(),
+            models: vec![EvaluationProviderModel {
+                id: MODEL_ID.to_owned(),
+                provider_model_id: "jev-1.13.0".to_owned(),
+                question_types: vec![
+                    bitrouter_sdk::evaluation::EvaluationQuestionType::Noul,
+                    bitrouter_sdk::evaluation::EvaluationQuestionType::Choice,
+                    bitrouter_sdk::evaluation::EvaluationQuestionType::Score,
+                ],
+                max_choice_options: Some(255),
+                max_score_levels: Some(10),
+            }],
         }
     }
 
@@ -69,7 +81,11 @@ impl EvaluationFormatAdapter for SystemOneFormat {
         }))
     }
 
-    fn parse_response(&self, body: Value, request: &EvaluationRequest) -> Result<EvaluationResult> {
+    fn parse_response(
+        &self,
+        body: Value,
+        request: &EvaluationRequest,
+    ) -> Result<EvaluationProviderOutput> {
         validate_distribution_precision(&body, request)?;
         let parsed: SystemOneResponse =
             serde_json::from_value(body).map_err(|_| invalid_answer())?;
@@ -95,10 +111,8 @@ impl EvaluationFormatAdapter for SystemOneFormat {
                 return Err(invalid_answer());
             }
         }
-        let result = EvaluationResult {
-            id: "host-overwrites-id".to_owned(),
+        let result = EvaluationProviderOutput {
             model: parsed.model,
-            provider: "host-overwrites-provider".to_owned(),
             answers: parsed.answers,
             usage: parsed.usage,
         };

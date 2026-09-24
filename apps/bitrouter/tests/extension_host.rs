@@ -31,11 +31,6 @@ async fn extension_host_child() -> Result<()> {
     };
     let mode = std::env::var(CHILD_MODE)?;
     bitrouter::host::serve_with_extensions(&ConfigSource::File(config.into()), move |api| {
-        if mode == "evaluation" {
-            bitrouter_system_one_format::register(api)?;
-            api.request_check("unused", "v1", Arc::new(|_| Decision::Allow))?;
-            return Ok(());
-        }
         if mode == "missing" {
             return Ok(());
         }
@@ -104,14 +99,24 @@ impl Host {
     }
 
     fn official(home: &Path) -> Result<Self> {
+        Self::official_with_key(home, None)
+    }
+
+    fn official_with_key(home: &Path, typesafe_key: Option<&str>) -> Result<Self> {
         let log = home.join("official.log");
         let output = std::fs::File::create(&log)?;
-        let child = Command::new(env!("CARGO_BIN_EXE_bro"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+        command
             .args(["serve", "--config"])
             .arg(home.join("bitrouter.yaml"))
             .env("BITROUTER_HOME", home)
             .env("BITROUTER_CONTROL_TOKEN", TOKEN)
-            .env_remove("BITROUTER_WORKFLOW_TRACE_JSONL")
+            .env_remove("TYPESAFE_API_KEY")
+            .env_remove("BITROUTER_WORKFLOW_TRACE_JSONL");
+        if let Some(key) = typesafe_key {
+            command.env("TYPESAFE_API_KEY", key);
+        }
+        let child = command
             .stdin(Stdio::null())
             .stdout(output.try_clone()?)
             .stderr(output)
@@ -186,6 +191,25 @@ impl Drop for Host {
         // Every error path reaps the child before the temporary home is removed.
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+struct DetachedHostGuard {
+    home: PathBuf,
+    active: bool,
+}
+
+impl Drop for DetachedHostGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = Command::new(env!("CARGO_BIN_EXE_bro"))
+                .args(["stop", "--config"])
+                .arg(self.home.join("bitrouter.yaml"))
+                .env("BITROUTER_HOME", &self.home)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
     }
 }
 
@@ -273,19 +297,6 @@ database:
 providers:
   typesafe:
     api_base: {upstream}
-    api_key: fixture-test-key
-    operations:
-      evaluate:
-        endpoint: /v1/systemone
-        format: {{ extension: system-one, adapter: json, revision: 1 }}
-    models:
-      - id: typesafe/jev-1.13
-        provider_model_id: jev-1.13.0
-        operations:
-          evaluate:
-            question_types: [noul, choice, score]
-            max_choice_options: 255
-            max_score_levels: 10
 "#
         ),
     )?;
@@ -330,7 +341,7 @@ async fn mount_upstream(upstream: &MockServer) {
 }
 
 #[tokio::test]
-async fn evaluation_format_uses_shared_foreground_host_lifecycle() -> Result<()> {
+async fn default_bro_serves_typesafe_evaluation_with_shared_lifecycle() -> Result<()> {
     let home = temporary_home()?;
     let (inference, control) = addresses()?;
     let upstream = MockServer::start().await;
@@ -346,7 +357,7 @@ async fn evaluation_format_uses_shared_foreground_host_lifecycle() -> Result<()>
         .mount(&upstream)
         .await;
     write_evaluation_config(home.path(), inference, control, &upstream.uri())?;
-    let mut host = Host::spawn(home.path(), "evaluation")?;
+    let mut host = Host::official_with_key(home.path(), Some("fixture-test-key"))?;
     host.ready(home.path(), inference, control).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -414,24 +425,191 @@ async fn evaluation_format_uses_shared_foreground_host_lifecycle() -> Result<()>
 }
 
 #[tokio::test]
-async fn stock_host_rejects_explicit_evaluation_binding_before_database() -> Result<()> {
+async fn detached_bro_start_routes_typesafe_through_the_same_daemon() -> Result<()> {
     let home = temporary_home()?;
     let (inference, control) = addresses()?;
-    write_evaluation_config(home.path(), inference, control, "http://127.0.0.1:1")?;
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(header("authorization", "Bearer fixture-test-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "jev-1.13.0",
+            "answers": {"approved": {"type": "noul", "noul": 0.8}},
+            "usage": {"input_tokens": 2, "output_tokens": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    write_evaluation_config(home.path(), inference, control, &upstream.uri())?;
+    let mut guard = DetachedHostGuard {
+        home: home.path().to_path_buf(),
+        active: true,
+    };
+    let start = tokio::time::timeout(
+        Duration::from_secs(45),
+        tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+            .kill_on_drop(true)
+            .args(["start", "--config"])
+            .arg(home.path().join("bitrouter.yaml"))
+            .env("BITROUTER_HOME", home.path())
+            .env("BITROUTER_CONTROL_TOKEN", TOKEN)
+            .env("TYPESAFE_API_KEY", "fixture-test-key")
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await
+    .context("detached bro start timed out")??;
+    ensure!(
+        start.status.success(),
+        "detached bro start failed: {}",
+        String::from_utf8_lossy(&start.stderr)
+    );
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
+    let response = client
+        .post(format!("http://{inference}/v1/evaluate"))
+        .json(&json!({
+            "model": "typesafe/jev-1.13",
+            "state": "synthetic",
+            "questions": {"approved": {"type": "noul", "instructions": "Proceed?"}}
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+    let body: serde_json::Value = response.json().await?;
+    ensure!(body["provider"] == "typesafe");
+    ensure!(body["answers"]["approved"]["noul"] == 0.8);
+    let stopped = cli(home.path(), "stop").await?;
+    ensure!(
+        stopped.status.success(),
+        "detached bro stop failed: {}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    guard.active = false;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if ensure_clean(home.path()).is_ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .context("detached bro did not clean up its control state")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_bro_keeps_evaluate_endpoint_without_an_active_provider() -> Result<()> {
+    let home = temporary_home()?;
+    let (inference, control) = addresses()?;
+    let config_path = home.path().join("bitrouter.yaml");
+    let inactive_config = format!(
+        "inherit_defaults: false\nregistry:\n  enabled: false\nserver:\n  listen: {inference}\n  control_socket: host.sock\n  skip_auth: true\ncontrol:\n  enabled: true\n  listen: {control}\ndatabase:\n  url: 'sqlite://host.db?mode=rwc'\n"
+    );
+    std::fs::write(&config_path, &inactive_config)?;
     let mut host = Host::official(home.path())?;
+    host.ready(home.path(), inference, control).await?;
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{inference}/v1/evaluate"))
+        .json(&json!({
+            "model": "typesafe/jev-1.13",
+            "state": "synthetic",
+            "questions": {"approved": {"type": "noul", "instructions": "Proceed?"}}
+        }))
+        .send()
+        .await?;
+    ensure!(response.status() == reqwest::StatusCode::NOT_FOUND);
+    let body: serde_json::Value = response.json().await?;
+    ensure!(body["error"]["code"] == "evaluation_model_not_found");
+    let models: serde_json::Value = client
+        .get(format!("http://{inference}/v1/models"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    ensure!(!models["data"].as_array().is_some_and(|entries| {
+        entries
+            .iter()
+            .any(|entry| entry["id"] == "typesafe/jev-1.13")
+    }));
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(header("authorization", "Bearer fixture-test-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "model": "jev-1.13.0",
+            "answers": {"approved": {"type": "noul", "noul": 0.8}},
+            "usage": {"input_tokens": 2, "output_tokens": 1}
+        })))
+        .mount(&upstream)
+        .await;
+    std::fs::write(
+        &config_path,
+        format!(
+            "{inactive_config}providers:\n  typesafe:\n    api_base: {}\n    api_key: fixture-test-key\n",
+            upstream.uri()
+        ),
+    )?;
+    let activated = cli(home.path(), "reload").await?;
     ensure!(
-        !host.exited().await?.success(),
-        "stock host accepted native binding"
+        activated.status.success(),
+        "TypeSafe activation reload failed: {}",
+        String::from_utf8_lossy(&activated.stderr)
     );
+    let active_models: serde_json::Value = client
+        .get(format!("http://{inference}/v1/models"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    ensure!(active_models["data"].as_array().is_some_and(|entries| {
+        entries
+            .iter()
+            .any(|entry| entry["id"] == "typesafe/jev-1.13")
+    }));
+    let active_response = client
+        .post(format!("http://{inference}/v1/evaluate"))
+        .json(&json!({
+            "model": "typesafe/jev-1.13",
+            "state": "synthetic",
+            "questions": {"approved": {"type": "noul", "instructions": "Proceed?"}}
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+    let active_body: serde_json::Value = active_response.json().await?;
+    ensure!(active_body["provider"] == "typesafe");
+
+    std::fs::write(&config_path, inactive_config)?;
+    let deactivated = cli(home.path(), "reload").await?;
     ensure!(
-        !home.path().join("host.db").exists(),
-        "stock host opened the database before rejecting the binding"
+        deactivated.status.success(),
+        "TypeSafe deactivation reload failed: {}",
+        String::from_utf8_lossy(&deactivated.stderr)
     );
+    let inactive_again = client
+        .post(format!("http://{inference}/v1/evaluate"))
+        .json(&json!({
+            "model": "typesafe/jev-1.13",
+            "state": "synthetic",
+            "questions": {"approved": {"type": "noul", "instructions": "Proceed?"}}
+        }))
+        .send()
+        .await?;
+    ensure!(inactive_again.status() == reqwest::StatusCode::NOT_FOUND);
     ensure!(
-        host.logs().contains("missing evaluation format extension"),
-        "wrong startup failure: {}",
-        host.logs()
+        matches!(
+            daemon::send_command(&home.path().join("host.sock"), &DaemonCommand::Stop).await?,
+            DaemonResponse::Ok
+        ),
+        "stop failed"
     );
+    ensure!(host.exited().await?.success());
     ensure_clean(home.path())?;
     Ok(())
 }

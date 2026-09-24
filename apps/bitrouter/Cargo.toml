@@ -26,6 +26,7 @@ bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", 
 # `otel-http` alone.
 bitrouter-telemetry = { workspace = true, features = ["otel-http", "server"] }
 bitrouter-providers = { workspace = true, features = ["hosted", "pkce"] }
+bitrouter-typesafe-provider = { path = "../../extensions/typesafe/provider", version = "=1.0.0-alpha.33" }
 chrono.workspace = true
 sha2.workspace = true
 hmac.workspace = true
@@ -82,7 +83,6 @@ rustix = { workspace = true, features = ["process"] }
 serde_json.workspace = true
 
 [dev-dependencies]
-bitrouter-system-one-format = { path = "../../extensions/system-one/format", version = "=1.0.0-alpha.33" }
 bitrouter-guardrails = { path = "../../extensions/regex-checker/matcher" }
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock = "0.6"

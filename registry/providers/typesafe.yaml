@@ -14,10 +14,6 @@ auth:
 operations:
   evaluate:
     endpoint: /v1/systemone
-    format:
-      extension: system-one
-      adapter: json
-      revision: 1
 models:
   - id: typesafe/jev-1.13
     provider_model_id: jev-1.13.0

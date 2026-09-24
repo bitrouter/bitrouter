@@ -24,8 +24,8 @@ use crate::language_model::routing::{ModelInfo, RoutingPrefs, RoutingTable, Sort
 use crate::language_model::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
 use crate::language_model::types::{ApiProtocol, RoutingTarget};
 
-/// Configured evaluation route metadata, before native-extension availability
-/// and account-level execution are checked by a future evaluation host.
+/// Configured evaluation route metadata, before extension availability and
+/// account-level execution are checked by the host.
 #[derive(Debug, Clone)]
 pub struct EvaluationRouteDeclaration {
     /// Provider id owning the configured route.
@@ -34,14 +34,14 @@ pub struct EvaluationRouteDeclaration {
     pub model: String,
     /// Model id sent to the upstream provider.
     pub provider_model_id: String,
-    /// Host-owned endpoint and required native format key.
+    /// Extension-owned endpoint validated against the registered provider.
     pub operation: crate::config::ProviderOperationConfig,
     /// Positively declared question types and provider limits.
     pub limits: crate::config::ModelOperationConfig,
 }
 
 /// An executable evaluation route assembled from a positively declared model.
-/// Native format availability is checked separately by the extension host.
+/// Provider implementation availability is checked separately by the host.
 #[derive(Debug, Clone)]
 pub struct EvaluationRoute {
     /// Canonical route declaration and host-owned endpoint.
@@ -51,7 +51,7 @@ pub struct EvaluationRoute {
 }
 
 /// Resolve only declared evaluation-capable models. This does not assert that
-/// the required native extension is registered or that the route is callable.
+/// the provider implementation is registered or that the route is callable.
 pub fn resolve_evaluation_declaration_for(
     config: &Config,
     selector: &str,
@@ -1015,7 +1015,6 @@ providers:
     operations:
       evaluate:
         endpoint: /v1/systemone
-        format: { extension: system-one, adapter: json, revision: 1 }
     models:
       - id: typesafe/jev-1.13
         provider_model_id: jev-1.13.0
@@ -1034,7 +1033,7 @@ providers:
         let pinned = resolve_evaluation_declaration_for(&config, "typesafe:typesafe/jev-1.13")?;
         assert_eq!(bare.provider, "typesafe");
         assert_eq!(pinned.provider_model_id, "jev-1.13.0");
-        assert_eq!(bare.operation.format.adapter, "json");
+        assert_eq!(bare.operation.endpoint, "/v1/systemone");
         assert_eq!(bare.limits.question_types.len(), 3);
         assert!(matches!(
             resolve_evaluation_declaration_for(&config, "legacy/chat"),
@@ -1097,7 +1096,6 @@ providers:
     operations:
       evaluate:
         endpoint: ENDPOINT
-        format: { extension: system-one, adapter: json, revision: 1 }
     models:
       - id: typesafe/jev-1.13
         operations:

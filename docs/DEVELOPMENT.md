@@ -133,11 +133,12 @@ Because the schema is the contract, it is written down rather than inferred from
 
 Extension authors use an ordinary function accepting
 `bitrouter_sdk::extension::ExtensionApi` and call
-`request_check(id, revision, callback)` or `register_evaluation_format(adapter)`.
+`request_check(id, revision, callback)` or
+`register_evaluation_provider(implementation)`.
 Request-check business inputs and decisions live in `extension::request_check`;
-the typed evaluation render/parse contract lives in
-`extension::evaluation_format`. Neither receives a provider credential or
-unrestricted host context. The custom host passes the
+the typed provider-owned evaluation contract lives in `extension::provider`.
+Neither receives an unrestricted host context. Default `bro` registers the
+reviewed TypeSafe extension; a custom host can pass its own
 registration function to `host::serve_with_extensions` for the shared foreground
 daemon lifecycle, or `assemble::build_app_with_extensions` for low-level embedding.
 Fragment and coverage types also live in `extension::request_check`.
@@ -148,8 +149,8 @@ probe command, runtime installation or extra extension API crate.
 
 Valid unconfigured request-check registrations are inactive with sorted startup
 diagnostics; configured instances require a matching registration even without
-router bindings. Active provider evaluation routes likewise require an exact
-registered format revision before database assembly.
+router bindings. Active evaluation routes require a matching provider-owned
+model and operation claim before database assembly.
 The regex example uses the same inference, local/remote management, reload and
 shutdown path as `bro serve`. Restart custom hosts with their own executable;
 the example does not implement the default CLI's background-launch protocol.
@@ -159,11 +160,12 @@ pipeline context. The host retains resource bounds, fixed binding identity and
 bounded content-free tracing. Synchronous callbacks cannot be forcibly
 terminated by deadlines; they are trusted in-process code.
 
-The first evaluation format is `system-one/json@1` in
-[`extensions/system-one/`](../extensions/system-one/README.md), verified for the
-TypeSafe Jev provider binding. The opt-in `bro-evaluate` binary links it but
-uses the same foreground host, management, reload, and shutdown path; stock
-`bro` links no evaluation format and does not expose `/v1/evaluate`.
+The first evaluation provider extension is TypeSafe in
+[`extensions/typesafe/`](../extensions/typesafe/README.md). It owns the System
+One JSON dialect and executable Jev model; default `bro` registers it and
+serves `/v1/evaluate` through the standard daemon lifecycle. Without an
+active TypeSafe account, the endpoint remains available but Jev is not listed
+or routable.
 
 Legacy `Plugin` / `AppBuilder::plugin` and optional `GuardrailsPlugin` retain
 custom-host global, stream/output and migration semantics. Input-only checks do

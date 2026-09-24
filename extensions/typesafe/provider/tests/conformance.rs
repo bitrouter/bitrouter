@@ -1,8 +1,8 @@
 use bitrouter_sdk::error::Result;
 use bitrouter_sdk::evaluation::{EvaluationAnswer, EvaluationRequest, EvaluationRoutingTarget};
 use bitrouter_sdk::extension::ExtensionApi;
-use bitrouter_sdk::extension::evaluation_format::EvaluationFormatAdapter;
-use bitrouter_system_one_format::{REVISION, SystemOneFormat, register};
+use bitrouter_sdk::extension::provider::EvaluationProvider;
+use bitrouter_typesafe_provider::{MODEL_ID, PROVIDER_ID, TypeSafeProvider, register};
 use serde_json::{Value, json};
 
 fn request() -> std::result::Result<EvaluationRequest, serde_json::Error> {
@@ -14,10 +14,12 @@ fn response() -> std::result::Result<Value, serde_json::Error> {
 }
 
 #[test]
-fn registration_is_explicit_and_revisioned() -> Result<()> {
+fn registration_is_provider_owned_and_exact() -> Result<()> {
     let mut api = ExtensionApi::new();
     register(&mut api)?;
-    assert_eq!(REVISION, 1);
+    let descriptor = TypeSafeProvider.descriptor();
+    assert_eq!(descriptor.provider_id, PROVIDER_ID);
+    assert_eq!(descriptor.models[0].id, MODEL_ID);
     assert!(register(&mut api).is_err());
     assert!(api.into_registrations().is_err());
     Ok(())
@@ -27,7 +29,7 @@ fn registration_is_explicit_and_revisioned() -> Result<()> {
 fn mixed_request_preserves_structure_nulls_and_provider_model_mapping()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let request = request()?;
-    let wire = SystemOneFormat.render_request(
+    let wire = TypeSafeProvider.render_request(
         &request,
         &EvaluationRoutingTarget {
             provider_model_id: "jev-1.13.0".into(),
@@ -47,7 +49,7 @@ fn mixed_request_preserves_structure_nulls_and_provider_model_mapping()
 #[test]
 fn mixed_response_preserves_all_answer_kinds_version_usage_and_confidence()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let result = SystemOneFormat.parse_response(response()?, &request()?)?;
+    let result = TypeSafeProvider.parse_response(response()?, &request()?)?;
     assert_eq!(result.model, "jev-1.13.0");
     assert_eq!(result.usage.input_tokens, 318);
     assert_eq!(result.usage.output_tokens, 34);
@@ -75,8 +77,12 @@ fn rounding_drift_is_accepted_but_invalid_distributions_are_rejected()
     let request = request()?;
     let mut malformed = response()?;
     malformed["answers"]["severity"]["probabilities"]["2"] = json!(0.1);
-    assert!(SystemOneFormat.parse_response(malformed, &request).is_err());
-    let valid = SystemOneFormat.parse_response(response()?, &request)?;
+    assert!(
+        TypeSafeProvider
+            .parse_response(malformed, &request)
+            .is_err()
+    );
+    let valid = TypeSafeProvider.parse_response(response()?, &request)?;
     assert!(matches!(
         valid.answers.get("severity"),
         Some(EvaluationAnswer::Score { .. })
@@ -114,7 +120,7 @@ fn malformed_answer_keys_types_ranges_legend_and_usage_are_rejected()
     negative_usage["usage"]["input_tokens"] = json!(-1);
     cases.push(negative_usage);
     for body in cases {
-        assert!(SystemOneFormat.parse_response(body, &request).is_err());
+        assert!(TypeSafeProvider.parse_response(body, &request).is_err());
     }
     Ok(())
 }

@@ -193,7 +193,7 @@ impl Config {
     }
 
     /// Validate operation declarations without requiring a runtime extension.
-    /// Binding a declared format is a separate host-assembly step.
+    /// Matching an executable provider is a separate host-assembly step.
     pub fn validate_operations(&self) -> Result<()> {
         for (provider_id, provider) in &self.providers {
             for (operation, config) in &provider.operations {
@@ -210,14 +210,6 @@ impl Config {
                 {
                     return Err(BitrouterError::bad_request(format!(
                         "provider '{provider_id}' has an invalid {operation:?} endpoint"
-                    )));
-                }
-                if config.format.extension.is_empty()
-                    || config.format.adapter.is_empty()
-                    || config.format.revision == 0
-                {
-                    return Err(BitrouterError::bad_request(format!(
-                        "provider '{provider_id}' has an invalid {operation:?} format"
                     )));
                 }
             }
@@ -1246,7 +1238,7 @@ pub struct ProviderConfig {
     /// host-inferred default. A bare protocol string still parses to a
     /// one-element set, so single-protocol providers are unchanged.
     pub api_protocol: PatternMap<ProtocolList>,
-    /// Non-generation operation endpoints and their required native format.
+    /// Non-generation operation endpoints supplied by provider extensions.
     /// Generation continues to use `api_protocol` unchanged.
     pub operations: BTreeMap<InferenceOperation, ProviderOperationConfig>,
     /// Optional per-protocol base-URL override, keyed by protocol name
@@ -1613,26 +1605,12 @@ impl ProviderModel {
     }
 }
 
-/// A non-generation provider operation's host-owned endpoint and format key.
+/// A non-generation provider operation's extension-owned endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderOperationConfig {
     /// A relative path joined to the validated provider API base by the host.
     pub endpoint: String,
-    /// Exact native format facet required to execute the operation.
-    pub format: OperationFormatConfig,
-}
-
-/// Identity of one compiled native format facet.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct OperationFormatConfig {
-    /// Native extension package id.
-    pub extension: String,
-    /// Adapter id inside the extension.
-    pub adapter: String,
-    /// Exact format-contract revision.
-    pub revision: u32,
 }
 
 /// Constraints declared by one concrete model operation.

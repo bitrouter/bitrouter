@@ -1,6 +1,6 @@
 [package]
-name = "bitrouter-system-one-format"
-description = "Native System One JSON evaluation format for custom BitRouter hosts"
+name = "bitrouter-typesafe-provider"
+description = "Native TypeSafe evaluation provider extension for BitRouter"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bitrouter-sdk = { workspace = true, features = ["config_file"] }
+bitrouter-sdk = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 

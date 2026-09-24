@@ -52,13 +52,14 @@ providers:
     operations:
       evaluate:
         endpoint: /v1/systemone
-        format: {{ extension: fixture, adapter: decisions, revision: 1 }}
     models:
       - id: typesafe/jev-1.13
         provider_model_id: jev-1.13.0
         operations:
           evaluate:
             question_types: [noul, choice, score]
+            max_choice_options: 255
+            max_score_levels: 10
   legacy:
     api_base: {}
     api_key: test-key
@@ -71,10 +72,12 @@ providers:
     let cfg = config::parse(&raw)?;
     let runtime_home = tempfile::tempdir()?;
     let config_path = runtime_home.path().join("bitrouter.yaml");
+    let mut extensions = bitrouter_sdk::extension::ExtensionApi::new();
+    bitrouter_typesafe_provider::register(&mut extensions)?;
     let assembled = bitrouter::assemble::build_app_with_registered_extensions(
         &cfg,
         Some(&config_path),
-        &evaluation::registered()?,
+        &extensions,
         None,
     )
     .await?;

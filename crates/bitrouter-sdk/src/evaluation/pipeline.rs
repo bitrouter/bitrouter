@@ -55,7 +55,7 @@ pub struct EvaluationAttemptRecord {
     pub account_label: Option<String>,
     /// One-based index in the eligible same-provider account chain.
     pub attempt: usize,
-    /// Format facet selected by configuration.
+    /// Legacy metering column containing the provider-extension identity.
     pub format: String,
     /// Time spent waiting for this attempt, including HTTP body receipt.
     pub duration_ms: u64,
@@ -107,7 +107,7 @@ impl Drop for CancellationOnDrop {
 }
 
 impl EvaluationPipeline {
-    /// Build the internal rail from an already validated custom-host registry.
+    /// Build the internal rail from already validated provider registrations.
     pub fn new(
         routing: Arc<ConfigRoutingTable>,
         http: Arc<HttpExecutor>,
@@ -161,9 +161,9 @@ impl EvaluationPipeline {
         }
         let route = self.routing.resolve_evaluation_route(&request.model)?;
         validate_route_limits(&request, &route.declaration.limits)?;
-        let adapter = self
+        let provider = self
             .extensions
-            .evaluation_format(&route.declaration.operation.format)?;
+            .evaluation_provider(&route.declaration.provider)?;
         let cancellation = CancellationToken::new();
         let cancelled_on_drop = CancellationOnDrop(cancellation.clone());
         let (sender, receiver) = oneshot::channel();
@@ -180,7 +180,7 @@ impl EvaluationPipeline {
             self.tasks.spawn(async move {
                 let result = execute_route(
                     &http,
-                    adapter.as_ref(),
+                    provider.as_ref(),
                     recorder.as_ref(),
                     EvaluationJob {
                         route,
@@ -252,7 +252,7 @@ fn validate_route_limits(
 
 async fn execute_route(
     http: &HttpExecutor,
-    adapter: &dyn crate::extension::evaluation_format::EvaluationFormatAdapter,
+    provider: &dyn crate::extension::provider::EvaluationProvider,
     recorder: &dyn EvaluationAttemptRecorder,
     job: EvaluationJob,
 ) -> Result<EvaluationResult> {
@@ -264,11 +264,7 @@ async fn execute_route(
         caller,
         cancellation,
     } = job;
-    let format = &route.declaration.operation.format;
-    let format_label = format!(
-        "{}/{}@{}",
-        format.extension, format.adapter, format.revision
-    );
+    let format_label = format!("provider:{}", route.declaration.provider);
     let mut saw_invalid_response = false;
     let count = route.targets.len();
     let canonical_model = route.declaration.model.clone();
@@ -280,7 +276,7 @@ async fn execute_route(
         let execution = http.execute_evaluation_attempt(
             &target,
             &route.declaration.operation.endpoint,
-            adapter,
+            provider,
             &request,
             &request_id,
             &inbound_headers,
