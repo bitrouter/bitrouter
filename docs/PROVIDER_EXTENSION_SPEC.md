@@ -1,10 +1,10 @@
 # Native provider extensions for evaluation models
 
-Status: **approved architecture; implementation in progress on PR #942.**
-The current branch passed 3,596 local nextest tests, strict CI-form Clippy,
-format, registry/schema checks, SDK no-config compilation and warning-free
-public docs. Hosted CI and credentialed TypeSafe smoke remain outstanding;
-this document does not authorize merging or releasing the implementation.
+Status: **approved architecture; implementation under review on PR #942.**
+Use that PR's checks for revision-specific deterministic validation. The
+credentialed TypeSafe smoke and upstream limit measurement remain separate
+acceptance gates; this document does not authorize merging or releasing the
+implementation.
 
 Date: 2026-09-23
 

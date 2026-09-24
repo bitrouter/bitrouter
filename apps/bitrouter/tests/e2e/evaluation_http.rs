@@ -660,11 +660,181 @@ async fn upstream_failures_have_stable_safe_evaluation_errors() -> anyhow::Resul
     Ok(())
 }
 
+async fn run_typesafe_smoke(api_base: &str, key: &str) -> anyhow::Result<()> {
+    use bitrouter::metering::entities::evaluation_attempts;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let mut config = fixture_config(api_base, true)?;
+    let provider = config
+        .providers
+        .get_mut("typesafe")
+        .context("TypeSafe fixture provider missing")?;
+    provider.api_key = key.to_owned();
+    let mut extensions = ExtensionApi::new();
+    bitrouter_typesafe_provider::register(&mut extensions)?;
+    let assembled =
+        bitrouter::assemble::build_app_with_registered_extensions(&config, None, &extensions, None)
+            .await?;
+    let server = TestServer::new(router_for_assembled(&config, &assembled)?);
+    let cases = [
+        (
+            "noul",
+            json!({"type": "noul", "instructions": "Is this ticket about billing?"}),
+        ),
+        (
+            "choice",
+            json!({
+                "type": "choice",
+                "instructions": "Which team handles this ticket?",
+                "criteria": {"billing": null, "technical": null}
+            }),
+        ),
+        (
+            "score",
+            json!({
+                "type": "score",
+                "instructions": "How urgent is this ticket?",
+                "criteria": ["routine", "urgent"]
+            }),
+        ),
+    ];
+    for (kind, question) in cases {
+        let request_id = format!("eval-typesafe-live-{kind}");
+        let mut questions = serde_json::Map::new();
+        questions.insert(kind.to_owned(), question);
+        let response = server
+            .post("/v1/evaluate")
+            .add_header("x-bitrouter-request-id", request_id.as_str())
+            .json(&json!({
+                "model": "typesafe/jev-1.13",
+                "state": {"ticket": "A synthetic customer reports a duplicate charge."},
+                "questions": questions
+            }))
+            .await;
+        anyhow::ensure!(
+            response.status_code() == 200,
+            "live TypeSafe {kind} evaluation failed with HTTP {}",
+            response.status_code()
+        );
+        let body: Value = response.json();
+        let model = body["model"]
+            .as_str()
+            .context("provider model version missing")?;
+        anyhow::ensure!(model.starts_with("jev-"), "provider did not report Jev");
+        anyhow::ensure!(body["provider"] == "typesafe", "provider identity mismatch");
+        anyhow::ensure!(
+            body["answers"][kind]["type"] == kind,
+            "{kind} answer missing"
+        );
+        anyhow::ensure!(
+            body["usage"]["input_tokens"]
+                .as_u64()
+                .is_some_and(|tokens| tokens > 0),
+            "input usage missing for {kind}"
+        );
+        anyhow::ensure!(
+            body["usage"]["output_tokens"].as_u64().is_some(),
+            "output usage missing for {kind}"
+        );
+        let cost = body["usage"]["cost"]
+            .as_f64()
+            .context("settled cost missing")?;
+        let row = evaluation_attempts::Entity::find()
+            .filter(evaluation_attempts::Column::RequestId.eq(request_id))
+            .one(&assembled.db)
+            .await?
+            .context("live TypeSafe attempt evidence missing")?;
+        anyhow::ensure!(row.terminal == "completed", "attempt did not complete");
+        anyhow::ensure!(
+            row.reported_model.as_deref() == Some(model),
+            "reported model drift"
+        );
+        anyhow::ensure!(row.provider_model_id == "jev-1.13.0", "wire model drift");
+        anyhow::ensure!(row.charge_status == "computed", "charge not computed");
+        let charge = row.charge_micro_usd.context("settled charge missing")?;
+        anyhow::ensure!(
+            (cost - charge as f64 / 1_000_000.0).abs() < 1e-9,
+            "response cost differs from settlement"
+        );
+        let evidence: Value = serde_json::from_str(
+            row.charge_evidence_json
+                .as_deref()
+                .context("charge evidence missing")?,
+        )?;
+        anyhow::ensure!(
+            evidence["pricing_source"] == "configured",
+            "unexpected pricing provenance"
+        );
+        anyhow::ensure!(
+            evidence["pricing_version"].as_str().is_some(),
+            "pricing version missing"
+        );
+        anyhow::ensure!(
+            !format!("{row:?}{body}{evidence}").contains(key),
+            "TypeSafe key appeared in response or settlement evidence"
+        );
+        println!("TypeSafe {kind} smoke passed for model {model}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn typesafe_smoke_contract_covers_each_kind_and_settlement() -> anyhow::Result<()> {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .and(header("authorization", "Bearer fixture-live-key"))
+        .respond_with(|request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+            let kind = body["questions"]
+                .as_object()
+                .and_then(|questions| questions.keys().next())
+                .map(String::as_str);
+            let answer = match kind {
+                Some("noul") => json!({"type": "noul", "noul": 0.8}),
+                Some("choice") => json!({
+                    "type": "choice",
+                    "choice": "billing",
+                    "probabilities": {"billing": 0.7, "technical": 0.3}
+                }),
+                Some("score") => json!({
+                    "type": "score",
+                    "score": 1.0,
+                    "probabilities": {"0": 0.2, "1": 0.8},
+                    "legend": {"0": "routine", "1": "urgent"}
+                }),
+                _ => return ResponseTemplate::new(400),
+            };
+            let mut answers = serde_json::Map::new();
+            if let Some(kind) = kind {
+                answers.insert(kind.to_owned(), answer);
+            }
+            ResponseTemplate::new(200).set_body_json(json!({
+                "model": "jev-1.13.0",
+                "answers": answers,
+                "usage": {"input_tokens": 318, "output_tokens": 34}
+            }))
+        })
+        .mount(&upstream)
+        .await;
+    run_typesafe_smoke(&upstream.uri(), "fixture-live-key").await?;
+    anyhow::ensure!(
+        upstream
+            .received_requests()
+            .await
+            .context("mock upstream request capture unavailable")?
+            .len()
+            == 3,
+        "smoke contract did not make one request per question kind"
+    );
+    Ok(())
+}
+
 /// Explicit, credentialed conformance probe. Ordinary PR CI never executes it.
 /// Run with `TYPESAFE_API_KEY_FILE` or `TYPESAFE_API_KEY` set and `cargo test -p bitrouter --test e2e
 /// typesafe_live_smoke -- --ignored` after the deterministic gate is green.
 #[tokio::test]
-#[ignore = "requires an explicit TypeSafe API key and spends one real provider call"]
+#[ignore = "requires an explicit TypeSafe API key and spends up to three real provider calls"]
 async fn typesafe_live_smoke() -> anyhow::Result<()> {
     let key = match std::env::var("TYPESAFE_API_KEY_FILE") {
         Ok(path) => std::fs::read_to_string(path).context("read TypeSafe smoke key file")?,
@@ -673,69 +843,5 @@ async fn typesafe_live_smoke() -> anyhow::Result<()> {
     };
     let key = key.trim();
     anyhow::ensure!(!key.is_empty(), "TYPESAFE_API_KEY is empty");
-    let mut config = fixture_config("https://api.typesafe.ai", true)?;
-    let provider = config
-        .providers
-        .get_mut("typesafe")
-        .context("TypeSafe fixture provider missing")?;
-    provider.api_key = key.to_owned();
-    let server = server_for_config(&config).await?;
-    let response = server
-        .post("/v1/evaluate")
-        .json(&json!({
-            "model": "typesafe/jev-1.13",
-            "state": {"ticket": "A synthetic customer reports a duplicate charge."},
-            "questions": {
-                "billing": {"type": "noul", "instructions": "Is this about billing?"},
-                "team": {
-                    "type": "choice",
-                    "instructions": "Which team handles this?",
-                    "criteria": {"billing": null, "technical": null}
-                },
-                "urgency": {
-                    "type": "score",
-                    "instructions": "How urgent is the ticket?",
-                    "criteria": ["routine", "urgent"]
-                }
-            }
-        }))
-        .await;
-    anyhow::ensure!(
-        response.status_code() == 200,
-        "live TypeSafe evaluation failed with HTTP {}",
-        response.status_code()
-    );
-    let body: Value = response.json();
-    let model = body["model"]
-        .as_str()
-        .context("provider model version missing")?;
-    anyhow::ensure!(
-        model.starts_with("jev-"),
-        "provider did not report a Jev version"
-    );
-    println!("TypeSafe live smoke passed for model {model}");
-    anyhow::ensure!(body["provider"] == "typesafe", "provider identity mismatch");
-    anyhow::ensure!(
-        body["answers"]["billing"]["type"] == "noul",
-        "Noul answer missing"
-    );
-    anyhow::ensure!(
-        body["answers"]["team"]["type"] == "choice",
-        "Choice answer missing"
-    );
-    anyhow::ensure!(
-        body["answers"]["urgency"]["type"] == "score",
-        "Score answer missing"
-    );
-    anyhow::ensure!(
-        body["usage"]["input_tokens"]
-            .as_u64()
-            .is_some_and(|tokens| tokens > 0),
-        "input usage missing"
-    );
-    anyhow::ensure!(
-        body["usage"]["output_tokens"].as_u64().is_some(),
-        "output usage missing"
-    );
-    Ok(())
+    run_typesafe_smoke("https://api.typesafe.ai", key).await
 }
