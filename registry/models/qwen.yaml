@@ -180,3 +180,14 @@
   max_input_tokens: 1000000
   max_output_tokens: 131072
   release_date: 2026-09-21
+- id: qwen/qwen3.8-max-prime
+  name: 'Qwen: Qwen3.8 Max Prime'
+  input_modalities:
+  - image
+  - text
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 131072
+  release_date: 2026-09-23

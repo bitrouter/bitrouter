@@ -678,6 +678,22 @@ models:
         cache_read: 0.016
       output_tokens:
         text: 0.47
+  - id: qwen/qwen3.8-max-prime
+    provider_model_id: qwen/qwen3.8-max-prime
+    pricing:
+      input_tokens:
+        no_cache: 4
+        cache_read: 0.5
+      output_tokens:
+        text: 12
+  - id: z-ai/glm-5.3-prime
+    provider_model_id: z-ai/glm-5.3-prime
+    pricing:
+      input_tokens:
+        no_cache: 2.8
+        cache_read: 0.56
+      output_tokens:
+        text: 8.8
 status: active
 weight: 1
 community: false

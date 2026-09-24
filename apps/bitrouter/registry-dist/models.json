@@ -1273,9 +1273,29 @@
           }
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "no_cache": 4.0
+            },
+            "output_tokens": {
+              "text": 20.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "anthropic/claude-opus-5.5"
+        },
+        {
           "api_protocol": "anthropic",
           "provider": "claude-code",
           "provider_model_id": "claude-opus-5-5"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "claude-opus-5.5"
         },
         {
           "api_protocol": "openai",
@@ -6279,6 +6299,26 @@
           }
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "openai/gpt-6-luna"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "gpt-6-luna"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses"
@@ -6302,6 +6342,11 @@
         {
           "api_protocol": "responses",
           "provider": "openai-codex",
+          "provider_model_id": "gpt-6-luna"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "opencode-go",
           "provider_model_id": "gpt-6-luna"
         },
         {
@@ -6411,6 +6456,26 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "openai/gpt-6-sol"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "gpt-6-sol"
         },
         {
           "api_protocol": [
@@ -7996,6 +8061,41 @@
       "release_date": "2026-09-03"
     },
     {
+      "id": "qwen/qwen3.8-max-prime",
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 131072,
+      "name": "Qwen: Qwen3.8 Max Prime",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 4.0
+            },
+            "output_tokens": {
+              "text": 12.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "qwen/qwen3.8-max-prime"
+        }
+      ],
+      "release_date": "2026-09-23"
+    },
+    {
       "id": "qwen/qwen3.8-omni-flash",
       "input_modalities": [
         "audio",
@@ -9093,6 +9193,20 @@
       "providers": [
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "xiaomi/mimo-v2.6-flash"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "opencode-go",
           "provider_model_id": "mimo-v2.6-flash"
         },
@@ -9191,6 +9305,20 @@
       "providers": [
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "xiaomi/mimo-v2.6-pro"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "opencode-go",
           "provider_model_id": "mimo-v2.6-pro"
         },
@@ -9287,6 +9415,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.036,
+              "no_cache": 4.35
+            },
+            "output_tokens": {
+              "text": 8.7
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "xiaomi/mimo-v2.6-pro-ultraspeed"
+        },
         {
           "api_protocol": [
             "openai",
@@ -10553,6 +10695,39 @@
         }
       ],
       "release_date": "2026-09-18"
+    },
+    {
+      "id": "z-ai/glm-5.3-prime",
+      "input_modalities": [
+        "text"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 131072,
+      "name": "Z.ai: GLM 5.3 Prime",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.56,
+              "no_cache": 2.8
+            },
+            "output_tokens": {
+              "text": 8.8
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "z-ai/glm-5.3-prime"
+        }
+      ],
+      "release_date": "2026-09-23"
     }
   ]
 }
