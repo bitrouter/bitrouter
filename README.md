@@ -84,13 +84,13 @@ See the [full study and limitations](benchmarks/002-2026-09-07-tbench-v2.1-route
 
 ```bash
 # macOS / Linux
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bitrouter/bitrouter/releases/latest/download/bitrouter-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-installer.sh | sh
 
 # Homebrew
 brew install bitrouter/tap/bitrouter
 
 # Windows
-powershell -ExecutionPolicy Bypass -Command "irm https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.31/bitrouter-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-installer.ps1 | iex"
 
 # npm
 npm install -g bitrouter
