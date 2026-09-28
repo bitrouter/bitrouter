@@ -1563,6 +1563,25 @@ impl StreamDecoder for ChatStreamDecoder {
             Err(_) => return Ok(Vec::new()),
         };
 
+        // OpenAI-compatible servers can report a failure inside an HTTP 200
+        // SSE stream. Do not silently treat that frame as an empty chunk: a
+        // pre-content error must reach fallback, and a post-content error must
+        // fail the committed stream. A named `error` event may carry either an
+        // `error` object or the error fields directly.
+        let error = chunk.get("error").filter(|value| !value.is_null());
+        if error.is_some() || event.event.as_deref() == Some("error") {
+            let status = error
+                .and_then(|value| value.get("status").or_else(|| value.get("statusCode")))
+                .or_else(|| chunk.get("status").or_else(|| chunk.get("statusCode")))
+                .and_then(serde_json::Value::as_u64)
+                .filter(|status| (400..=599).contains(status))
+                .map_or(502, |status| status as u16);
+            return Err(BitrouterError::Upstream {
+                status,
+                message: "chat completions stream error".to_string(),
+            });
+        }
+
         let mut parts = Vec::new();
         // Surface the upstream response id once, before any deltas. Every
         // chunk repeats the top-level `id` (`chatcmpl-...`); we emit it a
@@ -2011,5 +2030,39 @@ mod trailing_usage_tests {
             }]
         ));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod stream_error_tests {
+    use super::*;
+
+    #[test]
+    fn top_level_error_frame_is_not_ignored() {
+        let mut decoder = ChatStreamDecoder::default();
+        let error = decoder.decode(&SseEvent {
+            event: None,
+            data: serde_json::json!({
+                "error": {"message": "upstream failed", "status": 503}
+            })
+            .to_string(),
+        });
+        assert!(matches!(
+            error,
+            Err(BitrouterError::Upstream { status: 503, .. })
+        ));
+    }
+
+    #[test]
+    fn named_error_frame_preserves_byok_auth_status() {
+        let mut decoder = ChatStreamDecoder::default();
+        let error = decoder.decode(&SseEvent {
+            event: Some("error".to_string()),
+            data: serde_json::json!({"statusCode": 401, "message": "invalid key"}).to_string(),
+        });
+        assert!(matches!(
+            error,
+            Err(BitrouterError::Upstream { status: 401, .. })
+        ));
     }
 }
