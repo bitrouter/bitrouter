@@ -942,7 +942,7 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
         reasoning_effort: None,
         provider_id: "openai".into(),
         account_label: None,
-        response_id: None,
+        chat_completion_response_id: None,
         prompt_tokens: 10,
         completion_tokens: 5,
         reasoning_tokens: 0,

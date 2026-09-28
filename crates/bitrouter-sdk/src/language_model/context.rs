@@ -760,7 +760,7 @@ impl PipelineContext {
     pub fn settlement_context(&mut self) -> SettlementContext {
         let target = self.serving_target();
         let exec = self.execution_result.as_ref();
-        let response_id = target
+        let chat_completion_response_id = target
             .as_ref()
             .filter(|target| target.api_protocol == ApiProtocol::ChatCompletions)
             .and_then(|_| {
@@ -794,7 +794,7 @@ impl PipelineContext {
             reasoning_effort: self.prompt.params.reasoning_effort,
             provider_id,
             account_label,
-            response_id,
+            chat_completion_response_id,
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             reasoning_tokens: usage.reasoning_tokens,
@@ -1487,9 +1487,16 @@ mod tests {
             crate::language_model::types::UsageOrigin::ProviderReported
         );
         assert_eq!(settlement.raw_usage.as_ref(), Some(&raw));
-        assert_eq!(settlement.response_id.as_deref(), Some("gen_json"));
+        assert_eq!(
+            settlement.chat_completion_response_id.as_deref(),
+            Some("gen_json")
+        );
         bind_target(&mut ctx, ApiProtocol::Responses);
-        assert!(ctx.settlement_context().response_id.is_none());
+        assert!(
+            ctx.settlement_context()
+                .chat_completion_response_id
+                .is_none()
+        );
     }
 
     #[test]
@@ -1530,7 +1537,12 @@ mod tests {
                 .as_deref(),
             Some("resp-native")
         );
-        assert!(native.settlement_context().response_id.is_none());
+        assert!(
+            native
+                .settlement_context()
+                .chat_completion_response_id
+                .is_none()
+        );
 
         let mut cross_protocol = streaming_context(ApiProtocol::ChatCompletions);
         let mut stream = cross_protocol.stream_context();
@@ -1546,7 +1558,10 @@ mod tests {
             None
         );
         assert_eq!(
-            cross_protocol.settlement_context().response_id.as_deref(),
+            cross_protocol
+                .settlement_context()
+                .chat_completion_response_id
+                .as_deref(),
             Some("chatcmpl-upstream")
         );
     }
