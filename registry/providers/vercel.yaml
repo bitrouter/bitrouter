@@ -1,4 +1,5 @@
-# Candidate exact-ID mappings from the Vercel public model catalog (2026-09-28 UTC).
+# Candidate mappings from the Vercel public model catalog (2026-09-28 UTC).
+# Includes 39 exact IDs and 19 exact slugs under Vercel's different namespaces.
 # Staging until credentialed JSON/SSE parity, usage, and price gates pass.
 # The prices below are the published BitRouter customer tariffs, not Vercel cost.
 # Capabilities are intentionally absent until each feature is verified.
@@ -346,4 +347,161 @@ models:
       cache_read: 0.036
     output_tokens:
       text: 8.7
+# Exact model slugs under Vercel catalog namespaces; staged for credentialed parity review.
+- id: qwen/qwen3.6-27b
+  provider_model_id: alibaba/qwen3.6-27b
+  pricing:
+    input_tokens:
+      no_cache: 0.3
+    output_tokens:
+      text: 3.2
+- id: qwen/qwen3.7-max
+  provider_model_id: alibaba/qwen3.7-max
+  pricing:
+    input_tokens:
+      no_cache: 1.25
+      cache_read: 0.25
+      cache_write: 1.5625
+    output_tokens:
+      text: 3.75
+- id: qwen/qwen3.7-plus
+  provider_model_id: alibaba/qwen3.7-plus
+  pricing:
+    input_tokens:
+      no_cache: 0.276
+    output_tokens:
+      text: 1.101
+- id: x-ai/grok-4.20-multi-agent
+  provider_model_id: spacexai/grok-4.20-multi-agent
+  pricing:
+    input_tokens:
+      no_cache: 1.25
+      cache_read: 0.2
+    output_tokens:
+      text: 2.5
+- id: x-ai/grok-4.3
+  provider_model_id: spacexai/grok-4.3
+  pricing:
+    input_tokens:
+      no_cache: 1.25
+      cache_read: 0.2
+    output_tokens:
+      text: 2.5
+- id: x-ai/grok-build-0.1
+  provider_model_id: spacexai/grok-build-0.1
+  pricing:
+    input_tokens:
+      no_cache: 1
+      cache_read: 0.2
+    output_tokens:
+      text: 2
+- id: z-ai/glm-4.7
+  provider_model_id: zai/glm-4.7
+  pricing:
+    input_tokens:
+      no_cache: 0.6
+      cache_read: 0.11
+    output_tokens:
+      text: 2.2
+- id: z-ai/glm-5.1
+  provider_model_id: zai/glm-5.1
+  pricing:
+    input_tokens:
+      no_cache: 0.98
+      cache_read: 0.182
+    output_tokens:
+      text: 3.08
+- id: z-ai/glm-5.2
+  provider_model_id: zai/glm-5.2
+  pricing:
+    input_tokens:
+      no_cache: 0.979
+      cache_read: 0.182
+    output_tokens:
+      text: 3.08
+- id: x-ai/grok-4.5
+  provider_model_id: spacexai/grok-4.5
+  pricing:
+    input_tokens:
+      no_cache: 2
+      cache_read: 0.5
+    output_tokens:
+      text: 6
+- id: qwen/qwen3.8-max
+  provider_model_id: alibaba/qwen3.8-max
+  pricing:
+    input_tokens:
+      no_cache: 2
+      cache_read: 0.25
+      cache_write: 2.5
+    output_tokens:
+      text: 6
+- id: x-ai/grok-4.6
+  provider_model_id: spacexai/grok-4.6
+  pricing:
+    input_tokens:
+      no_cache: 2
+      cache_read: 0.5
+    output_tokens:
+      text: 6
+- id: qwen/qwen3.8-2.4t-a95b
+  provider_model_id: alibaba/qwen3.8-2.4t-a95b
+  pricing:
+    input_tokens:
+      no_cache: 2
+      cache_read: 0.17
+      cache_write: 2.5
+    output_tokens:
+      text: 6
+- id: qwen/qwen3.8-27b
+  provider_model_id: alibaba/qwen3.8-27b
+  pricing:
+    input_tokens:
+      no_cache: 0.5
+      cache_read: 0.05
+      cache_write: 0.625
+    output_tokens:
+      text: 3
+- id: z-ai/glm-5.3
+  provider_model_id: zai/glm-5.3
+  pricing:
+    input_tokens:
+      no_cache: 1.4
+      cache_read: 0.26
+    output_tokens:
+      text: 4.4
+- id: z-ai/glm-5.3-flash
+  provider_model_id: zai/glm-5.3-flash
+  pricing:
+    input_tokens:
+      no_cache: 0.075
+      cache_read: 0.015
+    output_tokens:
+      text: 0.25
+- id: qwen/qwen3.8-flash
+  provider_model_id: alibaba/qwen3.8-flash
+  pricing:
+    input_tokens:
+      no_cache: 0.15
+      cache_read: 0.016
+      cache_write: 0.2
+    output_tokens:
+      text: 0.47
+- id: z-ai/glm-5.3-flashx
+  provider_model_id: zai/glm-5.3-flashx
+  pricing:
+    input_tokens:
+      no_cache: 0.37
+      cache_read: 0.075
+      cache_write: 0
+    output_tokens:
+      text: 1.25
+- id: x-ai/grok-4.7
+  provider_model_id: spacexai/grok-4.7
+  pricing:
+    input_tokens:
+      no_cache: 2
+      cache_read: 0.5
+    output_tokens:
+      text: 6
 status: staging
