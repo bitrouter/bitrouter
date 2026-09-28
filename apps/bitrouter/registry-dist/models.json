@@ -173,6 +173,21 @@
           },
           "provider": "openrouter",
           "provider_model_id": "anthropic/claude-fable-5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.0,
+              "cache_write": 12.5,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 50.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "anthropic/claude-fable-5"
         }
       ],
       "release_date": "2026-06-09"
@@ -309,6 +324,21 @@
           },
           "provider": "openrouter",
           "provider_model_id": "anthropic/claude-fable-5.1"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 12.5,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 50.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "anthropic/claude-fable-5.1"
         }
       ],
       "release_date": "2026-09-01"
@@ -439,6 +469,21 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "anthropic/claude-haiku-4.5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "provider": "vercel",
           "provider_model_id": "anthropic/claude-haiku-4.5"
         }
       ],
@@ -611,6 +656,21 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "anthropic/claude-opus-4.6"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "vercel",
           "provider_model_id": "anthropic/claude-opus-4.6"
         }
       ],
@@ -807,6 +867,20 @@
           },
           "provider": "openrouter",
           "provider_model_id": "anthropic/claude-opus-4.7"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.45,
+              "no_cache": 4.5
+            },
+            "output_tokens": {
+              "text": 22.5
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "anthropic/claude-opus-4.7"
         }
       ],
       "release_date": "2026-04-16"
@@ -1002,6 +1076,21 @@
           },
           "provider": "openrouter",
           "provider_model_id": "anthropic/claude-opus-4.8"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "anthropic/claude-opus-4.8"
         }
       ],
       "release_date": "2026-05-28"
@@ -1194,6 +1283,21 @@
           },
           "provider": "openrouter",
           "provider_model_id": "anthropic/claude-opus-5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 25.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "anthropic/claude-opus-5"
         }
       ],
       "release_date": "2026-07-24"
@@ -1329,6 +1433,21 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "anthropic/claude-opus-5.5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "no_cache": 4.0
+            },
+            "output_tokens": {
+              "text": 20.0
+            }
+          },
+          "provider": "vercel",
           "provider_model_id": "anthropic/claude-opus-5.5"
         }
       ],
@@ -1525,6 +1644,21 @@
           },
           "provider": "openrouter",
           "provider_model_id": "anthropic/claude-sonnet-4.6"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "cache_write": 3.75,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "anthropic/claude-sonnet-4.6"
         }
       ],
       "release_date": "2026-02-17"
@@ -1708,6 +1842,21 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "anthropic/claude-sonnet-5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "vercel",
           "provider_model_id": "anthropic/claude-sonnet-5"
         }
       ],
@@ -1962,6 +2111,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.105,
+              "no_cache": 0.21
+            },
+            "output_tokens": {
+              "text": 0.315
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "deepseek/deepseek-v3.2"
         }
       ],
       "release_date": "2025-01-01"
@@ -2267,6 +2430,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.02,
+              "no_cache": 0.09
+            },
+            "output_tokens": {
+              "text": 0.18
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "deepseek/deepseek-v4-flash"
         }
       ],
       "release_date": "2026-04-24"
@@ -2553,6 +2730,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "deepseek/deepseek-v4-flash-0731"
         }
       ],
       "release_date": "2026-07-31"
@@ -2863,6 +3054,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003625,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "deepseek/deepseek-v4-pro"
         }
       ],
       "release_date": "2026-04-24"
@@ -3019,6 +3224,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003625,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "deepseek/deepseek-v4-pro-0813"
         }
       ],
       "release_date": "2026-08-13"
@@ -3124,6 +3343,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.13,
+              "no_cache": 0.65
+            },
+            "output_tokens": {
+              "text": 1.45
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "deepseek/deepseek-v4.1-flash"
         }
       ],
       "release_date": "2026-09-10"
@@ -3244,6 +3477,20 @@
           "provider_model_id": "google/gemini-3.5-flash"
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 9.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "google/gemini-3.5-flash"
+        },
+        {
           "api_protocol": "google",
           "pricing": {
             "input_tokens": {
@@ -3360,6 +3607,20 @@
           "provider_model_id": "google/gemini-3.6-flash"
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 1.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "google/gemini-3.6-flash"
+        },
+        {
           "api_protocol": "google",
           "pricing": {
             "input_tokens": {
@@ -3468,6 +3729,20 @@
           "provider_model_id": "google/gemini-3.7-flash"
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "no_cache": 0.75
+            },
+            "output_tokens": {
+              "text": 3.75
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "google/gemini-3.7-flash"
+        },
+        {
           "api_protocol": "google",
           "pricing": {
             "input_tokens": {
@@ -3573,6 +3848,20 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "google/gemini-3.8-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "no_cache": 0.75
+            },
+            "output_tokens": {
+              "text": 3.75
+            }
+          },
+          "provider": "vercel",
           "provider_model_id": "google/gemini-3.8-flash"
         },
         {
@@ -3794,6 +4083,21 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.045,
+              "cache_write": 0.28125,
+              "no_cache": 0.225
+            },
+            "output_tokens": {
+              "text": 0.9
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "minimax/minimax-m2.7"
         }
       ],
       "release_date": "2026-03-18"
@@ -4003,6 +4307,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "minimax/minimax-m3"
         }
       ],
       "release_date": "2026-06-01"
@@ -4365,6 +4683,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.12,
+              "no_cache": 0.7125
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "moonshotai/kimi-k2.6"
         }
       ],
       "release_date": "2026-05-13"
@@ -4558,6 +4890,20 @@
           },
           "provider": "siliconflow",
           "provider_model_id": "moonshotai/Kimi-K2.7-Code"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1425,
+              "no_cache": 0.7125
+            },
+            "output_tokens": {
+              "text": 3.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "moonshotai/kimi-k2.7-code"
         }
       ],
       "release_date": "2026-06-12"
@@ -4795,6 +5141,20 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3.0
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "moonshotai/kimi-k3"
         }
       ],
       "release_date": "2026-07-16"
@@ -4978,6 +5338,20 @@
           },
           "provider": "openrouter",
           "provider_model_id": "openai/gpt-5.4"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "openai/gpt-5.4"
         }
       ],
       "release_date": "2026-03-05"
@@ -5140,6 +5514,20 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "openai/gpt-5.4-mini"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "no_cache": 0.75
+            },
+            "output_tokens": {
+              "text": 4.5
+            }
+          },
+          "provider": "vercel",
           "provider_model_id": "openai/gpt-5.4-mini"
         }
       ],
@@ -5342,6 +5730,20 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "openai/gpt-5.5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "vercel",
           "provider_model_id": "openai/gpt-5.5"
         }
       ],
@@ -5550,6 +5952,21 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "openai/gpt-5.6-luna"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "vercel",
           "provider_model_id": "openai/gpt-5.6-luna"
         }
       ],
@@ -5791,6 +6208,21 @@
           },
           "provider": "openrouter",
           "provider_model_id": "openai/gpt-5.6-sol"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5.0
+            },
+            "output_tokens": {
+              "text": 30.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "openai/gpt-5.6-sol"
         }
       ],
       "release_date": "2026-06-25"
@@ -6031,6 +6463,21 @@
           },
           "provider": "openrouter",
           "provider_model_id": "openai/gpt-5.6-terra"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 15.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "openai/gpt-5.6-terra"
         }
       ],
       "release_date": "2026-06-25"
@@ -6223,6 +6670,21 @@
           },
           "provider": "openrouter",
           "provider_model_id": "openai/gpt-6-astra"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.0,
+              "cache_write": 12.5,
+              "no_cache": 10.0
+            },
+            "output_tokens": {
+              "text": 50.0
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "openai/gpt-6-astra"
         }
       ],
       "release_date": "2026-09-04"
@@ -6382,6 +6844,21 @@
           },
           "provider": "openrouter",
           "provider_model_id": "openai/gpt-6-luna"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "openai/gpt-6-luna"
         }
       ],
       "release_date": "2026-09-22"
@@ -6535,6 +7012,21 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "openai/gpt-6-sol"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "vercel",
           "provider_model_id": "openai/gpt-6-sol"
         }
       ],
@@ -8972,6 +9464,20 @@
           "provider_model_id": "xiaomi/mimo-v2.5"
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "xiaomi/mimo-v2.5"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses",
@@ -9098,6 +9604,20 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "xiaomi/mimo-v2.5-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider": "vercel",
           "provider_model_id": "xiaomi/mimo-v2.5-pro"
         },
         {
@@ -9229,6 +9749,20 @@
           "provider_model_id": "xiaomi/mimo-v2.6-flash"
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "xiaomi/mimo-v2.6-flash"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses",
@@ -9341,6 +9875,20 @@
           "provider_model_id": "xiaomi/mimo-v2.6-pro"
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            }
+          },
+          "provider": "vercel",
+          "provider_model_id": "xiaomi/mimo-v2.6-pro"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses",
@@ -9445,6 +9993,20 @@
             }
           },
           "provider": "openrouter",
+          "provider_model_id": "xiaomi/mimo-v2.6-pro-ultraspeed"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.036,
+              "no_cache": 4.35
+            },
+            "output_tokens": {
+              "text": 8.7
+            }
+          },
+          "provider": "vercel",
           "provider_model_id": "xiaomi/mimo-v2.6-pro-ultraspeed"
         },
         {
