@@ -1546,10 +1546,11 @@ struct ChatStreamDecoder {
 impl StreamDecoder for ChatStreamDecoder {
     fn decode(&mut self, event: &SseEvent) -> Result<Vec<StreamPart>> {
         let data = event.data.trim();
-        if data.is_empty() {
+        let named_error = event.event.as_deref() == Some("error");
+        if data.is_empty() && !named_error {
             return Ok(Vec::new());
         }
-        if data == "[DONE]" {
+        if data == "[DONE]" && !named_error {
             self.done = true;
             return Ok(self
                 .pending_finish
@@ -1559,6 +1560,12 @@ impl StreamDecoder for ChatStreamDecoder {
         }
         let chunk: serde_json::Value = match serde_json::from_str(data) {
             Ok(v) => v,
+            Err(_) if named_error => {
+                return Err(BitrouterError::Upstream {
+                    status: 502,
+                    message: "chat completions stream error".to_string(),
+                });
+            }
             // A non-JSON keepalive / comment line — ignore, do not error.
             Err(_) => return Ok(Vec::new()),
         };
@@ -1569,7 +1576,7 @@ impl StreamDecoder for ChatStreamDecoder {
         // fail the committed stream. A named `error` event may carry either an
         // `error` object or the error fields directly.
         let error = chunk.get("error").filter(|value| !value.is_null());
-        if error.is_some() || event.event.as_deref() == Some("error") {
+        if error.is_some() || named_error {
             let status = error
                 .and_then(|value| value.get("status").or_else(|| value.get("statusCode")))
                 .or_else(|| chunk.get("status").or_else(|| chunk.get("statusCode")))
@@ -2063,6 +2070,19 @@ mod stream_error_tests {
         assert!(matches!(
             error,
             Err(BitrouterError::Upstream { status: 401, .. })
+        ));
+    }
+
+    #[test]
+    fn named_error_frame_with_plain_text_is_not_ignored() {
+        let mut decoder = ChatStreamDecoder::default();
+        let error = decoder.decode(&SseEvent {
+            event: Some("error".to_string()),
+            data: "upstream connection failed".to_string(),
+        });
+        assert!(matches!(
+            error,
+            Err(BitrouterError::Upstream { status: 502, .. })
         ));
     }
 }
