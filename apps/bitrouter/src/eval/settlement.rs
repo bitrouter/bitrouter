@@ -1093,6 +1093,7 @@ mod tests {
             reasoning_effort: None,
             provider_id: "provider".into(),
             account_label: None,
+            response_id: None,
             prompt_tokens: 10,
             completion_tokens: 5,
             reasoning_tokens: 0,
