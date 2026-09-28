@@ -640,7 +640,8 @@ fn stream_transport_error(is_timeout: bool, display: impl std::fmt::Display) -> 
 /// remain a sanitized 502 at the BitRouter boundary.
 fn classify_stream_decoder_error(error: BitrouterError) -> BitrouterError {
     match error {
-        error @ BitrouterError::UpstreamPolicyViolation { .. } => error,
+        error @ (BitrouterError::UpstreamPolicyViolation { .. }
+        | BitrouterError::Upstream { .. }) => error,
         error => BitrouterError::UpstreamInvalidResponse {
             message: error.to_string(),
         },
@@ -1776,6 +1777,19 @@ mod error_classification_tests {
         assert_eq!(error.status(), 403);
         assert_eq!(error.error_code(), "upstream_policy_violation");
         assert_eq!(error.public_message(), "upstream content policy violation");
+    }
+
+    #[test]
+    fn stream_decoder_preserves_explicit_upstream_status() {
+        let error = classify_stream_decoder_error(BitrouterError::Upstream {
+            status: 401,
+            message: "chat completions stream error".to_string(),
+        });
+
+        assert!(matches!(
+            error,
+            BitrouterError::Upstream { status: 401, .. }
+        ));
     }
 
     #[test]
