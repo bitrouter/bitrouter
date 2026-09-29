@@ -94,6 +94,7 @@
   open_weights: false
   family: claude-sonnet
 - id: anthropic/claude-sonnet-4.6
+  deprecation_date: 2026-10-29
   name: 'Anthropic: Claude Sonnet 4.6'
   description: Anthropic's Claude Sonnet 4.6.
   input_modalities:
@@ -129,3 +130,14 @@
   max_input_tokens: 1000000
   max_output_tokens: 128000
   release_date: 2026-09-22
+- id: anthropic/claude-sonnet-5.5
+  name: 'Anthropic: Claude Sonnet 5.5'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 128000
+  release_date: 2026-09-28
