@@ -217,6 +217,14 @@ models:
         cache_read: 0.283
       output_tokens:
         text: 14.133
+  - id: qwen/qwen3.8-omni-flash
+    provider_model_id: qwen3.8-omni-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.113
+        cache_read: 0.014
+      output_tokens:
+        text: 0.382
 status: active
 weight: 1
 submitted_at: 2026-07-06
