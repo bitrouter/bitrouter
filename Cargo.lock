@@ -732,6 +732,7 @@ dependencies = [
  "futures",
  "globset",
  "ignore",
+ "process-wrap",
  "regex",
  "rustix 1.1.4",
  "serde",

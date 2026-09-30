@@ -32,6 +32,9 @@ use crate::language_model::types::{
 /// `providerMetadata.google.thoughtSignature`.
 /// <https://ai.google.dev/gemini-api/docs/thinking>
 const GOOGLE_THOUGHT_SIGNATURE: &str = "thoughtSignature";
+// Preserve the provider's optional ID independently of the canonical ID used
+// to correlate calls and results internally, including when routing protocols.
+const GOOGLE_FUNCTION_CALL_ID: &str = "functionCallId";
 /// The metadata key, within the `google` namespace, carrying the response's
 /// `modelVersion` (the exact model build that served the response) at result
 /// level — it has no dedicated canonical field.
@@ -1319,6 +1322,15 @@ impl Transport for GenerateContentTransport {
     }
 }
 
+fn google_function_call_id<'a>(id: &'a str, metadata: &'a ProviderMetadata) -> Option<&'a str> {
+    match provider_namespace(metadata, PROVIDER_ID_GOOGLE)
+        .and_then(|namespace| namespace.get(GOOGLE_FUNCTION_CALL_ID))
+    {
+        Some(value) => value.as_str(),
+        None => (!id.is_empty()).then_some(id),
+    }
+}
+
 fn render_part(c: &Content) -> Option<serde_json::Value> {
     match c {
         Content::Text { text, .. } => Some(serde_json::json!({ "text": text })),
@@ -1332,6 +1344,7 @@ fn render_part(c: &Content) -> Option<serde_json::Value> {
             Some(part)
         }
         Content::ToolCall {
+            id,
             name,
             arguments,
             provider_metadata,
@@ -1340,6 +1353,9 @@ fn render_part(c: &Content) -> Option<serde_json::Value> {
             let args: serde_json::Value =
                 serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
             let mut part = serde_json::json!({ "functionCall": { "name": name, "args": args } });
+            if let Some(id) = google_function_call_id(id, provider_metadata) {
+                part["functionCall"]["id"] = serde_json::json!(id);
+            }
             // A `functionCall` continuing a reasoning chain carries a
             // `thoughtSignature`; restore it when it round-tripped.
             apply_thought_signature(&mut part, provider_metadata);
@@ -1363,6 +1379,7 @@ fn render_part(c: &Content) -> Option<serde_json::Value> {
             call_id,
             tool_name,
             output,
+            provider_metadata,
             ..
         } => {
             let name = tool_name.as_deref().unwrap_or(call_id);
@@ -1379,8 +1396,10 @@ fn render_part(c: &Content) -> Option<serde_json::Value> {
             };
             let mut fr = serde_json::json!({ "name": name, "response": response });
             // Carry the call id only when it adds information beyond the name.
-            if call_id != name && !call_id.is_empty() {
-                fr["id"] = serde_json::Value::String(call_id.clone());
+            if let Some(id) = google_function_call_id(call_id, provider_metadata)
+                && id != name
+            {
+                fr["id"] = serde_json::json!(id);
             }
             Some(serde_json::json!({ "functionResponse": fr }))
         }
@@ -1556,13 +1575,27 @@ impl StreamDecoder for GenerateContentStreamDecoder {
                             id,
                             name,
                             arguments,
+                            mut provider_metadata,
                             ..
-                        } => parts.push(StreamPart::ToolCallDelta {
-                            id,
-                            name: Some(name),
-                            arguments,
-                            provider_metadata: Default::default(),
-                        }),
+                        } => {
+                            // Gemini emits complete functionCall frames and may
+                            // omit their IDs. Consumers can assign internal IDs
+                            // while preserving that absence on provider replay.
+                            if id.is_empty() {
+                                set_provider_metadata(
+                                    &mut provider_metadata,
+                                    PROVIDER_ID_GOOGLE,
+                                    GOOGLE_FUNCTION_CALL_ID,
+                                    serde_json::Value::Null,
+                                );
+                            }
+                            parts.push(StreamPart::ToolCallDelta {
+                                id,
+                                name: Some(name),
+                                arguments,
+                                provider_metadata,
+                            });
+                        }
                         Content::ToolResult { .. } => {}
                         // A generated file (e.g. an image) becomes one whole
                         // `StreamPart::File`, matching the AI SDK V3 stream `file`

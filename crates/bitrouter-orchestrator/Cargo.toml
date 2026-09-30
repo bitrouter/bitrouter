@@ -24,3 +24,6 @@ uuid.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process"] }
+
+[target.'cfg(windows)'.dependencies]
+process-wrap = { workspace = true, features = ["tokio1", "job-object", "kill-on-drop"] }

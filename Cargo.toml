@@ -41,6 +41,7 @@ bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-al
 # Safe syscall wrappers. Used by the SDK's `acp` runtime for `killpg(2)`;
 # `libc` would need an `unsafe` block, and `bitrouter-sdk` forbids unsafe code.
 rustix = { version = "1", default-features = false }
+process-wrap = { version = "10", default-features = false }
 
 # ACP SDK crates. Development pins one reviewed Git revision, whose manifests
 # consume schema 1.7.0. The compatible major-version requirement is retained

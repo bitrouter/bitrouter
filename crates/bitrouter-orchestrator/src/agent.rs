@@ -7,8 +7,8 @@ use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::language_model::{
-    Content, FinishReason, GenerateResult, Message, PipelineResponse, Prompt, Role, StreamPart,
-    ToolResultOutput, Usage,
+    Content, FinishReason, GenerateResult, Message, PipelineResponse, Prompt, ProviderMetadata,
+    Role, StreamPart, ToolResultOutput, Usage,
 };
 use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
@@ -137,6 +137,7 @@ struct PendingCall {
     id: String,
     name: String,
     arguments: String,
+    provider_metadata: ProviderMetadata,
 }
 
 #[derive(Default)]
@@ -207,11 +208,22 @@ impl StreamCollector {
                 }
             }
             StreamPart::ToolCallDelta {
-                id,
+                mut id,
                 name,
                 arguments,
                 provider_metadata,
             } => {
+                // Gemini sends complete calls with optional provider IDs.
+                // Assign each ID-less frame its own identity before collecting
+                // it; other protocols still require provider correlation IDs.
+                if id.is_empty()
+                    && provider_metadata
+                        .get("google")
+                        .and_then(|metadata| metadata.get("functionCallId"))
+                        == Some(&serde_json::Value::Null)
+                {
+                    id = uuid::Uuid::new_v4().to_string();
+                }
                 self.content_bytes = self.content_bytes.saturating_add(arguments.len());
                 let index = match self.tool_indices.get(&id).copied() {
                     Some(index) => index,
@@ -472,12 +484,14 @@ impl Agent {
                         id,
                         name,
                         arguments,
+                        provider_metadata,
                         provider_executed: false,
                         ..
                     } => Some(PendingCall {
                         id: id.clone(),
                         name: name.clone(),
                         arguments: arguments.clone(),
+                        provider_metadata: provider_metadata.clone(),
                     }),
                     _ => None,
                 })
@@ -623,7 +637,7 @@ impl Agent {
                         tool_name: Some(call.name.clone()),
                         output: output.clone(),
                         dynamic: false,
-                        provider_metadata: Default::default(),
+                        provider_metadata: call.provider_metadata,
                     }],
                 };
                 report.messages.push(tool_message);
@@ -830,6 +844,100 @@ mod tests {
         configure(&mut config);
         Agent::new(app, CallerContext::local(), workspace.path(), config)
             .map_err(std::io::Error::other)
+    }
+
+    #[tokio::test]
+    async fn gemini_optional_ids_execute_separately_and_replay_provider_ids()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_sdk::language_model::protocol::{
+            OutboundAdapter, SseEvent, generate_content::GenerateContentAdapter,
+        };
+
+        let workspace = TempDir::new()?;
+        for name in ["first.txt", "second.txt", "third.txt"] {
+            std::fs::write(workspace.path().join(name), name)?;
+        }
+        let adapter = GenerateContentAdapter;
+        let wire = serde_json::json!({
+            "candidates": [{"content": {"role":"model", "parts":[
+                {"functionCall":{"name":"read", "args":{"path":"first.txt"}}, "thoughtSignature":"signature"},
+                {"functionCall":{"name":"read", "args":{"path":"second.txt"}}},
+                {"functionCall":{"id":"provider-3", "name":"read", "args":{"path":"third.txt"}}}
+            ]}, "finishReason":"STOP"}]
+        });
+        let mut decoder = adapter.stream_decoder();
+        let mut parts = decoder.decode(&SseEvent {
+            event: None,
+            data: wire.to_string(),
+        })?;
+        parts.extend(decoder.finish()?);
+        let table = StaticRoutingTable::new();
+        table.insert("fixture-model", vec![target()]);
+        let app = App::builder()
+            .language_model(|builder| {
+                builder
+                    .routing_table(Arc::new(table))
+                    .executor(Arc::new(MockExecutor::new(vec![
+                        MockResponse::Stream(parts),
+                        mock_stream(turn(vec![text("inspected")])),
+                    ])));
+            })
+            .build()?;
+        let agent = Agent::new(
+            Arc::new(app),
+            CallerContext::local(),
+            workspace.path(),
+            AgentConfig::fixed("fixture-model", None).read_only(),
+        )?;
+        let report = agent.run("inspect", CancellationToken::new(), None).await;
+        assert_eq!(report.status, RunStatus::Completed);
+        let mut ids = HashSet::new();
+        let outputs: Vec<_> = report
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|content| match content {
+                Content::ToolResult {
+                    call_id, output, ..
+                } => {
+                    assert!(!call_id.is_empty());
+                    assert!(ids.insert(call_id.clone()));
+                    Some(output.to_provider_string())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            outputs,
+            ["L1: first.txt\n", "L1: second.txt\n", "L1: third.txt\n"]
+        );
+        assert!(ids.contains("provider-3"));
+        let prompt = context::build(
+            "fixture",
+            None,
+            "inspect",
+            &report.messages,
+            WorkspaceTools::declarations(ToolMode::ReadOnly),
+            512 * 1024,
+        )?;
+        let replay = adapter.render_request(&prompt)?;
+        let calls = &replay["contents"][1]["parts"];
+        assert!(calls[0]["functionCall"].get("id").is_none());
+        assert!(calls[1]["functionCall"].get("id").is_none());
+        assert_eq!(calls[0]["thoughtSignature"], "signature");
+        assert_eq!(calls[2]["functionCall"]["id"], "provider-3");
+        let results: Vec<_> = replay["contents"]
+            .as_array()
+            .ok_or("missing contents")?
+            .iter()
+            .flat_map(|content| content["parts"].as_array().into_iter().flatten())
+            .filter_map(|part| part.get("functionResponse"))
+            .collect();
+        assert_eq!(results.len(), 3);
+        assert!(results[0].get("id").is_none());
+        assert!(results[1].get("id").is_none());
+        assert_eq!(results[2]["id"], "provider-3");
+        Ok(())
     }
 
     #[tokio::test]

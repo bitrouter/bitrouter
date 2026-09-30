@@ -238,7 +238,9 @@ impl WorkspaceTools {
             name: name.into(),
             description: Some(description.into()),
             parameters,
-            strict: Some(true),
+            // These tools intentionally accept omitted optional arguments.
+            // OpenAI strict mode requires every property to be required.
+            strict: Some(false),
             provider_metadata: Default::default(),
         })
         .collect()
@@ -695,7 +697,7 @@ impl WorkspaceTools {
             .kill_on_drop(true);
         #[cfg(unix)]
         command.process_group(0);
-        let mut child = match command.spawn() {
+        let mut child = match spawn_shell(command) {
             Ok(child) => child,
             Err(error) if kind == "powershell" && error.kind() == std::io::ErrorKind::NotFound => {
                 let mut fallback = Command::new("powershell.exe");
@@ -713,7 +715,7 @@ impl WorkspaceTools {
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .kill_on_drop(true);
-                fallback.spawn().map_err(|error| error.to_string())?
+                spawn_shell(fallback).map_err(|error| error.to_string())?
             }
             Err(error) if kind == "bash" && error.kind() == std::io::ErrorKind::NotFound => {
                 let mut fallback = Command::new("sh");
@@ -727,13 +729,19 @@ impl WorkspaceTools {
                     .kill_on_drop(true);
                 #[cfg(unix)]
                 fallback.process_group(0);
-                fallback.spawn().map_err(|error| error.to_string())?
+                spawn_shell(fallback).map_err(|error| error.to_string())?
             }
             Err(error) => return Err(error.to_string()),
         };
         let child_id = child.id();
+        #[cfg(not(windows))]
         let stdout = child.stdout.take().ok_or("stdout pipe unavailable")?;
+        #[cfg(windows)]
+        let stdout = child.stdout().take().ok_or("stdout pipe unavailable")?;
+        #[cfg(not(windows))]
         let stderr = child.stderr.take().ok_or("stderr pipe unavailable")?;
+        #[cfg(windows)]
+        let stderr = child.stderr().take().ok_or("stderr pipe unavailable")?;
         let stdout_task = tokio::spawn(read_bounded(
             stdout,
             tool_id.to_owned(),
@@ -748,23 +756,24 @@ impl WorkspaceTools {
         ));
         let mut timed_out = false;
         let status = tokio::select! {
-            result = child.wait() => result.map_err(|error| error.to_string())?,
+            result = wait_shell(&mut child) => result.map_err(|error| error.to_string())?,
             _ = cancel.cancelled() => {
-                kill_process_group(child_id);
-                let _ = child.kill().await;
+                let cleanup = kill_shell(&mut child).await;
                 stdout_task.abort();
                 stderr_task.abort();
+                cleanup.map_err(|error| format!("command cleanup failed: {error}"))?;
                 return Err("command cancelled; effects may have occurred".into());
             }
             _ = tokio::time::sleep(Duration::from_secs(timeout)) => {
                 timed_out = true;
-                kill_process_group(child_id);
-                let _ = child.kill().await;
-                child.wait().await.map_err(|error| error.to_string())?
+                kill_shell(&mut child).await.map_err(|error| error.to_string())?;
+                wait_shell(&mut child).await.map_err(|error| error.to_string())?
             }
         };
         // A shell may exit while a background child still holds a pipe open.
-        kill_process_group(child_id);
+        stop_shell_descendants(&mut child, child_id)
+            .await
+            .map_err(|error| error.to_string())?;
         let (stdout, stdout_truncated) = stdout_task
             .await
             .map_err(|error| error.to_string())?
@@ -934,6 +943,69 @@ fn validate_relative(path: &str) -> Result<PathBuf, String> {
     Ok(path.to_path_buf())
 }
 
+#[cfg(windows)]
+type ShellChild = Box<dyn process_wrap::tokio::ChildWrapper>;
+#[cfg(not(windows))]
+type ShellChild = tokio::process::Child;
+
+fn spawn_shell(command: Command) -> std::io::Result<ShellChild> {
+    #[cfg(windows)]
+    {
+        use process_wrap::tokio::{CommandWrap, JobObject, KillOnDrop};
+        // Suspend during assignment so even immediate descendants belong to
+        // the job; KillOnDrop also covers errors and dropped execution futures.
+        CommandWrap::from(command)
+            .wrap(KillOnDrop)
+            .wrap(JobObject)
+            .spawn()
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = command;
+        command.spawn()
+    }
+}
+
+async fn wait_shell(child: &mut ShellChild) -> std::io::Result<std::process::ExitStatus> {
+    #[cfg(windows)]
+    {
+        // Wait only for the shell. JobObject's wait includes descendants,
+        // which must be terminated before draining inherited output pipes.
+        child.inner_mut().wait().await
+    }
+    #[cfg(not(windows))]
+    child.wait().await
+}
+
+async fn kill_shell(child: &mut ShellChild) -> std::io::Result<()> {
+    let child_id = child.id();
+    stop_shell_descendants(child, child_id).await?;
+    #[cfg(windows)]
+    {
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    child.kill().await
+}
+
+async fn stop_shell_descendants(
+    _child: &mut ShellChild,
+    _child_id: Option<u32>,
+) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        _child.start_kill()?;
+        // The task is terminal only after every job process has exited.
+        _child.wait().await?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        kill_process_group(_child_id);
+        Ok(())
+    }
+}
+
 #[cfg(unix)]
 fn kill_process_group(pid: Option<u32>) {
     if let Some(pid) = pid
@@ -944,7 +1016,7 @@ fn kill_process_group(pid: Option<u32>) {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn kill_process_group(_pid: Option<u32>) {}
 
 async fn read_bounded(
@@ -993,6 +1065,44 @@ mod tests {
             return Err(value.to_string());
         }
         Ok(output)
+    }
+
+    #[test]
+    fn openai_requests_preserve_optional_tool_arguments() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use bitrouter_sdk::language_model::protocol::{
+            OutboundAdapter, chat_completions::ChatCompletionsAdapter, responses::ResponsesAdapter,
+        };
+
+        for mode in [ToolMode::Coding, ToolMode::ReadOnly] {
+            let prompt = crate::context::build(
+                "fixture",
+                None,
+                "inspect",
+                &[],
+                WorkspaceTools::declarations(mode),
+                512 * 1024,
+            )?;
+            for adapter in [
+                &ChatCompletionsAdapter as &dyn OutboundAdapter,
+                &ResponsesAdapter,
+            ] {
+                let request = adapter.render_request(&prompt)?;
+                for tool in request["tools"].as_array().ok_or("missing tools")? {
+                    let function = tool.get("function").unwrap_or(tool);
+                    assert_eq!(function["strict"], false);
+                    let name = function["name"].as_str().ok_or("missing tool name")?;
+                    if name == "read" {
+                        assert_eq!(
+                            function["parameters"]["required"],
+                            serde_json::json!(["path"])
+                        );
+                        assert!(function["parameters"]["properties"].get("offset").is_some());
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -1203,5 +1313,114 @@ mod tests {
             matches!(result, ToolResultOutput::Json { value } if value["stdout"] == "firstsecond")
         );
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_exit_stops_background_descendants() -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = TempDir::new()?;
+        let tools = WorkspaceTools::new(workspace.path())?;
+        let result = tokio::time::timeout(Duration::from_secs(5), tools.execute("bash",
+            r#"{"command":"while true; do echo tick >>ticks.txt; sleep 0.05; done & while [ ! -s ticks.txt ]; do sleep 0.01; done"}"#,
+            &CancellationToken::new(), "shell", None)).await?;
+        success(result)?;
+        let ticks = std::fs::read(workspace.path().join("ticks.txt"))?;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(ticks, std::fs::read(workspace.path().join("ticks.txt"))?);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    async fn assert_windows_descendant_cleanup(
+        action: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = TempDir::new()?;
+        std::fs::write(
+            workspace.path().join("child.ps1"),
+            "Add-Content ticks.txt tick\n[Console]::WriteLine('ready')\nwhile ($true) { Add-Content ticks.txt tick; Start-Sleep -Milliseconds 50 }",
+        )?;
+        let tools = WorkspaceTools::new(workspace.path())?;
+        let cancel = CancellationToken::new();
+        let task_cancel = cancel.clone();
+        let (sender, mut receiver) = mpsc::channel(64);
+        let command = if action == "exit" {
+            // The shell exits normally while its background child owns a file.
+            "Start-Process powershell.exe -ArgumentList '-NoProfile -NonInteractive -File child.ps1' -NoNewWindow; while (!(Test-Path ticks.txt)) { Start-Sleep -Milliseconds 20 }; [Console]::WriteLine('ready')"
+        } else {
+            "& powershell.exe -NoProfile -NonInteractive -File child.ps1"
+        };
+        let timeout = if action == "timeout" { 3 } else { 30 };
+        let task = tokio::spawn(async move {
+            tools
+                .execute(
+                    "powershell",
+                    &serde_json::json!({"command":command, "timeout":timeout}).to_string(),
+                    &task_cancel,
+                    "shell",
+                    Some(&sender),
+                )
+                .await
+        });
+        let ready = tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(event) = receiver.recv().await {
+                if matches!(event, RunEvent::ToolOutputDelta {text, ..} if text.contains("ready")) {
+                    return Ok::<(), String>(());
+                }
+            }
+            Err("shell exited before descendant started".to_string())
+        })
+        .await;
+        if !matches!(ready, Ok(Ok(()))) {
+            cancel.cancel();
+            task.await?;
+            return Err("descendant did not start".into());
+        }
+        match action {
+            "cancel" => cancel.cancel(),
+            "drop" => task.abort(),
+            _ => {}
+        }
+        let result = tokio::time::timeout(Duration::from_secs(10), task).await?;
+        match action {
+            "cancel" => assert!(result?.is_error()),
+            "drop" => assert!(result.is_err_and(|error| error.is_cancelled())),
+            "timeout" => assert!(
+                matches!(success(result?)?, ToolResultOutput::Json {value} if value["timed_out"] == true)
+            ),
+            "exit" => {
+                success(result?)?;
+            }
+            _ => return Err("unknown cleanup action".into()),
+        }
+        let ticks = std::fs::read(workspace.path().join("ticks.txt"))?;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(ticks, std::fs::read(workspace.path().join("ticks.txt"))?);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn powershell_cancellation_stops_descendants() -> Result<(), Box<dyn std::error::Error>> {
+        assert_windows_descendant_cleanup("cancel").await
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn powershell_timeout_stops_descendants() -> Result<(), Box<dyn std::error::Error>> {
+        assert_windows_descendant_cleanup("timeout").await
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn powershell_exit_stops_background_descendants() -> Result<(), Box<dyn std::error::Error>>
+    {
+        assert_windows_descendant_cleanup("exit").await
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn dropped_powershell_future_stops_descendants() -> Result<(), Box<dyn std::error::Error>>
+    {
+        assert_windows_descendant_cleanup("drop").await
     }
 }
