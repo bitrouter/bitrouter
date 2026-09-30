@@ -1124,7 +1124,11 @@ fn apply_evaluation_provider_defaults(
     for descriptor in extensions.evaluation_provider_descriptors() {
         bitrouter_sdk::url_validator::validate_upstream_url(&descriptor.api_base)
             .with_context(|| format!("provider '{}' default API base", descriptor.provider_id))?;
-        let credential = env_lookup(&descriptor.credential_env).filter(|value| !value.is_empty());
+        let credential = config
+            .inherit_defaults
+            .then(|| env_lookup(&descriptor.credential_env))
+            .flatten()
+            .filter(|value| !value.is_empty());
         let provider = match config.providers.entry(descriptor.provider_id.clone()) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => {

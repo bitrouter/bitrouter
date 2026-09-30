@@ -297,6 +297,7 @@ database:
 providers:
   typesafe:
     api_base: {upstream}
+    api_key: ${{TYPESAFE_API_KEY}}
 "#
         ),
     )?;
@@ -500,7 +501,7 @@ async fn detached_bro_start_routes_typesafe_through_the_same_daemon() -> Result<
 }
 
 #[tokio::test]
-async fn default_bro_keeps_evaluate_endpoint_without_an_active_provider() -> Result<()> {
+async fn default_bro_respects_provider_opt_out_with_environment_credentials() -> Result<()> {
     let home = temporary_home()?;
     let (inference, control) = addresses()?;
     let config_path = home.path().join("bitrouter.yaml");
@@ -508,7 +509,7 @@ async fn default_bro_keeps_evaluate_endpoint_without_an_active_provider() -> Res
         "inherit_defaults: false\nregistry:\n  enabled: false\nserver:\n  listen: {inference}\n  control_socket: host.sock\n  skip_auth: true\ncontrol:\n  enabled: true\n  listen: {control}\ndatabase:\n  url: 'sqlite://host.db?mode=rwc'\n"
     );
     std::fs::write(&config_path, &inactive_config)?;
-    let mut host = Host::official(home.path())?;
+    let mut host = Host::official_with_key(home.path(), Some("undeclared-env-key"))?;
     host.ready(home.path(), inference, control).await?;
     let client = reqwest::Client::new();
     let response = client

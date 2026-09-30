@@ -14,10 +14,13 @@ use bitrouter_sdk::error::BitrouterError;
 use bitrouter_sdk::evaluation::EvaluationRequest;
 use bitrouter_sdk::evaluation::pipeline::EvaluationPipeline;
 use bitrouter_sdk::inference::InferenceOperation;
+use bitrouter_sdk::language_model::HookDecision;
 use bitrouter_sdk::language_model::routing::RoutingTable;
 
 use crate::assemble::Assembled;
 use crate::auth::AuthHook;
+use crate::metering::MeteringStore;
+use crate::policy::hook::PolicyHook;
 
 const BODY_LIMIT: usize = 16 * 1024 * 1024;
 const REQUEST_ID_HEADER: &str = "x-bitrouter-request-id";
@@ -27,6 +30,7 @@ struct EvaluationHttpState {
     pipeline: Option<Arc<EvaluationPipeline>>,
     routing_table: Arc<ConfigRoutingTable>,
     auth: Arc<AuthHook>,
+    policy: Arc<PolicyHook>,
     skip_auth: bool,
 }
 
@@ -38,6 +42,10 @@ pub fn router(_config: &Config, assembled: &Assembled) -> Router {
         pipeline: assembled.evaluation_pipeline.clone(),
         routing_table: Arc::clone(&assembled.routing_table),
         auth: Arc::new(AuthHook::new(assembled.db.clone())),
+        policy: Arc::new(PolicyHook::new(
+            assembled.policy_store.clone(),
+            Some(MeteringStore::new(assembled.db.clone())),
+        )),
         skip_auth: assembled.app.skip_auth(),
     };
     Router::new()
@@ -83,7 +91,7 @@ async fn evaluate(
     if let Err(error) = request.validate() {
         return error_response(&error, Some(&request_id));
     }
-    let caller = match state
+    let (caller, policy_id) = match state
         .auth
         .authenticate_evaluation(&headers, state.skip_auth)
         .await
@@ -91,6 +99,27 @@ async fn evaluate(
         Ok(caller) => caller,
         Err(error) => return error_response(&error, Some(&request_id)),
     };
+    let route = match state.routing_table.resolve_evaluation_route(&request.model) {
+        Ok(route) => route,
+        Err(error) => return error_response(&error, Some(&request_id)),
+    };
+    match state
+        .policy
+        .check_inference(
+            policy_id.as_deref(),
+            &caller,
+            &route.declaration.model,
+            std::iter::empty(),
+        )
+        .await
+    {
+        Ok(HookDecision::Allow) => {}
+        Ok(HookDecision::Deny(reason)) => {
+            let error = BitrouterError::from(reason);
+            return error_response(&error, Some(&request_id));
+        }
+        Err(error) => return error_response(&error, Some(&request_id)),
+    }
     let Some(pipeline) = &state.pipeline else {
         return error_response(
             &BitrouterError::NotFound("no evaluation provider is active".into()),
@@ -161,6 +190,11 @@ fn error_response(error: &BitrouterError, request_id: Option<&str>) -> Response 
             "missing or invalid API key",
         ),
         BitrouterError::Forbidden(_) => (StatusCode::FORBIDDEN, "forbidden", "access denied"),
+        BitrouterError::RateLimited { .. } => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_exceeded",
+            "rate limited",
+        ),
         BitrouterError::NotFound(_) => (
             StatusCode::NOT_FOUND,
             "evaluation_model_not_found",
@@ -236,7 +270,10 @@ fn error_response(error: &BitrouterError, request_id: Option<&str>) -> Response 
     if let Some(id) = request_id {
         attach_request_id(&mut response, id);
     }
-    if let BitrouterError::UpstreamRateLimited {
+    if let BitrouterError::RateLimited {
+        retry_after: Some(seconds),
+    }
+    | BitrouterError::UpstreamRateLimited {
         retry_after: Some(seconds),
         ..
     } = error

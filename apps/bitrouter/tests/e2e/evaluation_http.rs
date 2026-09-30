@@ -845,3 +845,194 @@ async fn typesafe_live_smoke() -> anyhow::Result<()> {
     anyhow::ensure!(!key.is_empty(), "TYPESAFE_API_KEY is empty");
     run_typesafe_smoke("https://api.typesafe.ai", key).await
 }
+
+async fn policy_server(
+    upstream: &MockServer,
+    policy: bitrouter::policy::policy::Policy,
+    priced: bool,
+) -> anyhow::Result<(TestServer, String, bitrouter::metering::MeteringStore)> {
+    use bitrouter::auth::{NewApiKey, db as auth_db, generate};
+    let mut config = fixture_config(&upstream.uri(), false)?;
+    if !priced {
+        config
+            .providers
+            .get_mut("typesafe")
+            .and_then(|provider| provider.models.first_mut())
+            .context("missing fixture model")?
+            .pricing = None;
+    }
+    let policy_dir = tempfile::tempdir()?;
+    std::fs::write(
+        policy_dir.path().join("restricted.yaml"),
+        serde_json::to_vec(&json!({
+            "id": policy.id, "allowed_models": policy.allowed_models,
+            "denied_models": policy.denied_models, "expires_at": policy.expires_at,
+            "max_spend_micro_usd": policy.max_spend_micro_usd,
+            "max_requests_per_minute": policy.max_requests_per_minute,
+        }))?,
+    )?;
+    config.plugins.insert(
+        "bitrouter-policy".into(),
+        json!({"policy_dir": policy_dir.path()}),
+    );
+    let mut extensions = ExtensionApi::new();
+    bitrouter_typesafe_provider::register(&mut extensions)?;
+    let assembled =
+        bitrouter::assemble::build_app_with_registered_extensions(&config, None, &extensions, None)
+            .await?;
+    let policy_id = policy.id.clone();
+    auth_db::upsert_user(&assembled.db, "policy-user").await?;
+    let key = generate();
+    auth_db::insert_api_key(
+        &assembled.db,
+        &NewApiKey {
+            id: "policy-key".into(),
+            key_hash: key.hash,
+            user_id: "policy-user".into(),
+            spend_limit_micro_usd: None,
+            rpm_limit: None,
+            policy_id: Some(policy_id),
+        },
+    )
+    .await?;
+    let metering = bitrouter::metering::MeteringStore::new(assembled.db.clone());
+    Ok((
+        TestServer::new(router_for_assembled(&config, &assembled)?),
+        key.secret,
+        metering,
+    ))
+}
+
+fn policy_request(selector: &str) -> Value {
+    json!({"model": selector, "state": "synthetic",
+        "questions": {"approve": {"type": "noul", "instructions": "approve?"}}})
+}
+
+#[tokio::test]
+async fn evaluation_policy_rejects_before_dispatch() -> anyhow::Result<()> {
+    use bitrouter::policy::policy::Policy;
+    let upstream = MockServer::start().await;
+    let policies = [
+        Policy {
+            allowed_models: Some(vec!["legacy/chat".into()]),
+            ..Policy::default()
+        },
+        Policy {
+            denied_models: vec!["typesafe/jev-1.13".into()],
+            ..Policy::default()
+        },
+        Policy {
+            expires_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
+            ..Policy::default()
+        },
+        Policy {
+            max_spend_micro_usd: Some(0),
+            ..Policy::default()
+        },
+        Policy {
+            max_requests_per_minute: Some(0),
+            ..Policy::default()
+        },
+    ];
+    for mut policy in policies {
+        policy.id = "restricted".into();
+        let status = if policy.max_requests_per_minute.is_some() {
+            429
+        } else {
+            403
+        };
+        let (server, key, _) = policy_server(&upstream, policy, true).await?;
+        for selector in ["typesafe/jev-1.13", "typesafe:typesafe/jev-1.13"] {
+            let response = server
+                .post("/v1/evaluate")
+                .add_header("authorization", format!("Bearer {key}"))
+                .json(&policy_request(selector))
+                .await;
+            assert_eq!(response.status_code().as_u16(), status);
+        }
+    }
+    assert!(
+        upstream
+            .received_requests()
+            .await
+            .context("missing capture")?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn evaluation_usage_enforces_shared_key_limits() -> anyhow::Result<()> {
+    use bitrouter::metering::TimeWindow;
+    use bitrouter::policy::policy::Policy;
+    for (spend_limit, rate_limit, priced, expected_status) in [
+        (Some(1), None, true, 403),
+        (None, Some(2), true, 429),
+        (Some(100), None, false, 403),
+    ] {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/systemone"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "model": "jev-1.13.0", "answers": {"approve": {"type": "noul", "noul": 0.8}},
+                "usage": {"input_tokens": 1000, "output_tokens": 2}
+            })))
+            .mount(&upstream)
+            .await;
+        let policy = Policy {
+            id: "restricted".into(),
+            allowed_models: Some(vec!["typesafe/jev-1.13".into(), "legacy/chat".into()]),
+            max_spend_micro_usd: spend_limit,
+            max_requests_per_minute: rate_limit,
+            ..Policy::default()
+        };
+        let (server, key, metering) = policy_server(&upstream, policy, priced).await?;
+        let admitted = if rate_limit.is_some() { 2 } else { 1 };
+        for _ in 0..admitted {
+            server
+                .post("/v1/evaluate")
+                .add_header("authorization", format!("Bearer {key}"))
+                // Reusing a caller-supplied ID must not reduce the observed rate.
+                .add_header("x-bitrouter-request-id", "reused-policy-id")
+                .json(&policy_request("typesafe:typesafe/jev-1.13"))
+                .await
+                .assert_status_ok();
+        }
+        let rate = metering.get_rate("policy-key").await?;
+        assert_eq!(rate.requests_per_minute, f64::from(admitted));
+        assert_eq!(
+            metering.get_rate("another-key").await?.requests_per_minute,
+            0.0
+        );
+        let spend = metering
+            .get_enforceable_spend("policy-key", TimeWindow::ThisMonth)
+            .await?;
+        if priced {
+            assert!(spend.is_some_and(|value| value > 0));
+        } else {
+            assert_eq!(spend, None);
+        }
+        let response = server
+            .post("/v1/evaluate")
+            .add_header("authorization", format!("Bearer {key}"))
+            .json(&policy_request("typesafe/jev-1.13"))
+            .await;
+        assert_eq!(response.status_code().as_u16(), expected_status);
+        let generation = server.post("/v1/chat/completions")
+            .add_header("authorization", format!("Bearer {key}"))
+            .json(&json!({"model": "legacy/chat", "messages": [{"role": "user", "content": "hello"}]})).await;
+        assert_eq!(generation.status_code().as_u16(), expected_status);
+        if expected_status == 429 {
+            assert_eq!(response.header("retry-after"), "60");
+        }
+        assert_eq!(
+            upstream
+                .received_requests()
+                .await
+                .context("missing capture")?
+                .len(),
+            admitted as usize
+        );
+    }
+    Ok(())
+}

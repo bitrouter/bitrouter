@@ -14,7 +14,12 @@ TYPESAFE_API_KEY=... cargo run -p bitrouter --bin bro -- serve --config /absolut
 ```
 
 For an installed CLI, use `bro serve` or `bro start` with the same
-`TYPESAFE_API_KEY` environment. The host uses the configured `server.listen`
+`TYPESAFE_API_KEY` environment and `inherit_defaults: true`. With
+`inherit_defaults: false`, environment credentials do not automatically activate
+a provider or fill missing credentials: explicitly configure the TypeSafe
+provider with an API key or credentialed accounts. Explicit
+`api_key: ${TYPESAFE_API_KEY}` configuration is also supported. The host uses
+the configured `server.listen`
 (normally `127.0.0.1:4356`). The fixed `typesafe/jev-1.13` model is declared
 by the provider extension; the public registry only enriches metadata. It
 remains usable when registry fetching is disabled. An explicitly configured
@@ -49,6 +54,10 @@ path is used only for the outbound TypeSafe call.
 An evaluation-only selector sent to a generation endpoint, or a generation-only
 selector sent to `/v1/evaluate`, fails with `model_operation_mismatch` before
 upstream dispatch. With `server.skip_auth: false`, `/v1/evaluate` uses the same
-`brvk_` virtual-key validation as generation. Evaluation does not run generation
+`brvk_` virtual-key validation as generation. Bound policies enforce canonical
+model permissions, expiry, monthly spend, and request rate before dispatch.
+Evaluation attempts count toward the same per-key spend and rate limits as
+generation; incomplete charge evidence blocks requests with a spend ceiling.
+Evaluation does not run generation
 prompt transforms or tools. Do not treat confidence as authorization for an
 external action; the caller owns thresholds and fallbacks.
