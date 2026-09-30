@@ -31,6 +31,7 @@ keyring = { version = "3", default-features = false, features = [
 
 # internal crates
 bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.33", default-features = false }
+bitrouter-orchestrator = { path = "crates/bitrouter-orchestrator", version = "1.0.0-alpha.33" }
 bitrouter-providers = { path = "crates/bitrouter-providers", version = "1.0.0-alpha.33" }
 bitrouter-guardrails = { path = "extensions/regex-checker/matcher", version = "1.0.0-alpha.33" }
 # Optional telemetry egress. `default-features = false` keeps a consumer that
@@ -225,6 +226,8 @@ chrono = { version = "0.4", default-features = false, features = [
 ] }
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1"
+globset = "0.4"
+ignore = "0.4"
 tempfile = "3"
 atomicwrites = "0.4.4"
 

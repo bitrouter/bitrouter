@@ -24,6 +24,11 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   and identity migration sub-batch; not completion of the original M0–M1 batch.
 - [`CLI.md`](CLI.md) — full command reference, flags, and config resolution.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
+- [`BRO_NATIVE_AGENT_SERVER_SPEC.md`](BRO_NATIVE_AGENT_SERVER_SPEC.md) —
+  phased design for one `bro` executable with headless CLI, TUI, and API
+  clients of a BitRouter-owned native agent server. See the
+  [implementation record](BRO_NATIVE_AGENT_IMPLEMENTATION.md) for delivered
+  baseline behavior, checks, and remaining risks.
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
   skills over MCP, the observability TUI, the ACP TUI, the ACP controller,

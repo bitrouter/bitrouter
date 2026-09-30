@@ -5,7 +5,7 @@ description: >
   its CLI — a self-hosted LLM proxy on 127.0.0.1:4356 routing OpenAI- or
   Anthropic-shaped traffic to any provider, via a coding-agent subscription,
   hosted BitRouter, or your own keys. Covers bro init, provider
-  credentials, starting the default ACP TUI with bro, routing, and spend.
+  credentials, native BRO tasks, ACP harnesses, routing, and spend.
   Trigger on bitrouter.yaml, port 4356, brk_ keys, "replace litellm", or
   pointing a coding agent at a proxy.
 license: Apache-2.0
@@ -43,8 +43,7 @@ Verify with `bro --version`; on failure read `references/diagnose.md`.
 ### 3. Configure
 
 A human runs `bro` to complete onboarding using searchable Up/Down lists of registry
-providers (including BitRouter Cloud), ACP harnesses and actions. After setup the same
-command opens the saved default ACP TUI. Credentials alone do not mark setup complete.
+providers (including BitRouter Cloud), ACP harnesses and actions. Credentials alone do not mark setup complete.
 For scripted setup:
 
 ```bash
@@ -88,9 +87,11 @@ covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supp
 BitRouter's inline conversation uses explicit alternate-screen inspectors:
 
 ```bash
-bro code                    # conversation with Choose agent picker
+bro code --model openai/gpt-5  # BRO native interactive coding view
 bro code codex              # explicit interactive ACP session
 bro run claude "summarize this repo"  # headless ACP turn
+bro task run "fix the failing test" --model openai/gpt-5 --check "cargo test"  # BRO native task
+bro task run "inspect this project" --model openai/gpt-5 --read-only  # no shell or writes
 bro run codex "audit this repo" --background  # supervised; returns run id
 bro agents sessions --json  # scriptable supervised-run inventory
 bro agents                 # standalone manager; TTY only
@@ -100,8 +101,17 @@ Background runs survive client exit. Attach with `bro agents attach <run-id>`; s
 remove are separate. Foreground `run` denies unmatched permissions; background asks.
 Same-worktree runs require the warned override. Read `references/sessions.md` first.
 
-Both built-in adapters require Node.js 22+ and `npx`; a compatible local CLI is
-selected automatically behind the pinned adapter. For the harness's own native
+`bro task run` joins `bro serve`, subscribes to NDJSON events, requires `--model`, and
+approves its own tools. `--check` adds verification; otherwise it is unavailable.
+Bare `bro code` streams assistant and shell output and asks before effects.
+`--read-only` on either native entry point permits `read`, `ls`, `find`, `grep`.
+Coding tasks also expose `write`, `edit` (unique `edits: [{oldText, newText}]`),
+and `bash` on Unix or `powershell` on Windows. `code <agent>` and `run <agent>`
+stay ACP. Native tasks are held in server memory: detach keeps them running;
+restart loses them. Never automatically resubmit after instance loss.
+See `references/cli.md` for reattach, task API, and interface details.
+
+Built-in ACP adapters require Node.js 22+ and `npx`. For the harness's native
 interface, use the reversible per-process launcher:
 
 ```bash
@@ -113,26 +123,14 @@ bro codex -- --search
 `codex` are shortcuts. Everything after `--` is forwarded verbatim, and user
 configuration is not edited.
 
-Leave the harness's own model on its subscription and let BitRouter carry the
-rest — subagents, bulk work, models the plan does not include. Pinning the whole
-harness off a subscription they already pay for usually costs more, so make it a
-deliberate choice rather than a default.
+Keep the harness's model on its subscription by default; use BitRouter for
+subagents, bulk work, and models the plan lacks.
 
-**The restart handoff — say it every time.** Existing harness processes cannot
-be rerouted. End with: "run `bro claude` (or restart the harness with the
-env override) to route this session." MCP is control/introspection only;
-inference goes to the daemon HTTP API.
+**The restart handoff — say it every time.** Existing harness processes need a
+restart; tell the user to run `bro claude` to route the new session.
 
-For an ACP client, use `bro acp serve claude` or
-`bro acp serve codex`. Stable ACP v1 on exact adapter pins,
-initializing the harness with the client's capabilities and transparently
-carrying multiple harness-native sessions on one connection. Native IDs and
-history remain harness-owned; `acp_recording.enabled` optionally records the
-observable ACP transcript locally; `acp checkpoints` freezes and annotates it. Route leases
-(`_bitrouter/route/list|set|reset`) and session-attributed cost are
-capability-gated and need a local control binding, which an explicit remote
-`--base-url` does not provide. Read `references/sessions.md` — the pins and the
-wire contract are there — before reasoning about this surface.
+For an ACP client, use `bro acp serve claude` or `bro acp serve codex`.
+Harness-native IDs and history stay harness-owned; see `references/sessions.md`.
 
 ### 6. Verify
 ```bash
@@ -180,7 +178,6 @@ boundaries. Remote errors never fall back to this machine's configuration.
 - `server.skip_auth: false` protects both model and MCP routes with the same
   `brvk_` virtual-key validation. Static credentials under `mcp_servers` are
   for BitRouter's upstream hop; they do not authenticate a downstream caller.
-
 - **Local port is `127.0.0.1:4356`** — old docs saying 8787 are stale. Hosted:
   `https://api.bitrouter.ai/v1` for the OpenAI shape, `https://api.bitrouter.ai`
   (no `/v1`) for the Anthropic SDK — same asymmetry locally.
@@ -192,11 +189,12 @@ boundaries. Remote errors never fall back to this machine's configuration.
   private tunnel or TLS reverse proxy. `server.skip_auth` never disables this
   authentication, changes under `control:` require a daemon restart, and the
   control API does not run remote ACP sessions.
+- **Native task HTTP is opt-in and separately privileged.** `agent_api.enabled:
+  true` requires a loopback `listen`, `token_env`, and exact `workspaces`
+  allowlist. `server.skip_auth` never admits an HTTP task caller.
 - **`init --harness` only accepts `claude` and `codex`**; `launch <agent>`
   accepts the native facets listed by `launch --help`.
-- **`providers add/remove/use/test/stats` and `bro doctor` do not exist.**
-  Manage with `providers list|login|logout` + `bitrouter.yaml`/`reload`; diagnose
-  with `status`, `route <model>`, `models`, `~/.bitrouter/bitrouter.log`.
-- **`bitrouter/<id>` selects a named router**, resolved before provider lookup.
-  `bitrouter/auto` and `bitrouter/fusion` keep compatibility semantics; unknown
-  names fail. See `references/cli.md` for coding initialization and preset migration.
+- **`providers add/remove/use/test/stats` and `bro doctor` do not exist.** Manage
+  with `providers list|login|logout` + config/reload; diagnose via `status`, `route`, `models`, and logs.
+- **`bitrouter/<id>` selects a named router** before provider lookup; `auto` and
+  `fusion` retain compatibility behavior. See `references/cli.md` for details.

@@ -180,6 +180,36 @@
       },
       "type": "object"
     },
+    "AgentApiConfig": {
+      "additionalProperties": false,
+      "description": "Privileged HTTP access to the BRO task service. The app validates a\nloopback listener, nonempty token environment variable, and workspace\nallowlist before binding; `server.skip_auth` never grants this authority.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Whether to bind the task HTTP listener.",
+          "type": "boolean"
+        },
+        "listen": {
+          "default": "127.0.0.1:4359",
+          "description": "Loopback host and port, distinct from inference and control.",
+          "type": "string"
+        },
+        "token_env": {
+          "default": "",
+          "description": "Environment variable containing the dedicated task bearer token.",
+          "type": "string"
+        },
+        "workspaces": {
+          "default": [],
+          "description": "Exact server-owned workspace paths admitted for task submission.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ApiProtocol": {
       "description": "Wire protocol. Known values: `chat_completions`, `messages`, `generate_content`, `responses`; any other string names an externally-registered (outbound-only) custom protocol.",
       "examples": [
@@ -2363,6 +2393,10 @@
         "enabled": false
       },
       "description": "Opt-in local storage of observable ACP conversation content."
+    },
+    "agent_api": {
+      "$ref": "#/$defs/AgentApiConfig",
+      "description": "Opt-in privileged BRO coding task API, separate from inference and control."
     },
     "agents": {
       "additionalProperties": {

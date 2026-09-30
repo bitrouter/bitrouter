@@ -41,9 +41,15 @@
 //! # let _ = app; Ok(()) }
 //! ```
 
+use std::pin::Pin;
 use std::sync::Arc;
 
+use futures_core::Stream;
+
+use crate::caller::CallerContext;
 use crate::error::Result;
+use crate::language_model::protocol::sanitize_model_name;
+use crate::language_model::types::{PipelineRequest, PipelineResponse, Prompt, StreamPart};
 use crate::language_model::{self, PipelineBuilder};
 use crate::mcp;
 use crate::metrics::MetricsRenderer;
@@ -121,6 +127,64 @@ impl App {
         AppBuilder::new()
     }
 
+    /// Execute one non-streaming native model turn through this app's routed,
+    /// checked, and settled language-model pipeline. The caller is established
+    /// by the embedding server, not inferred from `skip_auth`.
+    ///
+    /// Prompt transforms that require HTTP headers see an empty header map and
+    /// therefore cannot infer an HTTP client identity. The SDK's optional
+    /// request-scoped server-tool loop is skipped: the embedding agent owns its
+    /// own tool calls and must execute each one exactly once.
+    pub async fn execute_native(
+        &self,
+        prompt: Prompt,
+        caller: CallerContext,
+    ) -> Result<PipelineResponse> {
+        if prompt.stream {
+            return Err(crate::error::BitrouterError::bad_request(
+                "native model turns must be non-streaming",
+            ));
+        }
+        let pipeline = self.language_model.as_ref().ok_or_else(|| {
+            crate::error::BitrouterError::internal("no language_model pipeline configured")
+        })?;
+        let headers = http::HeaderMap::new();
+        let (prompt, original_model) =
+            prepare_model_prompt(prompt, &headers, &self.prompt_transforms);
+        let mut request = PipelineRequest::new(prompt.model.clone(), caller, prompt);
+        request.original_model = original_model;
+        Arc::clone(pipeline)
+            .execute_without_server_tools(request)
+            .await
+    }
+
+    /// Stream one native agent turn through the same routed and settled path.
+    /// The embedding agent owns client tool calls, so SDK server tools are
+    /// excluded just as they are for `execute_native`.
+    pub async fn execute_native_stream(
+        &self,
+        mut prompt: Prompt,
+        caller: CallerContext,
+    ) -> Result<(
+        String,
+        Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>,
+    )> {
+        let pipeline = self.language_model.as_ref().ok_or_else(|| {
+            crate::error::BitrouterError::internal("no language_model pipeline configured")
+        })?;
+        prompt.stream = true;
+        let headers = http::HeaderMap::new();
+        let (prompt, original_model) =
+            prepare_model_prompt(prompt, &headers, &self.prompt_transforms);
+        let mut request = PipelineRequest::new(prompt.model.clone(), caller, prompt);
+        request.original_model = original_model;
+        let request_id = request.request_id.clone();
+        let parts = Arc::clone(pipeline)
+            .execute_stream_without_server_tools(request)
+            .await?;
+        Ok((request_id, parts))
+    }
+
     /// The `language_model` pipeline, if that protocol was configured.
     pub fn language_model(&self) -> Option<&Arc<language_model::Pipeline>> {
         self.language_model.as_ref()
@@ -162,6 +226,21 @@ impl App {
     pub fn mcp_aggregate_route(&self) -> Option<&str> {
         self.mcp_aggregate_route.as_deref()
     }
+}
+
+/// Common post-parse preparation for HTTP and in-process native requests.
+/// Preserve the caller's selector before transforms for policy attribution.
+pub(crate) fn prepare_model_prompt(
+    mut prompt: Prompt,
+    headers: &http::HeaderMap,
+    transforms: &[Arc<dyn PromptTransform>],
+) -> (Prompt, String) {
+    prompt.model = sanitize_model_name(&prompt.model);
+    let original_model = prompt.model.clone();
+    for transform in transforms {
+        transform.apply_with_headers(&mut prompt, headers);
+    }
+    (prompt, original_model)
 }
 
 /// Configures an [`App`] for a trusted host. Each protocol has its own

@@ -2676,35 +2676,15 @@ async fn standalone_agents_and_attach_restore_terminal_without_stopping_runs() -
 }
 
 #[test]
-fn code_bare_entry_offers_selection_without_permanent_navigation() -> Result<()> {
+fn code_bare_entry_opens_native_model_editor() -> Result<()> {
     let mut bare = CodeFixture::bare()?;
-    let selection = bare.pty.wait_for_text("claude-acp")?;
+    let view = bare.pty.wait_for_text("Enter a routed model ID")?;
     ensure!(
-        !selection.contains("Home")
-            && !selection.replace("/ Agents", "").contains("Agents")
-            && !selection.contains("Requests"),
-        "bare Code entry restored permanent navigation"
+        view.contains("BRO"),
+        "bare Code did not open BRO native view"
     );
-    bare.close_to_composer()?;
-    bare.pty.paste("draft before selection")?;
-    let submit_checkpoint = bare.pty.checkpoint();
-    bare.pty.send(b"\r")?;
-    let bare_output = bare
-        .pty
-        .wait_for_text("Choose an agent before sending this draft")?;
-    ensure!(
-        !bare_output.contains("Home") && !bare_output.replace("/ Agents", "").contains("Agents"),
-        "bare Code entry restored permanent navigation"
-    );
-    let _ = bare
-        .pty
-        .wait_for_text_since(&submit_checkpoint, "claude-acp")?;
-    bare.close_to_composer()?;
-    let clear_checkpoint = bare.pty.checkpoint();
-    bare.pty.send(b"\x03")?;
-    let _ = bare
-        .pty
-        .wait_for_text_since(&clear_checkpoint, "Draft cleared")?;
+    bare.pty.send(b"test-model\r")?;
+    let _ = bare.pty.wait_for_text("Model selected: test-model")?;
     bare.pty.send(b"\x04")?;
     bare.assert_terminal_restored()
 }
@@ -2766,16 +2746,13 @@ fn code_hidden_chat_shares_palette_permissions_and_terminal_restoration() -> Res
 }
 
 #[test]
-fn code_hidden_tui_bare_alias_uses_the_shared_empty_composer() -> Result<()> {
+fn code_hidden_tui_bare_alias_uses_the_native_model_editor() -> Result<()> {
     let mut tui = CodeFixture::tui_bare()?;
-    let selection = tui.pty.wait_for_text("claude-acp")?;
+    let view = tui.pty.wait_for_text("Enter a routed model ID")?;
     ensure!(
-        !selection.contains("Home")
-            && !selection.replace("/ Agents", "").contains("Agents")
-            && !selection.contains("Requests"),
-        "hidden tui entry restored permanent navigation"
+        view.contains("BRO"),
+        "hidden tui alias did not open native view"
     );
-    tui.close_to_composer()?;
     tui.pty.send(b"\x04")?;
     tui.assert_terminal_restored()
 }

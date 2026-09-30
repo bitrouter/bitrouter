@@ -521,6 +521,14 @@ impl Pipeline {
         self: Arc<Self>,
         req: PipelineRequest,
     ) -> Result<PreparedPipelineResponse> {
+        self.execute_detached_prepared_with_mode(req, true).await
+    }
+
+    async fn execute_detached_prepared_with_mode(
+        self: Arc<Self>,
+        req: PipelineRequest,
+        run_server_tools: bool,
+    ) -> Result<PreparedPipelineResponse> {
         let pipeline = Arc::clone(&self);
         // `tokio::spawn` does not propagate the current tracing span, so attach
         // it explicitly — otherwise the whole request's logs would detach from
@@ -529,7 +537,7 @@ impl Pipeline {
         let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
         self.detached_executions.spawn(
             async move {
-                let result = pipeline.execute_prepared(req).await;
+                let result = pipeline.execute_prepared(req, run_server_tools).await;
                 // A dropped handler drops the prepared delivery permit here;
                 // upstream execution and settlement have nevertheless run on
                 // this shutdown-tracked task.
@@ -546,17 +554,36 @@ impl Pipeline {
 
     /// Execute a non-streaming request: the four stages, in order.
     pub async fn execute(&self, req: PipelineRequest) -> Result<PipelineResponse> {
-        let prepared = self.execute_prepared(req).await?;
+        let prepared = self.execute_prepared(req, true).await?;
         prepared.delivery.deliver().await?;
         Ok(prepared.response)
     }
 
-    async fn execute_prepared(&self, req: PipelineRequest) -> Result<PreparedPipelineResponse> {
+    /// One native agent turn. The host agent executes client tool calls; the
+    /// SDK must not inject or execute its own server tools on this request.
+    pub(crate) async fn execute_without_server_tools(
+        self: Arc<Self>,
+        req: PipelineRequest,
+    ) -> Result<PipelineResponse> {
+        // A cancelled agent may stop waiting for a model turn. The accepted
+        // upstream request still needs to settle before its result is dropped.
+        let prepared = Arc::clone(&self)
+            .execute_detached_prepared_with_mode(req, false)
+            .await?;
+        prepared.delivery.deliver().await?;
+        Ok(prepared.response)
+    }
+
+    async fn execute_prepared(
+        &self,
+        req: PipelineRequest,
+        run_server_tools: bool,
+    ) -> Result<PreparedPipelineResponse> {
         let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, false).await?;
 
         // ---- Stage 3: execution (with the server-side tool loop when configured) ----
         let exec_outcome = match &self.server_tool_loop {
-            Some(server_loop) => {
+            Some(server_loop) if run_server_tools => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream = PipelineUpstream {
                     pipeline: self,
@@ -568,7 +595,7 @@ impl Pipeline {
                     .await
                     .map(|outcome| (outcome.result, outcome.provider_terminal_exposed))
             }
-            None => self
+            _ => self
                 .execute_with_fallback(&chain, ctx.prompt(), &ctx)
                 .await
                 .map(|result| (result, true)),
@@ -688,18 +715,40 @@ impl Pipeline {
         req: PipelineRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>> {
         let prepared = self.execute_stream_prepared(req).await?;
-        Ok(Box::pin(prepared.parts.then(|item| async move {
+        Ok(Self::deliver_stream(prepared))
+    }
+
+    pub(crate) async fn execute_stream_without_server_tools(
+        self: Arc<Self>,
+        req: PipelineRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>> {
+        let prepared = self.execute_stream_prepared_with_mode(req, false).await?;
+        Ok(Self::deliver_stream(prepared))
+    }
+
+    fn deliver_stream(
+        prepared: PreparedPipelineStream,
+    ) -> Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>> {
+        Box::pin(prepared.parts.then(|item| async move {
             let PreparedStreamPart { part, delivery } = item?;
             if let Some(delivery) = delivery {
                 delivery.deliver().await?;
             }
             Ok(part)
-        })))
+        }))
     }
 
     pub(crate) async fn execute_stream_prepared(
         self: Arc<Self>,
         req: PipelineRequest,
+    ) -> Result<PreparedPipelineStream> {
+        self.execute_stream_prepared_with_mode(req, true).await
+    }
+
+    async fn execute_stream_prepared_with_mode(
+        self: Arc<Self>,
+        req: PipelineRequest,
+        run_server_tools: bool,
     ) -> Result<PreparedPipelineStream> {
         let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, true).await?;
         let latest_attempt: SharedStreamAttempt = Arc::new(std::sync::Mutex::new(None));
@@ -708,7 +757,7 @@ impl Pipeline {
         // merged stream becomes the "upstream" the settlement guard drains, so
         // settlement is unchanged. Otherwise the pipeline stays single-shot.
         let upstream_result = match &self.server_tool_loop {
-            Some(server_loop) => {
+            Some(server_loop) if run_server_tools => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream_impl: Arc<dyn UpstreamStream> = Arc::new(PipelineStreamUpstream {
                     pipeline: self.clone(),
@@ -735,7 +784,7 @@ impl Pipeline {
                     Err(error) => Err(error),
                 }
             }
-            None => match self.execute_stream_with_fallback(&chain, &ctx).await {
+            _ => match self.execute_stream_with_fallback(&chain, &ctx).await {
                 Ok(execution) => {
                     store_stream_attempt(
                         &latest_attempt,

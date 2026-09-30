@@ -21,6 +21,7 @@ path = "src/main.rs"
 
 [dependencies]
 bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp", "acp"] }
+bitrouter-orchestrator.workspace = true
 # `server`: the inbound ingress SERVER span, which wraps the SDK router this
 # binary serves. A deployment that builds its own ingress span takes
 # `otel-http` alone.
@@ -30,6 +31,7 @@ chrono.workspace = true
 sha2.workspace = true
 hmac.workspace = true
 ring.workspace = true
+subtle.workspace = true
 base64.workspace = true
 rand.workspace = true
 rand_distr = "0.6"
@@ -58,7 +60,7 @@ http.workspace = true
 axum.workspace = true
 futures.workspace = true
 agent-client-protocol.workspace = true
-tokio-util = { workspace = true, features = ["compat"] }
+tokio-util = { workspace = true, features = ["compat", "rt"] }
 axoupdater = { version = "0.10", default-features = false, features = ["github_releases"] }
 semver = "1"
 # Everything drawn by this binary. There is deliberately no `ratatui` here:

@@ -256,6 +256,19 @@ pub async fn serve_with_extensions(
             .await
             .with_context(|| format!("bind inference listener {listen}"))?;
         let control_listener = daemon::bind_control_socket(&socket_path).await?;
+        let task_socket = crate::agent_local::socket_path(&socket_path);
+        let task_listener = daemon::transport::bind(&task_socket).await?;
+        let task_service = bitrouter_orchestrator::service::TaskService::new(
+            app.clone(),
+            &cfg.agent_api.workspaces,
+        )
+        .map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            !cfg.agent_api.enabled
+                || cfg.control.credentials.iter().all(|credential| credential.token_env != cfg.agent_api.token_env),
+            "agent API and control API must use distinct credential environment variables"
+        );
+        let agent_api = crate::agent_api::BoundAgentApi::bind(&cfg.agent_api, task_service.clone()).await?;
         let remote_control = match remote_control {
             Some(server) => Some(
                 server
@@ -285,6 +298,8 @@ pub async fn serve_with_extensions(
         let http = async move {
             let (inference_shutdown_tx, inference_shutdown_rx) = tokio::sync::oneshot::channel();
             let (remote_shutdown_tx, remote_shutdown_rx) = tokio::sync::oneshot::channel();
+            let task_shutdown = tokio_util::sync::CancellationToken::new();
+            let task_shutdown_for_server = task_shutdown.clone();
             // Open an OTel SERVER span per inbound request and publish it on the
             // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
             let otel_wrapper = move |router: axum::Router| match &otel_router_wrapper {
@@ -338,8 +353,38 @@ pub async fn serve_with_extensions(
                     }
                 }
             };
+            let task = async move {
+                let runtime = task_service.clone();
+                let runtime_shutdown = task_shutdown_for_server.clone();
+                let cleanup = async move { runtime_shutdown.cancelled().await; runtime.shutdown().await; };
+                let local = crate::agent_local::serve(
+                    task_listener,
+                    task_service,
+                    task_shutdown_for_server.clone(),
+                );
+                let task_shutdown_for_cleanup = task_shutdown_for_server.clone();
+                let http = async move {
+                    match agent_api {
+                        Some(api) => api.serve(async move {
+                            task_shutdown_for_server.cancelled().await;
+                        }).await,
+                        None => {
+                            task_shutdown_for_server.cancelled().await;
+                            Ok(())
+                        }
+                    }
+                };
+                let serving = async {
+                    let result = tokio::try_join!(local, http).map(|_| ());
+                    task_shutdown_for_cleanup.cancel();
+                    result
+                };
+                let (result, ()) = tokio::join!(serving, cleanup);
+                result
+            };
             let mut inference = Box::pin(inference);
             let mut remote = Box::pin(remote);
+            let mut task = Box::pin(task);
             let mut shutdown = Box::pin(async move {
                 let _ = http_shutdown_rx.await;
             });
@@ -347,20 +392,34 @@ pub async fn serve_with_extensions(
             tokio::select! {
                 result = &mut inference => {
                     let _ = remote_shutdown_tx.send(());
+                    task_shutdown.cancel();
                     remote.await?;
+                    task.await?;
                     result
                 }
                 result = &mut remote => {
                     let _ = inference_shutdown_tx.send(());
+                    task_shutdown.cancel();
                     inference.await?;
+                    task.await?;
+                    result
+                }
+                result = &mut task => {
+                    let _ = inference_shutdown_tx.send(());
+                    let _ = remote_shutdown_tx.send(());
+                    let (inference_result, remote_result) = tokio::join!(inference, remote);
+                    inference_result?;
+                    remote_result?;
                     result
                 }
                 _ = &mut shutdown => {
                     let _ = inference_shutdown_tx.send(());
                     let _ = remote_shutdown_tx.send(());
-                    let (inference_result, remote_result) = tokio::join!(inference, remote);
+                    task_shutdown.cancel();
+                    let (inference_result, remote_result, task_result) = tokio::join!(inference, remote, task);
                     inference_result?;
-                    remote_result
+                    remote_result?;
+                    task_result
                 }
             }
         };
