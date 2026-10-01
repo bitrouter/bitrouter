@@ -793,3 +793,76 @@ This establishes non-streaming model-entry parity for these fixtures. It does no
 establish managed remote transport, private continuation or full monetary
 accounting. C3's continuation/cost contracts, C4–C6, the full A01–A23 audit, final
 independent review, PR and CI remain open.
+
+## C3 authentication proof prerequisites
+
+`AppliedAuth` now retains a transient commitment to the authenticated URL,
+credential header names and values, and known account-selection headers. The
+executor keeps that wrapper through provider header rules, tracing and request-id
+injection, then revalidates it before dispatch. Replacing one Bearer or API key
+with another no longer preserves an earlier proof merely because the scheme is
+unchanged. OpenAI organization/project, Anthropic workspace, ChatGPT account and
+Google user-project header changes also invalidate the proof, including removal
+and duplicate values. The commitment is private, uses length-delimited inputs and
+is neither serialized nor added to debug output.
+
+Stable principal identity remains separate from this per-request check. An
+authority-aware OAuth applier can install a refreshed access token and produce a
+new request proof with the same principal. Ordinary trace and compatibility
+headers do not invalidate it. The executor clears stale request authority before
+authentication and records a replacement only after final body, output-limit and
+count checks succeed. This request-local field is still not an independent proof
+that a generation attempt succeeded; signed-output sealing must use provenance
+owned by that successful attempt, rather than a count or earlier fallback.
+
+The Anthropic Platform API applier now derives its authority from the same
+resolved API key that it installs, preserving stored-key precedence, inline key
+overrides and account-label lookup. Its route-time proof uses the actual
+`x-api-key` scheme even when the target's configured scheme differs. Replacing a
+key under the same account label changes the proof. Explicit Anthropic workspace
+selection remains unverified until that scope is atomically bound; ordinary
+Messages requests continue to work. Claude Code and Antigravity OAuth still
+provide no verified principal and require further work. An account label alone
+is not account identity.
+
+Configured account selectors are resolved before authentication, using actual
+allowed inbound values or their configured defaults. Their stable commitment is
+folded into the existing credential authority at both routing and dispatch;
+ordinary Responses calls and same-scope continuation remain available. Changing
+organization or project cannot reuse an earlier native continuation. Without
+inbound context, a passthrough scope remains unknown instead of guessing its
+default. The executor also rejects an applier changing a configured scope. The
+counter follows the same header order and compares its final semantic headers
+with the generation request. Existing unscoped records cannot acquire new scoped
+authority retrospectively.
+
+This strengthens existing continuation authentication as well as preparing for
+signed-history binding. It is not a claim of complete provider-private history
+support. Anthropic signed/redacted
+thinking, Gemini signatures, child inheritance, model switches, output sealing
+and adjustment receipts remain part of the open C3 continuation work.
+
+Independent review found two missing OpenAI scope headers and a test that did
+not independently inspect the actual API key on wire; both were corrected.
+Targeted regressions cover same-scheme credential replacement, destination and
+scope mutation, stable principal identity after refresh, no upstream dispatch
+on invalid proof, and a real Messages pipeline with the production Anthropic
+applier and loopback provider.
+
+Review also caught that merely invalidating headers added after authentication
+would reject first Responses calls with configured scope. The stable scope
+binding above fixes that regression rather than weakening the proof. A production
+App fixture exercises actual gateway HTTP calls with both static defaults and
+passthrough headers: initial calls succeed, matching continuation substitutes the
+native handle, independent organization/project changes make zero upstream
+requests, and a fresh request under a new scope succeeds.
+
+Final independent review found no remaining blocker in this authentication/scope
+segment after the count-path wiring and ordinary unproven-applier guard were
+fixed. This review does not cover completion of the remaining C3–C6 work.
+
+- Final-tree workspace nextest: 3763 passed, 22 skipped, in 209.015 seconds.
+- Strict all-target/all-feature workspace clippy, all-feature workspace
+  doctests, formatting and diff checks passed.
+- The earlier 3760-test pass preceded the stable scope changes and is not the
+  final-tree acceptance result; intermediate compile failures were corrected.

@@ -172,14 +172,69 @@ impl ContinuationAuthority {
         self.effective_scheme
     }
 
-    /// Revalidate that the final mutated request still has the exact,
-    /// unambiguous wire-auth shape from which this authority was proven.
-    ///
-    /// The credential principal proof is returned atomically by the auth
-    /// applier; this last-mile check ensures later request mutations neither
-    /// replace its scheme nor add a second credential family.
-    pub(crate) fn validates_final_request(&self, request: &reqwest::Request) -> bool {
-        request_effective_auth_scheme(request) == Some(self.effective_scheme)
+    pub(crate) fn with_request_scope(mut self, headers: &http::HeaderMap) -> Self {
+        if headers.is_empty() {
+            return self;
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"bitrouter.transport.request-scope.v1");
+        digest.update(self.credential.proof_bytes());
+        for name in CONTINUATION_SCOPE_HEADERS {
+            digest_header(&mut digest, headers, name);
+        }
+        self.credential = CredentialAuthority(digest.finalize().into());
+        self
+    }
+}
+
+const CONTINUATION_SCOPE_HEADERS: [&str; 5] = [
+    "openai-organization",
+    "openai-project",
+    "anthropic-workspace-id",
+    "chatgpt-account-id",
+    "x-goog-user-project",
+];
+
+pub(crate) fn is_continuation_scope_header(name: &str) -> bool {
+    CONTINUATION_SCOPE_HEADERS.contains(&name)
+}
+
+/// Resolve configured account selectors using exactly the same precedence as
+/// the outbound request. Missing inbound context is unknown for passthrough.
+pub(crate) fn request_scope_headers(
+    target: &RoutingTarget,
+    inbound: Option<&http::HeaderMap>,
+) -> Option<http::HeaderMap> {
+    let mut headers = http::HeaderMap::new();
+    for rule in &target.headers {
+        if !is_continuation_scope_header(rule.name().as_str()) {
+            continue;
+        }
+        headers.remove(rule.name());
+        if rule.passthrough() {
+            let values = inbound?.get_all(rule.name());
+            if values.iter().next().is_some() {
+                for value in values {
+                    headers.append(rule.name().clone(), value.clone());
+                }
+                continue;
+            }
+        }
+        if let Some(value) = rule.default() {
+            headers.insert(rule.name().clone(), value.clone());
+        }
+    }
+    Some(headers)
+}
+
+fn digest_header(digest: &mut Sha256, headers: &http::HeaderMap, name: &str) {
+    digest.update((name.len() as u64).to_be_bytes());
+    digest.update(name.as_bytes());
+    let values = headers.get_all(name);
+    digest.update((values.iter().count() as u64).to_be_bytes());
+    for value in values {
+        digest.update((value.as_bytes().len() as u64).to_be_bytes());
+        digest.update(value.as_bytes());
     }
 }
 
@@ -242,9 +297,16 @@ fn request_effective_auth_scheme(request: &reqwest::Request) -> Option<AuthSchem
 /// applier cannot prove a stable continuation authority; ordinary requests
 /// still work, but successful native Responses continuation publication fails
 /// closed.
+///
+/// Construct the proof after installing authentication. Later mutation of the
+/// destination, credential values or known account-selection headers invalidates
+/// the proof. Trace and ordinary compatibility headers may still be attached.
 pub struct AppliedAuth {
     request: reqwest::Request,
     continuation_authority: Option<ContinuationAuthority>,
+    // Transient commitment to this exact authentication, separate from stable
+    // principal identity so an OAuth refresh can retain the same principal.
+    wire_authentication: Option<[u8; 32]>,
 }
 
 impl AppliedAuth {
@@ -253,6 +315,9 @@ impl AppliedAuth {
         let continuation_authority = request_effective_auth_scheme(&request)
             .map(|scheme| ContinuationAuthority::new(authority, scheme));
         Self {
+            wire_authentication: continuation_authority
+                .as_ref()
+                .map(|_| wire_authentication_digest(&request)),
             request,
             continuation_authority,
         }
@@ -268,6 +333,9 @@ impl AppliedAuth {
             == Some(effective_scheme))
         .then(|| ContinuationAuthority::new(authority, effective_scheme));
         Self {
+            wire_authentication: continuation_authority
+                .as_ref()
+                .map(|_| wire_authentication_digest(&request)),
             request,
             continuation_authority,
         }
@@ -279,6 +347,7 @@ impl AppliedAuth {
         Self {
             request,
             continuation_authority: None,
+            wire_authentication: None,
         }
     }
 
@@ -290,8 +359,36 @@ impl AppliedAuth {
     }
 
     pub(crate) fn into_parts(self) -> (reqwest::Request, Option<ContinuationAuthority>) {
-        (self.request, self.continuation_authority)
+        let authority = self.continuation_authority.filter(|authority| {
+            request_effective_auth_scheme(&self.request) == Some(authority.effective_scheme)
+                && self.wire_authentication == Some(wire_authentication_digest(&self.request))
+        });
+        (self.request, authority)
     }
+}
+
+/// Bind the credential values, destination and known account-selection headers
+/// observed at authentication time. Framing, tracing and compatibility headers
+/// may still change without invalidating that proof. Never publish this digest.
+fn wire_authentication_digest(request: &reqwest::Request) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"bitrouter.transport.wire-authentication.v1");
+    let url = request.url().as_str();
+    digest.update((url.len() as u64).to_be_bytes());
+    digest.update(url.as_bytes());
+    for name in [
+        "authorization",
+        "x-api-key",
+        "x-goog-api-key",
+        "openai-organization",
+        "openai-project",
+        "anthropic-workspace-id",
+        "chatgpt-account-id",
+        "x-goog-user-project",
+    ] {
+        digest_header(&mut digest, request.headers(), name);
+    }
+    digest.finalize().into()
 }
 
 impl std::ops::Deref for AppliedAuth {
@@ -509,6 +606,35 @@ impl AuthAppliers {
         &self,
         target: &RoutingTarget,
     ) -> Result<Option<ContinuationAuthority>> {
+        let Some(scope) = request_scope_headers(target, None) else {
+            return Ok(None);
+        };
+        Ok(self
+            .unscoped_continuation_authority_proof(target)
+            .await?
+            .map(|authority| authority.with_request_scope(&scope)))
+    }
+
+    /// Resolve a continuation proof with the current request's effective
+    /// account selectors, including allowed passthrough header values.
+    pub async fn continuation_authority_proof_for_request(
+        &self,
+        target: &RoutingTarget,
+        inbound: &http::HeaderMap,
+    ) -> Result<Option<ContinuationAuthority>> {
+        let Some(scope) = request_scope_headers(target, Some(inbound)) else {
+            return Ok(None);
+        };
+        Ok(self
+            .unscoped_continuation_authority_proof(target)
+            .await?
+            .map(|authority| authority.with_request_scope(&scope)))
+    }
+
+    async fn unscoped_continuation_authority_proof(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<Option<ContinuationAuthority>> {
         if let Some(applier) = self.lookup(&target.provider_name) {
             return applier
                 .continuation_authority_proof(target)
@@ -535,6 +661,176 @@ impl AuthAppliers {
 mod tests {
     use super::*;
     use crate::language_model::types::ApiProtocol;
+
+    #[tokio::test]
+    async fn scope_proof_uses_effective_defaults_and_actual_passthrough_values() -> Result<()> {
+        use crate::language_model::types::OutboundHeaderRule;
+        let registry = AuthAppliers::new();
+        let mut target = target();
+        target.api_key = "fixture-key".into();
+        let plain = registry.continuation_authority_proof(&target).await?;
+        target.headers.push(OutboundHeaderRule::new(
+            "openai-project",
+            Some("default-project"),
+            false,
+        )?);
+        let default = registry.continuation_authority_proof(&target).await?;
+        assert!(default.is_some());
+        assert_ne!(plain, default);
+        target.headers[0] =
+            OutboundHeaderRule::new("openai-project", Some("default-project"), true)?;
+        assert_eq!(registry.continuation_authority_proof(&target).await?, None);
+        let mut inbound = http::HeaderMap::new();
+        assert_eq!(
+            registry
+                .continuation_authority_proof_for_request(&target, &inbound)
+                .await?,
+            default
+        );
+        inbound.insert(
+            "openai-project",
+            http::HeaderValue::from_static("caller-project"),
+        );
+        let caller = registry
+            .continuation_authority_proof_for_request(&target, &inbound)
+            .await?;
+        assert!(caller.is_some());
+        assert_ne!(caller, default);
+        inbound.append(
+            "openai-project",
+            http::HeaderValue::from_static("second-project"),
+        );
+        assert_ne!(
+            registry
+                .continuation_authority_proof_for_request(&target, &inbound)
+                .await?,
+            caller
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn applied_authority_rejects_mutated_wire_credentials() -> Result<()> {
+        for (name, before, after) in [
+            ("authorization", "Bearer first", "Bearer second"),
+            ("x-api-key", "first", "second"),
+            ("x-goog-api-key", "first", "second"),
+        ] {
+            let request = reqwest::Client::new()
+                .post("https://example.invalid/v1/generate")
+                .header(name, before)
+                .build()
+                .map_err(|_| BitrouterError::internal("fixture request failed"))?;
+            let mut applied = AppliedAuth::proven(
+                request,
+                CredentialAuthority::derive("test", "same-principal"),
+            );
+            applied.headers_mut().insert(
+                reqwest::header::HeaderName::from_static(name),
+                reqwest::header::HeaderValue::from_static(after),
+            );
+            let (request, authority) = applied.into_parts();
+            assert!(request_effective_auth_scheme(&request).is_some());
+            assert!(authority.is_none(), "mutated {name} retained old proof");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn applied_authority_rejects_mutated_destination_and_account_scope() -> Result<()> {
+        for name in [
+            "openai-organization",
+            "openai-project",
+            "anthropic-workspace-id",
+            "chatgpt-account-id",
+            "x-goog-user-project",
+            "destination",
+            "credential-family",
+        ] {
+            let request = reqwest::Client::new()
+                .post("https://example.invalid/v1/generate")
+                .header("x-api-key", "first")
+                .build()
+                .map_err(|_| BitrouterError::internal("fixture request failed"))?;
+            let mut applied = AppliedAuth::proven(
+                request,
+                CredentialAuthority::derive("test", "same-principal"),
+            );
+            match name {
+                "destination" => applied.url_mut().set_path("/another-account/generate"),
+                "credential-family" => {
+                    applied.headers_mut().remove("x-api-key");
+                    applied.headers_mut().insert(
+                        "x-goog-api-key",
+                        reqwest::header::HeaderValue::from_static("first"),
+                    );
+                }
+                _ => {
+                    applied.headers_mut().insert(
+                        reqwest::header::HeaderName::from_static(name),
+                        reqwest::header::HeaderValue::from_static("other-account"),
+                    );
+                }
+            }
+            assert!(applied.into_parts().1.is_none(), "mutation: {name}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn applied_authority_rejects_replaced_removed_or_duplicate_scope() -> Result<()> {
+        for scope in ["openai-organization", "openai-project"] {
+            for mutation in ["replace", "remove", "duplicate"] {
+                let request = reqwest::Client::new()
+                    .post("https://example.invalid/v1/generate")
+                    .header("authorization", "Bearer first")
+                    .header(scope, "initial-scope")
+                    .build()
+                    .map_err(|_| BitrouterError::internal("fixture request failed"))?;
+                let mut applied = AppliedAuth::proven(
+                    request,
+                    CredentialAuthority::derive("test", "same-principal"),
+                );
+                let header = reqwest::header::HeaderName::from_static(scope);
+                let value = reqwest::header::HeaderValue::from_static("other-scope");
+                match mutation {
+                    "replace" => {
+                        applied.headers_mut().insert(header, value);
+                    }
+                    "remove" => {
+                        applied.headers_mut().remove(header);
+                    }
+                    _ => {
+                        applied.headers_mut().append(header, value);
+                    }
+                }
+                assert!(applied.into_parts().1.is_none(), "{mutation}: {scope}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn atomic_auth_refresh_retains_principal_and_allows_trace_headers() -> Result<()> {
+        let principal = CredentialAuthority::derive("test", "same-principal");
+        let expected = ContinuationAuthority::new(principal.clone(), AuthScheme::Bearer);
+        for bearer in ["Bearer before-refresh", "Bearer after-refresh"] {
+            let request = reqwest::Client::new()
+                .post("https://example.invalid/v1/generate")
+                .header("authorization", bearer)
+                .build()
+                .map_err(|_| BitrouterError::internal("fixture request failed"))?;
+            let mut applied = AppliedAuth::proven(request, principal.clone());
+            for name in ["traceparent", "x-bitrouter-request-id", "anthropic-beta"] {
+                applied.headers_mut().insert(
+                    reqwest::header::HeaderName::from_static(name),
+                    reqwest::header::HeaderValue::from_static("fixture-value"),
+                );
+            }
+            assert_eq!(applied.into_parts().1, Some(expected.clone()));
+        }
+        Ok(())
+    }
 
     struct LegacyApplier;
 
