@@ -21,7 +21,7 @@ mock-provider demonstration does not establish production integration.
 | --- | --- | --- |
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
-| C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | In progress: agent-owned execution state established; scheduler/dispatcher pending |
+| C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Pending |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
@@ -130,7 +130,49 @@ of concurrent child execution.
   run status from all agents, and apply admission to both the run and selected
   agent. The current driver deliberately still accepts only root execution.
 
-Next C2 work is the single collaboration dispatcher and bounded fair scheduler,
-including durable mailboxes, follow-ups, waits, subtree interruption, real
-overlapping provider requests, and provisional root completion until descendants
-and effects settle. C2 is not complete.
+The scheduling work below completes the next part of C2 after this preparation.
+
+## C2 scheduling evidence
+
+One session driver schedules bounded concurrent agent steps through the shared
+SDK path. A single collaboration dispatcher handles the seven core-owned
+actions. Model calls retain their provider call/result pairing; runtime actions
+have explicit runtime provenance. Agents retain history across FIFO follow-ups,
+including later root runs. Result delivery records the assigning agent, while
+structural ownership controls subtree cancellation. A provisional final answer
+waits for descendant and assigned work, pending mail, tools, and verification.
+
+Runtime waits are durable observations keyed by their accepted operation IDs in
+the snapshot. Their completion is committed without creating a model tool call
+or occupying a model slot. Model waits park their agent, release its slot, and
+wake on relevant state/mail changes or deadlines. Wait observations identify
+queued assignments rather than returning an earlier completed turn's answer.
+
+- `cargo test -p bitrouter-orchestrator --test core_execution`: 36 passed.
+- `cargo nextest run -p bitrouter-sdk -p bitrouter-orchestrator --all-features`:
+  1134 passed, 2 skipped.
+- SDK/orchestrator all-feature doctests: 5 passed, 1 ignored.
+- Strict all-target/all-feature SDK/orchestrator clippy, formatting and diff
+  checks passed.
+- Concurrent held providers demonstrate two actual overlapping child calls,
+  a bounded peak of two, a root scheduling opportunity, correct attribution,
+  and final incorporation of child evidence. Active provider time measures the
+  union of intervals while each attempt retains its own elapsed-time receipt.
+- A one-slot model-driven spawn/delegate/wait run sends only workspace reads
+  to the harness. Other regressions cover mailbox replay, queued follow-ups,
+  wait deadlines and tool-result wakeups while another model is still running,
+  graph bounds, explicit wait cycles, and implicit assignment/join cycles.
+- Cancellation regressions retain billed provider output while discarding new
+  effects, wait for dispatched tool cleanup, preserve paired history before
+  interruption, archive child results to cancelled recipients even with a full
+  mailbox, and serialize cleanup against another agent's pending output ACK.
+- Independent reviews found and fixed stale transition races, stale verification
+  reuse, cross-run queue selection, mailbox-capacity cancellation deadlock,
+  timer/admission retry loops, and dependency cycles through idle ancestors.
+  Follow-up read-only review found no remaining concrete C2 blocker.
+
+This stage establishes in-process scheduling mechanics, not complete joint
+context feasibility, crash restoration, remote transport parity, production
+harness integration, or tool-active-time accounting from harness status signals.
+Reuse policy hardening and decision receipts remain C3; restoration and durable
+root queue/steering remain C4. C5/C6 and the full A01–A23 audit remain pending.
