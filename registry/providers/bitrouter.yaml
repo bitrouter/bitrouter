@@ -580,6 +580,32 @@ models:
         cache_read: 0.036
       output_tokens:
         text: 8.7
+  - id: anthropic/claude-sonnet-5.5
+    provider_model_id: anthropic/claude-sonnet-5.5
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+  - id: qwen/qwen3.7-flash
+    provider_model_id: qwen/qwen3.7-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.03
+        cache_read: 0.003
+        cache_write: 0.0375
+      output_tokens:
+        text: 0.13
+  - id: qwen/qwen3.8-omni-flash
+    provider_model_id: qwen/qwen3.8-omni-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.016
+      output_tokens:
+        text: 0.47
 status: active
 weight: 1
 community: false
