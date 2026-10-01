@@ -337,6 +337,18 @@ pub trait AuthApplier: Send + Sync {
         None
     }
 
+    /// Pure, deterministic normalization of the expected managed wire body.
+    /// This must preserve required input and controls. It performs no I/O and
+    /// must not depend on credentials; final authenticated requests are checked
+    /// against this baseline. The default expects unchanged semantic fields.
+    fn normalize_managed_body(
+        &self,
+        _body: &mut serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Apply authentication. The default `Transport::authorise` is **not**
     /// called when this applier runs; the applier owns the full credential
     /// surface for the request.

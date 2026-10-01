@@ -3,6 +3,9 @@
 #[path = "tests_reconstruction.rs"]
 mod reconstruction;
 
+#[path = "tests_managed_protocol.rs"]
+mod managed_protocol;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

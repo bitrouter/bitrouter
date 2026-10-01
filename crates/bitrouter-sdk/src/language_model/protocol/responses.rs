@@ -2339,6 +2339,19 @@ impl InboundAdapter for ResponsesAdapter {
 }
 
 impl OutboundAdapter for ResponsesAdapter {
+    fn validate_managed_prompt(&self, prompt: &Prompt) -> std::result::Result<(), &'static str> {
+        super::managed::validate_prompt(&ApiProtocol::Responses, prompt)
+    }
+
+    fn validate_managed_body(
+        &self,
+        expected: &serde_json::Value,
+        actual: &serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> std::result::Result<(), &'static str> {
+        super::managed::validate_body(&ApiProtocol::Responses, expected, actual)
+    }
+
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::Responses
     }

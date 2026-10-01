@@ -145,6 +145,19 @@ pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, 
                 rejection_reasons: Vec::new(),
                 unverified_constraints: Vec::new(),
             };
+            match &route.protocol_validation {
+                bitrouter_sdk::language_model::native::NativeProtocolValidation::Compatible => {}
+                bitrouter_sdk::language_model::native::NativeProtocolValidation::Unverified => {
+                    assessment
+                        .unverified_constraints
+                        .push("protocol_compatibility_unknown".into())
+                }
+                bitrouter_sdk::language_model::native::NativeProtocolValidation::Rejected {
+                    reason,
+                } => assessment
+                    .rejection_reasons
+                    .push(format!("protocol_incompatible:{reason}")),
+            }
             let input_tokens = match &route.input_count {
                 Some(NativeInputCount::Counted { input_tokens, .. }) => Some(*input_tokens),
                 Some(NativeInputCount::Unavailable { .. }) => {

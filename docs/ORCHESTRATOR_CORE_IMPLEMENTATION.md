@@ -626,3 +626,106 @@ feasibility, reject known lossy protocol conversions and automatic truncation,
 and bind or reject provider-private native continuation with redacted adjustment
 receipts. Full accounting acceptance, C4–C6, A01–A23, final independent audit,
 final workspace validation, PR and CI remain open.
+
+
+## C3 shared protocol feasibility and final wire integrity
+
+Every controlled native call now freezes the shared executor's local protocol
+assessment into each `NativeRoute.protocol_validation`. The HTTP implementation
+uses the actual adapter, target model and provider's pure body normalization,
+without authentication, project discovery or provider I/O. Unknown custom
+executors remain explicitly unverified; custom HTTP adapters must implement
+managed validation. A rebuilt candidate receives a fresh assessment without
+model/effort reselection or changing the original candidate indices.
+
+Known lossy candidates are rejected before input counting or model admission.
+The SDK and core share the exact predicate for required count receipts, and
+skipped candidates cannot carry an invented count outcome. A custom embedding
+control cannot admit a route the executor rejected. Core persists controlled
+rejection categories and skips rejected candidates while retaining their
+positions in the frozen chain.
+
+Checks cover typed generation controls, provider-specific tools and tool
+identities, nested tool media/file references, mixed tool messages, unsupported
+reasoning replay and approval history. Gemini schema conversions that change
+the canonical schema are not certified as equivalent. Nested media also enters
+the existing shared capability derivation. These checks describe the actual
+current adapters, not universal provider support for every such input shape.
+
+Managed HTTP forbids automatic truncation, mutable provider conversations,
+unacknowledged provider compaction, unbound Responses continuation, Gemini
+private cached-content references and upstream multi-agent scheduling. This
+applies even without an input counter. Complete native-entry continuation
+binding, redacted adjustment receipts and broader continuation acceptance remain
+unfinished; this segment does not claim them.
+
+The immutable expected wire body is captured before asynchronous provider
+shaping. After authentication and on every retry, the adapter checks the entire
+final semantic body against that baseline, in addition to existing output-limit,
+credential-authority and exact input-count guards. Claude Code shares its pure
+identity-prefix/extension normalization with ordinary shaping; Antigravity
+checks its inner request and outer model while leaving project discovery to its
+existing authentication path. Ordinary uncontrolled requests keep their prior
+behavior.
+
+Independent review found and repaired Messages mixed-tool text loss, Responses
+custom-call false rejection, Gemini schema changes and private cache references,
+paired denial loss, cross-protocol tool identity loss, unsupported reasoning
+replay and incomplete final-body control coverage. The end-to-end fixture and
+review also exposed the core still requiring counts for rejected candidates;
+the shared count predicate fixed that admission mismatch. Final read-only
+review found no remaining concrete blocker in this segment.
+
+- Ten targeted regressions passed. The real HTTP/core fixture covers a rejected
+  configured-count candidate followed by a viable Responses candidate, with and
+  without counting, and all-candidate rejection for automatic truncation. It
+  asserts no count/attempt for the rejected candidate and retained route index.
+- Other regressions cover media capabilities, renderer failures, custom tool
+  identity, reasoning/approval loss, schema changes, custom-control admission,
+  private context, final authentication mutations and both provider wrappers.
+- Final-tree `cargo nextest run --workspace --all-features --build-jobs 2
+  --test-threads 1 --no-fail-fast`: 3749 passed, 22 skipped, in 210.887 seconds.
+- Strict all-target/all-feature workspace clippy, workspace all-feature
+  doctests (5 passed, 1 ignored), formatting, diff and generated-distribution
+  checks passed.
+
+Workspace validation exposed an inherited fixture isolation defect. Eight test
+configurations put `inherit_defaults: false` under `registry`, where the parser
+ignores it. Cold fixture homes therefore still allowed remote registry downloads
+with a 15-second per-request timeout, competing with the 15-second CLI readiness
+assertions. They now explicitly set `registry.enabled: false`. All changes are
+confined to test fixtures; production behavior, deadlines and success assertions
+are unchanged. Independent review confirmed the field placement and that no
+same-shaped fixture error remains. A first full rerun passed 3749 tests after
+the two initial configuration fixes; final verification includes all eight.
+This identifies and removes an actual external-network dependency, rather than
+using longer deadlines to tolerate it. It does not retroactively prove the
+cause of every historical intermittent failure.
+
+C3 remains in progress for complete continuation feasibility/adjustment evidence
+and full accounting acceptance. Private-item binding must cover Anthropic
+signed/redacted thinking and Gemini thought signatures retained in agent history,
+including provider/model/account changes and inherited child contexts, in addition
+to Responses continuation handles. C4–C6, A01–A23, final independent audit,
+final-tree workspace validation, PR and CI remain open.
+
+
+### Remaining C3 acceptance audit
+
+A separate read-only audit confirmed that the token subtotal is still only part
+of the run-cost contract. Preparation, input counting and integration work need
+explicit cost categories, including durable unknown evidence when no amount is
+available. Reported monetary charges and reconciled charges need independent,
+idempotently correlated evidence alongside estimates; provider-reported token
+usage is not a reported charge, and the values must not be added together as
+independent bills. The existing authoritative settlement path should supply this
+evidence rather than introducing another charging implementation.
+
+A09 also needs a direct production-App comparison between controlled native
+execution and ordinary HTTP ingress under the same configuration and provider
+fixture. Current native-to-metering comparisons do not prove this cross-entry
+behavior. Compare constraints, actual fallback provider/model, usage and pricing
+version while preserving the distinct managed workflow contract. Requested
+effort remains a request fact, not a provider observation. A hard monetary limit
+is not currently offered; conservative monetary reservations become mandatory
+if that policy is enabled.

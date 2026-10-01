@@ -41,6 +41,17 @@ pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send
 /// upstream call. Custom executors that don't need propagation can ignore it.
 #[async_trait]
 pub trait Executor: Send + Sync {
+    /// Pure local assessment before counting or admission. Implementations must
+    /// not perform provider/auth I/O, consume a response or modify the request.
+    fn native_protocol_validation(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> crate::language_model::native::NativeProtocolValidation {
+        Default::default()
+    }
+
     /// Count the exact managed input when explicitly configured. Unsupported
     /// executors fail that candidate rather than claim a known capacity fit.
     async fn count_input_tokens(
@@ -736,6 +747,7 @@ struct RequestBuildInput<'a> {
     timeouts: &'a HttpTimeouts,
     url: &'a str,
     body: &'a serde_json::Value,
+    managed_expected: Option<&'a serde_json::Value>,
     target: &'a RoutingTarget,
     transport: &'a Arc<dyn crate::language_model::protocol::Transport>,
     ctx: &'a PipelineContext,
@@ -927,6 +939,55 @@ impl HttpExecutor {
         Ok(())
     }
 
+    fn managed_expected_body(
+        &self,
+        rendered: &serde_json::Value,
+        target: &RoutingTarget,
+        ctx: &PipelineContext,
+    ) -> Result<Option<serde_json::Value>> {
+        if ctx
+            .extension::<crate::language_model::native::NativeManagedRequest>()
+            .is_none()
+        {
+            return Ok(None);
+        }
+        self.prepare_managed_baseline(rendered, target, ctx)
+            .map(Some)
+            .map_err(|reason| {
+                BitrouterError::bad_request(format!("managed protocol validation failed: {reason}"))
+            })
+    }
+
+    fn prepare_managed_baseline(
+        &self,
+        rendered: &serde_json::Value,
+        target: &RoutingTarget,
+        ctx: &PipelineContext,
+    ) -> std::result::Result<serde_json::Value, &'static str> {
+        let mut expected = rendered.clone();
+        if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
+            applier
+                .normalize_managed_body(&mut expected, target)
+                .map_err(|_| "provider_body_normalization_failed")?;
+        }
+        if expected
+            .get("previous_response_id")
+            .is_some_and(|value| !value.is_null())
+            && ctx.extension::<ProviderContinuation>().is_none()
+            && ctx.extension::<SuppressProviderContinuation>().is_none()
+        {
+            return Err("provider_continuation_unbound");
+        }
+        apply_provider_continuation(&mut expected, target, ctx)
+            .map_err(|_| "provider_continuation_incompatible")?;
+        let (adapter, _) = self
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or("outbound_adapter_unavailable")?;
+        adapter.validate_managed_body(&expected, &expected, target)?;
+        Ok(expected)
+    }
+
     async fn build_authenticated_request(
         &self,
         input: &RequestBuildInput<'_>,
@@ -950,6 +1011,32 @@ impl HttpExecutor {
             credential_authority.filter(|authority| authority.validates_final_request(&request));
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
         input.ctx.record_credential_authority(credential_authority);
+        if input
+            .ctx
+            .extension::<crate::language_model::native::NativeManagedRequest>()
+            .is_some()
+        {
+            let expected = input.managed_expected.ok_or_else(|| {
+                BitrouterError::bad_request("managed request baseline unavailable")
+            })?;
+            let (adapter, _) = self
+                .dispatch
+                .lookup(&input.target.api_protocol)
+                .ok_or_else(|| Self::no_dispatch_error(input.target))?;
+            let bytes = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .ok_or_else(|| BitrouterError::bad_request("managed request body unavailable"))?;
+            let actual = serde_json::from_slice(bytes)
+                .map_err(|_| BitrouterError::bad_request("managed request body is not JSON"))?;
+            adapter
+                .validate_managed_body(expected, &actual, input.target)
+                .map_err(|reason| {
+                    BitrouterError::bad_request(format!(
+                        "managed protocol validation failed: {reason}"
+                    ))
+                })?;
+        }
         if let Some(reservation) = input
             .ctx
             .extension::<crate::language_model::native::NativeOutputReservation>()
@@ -1310,6 +1397,37 @@ fn forward_inbound_anthropic_beta(
 
 #[async_trait]
 impl Executor for HttpExecutor {
+    fn native_protocol_validation(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> crate::language_model::native::NativeProtocolValidation {
+        let validate = || -> std::result::Result<(), &'static str> {
+            let (adapter, _) = self
+                .dispatch
+                .lookup(&target.api_protocol)
+                .ok_or("outbound_adapter_unavailable")?;
+            adapter.validate_managed_prompt(prompt)?;
+            Self::check_response_format(prompt, adapter, target)
+                .map_err(|_| "response_format_unsupported")?;
+            let mut upstream = prompt.clone();
+            upstream.model = target.service_id.clone();
+            upstream.stream = false;
+            let body = adapter
+                .render_request_for_target(&upstream, target)
+                .map_err(|_| "protocol_render_failed")?;
+            self.prepare_managed_baseline(&body, target, ctx)?;
+            Ok(())
+        };
+        match validate() {
+            Ok(()) => crate::language_model::native::NativeProtocolValidation::Compatible,
+            Err(reason) => crate::language_model::native::NativeProtocolValidation::Rejected {
+                reason: reason.into(),
+            },
+        }
+    }
+
     async fn count_input_tokens(
         &self,
         target: &RoutingTarget,
@@ -1353,6 +1471,7 @@ impl Executor for HttpExecutor {
         upstream_prompt.model = target.service_id.clone();
         upstream_prompt.stream = false;
         let mut body = adapter.render_request_for_target(&upstream_prompt, target)?;
+        let managed_expected = self.managed_expected_body(&body, target, ctx)?;
         self.shape_request_body(&mut body, target).await?;
         let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
         let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
@@ -1366,6 +1485,7 @@ impl Executor for HttpExecutor {
             timeouts: &timeouts,
             url: &url,
             body: &body,
+            managed_expected: managed_expected.as_ref(),
             target,
             transport,
             ctx,
@@ -1465,6 +1585,7 @@ impl Executor for HttpExecutor {
         upstream_prompt.model = target.service_id.clone();
         upstream_prompt.stream = true;
         let mut body = adapter.render_request_for_target(&upstream_prompt, target)?;
+        let managed_expected = self.managed_expected_body(&body, target, ctx)?;
         self.shape_request_body(&mut body, target).await?;
         let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
         let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
@@ -1478,6 +1599,7 @@ impl Executor for HttpExecutor {
             timeouts: &timeouts,
             url: &url,
             body: &body,
+            managed_expected: managed_expected.as_ref(),
             target,
             transport,
             ctx,
@@ -2162,6 +2284,7 @@ mod beta_forward_tests {
                 timeouts: &timeouts,
                 url: "https://api.example/v1/chat/completions",
                 body: &body,
+                managed_expected: None,
                 target: &target,
                 transport,
                 ctx: &ctx,
@@ -2201,6 +2324,7 @@ mod beta_forward_tests {
                 timeouts: &timeouts,
                 url: "https://example.invalid/v1/responses",
                 body: &body,
+                managed_expected: None,
                 target: &target,
                 transport,
                 ctx: &ctx,
@@ -2220,6 +2344,7 @@ mod beta_forward_tests {
             timeouts: &timeouts,
             url: "https://example.invalid/v1/responses",
             body,
+            managed_expected: None,
             target,
             transport,
             ctx,
@@ -2321,6 +2446,7 @@ mod beta_forward_tests {
                     timeouts: &timeouts,
                     url: "https://example.invalid/v1/chat/completions",
                     body: &body,
+                    managed_expected: None,
                     target: &target,
                     transport,
                     ctx: &ctx,
@@ -2368,12 +2494,100 @@ mod beta_forward_tests {
                     timeouts: &timeouts,
                     url: "https://example.invalid/fixture",
                     body: &body,
+                    managed_expected: None,
                     target: &target,
                     transport,
                     ctx: &ctx,
                     trace_headers: None,
                 })
                 .await?;
+        }
+        Ok(())
+    }
+
+    struct RewriteManagedField(&'static str, serde_json::Value);
+    #[async_trait]
+    impl crate::language_model::auth::AuthApplier for RewriteManagedField {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _: &RoutingTarget,
+        ) -> Result<reqwest::Request> {
+            let bytes = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .ok_or_else(|| BitrouterError::internal("fixture body missing"))?;
+            let mut body: serde_json::Value = serde_json::from_slice(bytes)
+                .map_err(|e| BitrouterError::internal(e.to_string()))?;
+            body[self.0] = self.1.clone();
+            *request.body_mut() = Some(
+                serde_json::to_vec(&body)
+                    .map_err(|e| BitrouterError::internal(e.to_string()))?
+                    .into(),
+            );
+            Ok(request)
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_protocol_revalidates_every_authenticated_body_without_a_counter() -> Result<()>
+    {
+        let target = target(ApiProtocol::Responses);
+        let body = serde_json::json!({"model":target.service_id,"input":"mandatory input","tools":[],"temperature":0.2});
+        for (field, replacement) in [
+            ("input", serde_json::json!("lost input")),
+            (
+                "tools",
+                serde_json::json!([{"type":"function","name":"unapproved"}]),
+            ),
+            ("model", serde_json::json!("different-model")),
+            ("temperature", serde_json::json!(1)),
+            ("truncation", serde_json::json!("auto")),
+            ("previous_response_id", serde_json::json!("private-handle")),
+        ] {
+            let executor = HttpExecutor::with_dispatch_and_auth(
+                Default::default(),
+                OutboundDispatch::builtin(),
+                AuthAppliers::new().with(
+                    &target.provider_name,
+                    Arc::new(RewriteManagedField(field, replacement)),
+                ),
+            )?;
+            let (_, transport) = executor
+                .dispatch
+                .lookup(&target.api_protocol)
+                .ok_or_else(|| BitrouterError::internal("fixture transport"))?;
+            let (client, timeouts) = executor.client_for(&target);
+            for managed in [false, true] {
+                let mut ctx = ctx_with_beta(None);
+                if managed {
+                    ctx.insert_extension(Arc::new(
+                        crate::language_model::native::NativeManagedRequest,
+                    ));
+                }
+                let baseline = executor.managed_expected_body(&body, &target, &ctx)?;
+                // Rebuilding after credential refresh uses this same immutable
+                // input and must repeat validation, without an input counter.
+                for _retry in 0..2 {
+                    let result = executor
+                        .build_authenticated_request(&RequestBuildInput {
+                            client: &client,
+                            timeouts: &timeouts,
+                            url: "https://example.invalid/responses",
+                            body: &body,
+                            managed_expected: baseline.as_ref(),
+                            target: &target,
+                            transport,
+                            ctx: &ctx,
+                            trace_headers: None,
+                        })
+                        .await;
+                    assert_eq!(result.is_err(), managed, "field={field}");
+                    if let Err(error) = result {
+                        assert!(!error.to_string().contains("private-handle"));
+                    }
+                }
+            }
         }
         Ok(())
     }

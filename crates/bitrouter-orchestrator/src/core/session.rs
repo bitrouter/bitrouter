@@ -2775,7 +2775,7 @@ impl NativeExecutionControl for StepControl {
                         || plan
                             .routes
                             .get(route_index as usize)
-                            .is_none_or(|route| route.constraints.input_token_counting.is_none())
+                            .is_none_or(|route| !route.requires_input_count())
                         || step.input_counts.last().is_some_and(|prior| {
                             prior.route_index >= route_index || prior.report.is_none()
                         })
@@ -3452,11 +3452,21 @@ fn validate_context_validation(step: &ModelStep) -> Result<(), CoreError> {
 }
 
 fn validate_input_counts(step: &ModelStep, plan: &NativePlan) -> Result<(), CoreError> {
+    if plan
+        .routes
+        .iter()
+        .any(|route| !route.requires_input_count() && route.input_count.is_some())
+    {
+        return Err(reject(
+            ErrorCode::OperationConflict,
+            "input count has no viable configured provenance",
+        ));
+    }
     let expected = plan
         .routes
         .iter()
         .enumerate()
-        .filter(|(_, route)| route.constraints.input_token_counting.is_some())
+        .filter(|(_, route)| route.requires_input_count())
         .collect::<Vec<_>>();
     if expected.len() != step.input_counts.len() {
         return Err(reject(

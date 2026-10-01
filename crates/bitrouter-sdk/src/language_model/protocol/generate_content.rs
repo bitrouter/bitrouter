@@ -1078,6 +1078,27 @@ impl InboundAdapter for GenerateContentAdapter {
 }
 
 impl OutboundAdapter for GenerateContentAdapter {
+    fn validate_managed_prompt(&self, prompt: &Prompt) -> std::result::Result<(), &'static str> {
+        super::managed::validate_prompt(&ApiProtocol::GenerateContent, prompt)?;
+        for tool in &prompt.tools {
+            if let Tool::Function { parameters, .. } = tool
+                && sanitize_gemini_schema(parameters) != *parameters
+            {
+                return Err("tool_schema_conversion_requires_validation");
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_managed_body(
+        &self,
+        expected: &serde_json::Value,
+        actual: &serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> std::result::Result<(), &'static str> {
+        super::managed::validate_body(&ApiProtocol::GenerateContent, expected, actual)
+    }
+
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::GenerateContent
     }

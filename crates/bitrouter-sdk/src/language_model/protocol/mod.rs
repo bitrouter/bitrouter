@@ -142,6 +142,7 @@ pub(crate) fn rendered_finish_reason(
 
 pub mod chat_completions;
 pub mod generate_content;
+mod managed;
 pub mod messages;
 pub mod responses;
 
@@ -288,6 +289,25 @@ pub trait InboundAdapter: Send + Sync {
 pub trait OutboundAdapter: Send + Sync {
     /// The wire protocol this adapter speaks.
     fn protocol(&self) -> ApiProtocol;
+
+    /// Validate managed request semantics before rendering. Ordinary compatibility
+    /// calls retain their existing conversion behavior. Custom adapters explicitly
+    /// opt in; successful rendering alone does not establish preservation.
+    fn validate_managed_prompt(&self, _prompt: &Prompt) -> std::result::Result<(), &'static str> {
+        Err("managed_protocol_validation_unsupported")
+    }
+
+    /// Check the final authenticated body against the originally rendered input.
+    /// Envelope adapters must validate their inner request rather than guessing
+    /// a built-in wire from a provider/model name. No private data enters errors.
+    fn validate_managed_body(
+        &self,
+        _expected: &serde_json::Value,
+        _actual: &serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> std::result::Result<(), &'static str> {
+        Err("managed_body_validation_unsupported")
+    }
 
     /// Whether this adapter can inspect the output bound in a final request,
     /// including any provider envelope. Custom adapters opt in by overriding

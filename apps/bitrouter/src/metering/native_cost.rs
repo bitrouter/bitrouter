@@ -118,6 +118,7 @@ mod tests {
                 constraints: Default::default(),
                 output_token_limit_supported: Some(true),
                 input_count: None,
+                protocol_validation: Default::default(),
             },
             actual_provider: Some("execution-provider".into()),
             actual_model: Some("served-model".into()),

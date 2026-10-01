@@ -329,6 +329,19 @@ fn go_platform() -> &'static str {
 
 #[async_trait]
 impl AuthApplier for AntigravityAuthApplier {
+    fn normalize_managed_body(
+        &self,
+        body: &mut serde_json::Value,
+        target: &RoutingTarget,
+    ) -> Result<()> {
+        // Project discovery is asynchronous authentication work. Only the
+        // immutable model and inner request are part of the semantic baseline.
+        let request = std::mem::replace(body, serde_json::Value::Null);
+        *body =
+            serde_json::json!({ "model": target.service_id, "project": null, "request": request });
+        Ok(())
+    }
+
     fn output_token_limit_support(&self, _target: &RoutingTarget) -> Option<bool> {
         Some(true)
     }
@@ -417,8 +430,26 @@ mod tests {
             .insert(DEFAULT_LABEL.into(), "fixture-project".into());
         let target = target();
         let mut body = serde_json::json!({"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":128}});
+        let mut baseline = body.clone();
+        applier.normalize_managed_body(&mut baseline, &target)?;
         applier.prepare_body(&mut body, &target).await?;
         let adapter = protocol::AntigravityAdapter::new();
+        assert_eq!(
+            adapter.validate_managed_body(&baseline, &body, &target),
+            Ok(())
+        );
+        let mut changed = body.clone();
+        changed["model"] = "different-model".into();
+        assert_eq!(
+            adapter.validate_managed_body(&baseline, &changed, &target),
+            Err("managed_provider_model_changed")
+        );
+        changed = body.clone();
+        changed["request"]["contents"] = serde_json::json!([]);
+        assert_eq!(
+            adapter.validate_managed_body(&baseline, &changed, &target),
+            Err("managed_context_or_controls_changed")
+        );
         assert_eq!(adapter.output_token_limit(&body)?, Some(128));
         body["request"]["generationConfig"] = serde_json::json!({});
         body["generationConfig"] = serde_json::json!({"maxOutputTokens":128});

@@ -766,6 +766,19 @@ impl InboundAdapter for ChatCompletionsAdapter {
 }
 
 impl OutboundAdapter for ChatCompletionsAdapter {
+    fn validate_managed_prompt(&self, prompt: &Prompt) -> std::result::Result<(), &'static str> {
+        super::managed::validate_prompt(&ApiProtocol::ChatCompletions, prompt)
+    }
+
+    fn validate_managed_body(
+        &self,
+        expected: &serde_json::Value,
+        actual: &serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> std::result::Result<(), &'static str> {
+        super::managed::validate_body(&ApiProtocol::ChatCompletions, expected, actual)
+    }
+
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::ChatCompletions
     }
