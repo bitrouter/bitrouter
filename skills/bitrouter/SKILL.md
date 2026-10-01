@@ -17,6 +17,9 @@ metadata:
 # BitRouter
 BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4.
 
+Native BRO execution commits task/model/tool facts to the configured database.
+See `references/cli.md` for current capabilities and restart limitations.
+
 ## Activate in one pass
 Work top to bottom, probing before asking.
 

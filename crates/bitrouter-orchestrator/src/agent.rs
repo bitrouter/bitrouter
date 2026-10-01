@@ -15,6 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::context;
+use crate::store::{CallRecord, CommitRequest, EffectStatus, ExecutionRecord};
 use crate::tools::WorkspaceTools;
 
 const DEFAULT_INSTRUCTIONS: &str = "You are BRO, a coding agent. Work in the selected server workspace. Use read, ls, find, and grep to inspect code; use write and edit to change it, and the available shell tool to run commands and checks. For edit, supply unique oldText values from the original file. Report what actually happened; do not claim a check passed unless its tool result shows it.";
@@ -22,7 +23,7 @@ const READ_ONLY_INSTRUCTIONS: &str = "You are BRO, a read-only coding agent. Ins
 const MAX_MODEL_CONTENT_BYTES: usize = 512 * 1024;
 const MAX_LIVE_DELTAS: usize = 8_192;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct EstimateRates {
     /// Estimated micro-USD per million prompt tokens.
     pub prompt: u64,
@@ -30,11 +31,13 @@ pub struct EstimateRates {
     pub completion: u64,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct AgentConfig {
     pub model: String,
     pub effort: Option<ReasoningEffort>,
     pub instructions: String,
     pub max_steps: u32,
+    pub max_tool_calls: u32,
     pub max_duration: Duration,
     pub max_context_bytes: usize,
     pub max_spend_microusd: Option<u64>,
@@ -57,6 +60,7 @@ impl AgentConfig {
             effort,
             instructions: DEFAULT_INSTRUCTIONS.into(),
             max_steps: 32,
+            max_tool_calls: 128,
             max_duration: Duration::from_secs(600),
             max_context_bytes: 512 * 1024,
             max_spend_microusd: None,
@@ -124,6 +128,9 @@ pub struct RunReport {
     pub events: Vec<RunEvent>,
     pub steps: u32,
     pub estimated_spend_microusd: u64,
+    pub tool_calls: u32,
+    pub active_duration_ms: u64,
+    pub unknown_effect: bool,
 }
 
 pub struct Agent {
@@ -225,6 +232,17 @@ impl StreamCollector {
                     id = uuid::Uuid::new_v4().to_string();
                 }
                 self.content_bytes = self.content_bytes.saturating_add(arguments.len());
+                if let Some(index) = self.tool_indices.get(&id)
+                    && name.is_some()
+                    && let Content::ToolCall {
+                        arguments: previous,
+                        ..
+                    } = &self.content[*index]
+                    && serde_json::from_str::<serde_json::Value>(previous).is_ok()
+                    && serde_json::from_str::<serde_json::Value>(&arguments).is_ok()
+                {
+                    return Err("duplicate complete tool call ID in provider stream".into());
+                }
                 let index = match self.tool_indices.get(&id).copied() {
                     Some(index) => index,
                     None => {
@@ -357,6 +375,7 @@ impl Agent {
     ) -> Result<Self, String> {
         if config.model.trim().is_empty()
             || config.max_steps == 0
+            || config.max_tool_calls == 0
             || config.max_duration.is_zero()
             || config.max_context_bytes == 0
         {
@@ -380,7 +399,8 @@ impl Agent {
         cancel: CancellationToken,
         events: Option<mpsc::Sender<RunEvent>>,
     ) -> RunReport {
-        self.run_with_approvals(task, cancel, events, None).await
+        self.run_with_approvals(task, cancel, events, None, None)
+            .await
     }
 
     pub(crate) async fn run_with_approvals(
@@ -389,6 +409,7 @@ impl Agent {
         cancel: CancellationToken,
         events: Option<mpsc::Sender<RunEvent>>,
         approvals: Option<mpsc::Sender<ApprovalRequest>>,
+        commits: Option<mpsc::Sender<CommitRequest>>,
     ) -> RunReport {
         let task = task.into();
         let mut report = RunReport {
@@ -399,14 +420,18 @@ impl Agent {
             events: Vec::new(),
             steps: 0,
             estimated_spend_microusd: 0,
+            tool_calls: 0,
+            active_duration_ms: 0,
+            unknown_effect: false,
         };
         let user_message = report.messages[0].clone();
         record(&mut report, &events, RunEvent::UserMessage(user_message)).await;
         let started = Instant::now();
-        let mut used_call_ids = HashSet::new();
-        loop {
-            if let Some((status, detail)) = self.bound_status(&report, started, &cancel) {
-                return finish(report, &events, status, detail).await;
+        let mut approval_wait = Duration::ZERO;
+        let (status, detail) = 'execution: loop {
+            let active_started = started + approval_wait;
+            if let Some(outcome) = self.bound_status(&report, active_started, &cancel) {
+                break outcome;
             }
             let prompt = match context::build(
                 &self.config.model,
@@ -417,48 +442,47 @@ impl Agent {
                 self.config.max_context_bytes,
             ) {
                 Ok(prompt) => prompt,
-                Err(error) => {
-                    return finish(report, &events, RunStatus::BoundExceeded, error).await;
-                }
+                Err(error) => break (RunStatus::BoundExceeded, error),
             };
+            let step_id = uuid::Uuid::new_v4().to_string();
+            if let Err(error) = commit_execution(
+                &commits,
+                vec![ExecutionRecord::ModelRequest {
+                    step_id: step_id.clone(),
+                    context_version: u64::from(report.steps),
+                    prompt: Box::new(prompt.clone()),
+                }],
+            )
+            .await
+            {
+                break (RunStatus::Failed, error);
+            }
             report.steps += 1;
-            let remaining = self.config.max_duration.saturating_sub(started.elapsed());
-            let turn = tokio::select! {
-                _ = cancel.cancelled() => {
-                    return finish(report, &events, RunStatus::Cancelled, "cancelled during model request".into()).await;
-                }
-                result = tokio::time::timeout(
-                    remaining,
-                    self.execute_turn(prompt, events.as_ref())
-                ) => result,
-            };
-            let response = match turn {
-                Ok(Ok(response)) => response,
-                Ok(Err(error)) => {
-                    return finish(report, &events, RunStatus::Failed, error.to_string()).await;
-                }
-                Err(_) => {
-                    return finish(
-                        report,
-                        &events,
-                        RunStatus::BoundExceeded,
-                        "time bound reached during model request".into(),
-                    )
-                    .await;
+            let remaining = self
+                .config
+                .max_duration
+                .saturating_sub(active_started.elapsed());
+            let response = tokio::select! {
+                _ = cancel.cancelled() => break (RunStatus::Cancelled, "cancelled during model request".into()),
+                result = tokio::time::timeout(remaining, self.execute_turn(prompt, events.as_ref())) => match result {
+                    Ok(Ok(response)) => response,
+                    Ok(Err(error)) => break (RunStatus::Failed, error),
+                    Err(_) => break (RunStatus::BoundExceeded, "time bound reached during model request".into()),
                 }
             };
             let mut usage_unavailable = false;
             if let Some(rates) = self.config.estimate_rates {
                 match response.result.usage.as_ref() {
                     Some(usage) => {
-                        let cost =
-                            estimate_cost(usage.prompt_tokens, usage.completion_tokens, rates);
-                        report.estimated_spend_microusd =
-                            report.estimated_spend_microusd.saturating_add(cost);
+                        report.estimated_spend_microusd = report
+                            .estimated_spend_microusd
+                            .saturating_add(estimate_cost(
+                                usage.prompt_tokens,
+                                usage.completion_tokens,
+                                rates,
+                            ))
                     }
-                    None if self.config.max_spend_microusd.is_some() => {
-                        usage_unavailable = true;
-                    }
+                    None if self.config.max_spend_microusd.is_some() => usage_unavailable = true,
                     None => {}
                 }
             }
@@ -466,16 +490,6 @@ impl Agent {
                 role: Role::Assistant,
                 content: response.result.content,
             };
-            record(
-                &mut report,
-                &events,
-                RunEvent::ModelTurn {
-                    request_id: response.request_id,
-                    requested_model: self.config.model.clone(),
-                    usage: response.result.usage,
-                },
-            )
-            .await;
             let calls: Vec<PendingCall> = assistant
                 .content
                 .iter()
@@ -496,6 +510,74 @@ impl Agent {
                     _ => None,
                 })
                 .collect();
+            let mut ids = HashSet::new();
+            if calls
+                .iter()
+                .any(|call| call.id.is_empty() || !ids.insert(call.id.clone()))
+            {
+                break (
+                    RunStatus::Failed,
+                    "missing or duplicate tool call ID in model response".into(),
+                );
+            }
+            if report
+                .tool_calls
+                .saturating_add(u32::try_from(calls.len()).unwrap_or(u32::MAX))
+                > self.config.max_tool_calls
+            {
+                break (
+                    RunStatus::BoundExceeded,
+                    "tool call bound exceeded before response admission".into(),
+                );
+            }
+            let mut admission = report.messages.clone();
+            admission.push(assistant.clone());
+            let size = serde_json::to_vec(&admission).map(|value| value.len());
+            let reserve = calls.len().saturating_mul(1024);
+            if size.map_or(true, |size| {
+                size.saturating_add(reserve) > self.config.max_context_bytes
+            }) {
+                break (
+                    RunStatus::BoundExceeded,
+                    "complete model response exceeds context settlement capacity".into(),
+                );
+            }
+            let call_records = calls
+                .iter()
+                .map(|call| CallRecord {
+                    item_id: uuid::Uuid::new_v4().to_string(),
+                    provider_call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                })
+                .collect::<Vec<_>>();
+            if let Err(error) = commit_execution(
+                &commits,
+                vec![ExecutionRecord::ModelResponse {
+                    step_id: step_id.clone(),
+                    item_id: uuid::Uuid::new_v4().to_string(),
+                    request_id: response.request_id.clone(),
+                    requested_model: self.config.model.clone(),
+                    usage: response.result.usage.clone(),
+                    estimated_spend_microusd: report.estimated_spend_microusd,
+                    message: assistant.clone(),
+                    calls: call_records.clone(),
+                }],
+            )
+            .await
+            {
+                break (RunStatus::Failed, error);
+            }
+            record(
+                &mut report,
+                &events,
+                RunEvent::ModelTurn {
+                    request_id: response.request_id,
+                    requested_model: self.config.model.clone(),
+                    usage: response.result.usage,
+                },
+            )
+            .await;
             let final_text = assistant
                 .content
                 .iter()
@@ -507,159 +589,205 @@ impl Agent {
                 .join("\n");
             report.messages.push(assistant.clone());
             record(&mut report, &events, RunEvent::AssistantMessage(assistant)).await;
-            if usage_unavailable {
-                return finish(
-                    report,
-                    &events,
+            let mut stop = if usage_unavailable {
+                Some((
                     RunStatus::Failed,
                     "model usage unavailable for the configured spend bound".into(),
-                )
-                .await;
-            }
-            if self
-                .config
-                .max_spend_microusd
-                .is_some_and(|bound| report.estimated_spend_microusd >= bound)
-            {
-                return finish(
-                    report,
-                    &events,
-                    RunStatus::BoundExceeded,
-                    "estimated spend bound reached".into(),
-                )
-                .await;
-            }
+                ))
+            } else {
+                self.effect_bound_status(&report, started + approval_wait, &cancel)
+            };
             if calls.is_empty() {
+                if let Some(outcome) = stop {
+                    break outcome;
+                }
                 if final_text.trim().is_empty() {
-                    return finish(
-                        report,
-                        &events,
+                    break (
                         RunStatus::Failed,
                         "model returned no final answer or client tool call".into(),
-                    )
-                    .await;
+                    );
                 }
                 report.final_answer = Some(final_text);
-                return finish(
-                    report,
-                    &events,
-                    RunStatus::Completed,
-                    "final answer recorded".into(),
-                )
-                .await;
+                break (RunStatus::Completed, "final answer recorded".into());
             }
-            for call in calls {
-                if let Some((status, detail)) = self.bound_status(&report, started, &cancel) {
-                    return finish(report, &events, status, detail).await;
+            let mut ordinary_batch_error = false;
+            for (call, call_record) in calls.into_iter().zip(call_records) {
+                report.tool_calls += 1;
+                if stop.is_none() {
+                    stop = self.effect_bound_status(&report, started + approval_wait, &cancel);
                 }
-                report.steps += 1;
-                record(
-                    &mut report,
-                    &events,
-                    RunEvent::ToolStarted {
-                        id: call.id.clone(),
-                        name: call.name.clone(),
-                    },
-                )
-                .await;
-                let output = if call.id.is_empty() || !used_call_ids.insert(call.id.clone()) {
-                    ToolResultOutput::ErrorJson {
-                        value: serde_json::json!({"error": "missing or duplicate tool call id"}),
-                    }
+                let mut effect = EffectStatus::NotExecuted;
+                let output = if let Some((_, reason)) = &stop {
+                    not_executed(reason)
                 } else if !WorkspaceTools::allowed(self.config.tool_mode, &call.name) {
-                    ToolResultOutput::ErrorJson {
-                        value: serde_json::json!({"error": "tool is unavailable in this task mode"}),
-                    }
+                    not_executed("tool is unavailable in this task mode")
+                } else if let Err(error) = WorkspaceTools::validate(&call.name, &call.arguments) {
+                    not_executed(&error)
                 } else {
                     let approved = if WorkspaceTools::read_only(&call.name) {
                         Ok(true)
-                    } else {
-                        match &approvals {
-                            Some(approvals) => {
-                                let (response, receiver) = oneshot::channel();
-                                let request = ApprovalRequest {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    tool_id: call.id.clone(),
-                                    tool_name: call.name.clone(),
-                                    arguments: call.arguments.clone(),
-                                    response,
-                                };
-                                if approvals.send(request).await.is_err() {
-                                    Err("approval service unavailable".to_string())
-                                } else {
-                                    let remaining =
-                                        self.config.max_duration.saturating_sub(started.elapsed());
-                                    tokio::select! {
-                                        _ = cancel.cancelled() => Err("approval cancelled".into()),
-                                        result = tokio::time::timeout(remaining, receiver) => {
-                                            match result {
-                                                Ok(Ok(approved)) => Ok(approved),
-                                                Ok(Err(_)) => Err("approval channel closed".into()),
-                                                Err(_) => Err("approval timed out".into()),
-                                            }
-                                        }
-                                    }
-                                }
+                    } else if let Some(approvals) = &approvals {
+                        let (response, receiver) = oneshot::channel();
+                        let request = ApprovalRequest {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            tool_id: call_record.item_id.clone(),
+                            tool_name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                            response,
+                        };
+                        let wait_started = Instant::now();
+                        let result = if approvals.send(request).await.is_err() {
+                            Err("approval service unavailable".to_string())
+                        } else {
+                            tokio::select! {
+                                _ = cancel.cancelled() => Err("approval cancelled".into()),
+                                result = receiver => result.map_err(|_| "approval channel closed".to_string()),
                             }
-                            None => Ok(true),
-                        }
+                        };
+                        approval_wait += wait_started.elapsed();
+                        result
+                    } else {
+                        Ok(true)
                     };
                     match approved {
-                        Ok(true) => {
-                            if cancel.is_cancelled() {
-                                ToolResultOutput::ErrorJson {
-                                    value: serde_json::json!({"error": "tool execution cancelled"}),
-                                }
-                            } else {
-                                self.tools
-                                    .execute(
-                                        &call.name,
-                                        &call.arguments,
-                                        &cancel,
-                                        &call.id,
-                                        events.as_ref(),
-                                    )
-                                    .await
+                        Ok(true) if !cancel.is_cancelled() => {
+                            if let Err(error) = commit_execution(
+                                &commits,
+                                vec![ExecutionRecord::ToolIntent {
+                                    step_id: step_id.clone(),
+                                    call: call_record.clone(),
+                                }],
+                            )
+                            .await
+                            {
+                                break 'execution (RunStatus::Failed, error);
                             }
+                            record(
+                                &mut report,
+                                &events,
+                                RunEvent::ToolStarted {
+                                    id: call_record.item_id.clone(),
+                                    name: call.name.clone(),
+                                },
+                            )
+                            .await;
+                            let result = self
+                                .tools
+                                .execute(
+                                    &call.name,
+                                    &call.arguments,
+                                    &cancel,
+                                    &call_record.item_id,
+                                    events.as_ref(),
+                                )
+                                .await;
+                            effect = if !WorkspaceTools::read_only(&call.name)
+                                && (cancel.is_cancelled()
+                                    || matches!(result, ToolResultOutput::ErrorJson { .. }))
+                            {
+                                report.unknown_effect = true;
+                                EffectStatus::Unknown
+                            } else {
+                                EffectStatus::Completed
+                            };
+                            result
                         }
+                        Ok(true) => not_executed("cancelled before tool execution"),
                         Ok(false) => ToolResultOutput::ExecutionDenied {
                             reason: Some("user denied tool execution".into()),
                         },
-                        Err(error) => ToolResultOutput::ErrorJson {
-                            value: serde_json::json!({"error": error}),
-                        },
+                        Err(error) => not_executed(&error),
                     }
                 };
-                let tool_message = Message {
+                let message = Message {
                     role: Role::Tool,
                     content: vec![Content::ToolResult {
-                        call_id: call.id.clone(),
+                        call_id: call.id,
                         tool_name: Some(call.name.clone()),
                         output: output.clone(),
                         dynamic: false,
                         provider_metadata: call.provider_metadata,
                     }],
                 };
-                report.messages.push(tool_message);
+                report.messages.push(message.clone());
+                if let Err(error) = commit_execution(
+                    &commits,
+                    vec![ExecutionRecord::ToolResult {
+                        step_id: step_id.clone(),
+                        item_id: call_record.item_id.clone(),
+                        message,
+                        effect,
+                    }],
+                )
+                .await
+                {
+                    report.unknown_effect |= effect != EffectStatus::NotExecuted;
+                    break 'execution (RunStatus::Failed, error);
+                }
                 record(
                     &mut report,
                     &events,
                     RunEvent::ToolFinished {
-                        id: call.id,
+                        id: call_record.item_id,
                         name: call.name,
-                        output,
+                        output: output.clone(),
                     },
                 )
                 .await;
-                if cancel.is_cancelled() {
-                    return finish(
-                        report,
-                        &events,
+                if report.unknown_effect {
+                    stop = Some((
+                        RunStatus::Failed,
+                        "tool effects require investigation before continuation".into(),
+                    ));
+                } else if cancel.is_cancelled() {
+                    stop = Some((
                         RunStatus::Cancelled,
-                        "cancelled during tool execution; command effects may have occurred".into(),
-                    )
-                    .await;
+                        "cancelled during tool execution".into(),
+                    ));
+                } else if matches!(
+                    output,
+                    ToolResultOutput::ErrorJson { .. } | ToolResultOutput::ExecutionDenied { .. }
+                ) && stop.is_none()
+                {
+                    ordinary_batch_error = true;
+                    // Settle later calls in this batch without launching them;
+                    // the model may react to the ordinary error in a new step.
+                    stop = Some((
+                        RunStatus::Failed,
+                        "remaining batch not executed after tool error or denial".into(),
+                    ));
                 }
+            }
+            if let Some(outcome) = stop
+                && (!ordinary_batch_error
+                    || report.unknown_effect
+                    || outcome.0 != RunStatus::Failed
+                    || cancel.is_cancelled()
+                    || usage_unavailable)
+            {
+                break outcome;
+            }
+        };
+        report.active_duration_ms =
+            u64::try_from(started.elapsed().saturating_sub(approval_wait).as_millis())
+                .unwrap_or(u64::MAX);
+        let settlement = ExecutionRecord::Settled {
+            messages: report.messages.clone(),
+            model_steps: report.steps,
+            tool_calls: report.tool_calls,
+            estimated_spend_microusd: report.estimated_spend_microusd,
+            active_duration_ms: report.active_duration_ms,
+        };
+        match commit_execution(&commits, vec![settlement]).await {
+            Ok(()) => finish(report, &events, status, detail).await,
+            Err(error) => {
+                finish(
+                    report,
+                    &events,
+                    RunStatus::Failed,
+                    format!("{detail}; settlement commit failed: {error}"),
+                )
+                .await
             }
         }
     }
@@ -670,14 +798,24 @@ impl Agent {
         started: Instant,
         cancel: &CancellationToken,
     ) -> Option<(RunStatus, String)> {
+        self.effect_bound_status(report, started, cancel)
+            .or_else(|| {
+                (report.steps >= self.config.max_steps)
+                    .then(|| (RunStatus::BoundExceeded, "step bound reached".into()))
+            })
+    }
+
+    fn effect_bound_status(
+        &self,
+        report: &RunReport,
+        started: Instant,
+        cancel: &CancellationToken,
+    ) -> Option<(RunStatus, String)> {
         if cancel.is_cancelled() {
             return Some((RunStatus::Cancelled, "cancelled".into()));
         }
         if started.elapsed() >= self.config.max_duration {
             return Some((RunStatus::BoundExceeded, "time bound reached".into()));
-        }
-        if report.steps >= self.config.max_steps {
-            return Some((RunStatus::BoundExceeded, "step bound reached".into()));
         }
         if self
             .config
@@ -697,6 +835,28 @@ fn estimate_cost(prompt_tokens: u64, completion_tokens: u64, rates: EstimateRate
     let total = u128::from(prompt_tokens) * u128::from(rates.prompt)
         + u128::from(completion_tokens) * u128::from(rates.completion);
     u64::try_from(total.div_ceil(1_000_000)).unwrap_or(u64::MAX)
+}
+
+async fn commit_execution(
+    sink: &Option<mpsc::Sender<CommitRequest>>,
+    records: Vec<ExecutionRecord>,
+) -> Result<(), String> {
+    let Some(sink) = sink else {
+        return Ok(());
+    };
+    let (response, receiver) = oneshot::channel();
+    sink.send(CommitRequest { records, response })
+        .await
+        .map_err(|_| "execution commit owner unavailable".to_string())?;
+    receiver
+        .await
+        .map_err(|_| "execution commit acknowledgement lost".to_string())?
+}
+
+fn not_executed(reason: &str) -> ToolResultOutput {
+    ToolResultOutput::ErrorJson {
+        value: serde_json::json!({"error": reason, "execution_status": "not_executed"}),
+    }
 }
 
 async fn record(report: &mut RunReport, sender: &Option<mpsc::Sender<RunEvent>>, event: RunEvent) {
@@ -1008,7 +1168,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_unknown_and_duplicate_calls_return_errors_without_effects()
+    async fn failed_batch_settles_and_provider_ids_can_repeat_in_later_steps()
     -> Result<(), Box<dyn std::error::Error>> {
         let workspace = TempDir::new()?;
         std::fs::write(workspace.path().join("note.txt"), "old")?;
@@ -1039,7 +1199,7 @@ mod tests {
         assert_eq!(report.status, RunStatus::Completed);
         assert_eq!(
             std::fs::read_to_string(workspace.path().join("note.txt"))?,
-            "old"
+            "changed"
         );
         let outputs: Vec<&ToolResultOutput> = report
             .events
@@ -1052,8 +1212,8 @@ mod tests {
         assert_eq!(outputs.len(), 4);
         assert!(outputs[0].is_error());
         assert!(outputs[1].is_error());
-        assert!(!outputs[2].is_error());
-        assert!(outputs[3].is_error());
+        assert!(outputs[2].is_error());
+        assert!(!outputs[3].is_error());
         Ok(())
     }
 
@@ -1097,7 +1257,13 @@ mod tests {
         assert_eq!(names, ["read", "ls", "find", "grep"]);
         let (approvals, mut approval_requests) = mpsc::channel(64);
         let report = agent
-            .run_with_approvals("inspect", CancellationToken::new(), None, Some(approvals))
+            .run_with_approvals(
+                "inspect",
+                CancellationToken::new(),
+                None,
+                Some(approvals),
+                None,
+            )
             .await;
         assert!(approval_requests.try_recv().is_err());
         assert_eq!(report.status, RunStatus::Completed);
@@ -1143,6 +1309,10 @@ mod tests {
         .run("create", CancellationToken::new(), None)
         .await;
         assert_eq!(step_limited.status, RunStatus::BoundExceeded);
+        assert_eq!(step_limited.steps, 1);
+        assert_eq!(step_limited.tool_calls, 1);
+        context::validate_history(&step_limited.messages)?;
+        std::fs::remove_file(workspace.path().join("created.txt"))?;
 
         let spend_limited = agent(&workspace, vec![effect.clone()], |config| {
             config.max_spend_microusd = Some(1);
@@ -1173,6 +1343,9 @@ mod tests {
             events: Vec::new(),
             steps: 0,
             estimated_spend_microusd: 0,
+            tool_calls: 0,
+            active_duration_ms: 0,
+            unknown_effect: false,
         };
         assert!(matches!(
             time_agent.bound_status(
@@ -1257,6 +1430,94 @@ mod tests {
                 .iter()
                 .all(|event| !matches!(event, RunEvent::ToolStarted { .. }))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_response_commit_settles_all_unstarted_calls()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = TempDir::new()?;
+        let runner = agent(
+            &workspace,
+            vec![turn(vec![
+                call(
+                    "one",
+                    "write",
+                    serde_json::json!({"path":"one.txt","content":"one"}),
+                ),
+                call(
+                    "two",
+                    "write",
+                    serde_json::json!({"path":"two.txt","content":"two"}),
+                ),
+            ])],
+            |_| {},
+        )?;
+        let cancellation = CancellationToken::new();
+        let control = cancellation.clone();
+        let (commits, mut requests) = mpsc::channel::<CommitRequest>(1);
+        let owner = tokio::spawn(async move {
+            let mut results = 0;
+            while let Some(request) = requests.recv().await {
+                if request
+                    .records
+                    .iter()
+                    .any(|record| matches!(record, ExecutionRecord::ModelResponse { .. }))
+                {
+                    control.cancel();
+                }
+                for record in &request.records {
+                    if let ExecutionRecord::ToolResult { effect, .. } = record {
+                        assert_eq!(*effect, EffectStatus::NotExecuted);
+                        results += 1;
+                    }
+                }
+                let _ = request.response.send(Ok(()));
+            }
+            results
+        });
+        let report = runner
+            .run_with_approvals("write both", cancellation, None, None, Some(commits))
+            .await;
+        assert_eq!(report.status, RunStatus::Cancelled);
+        assert_eq!(owner.await?, 2);
+        context::validate_history(&report.messages)?;
+        assert!(!workspace.path().join("one.txt").exists());
+        assert!(!workspace.path().join("two.txt").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate_complete_call_ids_reject_the_response_before_any_effect()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = TempDir::new()?;
+        let runner = agent(
+            &workspace,
+            vec![turn(vec![
+                call(
+                    "earlier",
+                    "write",
+                    serde_json::json!({"path":"earlier.txt","content":"one"}),
+                ),
+                call(
+                    "duplicate",
+                    "write",
+                    serde_json::json!({"path":"one.txt","content":"one"}),
+                ),
+                call(
+                    "duplicate",
+                    "write",
+                    serde_json::json!({"path":"two.txt","content":"two"}),
+                ),
+            ])],
+            |_| {},
+        )?;
+        let report = runner.run("write", CancellationToken::new(), None).await;
+        assert_eq!(report.status, RunStatus::Failed);
+        assert!(report.detail.contains("duplicate"));
+        assert!(!workspace.path().join("earlier.txt").exists());
+        assert!(!workspace.path().join("one.txt").exists());
+        assert!(!workspace.path().join("two.txt").exists());
         Ok(())
     }
 }

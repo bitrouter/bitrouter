@@ -1,9 +1,17 @@
 # BRO native agent implementation record
 
+Design status (2026-10-01): the old native-agent and shared-session specs are
+deprecated in favor of [BRO agent runtime MVP](BRO_AGENT_RUNTIME_SPEC.md).
+That replacement is v0.2: concurrency, queue/steer, persistence and safe recovery
+are confirmed MVP scope; implementation details remain under review. The
+implementation and checks below describe the earlier runtime and do not verify
+those capabilities or the proposed Thread/Turn/Item refactor.
+
 ## Current runtime revision — 2026-09-30
 
-The revised server spec supersedes the persistence claims in the historical
-phase notes below. `TaskService` now owns only process-local state and tracked
+This dated implementation baseline supersedes the persistence claims in the
+historical phase notes below; it does not constrain the future v0.2 design.
+`TaskService` in this baseline owns only process-local state and tracked
 Agent workers. There is no task journal, fsync, startup replay, or restart
 recovery. The existing database/router services keep their own responsibilities.
 

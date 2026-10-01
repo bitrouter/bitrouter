@@ -24,11 +24,19 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   and identity migration sub-batch; not completion of the original M0–M1 batch.
 - [`CLI.md`](CLI.md) — full command reference, flags, and config resolution.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
-- [`BRO_NATIVE_AGENT_SERVER_SPEC.md`](BRO_NATIVE_AGENT_SERVER_SPEC.md) —
-  phased design for one `bro` executable with headless CLI, TUI, and API
-  clients of a BitRouter-owned native agent server. See the
+- [`BRO_BASE_TOOLS_SPEC.md`](BRO_BASE_TOOLS_SPEC.md) — **v0.1, proposed for
+  review; not implemented.** Six native base tools: directory-aware `read`,
+  `glob`, `grep`, `write`, `edit`, and a server-selected `shell`.
+- [`BRO_AGENT_RUNTIME_SPEC.md`](BRO_AGENT_RUNTIME_SPEC.md) — **v0.2, product MVP
+  scope confirmed; implementation in progress; full MVP incomplete.**
+  Aligned with product document 003 v0.2: Thread/Turn/Item, bounded tool concurrency,
+  queue/steer, durable execution facts, safe recovery, and shared clients.
+  Supersedes the [native-agent design](BRO_NATIVE_AGENT_SERVER_SPEC.md) and
+  [shared-session draft](BRO_SHARED_SESSION_SERVER_SPEC.md), retained as deprecated
+  history. See the
   [implementation record](BRO_NATIVE_AGENT_IMPLEMENTATION.md) for delivered
-  baseline behavior, checks, and remaining risks.
+  baseline behavior, checks, and remaining risks. Current phase progress is in
+  [runtime implementation evidence](BRO_AGENT_RUNTIME_IMPLEMENTATION.md).
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
   skills over MCP, the observability TUI, the ACP TUI, the ACP controller,

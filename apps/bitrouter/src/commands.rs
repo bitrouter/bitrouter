@@ -201,9 +201,16 @@ pub async fn key_sign(
 /// than bubbling an error, but a caller on a hot path should prefer the
 /// daemon: see `crate::actions::models`.
 pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
-    let mut resolved = resolve_static(config.clone());
-    bitrouter_sdk::config::discover_models(&mut resolved).await;
+    let resolved = resolve_discovered(config.clone()).await;
     Ok(ConfigRoutingTable::from_config(resolved).list_models())
+}
+
+/// Resolve the standalone catalog as startup does, including bounded model
+/// discovery. Route previews and model listings must use the same catalog.
+pub(crate) async fn resolve_discovered(config: Config) -> Config {
+    let mut resolved = resolve_static(config);
+    bitrouter_sdk::config::discover_models(&mut resolved).await;
+    resolved
 }
 
 /// A config as the daemon sees it at start-up, minus network discovery: the
@@ -229,7 +236,7 @@ pub fn resolve_static(mut config: Config) -> Config {
 /// `bro route <model>` — resolve a model name through the routing table,
 /// **standalone** (no running daemon needed). Returns the fallback chain.
 pub async fn resolve_route(config: &Config, model: &str) -> Result<Vec<RouteHop>> {
-    let table = ConfigRoutingTable::from_config(resolve_static(config.clone()));
+    let table = ConfigRoutingTable::from_config(resolve_discovered(config.clone()).await);
     let chain = table
         .route_chain(model, &RoutingPrefs::default(), &CallerContext::local())
         .await

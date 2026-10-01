@@ -126,6 +126,24 @@ impl WorkspaceTools {
         matches!(name, "read" | "ls" | "find" | "grep")
     }
 
+    pub(crate) fn validate(name: &str, arguments: &str) -> Result<(), String> {
+        fn parse<T: serde::de::DeserializeOwned>(arguments: &str) -> Result<(), String> {
+            serde_json::from_str::<T>(arguments)
+                .map(|_| ())
+                .map_err(|error| format!("invalid tool arguments: {error}"))
+        }
+        match name {
+            "read" => parse::<ReadArgs>(arguments),
+            "ls" => parse::<LsArgs>(arguments),
+            "find" => parse::<FindArgs>(arguments),
+            "grep" => parse::<GrepArgs>(arguments),
+            "write" => parse::<WriteArgs>(arguments),
+            "edit" => parse::<EditArgs>(arguments),
+            "bash" | "powershell" => parse::<BashArgs>(arguments),
+            _ => Err("unknown tool".into()),
+        }
+    }
+
     pub(crate) fn declarations(mode: ToolMode) -> Vec<Tool> {
         [
             (

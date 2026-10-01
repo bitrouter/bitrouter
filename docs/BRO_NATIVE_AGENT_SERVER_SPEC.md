@@ -1,6 +1,18 @@
 # Spec: one `bro` binary, three interfaces, one native agent server
 
-Status: **implementation contract; current progress and verification are recorded in [the implementation notes](BRO_NATIVE_AGENT_IMPLEMENTATION.md).**
+Status: **deprecated design; superseded by [BRO agent runtime MVP](BRO_AGENT_RUNTIME_SPEC.md), a draft for maintainer review.**
+
+Deprecated: 2026-09-30. The body below preserves the earlier design and phase
+history. Use the replacement draft for future native-runtime design; its refactor
+is in progress and the full MVP is incomplete. Delivered behavior and prior verification remain recorded in
+[the implementation notes](BRO_NATIVE_AGENT_IMPLEMENTATION.md).
+
+Authority update (2026-10-01): the replacement spec is now v0.2, aligned with
+product document 003 v0.2. Its MVP requires bounded concurrency, queue/steer,
+persistence and safe recovery. The process-local scope and deferred durability
+statements below describe the earlier baseline; do not use them as constraints
+for new implementation. R0 contract details remain under review.
+
 Baseline: this worktree at `fc157cf5` (2026-09-29).
 Revision: 2026-09-30 — prioritize client/server separation and an in-memory
 background runtime; durable workflow state and its component ownership are deferred.
@@ -613,7 +625,11 @@ live-provider, and any hosted evidence separately. Mark the goal complete only
 when all required product paths and gates pass; otherwise report the exact
 remaining gate without calling the implementation complete.
 
-### Suggested `/goal` objective
+### Historical `/goal` objective — superseded; do not use
+
+This quoted objective belongs to the earlier process-local baseline. It is not
+an instruction to execute now. Use the v0.2 runtime spec's R0–R6 plan; persistence,
+queue/steer, concurrency and safe recovery are required in that MVP.
 
 > Implement `docs/BRO_NATIVE_AGENT_SERVER_SPEC.md` P0–P6 in order in this
 > worktree. Build the Pi-inspired Rust single-agent baseline first, then attach

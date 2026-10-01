@@ -43,7 +43,7 @@ answer. Standard output is NDJSON: an `accepted` record, ordered `event`
 records with per-task sequence numbers, and a `terminal` record with status,
 verification, final answer, and cursor. Failed, cancelled, or interrupted tasks
 exit nonzero. `--check` is a bounded shell command in the server workspace;
-without it verification is `unavailable`. `--effort`, `--workspace`, and
+without it verification is `not_requested`. `--effort`, `--workspace`, and
 `--config` are optional. This local headless client approves its own tool
 requests. `--read-only` restricts the entire task to inspection tools and
 cannot be combined with `--check`. Explicit remote contexts fail without local fallback.
@@ -105,12 +105,16 @@ shell deltas also carry sequenced events. Pending approvals include the request
 ID, tool ID/name, and arguments in the snapshot. The first valid response
 resolves an approval for all observers; cancellation resolves it as denied.
 
-Native tasks live in memory in one `bro serve` process. The local protocol is
-version 4; CLI/TUI subscribe to snapshots and events instead of polling.
+Live task state is owned by one `bro serve` process. The local protocol is
+version 5; CLI/TUI subscribe to snapshots and events instead of polling.
 Detaching keeps the task running. On shutdown the server stops admission,
 cancels tasks, and waits for Agent and verification cleanup. A restart creates
-a new instance with no previous task results or idempotency records. Clients
-must report instance loss and must not automatically repeat a submission.
+a new instance. The server commits admission, model snapshots/full responses,
+tool execution intents/results and settlement to dedicated records in its
+configured database. Loading continuous Threads and safe restart continuation
+are still under implementation; clients must report instance loss and must not
+automatically repeat a submission. A storage failure blocks the task as
+`recovery_required` and retains its workspace exclusion.
 
 Default runtime limits are 8 active tasks, 32 retained terminal tasks / 64 MiB for up to
 30 minutes, 256 cached events / 2 MiB per task, 8 observers per task, and a
@@ -537,6 +541,10 @@ bro route gpt-4o [--prompt <text>] [-c <path>] [--socket <path>]
 ```
 
 Resolves a model or router selector using the running daemon when reachable, otherwise the local configuration. Fixed routes include the provider fallback chain. A policy-bound router reports its binding and routable candidates with `policy_decision_executed: false`: the preview does not execute its dynamic policy or predict the selected model.
+
+The config fallback probes `auto_discover: true` providers with no declared
+models, using the same bounded discovery as `bro models`. A model shown by the
+config listing can therefore be previewed by the config route check.
 
 `--prompt` supplies request text for the existing static policy-table preview on the local config path. It does not execute a router's dynamic policy; live previews do not use it.
 

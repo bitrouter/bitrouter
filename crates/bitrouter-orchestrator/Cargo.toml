@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 bitrouter-sdk.workspace = true
 futures.workspace = true
 globset.workspace = true

@@ -1,4 +1,4 @@
-//! Process-local agent runtime. State, execution and observation share one
+//! Server-owned agent runtime with transactional execution facts. State, execution and observation share one
 //! authority; disconnecting an observer never cancels its task.
 
 use std::collections::{HashMap, VecDeque};
@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::agent::{Agent, AgentConfig, ApprovalRequest, RunEvent, RunStatus, ToolMode};
+use crate::store::{CommitRequest, ExecutionRecord, ExecutionStore, MemoryExecutionStore};
 use crate::tools::WorkspaceTools;
 
 const MAX_EVENT_PAGE: usize = 1000;
@@ -30,6 +31,7 @@ pub enum TaskStatus {
     Failed,
     Cancelled,
     Interrupted,
+    RecoveryRequired,
 }
 
 impl TaskStatus {
@@ -47,6 +49,8 @@ pub enum VerificationStatus {
     Passed,
     Failed,
     Unavailable,
+    NotRequested,
+    Denied,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +217,7 @@ pub enum ErrorCode {
     ShuttingDown,
     InstanceChanged,
     ResyncRequired,
+    StorageUnavailable,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,7 +269,7 @@ pub enum Observation {
 pub struct TaskSubscription {
     service: TaskService,
     task_id: String,
-    receiver: broadcast::Receiver<TaskEvent>,
+    receiver: broadcast::Receiver<Observation>,
     initial: Option<Observation>,
     finished: bool,
 }
@@ -278,9 +283,17 @@ impl TaskSubscription {
             return Ok(None);
         }
         match self.receiver.recv().await {
-            Ok(event) => {
-                self.finished = matches!(event.payload, TaskEventPayload::TaskFinished { .. });
-                Ok(Some(Observation::Event { event }))
+            Ok(observation) => {
+                self.finished = match &observation {
+                    Observation::Event { event } => {
+                        matches!(event.payload, TaskEventPayload::TaskFinished { .. })
+                    }
+                    Observation::Snapshot { snapshot, .. } => {
+                        snapshot.status.terminal()
+                            || snapshot.status == TaskStatus::RecoveryRequired
+                    }
+                };
+                Ok(Some(observation))
             }
             Err(broadcast::error::RecvError::Lagged(_)) => {
                 let mut state = self.service.lock_state();
@@ -290,7 +303,8 @@ impl TaskSubscription {
                     .ok_or_else(unknown_task)?;
                 // Registration and snapshot cutoff are atomic with publication.
                 self.receiver = record.publisher.subscribe();
-                self.finished = record.snapshot.status.terminal();
+                self.finished = record.snapshot.status.terminal()
+                    || record.snapshot.status == TaskStatus::RecoveryRequired;
                 Ok(Some(Observation::Snapshot {
                     snapshot: Box::new(record.snapshot.clone()),
                     resynchronized: true,
@@ -326,10 +340,13 @@ struct TaskRecord {
     snapshot: TaskSnapshot,
     events: VecDeque<TaskEvent>,
     event_bytes: usize,
-    publisher: broadcast::Sender<TaskEvent>,
+    publisher: broadcast::Sender<Observation>,
     terminal_at: Option<Instant>,
     cancel: CancellationToken,
     pending: Option<PendingInput>,
+    commit_lock: Arc<tokio::sync::Mutex<()>>,
+    store_version: u64,
+    storage_error: Option<String>,
 }
 
 struct State {
@@ -346,6 +363,8 @@ struct Inner {
     limits: RuntimeLimits,
     workers: TaskTracker,
     state: Mutex<State>,
+    store: Arc<dyn ExecutionStore>,
+    admission: tokio::sync::Mutex<()>,
 }
 
 #[derive(Clone)]
@@ -355,13 +374,40 @@ pub struct TaskService {
 
 impl TaskService {
     pub fn new(app: Arc<App>, allowed_workspaces: &[PathBuf]) -> Result<Self, ServiceError> {
-        Self::with_limits(app, allowed_workspaces, RuntimeLimits::default())
+        Self::with_store(
+            app,
+            allowed_workspaces,
+            Arc::new(MemoryExecutionStore::default()),
+        )
     }
 
+    pub fn with_store(
+        app: Arc<App>,
+        allowed_workspaces: &[PathBuf],
+        store: Arc<dyn ExecutionStore>,
+    ) -> Result<Self, ServiceError> {
+        Self::with_limits_and_store(app, allowed_workspaces, RuntimeLimits::default(), store)
+    }
+
+    #[cfg(test)]
     fn with_limits(
         app: Arc<App>,
         allowed_workspaces: &[PathBuf],
         limits: RuntimeLimits,
+    ) -> Result<Self, ServiceError> {
+        Self::with_limits_and_store(
+            app,
+            allowed_workspaces,
+            limits,
+            Arc::new(MemoryExecutionStore::default()),
+        )
+    }
+
+    fn with_limits_and_store(
+        app: Arc<App>,
+        allowed_workspaces: &[PathBuf],
+        limits: RuntimeLimits,
+        store: Arc<dyn ExecutionStore>,
     ) -> Result<Self, ServiceError> {
         if limits.active_tasks == 0
             || limits.retained_tasks == 0
@@ -382,6 +428,8 @@ impl TaskService {
                 instance_id: uuid::Uuid::new_v4().to_string(),
                 limits,
                 workers: TaskTracker::new(),
+                store,
+                admission: tokio::sync::Mutex::new(()),
                 state: Mutex::new(State {
                     tasks: HashMap::new(),
                     active_workspaces: HashMap::new(),
@@ -412,6 +460,7 @@ impl TaskService {
 
     pub async fn shutdown(&self) {
         {
+            let _admission = self.inner.admission.lock().await;
             let mut state = self.lock_state();
             state.closing = true;
             for record in state.tasks.values() {
@@ -466,7 +515,8 @@ impl TaskService {
                 resynchronized,
                 catchup,
             }),
-            finished: record.snapshot.status.terminal(),
+            finished: record.snapshot.status.terminal()
+                || record.snapshot.status == TaskStatus::RecoveryRequired,
         })
     }
 
@@ -529,7 +579,8 @@ impl TaskService {
         Ok(workspace)
     }
 
-    pub fn submit(&self, request: TaskRequest) -> Result<TaskSnapshot, ServiceError> {
+    pub async fn submit(&self, request: TaskRequest) -> Result<TaskSnapshot, ServiceError> {
+        let _admission = self.inner.admission.lock().await;
         if request.prompt.len()
             + request.config.instructions.len()
             + request.config.model.len()
@@ -539,6 +590,7 @@ impl TaskService {
             return Err("task request is too large".into());
         }
         if request.config.max_steps > 256
+            || request.config.max_tool_calls > 1024
             || request.config.max_context_bytes > 2 * 1024 * 1024
             || request.config.max_duration > Duration::from_secs(86400)
         {
@@ -577,6 +629,7 @@ impl TaskService {
             &request.verification_command,
             &request.config.instructions,
             request.config.max_steps,
+            request.config.max_tool_calls,
             request.config.max_duration.as_millis(),
             request.config.max_context_bytes,
             request.config.max_spend_microusd,
@@ -587,6 +640,9 @@ impl TaskService {
                 .map(|rates| (rates.prompt, rates.completion)),
         ))
         .map_err(|error| error.to_string())?;
+        let owner_key_id = request.caller.api_key_id().to_string();
+        let owner_user_id = request.caller.user_id().to_string();
+        let stored_config = request.config.clone();
         let agent = Agent::new(
             Arc::clone(&self.inner.app),
             request.caller,
@@ -595,15 +651,15 @@ impl TaskService {
         )?;
         let task_id = uuid::Uuid::new_v4().to_string();
         let cancel = CancellationToken::new();
-        let mut state = self.lock_state();
-        self.prune(&mut state);
-        if state.closing {
-            return Err(ServiceError::new(
-                ErrorCode::ShuttingDown,
-                "runtime is shutting down",
-            ));
-        }
-        let accepted = {
+        {
+            let mut state = self.lock_state();
+            self.prune(&mut state);
+            if state.closing {
+                return Err(ServiceError::new(
+                    ErrorCode::ShuttingDown,
+                    "runtime is shutting down",
+                ));
+            }
             if let Some(key) = key.as_ref()
                 && let Some((existing_fingerprint, existing_id)) = state.idempotency.get(key)
             {
@@ -631,6 +687,43 @@ impl TaskService {
                     "another task already owns this workspace",
                 ));
             }
+        }
+        let event = TaskEvent {
+            server_instance_id: self.inner.instance_id.clone(),
+            task_id: task_id.clone(),
+            seq: 1,
+            timestamp_ms: now_ms(),
+            payload: TaskEventPayload::Accepted {
+                prompt: request.prompt.clone(),
+                workspace: workspace.clone(),
+                model: agent.model().into(),
+                tool_mode,
+                idempotency_key: request.idempotency_key.clone(),
+                request_fingerprint: request
+                    .idempotency_key
+                    .as_ref()
+                    .map(|_| fingerprint.clone()),
+            },
+        };
+        let store_version = self
+            .inner
+            .store
+            .commit(
+                &task_id,
+                0,
+                &[ExecutionRecord::Accepted {
+                    owner_key_id,
+                    owner_user_id,
+                    fingerprint: fingerprint.clone(),
+                    config: Box::new(stored_config),
+                    verification_command: request.verification_command.clone(),
+                    event,
+                }],
+            )
+            .await
+            .map_err(|error| ServiceError::new(ErrorCode::StorageUnavailable, error))?;
+        let accepted = {
+            let mut state = self.lock_state();
             let snapshot = TaskSnapshot {
                 server_instance_id: self.inner.instance_id.clone(),
                 model: agent.model().to_string(),
@@ -658,6 +751,9 @@ impl TaskService {
                     terminal_at: None,
                     cancel: cancel.clone(),
                     pending: None,
+                    commit_lock: Arc::new(tokio::sync::Mutex::new(())),
+                    store_version,
+                    storage_error: None,
                 },
             );
             if let Err(error) = self.append_locked(
@@ -748,14 +844,16 @@ impl TaskService {
             .collect())
     }
 
-    pub fn answer_input(
+    pub async fn answer_input(
         &self,
         task_id: &str,
         request_id: &str,
         approved: bool,
     ) -> Result<(), ServiceError> {
-        let sender = {
-            let mut state = self.lock_state();
+        let gate = self.commit_gate(task_id)?;
+        let _guard = gate.lock().await;
+        {
+            let state = self.lock_state();
             let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
             if record.snapshot.status != TaskStatus::WaitingForInput
                 || record.snapshot.pending_input_id.as_deref() != Some(request_id)
@@ -766,43 +864,64 @@ impl TaskService {
                     "input is not pending for this task",
                 ));
             }
-            self.append_locked(
-                &mut state,
-                task_id,
-                TaskEventPayload::InputResolved {
-                    request_id: request_id.into(),
-                    approved,
-                },
-            )?;
-            state
-                .tasks
-                .get_mut(task_id)
-                .and_then(|record| record.pending.take())
-                .ok_or_else(|| "pending input channel is unavailable".to_string())?
-                .response
-        };
+        }
+        self.append_serialized(
+            task_id,
+            TaskEventPayload::InputResolved {
+                request_id: request_id.into(),
+                approved,
+            },
+        )
+        .await?;
+        let sender = self
+            .lock_state()
+            .tasks
+            .get_mut(task_id)
+            .and_then(|record| record.pending.take())
+            .ok_or_else(|| "pending input channel is unavailable".to_string())?
+            .response;
         sender.send(approved).map_err(|_| {
             ServiceError::new(ErrorCode::Conflict, "task stopped before accepting input")
         })
     }
 
-    pub fn cancel(&self, task_id: &str) -> Result<(), ServiceError> {
+    pub async fn cancel(&self, task_id: &str) -> Result<(), ServiceError> {
+        let gate = self.commit_gate(task_id)?;
+        let _guard = gate.lock().await;
         let token = {
-            let mut state = self.lock_state();
+            let state = self.lock_state();
             let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
-            if record.snapshot.status.terminal() {
+            if record.snapshot.status.terminal() || record.cancel.is_cancelled() {
                 return Ok(());
             }
-            let token = record.cancel.clone();
-            if token.is_cancelled() {
-                return Ok(());
-            }
-            token.cancel();
-            self.resolve_pending(&mut state, task_id)?;
-            self.append_locked(&mut state, task_id, TaskEventPayload::CancelRequested)?;
-            token
+            record.cancel.clone()
         };
         token.cancel();
+        self.append_serialized(task_id, TaskEventPayload::CancelRequested)
+            .await?;
+        let pending = self
+            .lock_state()
+            .tasks
+            .get(task_id)
+            .and_then(|record| record.snapshot.pending_input_id.clone());
+        if let Some(request_id) = pending {
+            self.append_serialized(
+                task_id,
+                TaskEventPayload::InputResolved {
+                    request_id,
+                    approved: false,
+                },
+            )
+            .await?;
+            if let Some(pending) = self
+                .lock_state()
+                .tasks
+                .get_mut(task_id)
+                .and_then(|record| record.pending.take())
+            {
+                let _ = pending.response.send(false);
+            }
+        }
         Ok(())
     }
 
@@ -817,6 +936,7 @@ impl TaskService {
     ) {
         if self
             .append(&task_id, TaskEventPayload::TaskStarted)
+            .await
             .is_err()
         {
             cancel.cancel();
@@ -824,16 +944,29 @@ impl TaskService {
         }
         let (event_tx, mut event_rx) = mpsc::channel(64);
         let (approval_tx, mut approval_rx) = mpsc::channel(1);
+        let (commit_tx, mut commit_rx) = mpsc::channel::<CommitRequest>(1);
         let run_cancel = cancel.clone();
         let mut run = tokio::spawn(async move {
             agent
-                .run_with_approvals(prompt, run_cancel, Some(event_tx), Some(approval_tx))
+                .run_with_approvals(
+                    prompt,
+                    run_cancel,
+                    Some(event_tx),
+                    Some(approval_tx),
+                    Some(commit_tx),
+                )
                 .await
         });
         let report = loop {
             tokio::select! {
+                Some(request) = commit_rx.recv() => {
+                    let result = self.commit_records(&task_id, &request.records).await.map_err(|error| error.to_string());
+                    let failed = result.is_err();
+                    let _ = request.response.send(result);
+                    if failed { cancel.cancel(); }
+                }
                 Some(event) = event_rx.recv() => {
-                    if self.append_agent_event(&task_id, event).is_err() {
+                    if self.append_agent_event(&task_id, event).await.is_err() {
                         break None;
                     }
                 }
@@ -841,11 +974,11 @@ impl TaskService {
                     // Agent control events precede its approval handoff. Drain
                     // that finite prefix before publishing the input request.
                     while let Ok(event) = event_rx.try_recv() {
-                        if self.append_agent_event(&task_id, event).is_err() {
+                        if self.append_agent_event(&task_id, event).await.is_err() {
                             cancel.cancel();
                         }
                     }
-                    if self.request_approval(&task_id, request).is_err() {
+                    if self.request_approval(&task_id, request).await.is_err() {
                         break None;
                     }
                 }
@@ -856,7 +989,7 @@ impl TaskService {
                         let _ = self.append(&task_id, TaskEventPayload::TaskFinished {
                             status: TaskStatus::Interrupted, detail: format!("agent execution lost: {error}; effects may have occurred"),
                             final_answer: None, verification: VerificationStatus::Unavailable, verification_evidence: None, unknown_effect: true,
-                        });
+                        }).await;
                         return;
                     }
                 },
@@ -870,25 +1003,28 @@ impl TaskService {
                     result = &mut run => { let _ = result; break; },
                     Some(_) = event_rx.recv() => {},
                     Some(request) = approval_rx.recv() => { let _ = request.response.send(false); },
+                    Some(request) = commit_rx.recv() => { let _ = request.response.send(Err("execution stopped after commit failure".into())); },
                 }
             }
-            let _ = self.append(
-                &task_id,
-                TaskEventPayload::TaskFinished {
-                    status: TaskStatus::Interrupted,
-                    detail: "agent execution stopped unexpectedly; effects may have occurred"
-                        .into(),
-                    final_answer: None,
-                    verification: VerificationStatus::Unavailable,
-                    verification_evidence: None,
-                    unknown_effect: true,
-                },
-            );
+            let _ = self
+                .append(
+                    &task_id,
+                    TaskEventPayload::TaskFinished {
+                        status: TaskStatus::Interrupted,
+                        detail: "agent execution stopped unexpectedly; effects may have occurred"
+                            .into(),
+                        final_answer: None,
+                        verification: VerificationStatus::Unavailable,
+                        verification_evidence: None,
+                        unknown_effect: true,
+                    },
+                )
+                .await;
             return;
         }
         if let Some(report) = report {
             while let Ok(event) = event_rx.try_recv() {
-                if self.append_agent_event(&task_id, event).is_err() {
+                if self.append_agent_event(&task_id, event).await.is_err() {
                     return;
                 }
             }
@@ -899,6 +1035,9 @@ impl TaskService {
             };
             if cancel.is_cancelled() {
                 status = TaskStatus::Cancelled;
+            }
+            if report.unknown_effect {
+                status = TaskStatus::RecoveryRequired;
             }
             let (verification, evidence) = if status == TaskStatus::Completed {
                 match verification_command {
@@ -919,62 +1058,65 @@ impl TaskService {
                         };
                         (verification, Some(evidence))
                     }
-                    None => (VerificationStatus::Unavailable, None),
+                    None => (VerificationStatus::NotRequested, None),
                 }
             } else {
                 (VerificationStatus::Unavailable, None)
             };
-            let _ = self.append(
-                &task_id,
-                TaskEventPayload::TaskFinished {
-                    status,
-                    detail: if verification == VerificationStatus::Failed {
-                        "configured verification check failed".into()
-                    } else {
-                        report.detail
+            let _ = self
+                .append(
+                    &task_id,
+                    TaskEventPayload::TaskFinished {
+                        status,
+                        detail: if verification == VerificationStatus::Failed {
+                            "configured verification check failed".into()
+                        } else {
+                            report.detail
+                        },
+                        final_answer: report.final_answer,
+                        verification,
+                        verification_evidence: evidence,
+                        unknown_effect: report.unknown_effect,
                     },
-                    final_answer: report.final_answer,
-                    verification,
-                    verification_evidence: evidence,
-                    unknown_effect: false,
-                },
-            );
+                )
+                .await;
         }
     }
 
-    fn request_approval(
+    async fn request_approval(
         &self,
         task_id: &str,
         request: ApprovalRequest,
     ) -> Result<(), ServiceError> {
-        let mut state = self.lock_state();
-        let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
-        if record.cancel.is_cancelled() {
-            let _ = request.response.send(false);
-            return Ok(());
-        }
-        if record.snapshot.status.terminal() || record.pending.is_some() {
-            return Err("task cannot accept another pending input".into());
-        }
-        self.append_locked(
-            &mut state,
-            task_id,
-            TaskEventPayload::InputRequested {
-                request_id: request.id.clone(),
-                tool_id: request.tool_id,
-                tool_name: request.tool_name,
-                arguments: request.arguments,
-            },
-        )?;
-        if let Some(record) = state.tasks.get_mut(task_id) {
+        let gate = self.commit_gate(task_id)?;
+        let _guard = gate.lock().await;
+        {
+            let mut state = self.lock_state();
+            let record = state.tasks.get_mut(task_id).ok_or_else(unknown_task)?;
+            if record.cancel.is_cancelled() {
+                let _ = request.response.send(false);
+                return Ok(());
+            }
+            if record.snapshot.status.terminal() || record.pending.is_some() {
+                return Err("task cannot accept another pending input".into());
+            }
             record.pending = Some(PendingInput {
                 response: request.response,
             });
         }
-        Ok(())
+        self.append_serialized(
+            task_id,
+            TaskEventPayload::InputRequested {
+                request_id: request.id,
+                tool_id: request.tool_id,
+                tool_name: request.tool_name,
+                arguments: request.arguments,
+            },
+        )
+        .await
     }
 
-    fn append_agent_event(&self, task_id: &str, event: RunEvent) -> Result<(), ServiceError> {
+    async fn append_agent_event(&self, task_id: &str, event: RunEvent) -> Result<(), ServiceError> {
         let payload = match event {
             RunEvent::UserMessage(_) | RunEvent::Finished { .. } => return Ok(()),
             RunEvent::AssistantDelta(text) => TaskEventPayload::AssistantDelta { text },
@@ -996,12 +1138,130 @@ impl TaskService {
                 TaskEventPayload::ToolFinished { id, name, output }
             }
         };
-        self.append(task_id, payload)
+        self.append(task_id, payload).await
     }
 
-    fn append(&self, task_id: &str, payload: TaskEventPayload) -> Result<(), ServiceError> {
+    fn commit_gate(&self, task_id: &str) -> Result<Arc<tokio::sync::Mutex<()>>, ServiceError> {
+        self.lock_state()
+            .tasks
+            .get(task_id)
+            .map(|record| Arc::clone(&record.commit_lock))
+            .ok_or_else(unknown_task)
+    }
+
+    async fn commit_records(
+        &self,
+        task_id: &str,
+        records: &[ExecutionRecord],
+    ) -> Result<(), ServiceError> {
+        let gate = self.commit_gate(task_id)?;
+        let _guard = gate.lock().await;
+        self.commit_serialized(task_id, records).await
+    }
+
+    async fn commit_serialized(
+        &self,
+        task_id: &str,
+        records: &[ExecutionRecord],
+    ) -> Result<(), ServiceError> {
+        let version = {
+            let state = self.lock_state();
+            let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
+            if let Some(error) = &record.storage_error {
+                return Err(ServiceError::new(
+                    ErrorCode::StorageUnavailable,
+                    error.clone(),
+                ));
+            }
+            record.store_version
+        };
+        match self.inner.store.commit(task_id, version, records).await {
+            Ok(version) => {
+                self.lock_state()
+                    .tasks
+                    .get_mut(task_id)
+                    .ok_or_else(unknown_task)?
+                    .store_version = version;
+                Ok(())
+            }
+            Err(error) => {
+                if let Some(record) = self.lock_state().tasks.get_mut(task_id) {
+                    record.cancel.cancel();
+                    record.storage_error = Some(error.clone());
+                    record.snapshot.status = TaskStatus::RecoveryRequired;
+                    record.snapshot.unknown_effect = true;
+                    record.snapshot.detail = Some(format!(
+                        "execution storage failed; recovery required: {error}"
+                    ));
+                    // Storage failure cannot be represented by a committed
+                    // event. Resynchronize observers to current blocked state
+                    // without inventing a durable sequence or terminal result.
+                    let _ = record.publisher.send(Observation::Snapshot {
+                        snapshot: Box::new(record.snapshot.clone()),
+                        resynchronized: true,
+                        catchup: Vec::new(),
+                    });
+                }
+                Err(ServiceError::new(ErrorCode::StorageUnavailable, error))
+            }
+        }
+    }
+
+    async fn append(&self, task_id: &str, payload: TaskEventPayload) -> Result<(), ServiceError> {
+        let gate = self.commit_gate(task_id)?;
+        let _guard = gate.lock().await;
+        self.append_serialized(task_id, payload).await
+    }
+
+    async fn append_serialized(
+        &self,
+        task_id: &str,
+        payload: TaskEventPayload,
+    ) -> Result<(), ServiceError> {
+        if matches!(
+            payload,
+            TaskEventPayload::AssistantDelta { .. } | TaskEventPayload::ToolOutputDelta { .. }
+        ) {
+            return self.append_locked(&mut self.lock_state(), task_id, payload);
+        }
+        let events = {
+            let state = self.lock_state();
+            let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
+            let mut payloads = Vec::new();
+            if matches!(
+                payload,
+                TaskEventPayload::TaskFinished { .. } | TaskEventPayload::CancelRequested
+            ) && let Some(request_id) = record.snapshot.pending_input_id.clone()
+            {
+                payloads.push(TaskEventPayload::InputResolved {
+                    request_id,
+                    approved: false,
+                });
+            }
+            payloads.push(payload);
+            payloads
+                .into_iter()
+                .enumerate()
+                .map(|(offset, payload)| TaskEvent {
+                    server_instance_id: self.inner.instance_id.clone(),
+                    task_id: task_id.into(),
+                    seq: record.snapshot.cursor + offset as u64 + 1,
+                    timestamp_ms: now_ms(),
+                    payload,
+                })
+                .collect::<Vec<_>>()
+        };
+        let facts = events
+            .iter()
+            .cloned()
+            .map(|event| ExecutionRecord::Event { event })
+            .collect::<Vec<_>>();
+        self.commit_serialized(task_id, &facts).await?;
         let mut state = self.lock_state();
-        self.append_locked(&mut state, task_id, payload)
+        for event in events {
+            self.append_locked(&mut state, task_id, event.payload)?;
+        }
+        Ok(())
     }
 
     fn resolve_pending(&self, state: &mut State, task_id: &str) -> Result<(), ServiceError> {
@@ -1081,7 +1341,7 @@ impl TaskService {
                 break;
             }
         }
-        let _ = record.publisher.send(event);
+        let _ = record.publisher.send(Observation::Event { event });
         self.prune(state);
         Ok(())
     }
@@ -1420,12 +1680,16 @@ mod tests {
             .map_err(std::io::Error::other)?;
         let mut submitted = request(&workspace);
         submitted.idempotency_key = Some("same-task".into());
-        let accepted = service.submit(submitted).map_err(std::io::Error::other)?;
+        let accepted = service
+            .submit(submitted)
+            .await
+            .map_err(std::io::Error::other)?;
         let mut duplicate = request(&workspace);
         duplicate.idempotency_key = Some("same-task".into());
         assert_eq!(
             service
                 .submit(duplicate)
+                .await
                 .map_err(std::io::Error::other)?
                 .task_id,
             accepted.task_id
@@ -1437,7 +1701,7 @@ mod tests {
             .map_err(std::io::Error::other)?;
         assert_eq!(completed.status, TaskStatus::Completed);
         assert_eq!(completed.final_answer.as_deref(), Some("done"));
-        assert_eq!(completed.verification, VerificationStatus::Unavailable);
+        assert_eq!(completed.verification, VerificationStatus::NotRequested);
         let all = service
             .events_after(&accepted.task_id, 0)
             .map_err(std::io::Error::other)?;
@@ -1474,11 +1738,12 @@ mod tests {
         ])?;
         let service = TaskService::new(app, &[workspace.path().to_path_buf()])
             .map_err(std::io::Error::other)?;
-        assert!(service.submit(request(&other)).is_err());
+        assert!(service.submit(request(&other)).await.is_err());
         let accepted = service
             .submit(request(&workspace))
+            .await
             .map_err(std::io::Error::other)?;
-        assert!(service.submit(request(&workspace)).is_err());
+        assert!(service.submit(request(&workspace)).await.is_err());
         let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput)
             .await
             .map_err(std::io::Error::other)?;
@@ -1489,15 +1754,18 @@ mod tests {
         assert!(
             service
                 .answer_input(&accepted.task_id, "wrong", true)
+                .await
                 .is_err()
         );
         assert!(!workspace.path().join("created.txt").exists());
         service
             .answer_input(&accepted.task_id, &input_id, true)
+            .await
             .map_err(std::io::Error::other)?;
         assert!(
             service
                 .answer_input(&accepted.task_id, &input_id, true)
+                .await
                 .is_err()
         );
         let completed = wait_for(&service, &accepted.task_id, TaskStatus::Completed)
@@ -1526,6 +1794,7 @@ mod tests {
         .map_err(std::io::Error::other)?;
         let accepted = service
             .submit(request(&workspace))
+            .await
             .map_err(std::io::Error::other)?;
         let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput)
             .await
@@ -1535,10 +1804,12 @@ mod tests {
             .ok_or_else(|| std::io::Error::other("missing pending input"))?;
         service
             .cancel(&accepted.task_id)
+            .await
             .map_err(std::io::Error::other)?;
         assert!(
             service
                 .answer_input(&accepted.task_id, &input_id, true)
+                .await
                 .is_err()
         );
         let cancelled = wait_for(&service, &accepted.task_id, TaskStatus::Cancelled)
@@ -1569,7 +1840,7 @@ mod tests {
             &[workspace.path().to_path_buf()],
             limits,
         )?;
-        let accepted = service.submit(request(&workspace))?;
+        let accepted = service.submit(request(&workspace)).await?;
         let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
         let mut observer = service.observe(&accepted.task_id, Some(0))?;
         assert!(matches!(
@@ -1597,12 +1868,14 @@ mod tests {
             _ => return Err("missing initial snapshot".into()),
         };
         for _ in 0..10 {
-            service.append(
-                &accepted.task_id,
-                TaskEventPayload::AssistantDelta {
-                    text: "live".repeat(16_384),
-                },
-            )?;
+            service
+                .append(
+                    &accepted.task_id,
+                    TaskEventPayload::AssistantDelta {
+                        text: "live".repeat(16_384),
+                    },
+                )
+                .await?;
         }
         let refreshed = match observer.next().await? {
             Some(Observation::Snapshot {
@@ -1635,7 +1908,7 @@ mod tests {
             assert!(record.events.len() <= 2);
             assert!(record.event_bytes <= service.inner.limits.event_bytes_per_task);
         }
-        service.cancel(&accepted.task_id)?;
+        service.cancel(&accepted.task_id).await?;
         let resolved = observer.next().await?.ok_or("missing resolution")?;
         assert!(
             matches!(resolved, Observation::Event { event } if event.seq == refreshed.cursor + 1 && matches!(event.payload, TaskEventPayload::InputResolved { approved: false, .. }))
@@ -1647,6 +1920,7 @@ mod tests {
                     waiting.pending_input_id.as_deref().ok_or("missing input")?,
                     true
                 )
+                .await
                 .is_err()
         );
         service.shutdown().await;
@@ -1672,11 +1946,12 @@ mod tests {
             &[workspace.path().to_path_buf(), other.path().to_path_buf()],
             limits,
         )?;
-        let accepted = service.submit(request(&workspace))?;
+        let accepted = service.submit(request(&workspace)).await?;
         wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
         assert_eq!(
             service
                 .submit(request(&other))
+                .await
                 .err()
                 .map(|error| error.code),
             Some(ErrorCode::Overloaded)
@@ -1692,6 +1967,7 @@ mod tests {
         assert_eq!(
             service
                 .submit(request(&workspace))
+                .await
                 .err()
                 .map(|error| error.code),
             Some(ErrorCode::ShuttingDown)
@@ -1714,9 +1990,9 @@ mod tests {
         )?;
         let mut first = request(&workspace);
         first.idempotency_key = Some("first".into());
-        let first = service.submit(first)?;
+        let first = service.submit(first).await?;
         wait_for(&service, &first.task_id, TaskStatus::Completed).await?;
-        let second = service.submit(request(&workspace))?;
+        let second = service.submit(request(&workspace)).await?;
         wait_for(&service, &second.task_id, TaskStatus::Completed).await?;
         assert_eq!(
             service.read(&first.task_id).err().map(|error| error.code),
@@ -1724,7 +2000,7 @@ mod tests {
         );
         let mut reused = request(&workspace);
         reused.idempotency_key = Some("first".into());
-        assert_ne!(service.submit(reused)?.task_id, first.task_id);
+        assert_ne!(service.submit(reused).await?.task_id, first.task_id);
         service.shutdown().await;
         Ok(())
     }
@@ -1738,7 +2014,7 @@ mod tests {
             TaskService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
         let mut submitted = request(&workspace);
         submitted.verification_command = Some("touch started; sleep 30; touch leaked".into());
-        let accepted = service.submit(submitted)?;
+        let accepted = service.submit(submitted).await?;
         tokio::time::timeout(Duration::from_secs(3), async {
             while !workspace.path().join("started").exists() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -1767,10 +2043,13 @@ mod tests {
         let mut read_only = request(&workspace);
         read_only.config = read_only.config.read_only();
         read_only.verification_command = Some("echo forbidden".into());
-        assert!(service.submit(read_only).is_err());
+        assert!(service.submit(read_only).await.is_err());
         let mut passing = request(&workspace);
         passing.verification_command = Some("echo verified".into());
-        let accepted = service.submit(passing).map_err(std::io::Error::other)?;
+        let accepted = service
+            .submit(passing)
+            .await
+            .map_err(std::io::Error::other)?;
         let passed = wait_for(&service, &accepted.task_id, TaskStatus::Completed)
             .await
             .map_err(std::io::Error::other)?;
@@ -1785,7 +2064,10 @@ mod tests {
         );
         let mut failing = request(&workspace);
         failing.verification_command = Some("exit 7".into());
-        let accepted = service.submit(failing).map_err(std::io::Error::other)?;
+        let accepted = service
+            .submit(failing)
+            .await
+            .map_err(std::io::Error::other)?;
         let failed = wait_for(&service, &accepted.task_id, TaskStatus::Failed)
             .await
             .map_err(std::io::Error::other)?;
@@ -1798,6 +2080,122 @@ mod tests {
                 .and_then(|e| e.exit_status),
             Some(7)
         );
+        Ok(())
+    }
+
+    struct FailingStore {
+        memory: MemoryExecutionStore,
+        failure: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl ExecutionStore for FailingStore {
+        async fn commit(
+            &self,
+            id: &str,
+            version: u64,
+            records: &[ExecutionRecord],
+        ) -> Result<u64, String> {
+            let fails = records.iter().any(|record| match record {
+                ExecutionRecord::Accepted { .. } => self.failure == "accepted",
+                ExecutionRecord::ModelResponse { .. } => self.failure == "response",
+                ExecutionRecord::ToolIntent { .. } => self.failure == "intent",
+                ExecutionRecord::ToolResult { .. } => self.failure == "result",
+                _ => false,
+            });
+            if fails {
+                return Err("injected execution commit failure".into());
+            }
+            self.memory.commit(id, version, records).await
+        }
+        async fn load(&self, id: &str) -> Result<Option<crate::store::StoredExecution>, String> {
+            self.memory.load(id).await
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_failures_block_effects_and_preserve_uncertain_execution()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for failure in ["accepted", "response", "intent", "result"] {
+            let workspace = TempDir::new()?;
+            let store = Arc::new(FailingStore {
+                memory: MemoryExecutionStore::default(),
+                failure,
+            });
+            let service = TaskService::with_store(
+                app(vec![
+                    turn(vec![
+                        tool_call(
+                            "first",
+                            "write",
+                            serde_json::json!({"path":"first.txt","content":"one"}),
+                        ),
+                        tool_call(
+                            "second",
+                            "write",
+                            serde_json::json!({"path":"second.txt","content":"two"}),
+                        ),
+                    ]),
+                    final_turn(),
+                ])?,
+                &[workspace.path().to_path_buf()],
+                store.clone(),
+            )?;
+            let accepted = service.submit(request(&workspace)).await;
+            if failure == "accepted" {
+                assert_eq!(
+                    accepted.err().map(|error| error.code),
+                    Some(ErrorCode::StorageUnavailable)
+                );
+                assert!(!workspace.path().join("first.txt").exists());
+                service.shutdown().await;
+                continue;
+            }
+            let accepted = accepted?;
+            if failure != "response" {
+                let approval =
+                    wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+                let request_id = approval
+                    .pending_input_id
+                    .ok_or("approval identity missing")?;
+                service
+                    .answer_input(&accepted.task_id, &request_id, true)
+                    .await?;
+            }
+            let blocked =
+                wait_for(&service, &accepted.task_id, TaskStatus::RecoveryRequired).await?;
+            assert!(blocked.unknown_effect);
+            service.shutdown().await;
+            assert_eq!(
+                workspace.path().join("first.txt").exists(),
+                failure == "result"
+            );
+            assert!(!workspace.path().join("second.txt").exists());
+            let saved = store
+                .load(&accepted.task_id)
+                .await?
+                .ok_or("execution missing")?;
+            assert!(
+                !saved
+                    .records
+                    .iter()
+                    .any(|record| matches!(record, ExecutionRecord::ToolResult { .. }))
+            );
+            if failure == "result" {
+                assert!(
+                    saved
+                        .records
+                        .iter()
+                        .any(|record| matches!(record, ExecutionRecord::ToolIntent { .. }))
+                );
+            }
+            assert!(
+                service
+                    .lock_state()
+                    .active_workspaces
+                    .contains_key(&blocked.workspace)
+            );
+        }
         Ok(())
     }
 }

@@ -4,10 +4,10 @@
 
 | Command | Behavior |
 | --- | --- |
-| `bro task run <prompt> --model ID [--effort EFFORT] [--check COMMAND\|--read-only] [--workspace PATH] [-c PATH]` | Connect to or start the local BRO task server, stream accepted/snapshot/event/terminal NDJSON, and exit nonzero for failed, cancelled, or interrupted tasks. The local headless client approves its own tool requests. `--read-only` permits only `read`, `ls`, `find`, and `grep`, with no verification command. Without `--check`, verification is `unavailable`. Explicit remote contexts are rejected without local fallback. This is distinct from ACP `bro run <agent>`. |
+| `bro task run <prompt> --model ID [--effort EFFORT] [--check COMMAND\|--read-only] [--workspace PATH] [-c PATH]` | Connect to or start the local BRO task server, stream accepted/snapshot/event/terminal NDJSON, and exit nonzero for failed, cancelled, or interrupted tasks. The local headless client approves its own tool requests. `--read-only` permits only `read`, `ls`, `find`, and `grep`, with no verification command. Without `--check`, verification is `not_requested`. Explicit remote contexts are rejected without local fallback. This is distinct from ACP `bro run <agent>`. |
 
 The local task socket is a sibling of the daemon control socket with a
-version 4 capabilities handshake bound to a server instance. Local requests
+version 5 capabilities handshake bound to a server instance. Local requests
 and replies carry a correlated `command_id` (distinct from approval `request_id`); submit accepts an optional
 `idempotency_key` scoped to that instance and caller. `bro code [--model ID] [--task-id ID]
 [--check COMMAND\|--read-only] [--workspace PATH]` uses the same task service. It prompts
@@ -41,9 +41,11 @@ use `GET /agent/v1/tasks/{id}` and `/events?after=N`; identified input and
 cancel use `/inputs` and `/cancel`. The task API does not inherit inference
 `server.skip_auth` or read-only control credentials.
 
-The runtime is in memory. Detach keeps tasks running, and shutdown cancels
-and joins execution cleanup. Restart loses task state and idempotency keys;
-report instance loss without automatically resubmitting. Defaults: 8 active
+The live task runtime is instance-local; execution facts are committed to the
+configured database before model/tool advancement. Detach keeps tasks running,
+and shutdown joins execution cleanup. Thread loading and safe continuation are
+still under implementation; report instance loss without automatically
+resubmitting. Storage failure blocks execution as `recovery_required`. Defaults: 8 active
 tasks, 32 retained terminal tasks / 64 MiB for up to 30 minutes, 256 events / 2 MiB per
 task, 8 observers / task, 32 queued events / observer, 32 KiB live output.
 Retention pressure may evict terminal tasks sooner. CLI/TUI use subscriptions;
@@ -99,7 +101,7 @@ Configuration status uses the target-owned optional `config_state`: saved input 
 
 | Command | Effect |
 |---|---|
-| `bro route <model> [--prompt TEXT] [--config PATH]` | Preview a model or router using the running daemon, otherwise local config (`resolved_via: live/config/zero_config`). Fixed routes show `effective_model`, `provider_chain`, and available rate estimates. Policy-bound routers show identity, source, `bound_policy`, candidates, and `policy_decision_executed: false`; their `effective_model` is the base model and their provider chain is empty. No dynamic selection is executed. `--prompt` only affects the existing local static policy-table preview. Nothing is sent upstream. |
+| `bro route <model> [--prompt TEXT] [--config PATH]` | Preview a model or router using the running daemon, otherwise local config (`resolved_via: live/config/zero_config`). The config fallback discovers models for `auto_discover: true` providers, as `bro models` does. Fixed routes show `effective_model`, `provider_chain`, and available rate estimates. Policy-bound routers show identity, source, `bound_policy`, candidates, and `policy_decision_executed: false`; their `effective_model` is the base model and their provider chain is empty. No dynamic selection is executed. `--prompt` only affects the existing local static policy-table preview. Nothing is sent upstream for inference; discovery may query provider `/models` endpoints. |
 | `bro models [--config PATH] [--provider ID]` | List every routable model selector, each with **all** the providers that can serve it (the fallback chain, in order). Subscription providers are explicit-route-only and therefore appear as pinned `provider:canonical-model` selectors; every displayed selector can be passed unchanged to `bro route`. Tries the running daemon first, falls back to a standalone config parse — same order as `bro route`. The parse is resolved the way the daemon resolves its own config at start-up (built-in defaults, then subscription providers such as `claude-code` / `google-ai` re-activated from the OAuth credential store), so a subscription-backed provider is listed with no daemon running; the live table additionally reflects `reload`s and whatever the daemon resolved at start-up. `--json` reports `resolved_via: "live" \| "config"`. Filter with `--provider`. |
 | `bro providers list [--config PATH] [--socket PATH]` | Local compatibility output retains `ID  MODELS  ACTIVE  API_BASE`; a named remote context and the dashboard use the redacted accepted catalog without API bases or credentials. Active means configured for routing rather than connectivity-probed. |
 | `bro mcp check [server] [--config PATH]` | Connect to one configured upstream MCP server, or all of them, and report transport, reachability, latency, negotiated tools capability, and advertised tool names. |
