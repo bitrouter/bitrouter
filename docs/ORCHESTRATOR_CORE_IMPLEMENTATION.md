@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared-plan records, worker allocation, output/input capacity and constrained reconstruction below; production hook revalidation and accounting remain pending |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared-plan records, worker allocation, output/input capacity and constrained reconstruction below; production hook revalidation below; accounting remains pending |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -445,9 +445,10 @@ can be removed. Missing or stale declarations retain all evidence; a finished
 work unit or an unrelated required document never authorizes deletion. Children,
 worker assignments and follow-ups do not inherit the declaration.
 
-The candidate retains user/system instructions, all current work, required
-material bodies and preparation additions, and validates complete call/result
-pairing. Core records the rejected source step, a reconstruction receipt, source
+At this checkpoint, the candidate retained user/system instructions, all current
+work, required material bodies and preparation additions, and validated complete
+call/result pairing. The production revalidation change below additionally
+rejects preparation-added messages without a dependency contract. Core records the rejected source step, a reconstruction receipt, source
 history digest and a new context revision/step. Its CPU work consumes active time;
 checkpoint ACK waiting does not. No second count or provider attempt begins until
 the reconstruction checkpoint is acknowledged. A still-infeasible candidate is
@@ -456,11 +457,10 @@ rejected without another reconstruction loop or model reselection.
 The shared SDK accepts only a strict ordered message subset, keeps generation
 parameters/model/effort/provider candidates frozen, reruns the original request
 checker bindings and performs fresh provider counts. A checker denial prevents
-both the second count and generation. Private continuation, App ingress prompt transforms, and all four mutable
-preparation/route-hook groups disable automatic reconstruction because those
-hooks have no immutable revalidation contract. This is an explicit functional
-limit: this path is usable in a hook-free embedding, not evidence that an
-assembled production App with such hooks supports automatic reconstruction.
+both the second count and generation. At `b966120c`, private continuation,
+App ingress prompt transforms, and all four mutable preparation/route-hook groups
+disabled automatic reconstruction. That checkpoint proved only a hook-free
+embedding; production hook support is implemented in the next segment.
 
 - SDK/orchestrator all-feature nextest: 1192 passed, 2 skipped, including
   80 core execution tests.
@@ -488,8 +488,72 @@ assembled production App with such hooks supports automatic reconstruction.
   workspace all-feature doctests (5 passed, 1 ignored), formatting and diff
   checks passed. These do not resolve the background CLI failure above.
 
-C3 remains open for the production hook revalidation contract, full protocol and
-continuation feasibility, priced receipts and protocol-aware cache accounting.
+At that checkpoint, C3 remained open for production hook revalidation, full
+protocol and continuation feasibility, priced receipts and cache accounting.
 The typed in-process declaration does not establish a remote context-inventory
 API or the C5 wire mapping. C4–C6, the complete A01–A23 audit, final independent
 review, final-tree workspace checks, PR and CI remain required.
+
+
+## C3 production context revalidation
+
+Preparation hooks and route hooks now have separate read-only revalidation
+contracts. Unknown implementations reject reconstructed context by default.
+Production authentication rereads the credential and checks the frozen caller,
+policy and route-principal bindings. Policy revalidation retains the ingress
+selector and policy binding while rereading live permissions and usage. Session
+identity, evolution admission fences, judge ownership, continuation state and
+server-tool declarations are checked without repeating registration or selection.
+The model, effort, tools, generation parameters and provider chain remain frozen.
+
+The App validates every ingress transform, even for a custom native embedding
+control. Each transform validates once, after durable validation admission, and
+must explicitly permit removal of its dependencies. Built-in model/alias
+transforms preserve their frozen decisions. Core rejects preparation-added
+messages because the caller's history declaration does not describe their
+semantic dependencies. Provider-private continuation remains unsupported for
+this reconstruction strategy.
+
+`context.rebuild` records a candidate step without replacing the agent's visible
+history. `context.validation.intent` must be acknowledged before any transform,
+read-only preparation hook, frozen request checker or route guard runs. Checks
+retain their original order: request checkers precede route guards. Each guard
+rechecks the live source, cancellation, dispatch and budget gate. Actual guard
+work consumes shared active time; waiting for another checkpoint between guards
+does not. The validation report records only a controlled error category.
+
+`context.validation.outcome` stores the report and, only when validation allows
+and the source and live dispatch gate still permit it, activates the candidate.
+Activation and its `applied` flag become visible together after ACK. Denial,
+provisional permission/cancellation blocks and disconnect cannot replace the
+old history. Runtime child inheritance also ignores unactivated candidates.
+Fresh counts and final admission require both acknowledged Allow and activation.
+
+- A shipped `assemble::build_app` + `CoreSession` integration uses a real HTTP
+  executor against a loopback Responses fixture. Two tasks trigger one rebuild,
+  fresh input counting, preserved required material and successful generation.
+  Metering retains exactly two logical request rows. This establishes production
+  App wiring with an embedding harness fixture, not a live-provider or production
+  harness acceptance run.
+- Regressions cover frozen selector/model/effort/provider chain, policy reload,
+  key rebinding/revocation, checker-before-route ordering, transform enforcement
+  for custom controls, all three checkpoint barriers, guard denial, signal and
+  cancellation changes, disconnect, inter-guard ACK waits, next-task history,
+  provisional dispatch blocks and child inheritance of pending candidates.
+- Independent reviews found and repaired duplicated ungated transform validation,
+  ACK waits charged as active time, route guards running before request checks,
+  rejected history leaking into later tasks/children, and activation racing a
+  provisional dispatch block.
+
+- The 19 targeted revalidation regressions passed. The final serial workspace
+  all-feature nextest run passed all 3726 selected tests, with 22 skipped, in
+  287.303 seconds. The previously intermittent background CLI tests passed in
+  this run; their earlier timeout cause remains unexplained.
+- Both independent follow-up reviews found no remaining concrete blocker in
+  this segment. Those reviews were static; the test evidence above is separate.
+- Strict all-target/all-feature workspace clippy, workspace all-feature
+  doctests (5 passed, 1 ignored), formatting and diff checks passed.
+
+C3 still requires full protocol/continuation feasibility and priced/cache
+receipts. C4–C6, A01–A23, final independent audit, final workspace validation,
+PR and CI remain open.

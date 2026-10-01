@@ -141,6 +141,43 @@ pub(crate) fn credential_from_headers(headers: &HeaderMap) -> Option<String> {
 
 #[async_trait]
 impl PreRequestHook for AuthHook {
+    async fn revalidate_context(&self, ctx: &PipelineContext) -> Result<HookDecision> {
+        if ctx.headers().is_empty() && !ctx.caller().is_anonymous() && !ctx.caller().is_local() {
+            // Managed callers remain under their embedding controller's live
+            // authorization gate; content removal cannot establish a new caller.
+            return Ok(HookDecision::Allow);
+        }
+        match self.authenticate(ctx.headers(), ctx.caller()).await? {
+            Authentication::Local => Ok(HookDecision::Allow),
+            Authentication::Denied(message) => {
+                Ok(HookDecision::Deny(DenyReason::Unauthorized(message)))
+            }
+            Authentication::Authenticated {
+                caller,
+                record,
+                route_scope_id,
+            } => {
+                let unchanged = caller.api_key_id() == ctx.caller().api_key_id()
+                    && caller.user_id() == ctx.caller().user_id()
+                    && ctx.get_event::<Authenticated>().is_some_and(|frozen| {
+                        frozen.api_key_id == record.id
+                            && frozen.user_id == record.user_id
+                            && frozen.policy_id == record.policy_id
+                    })
+                    && ctx
+                        .get_event::<ApiPrincipalEstablished>()
+                        .is_some_and(|frozen| frozen.route_scope_id == route_scope_id);
+                if unchanged {
+                    Ok(HookDecision::Allow)
+                } else {
+                    Ok(HookDecision::Deny(DenyReason::Unauthorized(
+                        "authentication or policy binding changed after admission".into(),
+                    )))
+                }
+            }
+        }
+    }
+
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
         // The native App entry has no HTTP headers and receives a caller only
         // after the embedding task adapter established its own authority.

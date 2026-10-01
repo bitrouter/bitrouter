@@ -2046,10 +2046,34 @@ impl ContinuationRuntime {
     pub fn registry(&self) -> &ContinuationRegistry {
         &self.registry
     }
+
+    fn validate_context_rebuild(&self, ctx: &PipelineContext) -> PipelineResult<()> {
+        if ctx.extension::<ContinuationRequestPlan>().is_some()
+            || ctx.extension::<CausalPrefixPlan>().is_some()
+            || ctx.extension::<RejectContinuationPreflight>().is_some()
+            || ["previous_response_id", "conversation"].iter().any(|key| {
+                ctx.prompt()
+                    .params
+                    .extra
+                    .get(*key)
+                    .is_some_and(|value| !value.is_null())
+            })
+        {
+            return Err(BitrouterError::bad_request(
+                "provider continuation cannot be reconstructed",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl PreRequestHook for ContinuationRuntime {
+    async fn revalidate_context(&self, ctx: &PipelineContext) -> PipelineResult<HookDecision> {
+        self.validate_context_rebuild(ctx)?;
+        Ok(HookDecision::Allow)
+    }
+
     async fn check(&self, ctx: &mut PipelineContext) -> PipelineResult<HookDecision> {
         if ctx.inbound_protocol() != Some(ApiProtocol::Responses) {
             return Ok(HookDecision::Allow);
@@ -2156,6 +2180,14 @@ impl PreRequestHook for ContinuationRuntime {
 
 #[async_trait]
 impl RouteHook for ContinuationRuntime {
+    async fn revalidate_context(
+        &self,
+        _chain: &[RoutingTarget],
+        ctx: &PipelineContext,
+    ) -> PipelineResult<()> {
+        self.validate_context_rebuild(ctx)
+    }
+
     async fn resolve(
         &self,
         chain: &mut Vec<RoutingTarget>,

@@ -247,6 +247,12 @@ pub struct ServerToolDeclarationsHook;
 
 #[async_trait]
 impl PreRequestHook for ServerToolDeclarationsHook {
+    async fn revalidate_context(&self, _ctx: &PipelineContext) -> Result<HookDecision> {
+        // SDK reconstruction only removes messages; declarations/tools and their
+        // already captured metadata are immutable across this boundary.
+        Ok(HookDecision::Allow)
+    }
+
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
         let decls = ServerToolDeclarations::from_prompt(ctx.prompt());
         if !decls.is_empty()

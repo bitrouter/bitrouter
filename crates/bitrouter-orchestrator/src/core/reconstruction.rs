@@ -1,5 +1,6 @@
 //! Deterministic reconstruction of explicitly optional settled history. Current
-//! work, instructions, required materials and preparation additions survive.
+//! work, instructions and required materials survive. Preparation-added
+//! messages require a separate dependency contract and prevent reconstruction.
 //! Completion alone never makes evidence optional. Removed history remains in
 //! the rejected step's immutable snapshot.
 
@@ -25,7 +26,6 @@ pub struct RebuildRecord {
 pub(crate) struct RebuiltContext {
     pub prompt: Prompt,
     pub history: Vec<Message>,
-    pub history_start: usize,
     pub removed_messages: usize,
 }
 
@@ -91,6 +91,11 @@ pub(crate) fn candidate(
         ));
     }
     step.context.validate_prepared(&plan.prompt)?;
+    if plan.prompt.messages.len() != required_source_len {
+        return Err(invalid(
+            "preparation added context outside the task's history declaration",
+        ));
+    }
     // Dropping a complete settled call/result batch cannot break an active pair.
     crate::context::validate_history(&agent.history[..start]).map_err(invalid)?;
     crate::context::validate_history(&agent.history[start..]).map_err(invalid)?;
@@ -137,15 +142,13 @@ pub(crate) fn candidate(
             "prepared context no longer contains the committed source",
         ));
     }
-    // Preparation-added calls or results may depend on removed history. Refuse
-    // reconstruction rather than stripping those additions or inventing pairs.
+    // Removing optional history must still leave complete call/result pairs.
     crate::context::validate_history(&messages).map_err(invalid)?;
     let mut prompt = plan.prompt.clone();
     prompt.messages = messages;
     Ok(RebuiltContext {
         prompt,
         history,
-        history_start: start - removed_messages,
         removed_messages,
     })
 }
