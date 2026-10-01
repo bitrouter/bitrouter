@@ -60,6 +60,7 @@ the authority and the task stays blocked rather than claiming terminal success.
 The approved [six-tool contract](BRO_BASE_TOOLS_SPEC.md) is implemented locally.
 Its [acceptance record](BRO_BASE_TOOLS_ACCEPTANCE.md) covers full source checks,
 macOS real-model coding/read-only runs, and a controlled comparison with the
-preceding seven-tool Unix interface. Windows execution remains unverified.
+preceding seven-tool Unix interface. Windows declarations, output/exit/streaming, and descendant cleanup passed
+hosted CI.
 This tool slice does not complete R0–R6, continuous Threads, or restart recovery;
 the phase ledger and earlier pending gates above retain their scope.

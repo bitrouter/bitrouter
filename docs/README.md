@@ -25,7 +25,7 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`CLI.md`](CLI.md) — full command reference, flags, and config resolution.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
 - [`BRO_BASE_TOOLS_SPEC.md`](BRO_BASE_TOOLS_SPEC.md) — **v0.2, implemented locally;
-  macOS verified, Windows acceptance pending.** Six native base tools: directory-aware `read`,
+  macOS real-model E2E and Windows CI verified.** Six native base tools: directory-aware `read`,
   `glob`, `grep`, `write`, `edit`, and a server-selected `shell`.
 - [`BRO_BASE_TOOLS_ACCEPTANCE.md`](BRO_BASE_TOOLS_ACCEPTANCE.md) — Local source
   checks, real-model coding/read-only tests, and controlled seven-to-six comparison.

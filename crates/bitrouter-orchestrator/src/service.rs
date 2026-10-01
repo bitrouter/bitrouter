@@ -1640,7 +1640,9 @@ mod tests {
         task_id: &str,
         status: TaskStatus,
     ) -> Result<TaskSnapshot, String> {
-        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        // Cold PowerShell startup under Windows CI load can exceed three seconds.
+        let seconds = if cfg!(windows) { 10 } else { 3 };
+        tokio::time::timeout(std::time::Duration::from_secs(seconds), async {
             loop {
                 let snapshot = service.read(task_id).map_err(|error| error.to_string())?;
                 if snapshot.status == status || snapshot.status.terminal() {

@@ -1,7 +1,8 @@
 # BRO six base tools: implementation and acceptance
 
 Updated: 2026-10-01. Status: **implemented locally; macOS checks and real-model
-E2E passed. Windows runtime acceptance and hosted CI remain pending.**
+E2E passed; Windows runtime tests and hosted CI passed. A test-wait robustness
+follow-up is being checked separately.**
 Contract: [six base tools v0.2](BRO_BASE_TOOLS_SPEC.md).
 
 ## Delivered behavior
@@ -135,14 +136,13 @@ Use a fresh, short output directory and a configured inference gateway on
 before/after in separate target directories, or force dependent source rebuilds
 and verify actual declarations; shared cache reuse is not source identity proof.
 
-- Windows runtime remains unverified. Cross-checking
-  `x86_64-pc-windows-msvc` failed while compiling `aws-lc-sys` because Windows C
-  headers (`stdlib.h`, `windows.h`) are unavailable here. This did not reach Rust
-  validation. Windows-specific declaration, nonzero exit, output cap/streaming, and
-  descendant cleanup tests are present, and the existing CI matrix runs them on `windows-latest`; that run
-  must pass before cross-platform acceptance is complete.
-- Hosted CI, merge and release publication are separate gates. No such result
-  is claimed by this local record.
+- Windows runtime acceptance is proven by hosted Windows tests, including
+  declarations, nonzero exit, capture caps/streaming and descendant cleanup. The
+  earlier macOS cross-check failed in `aws-lc-sys` due to missing Windows SDK
+  headers; that attempt remains excluded from successful evidence.
+- macOS is the platform for real-model E2E. Windows CI uses deterministic model
+  fixtures and actual PowerShell processes; no Windows real-provider E2E is
+  claimed. Merge and release publication remain separate external gates.
 - Future pending-call continuation/recovery belongs to runtime R4. Storage
   names/IDs remain untouched and new dispatch rejects old names, but this slice
   does not deliver restart recovery, continuous Threads, or the full runtime MVP.
@@ -156,7 +156,7 @@ A Windows-only test added after the recorded macOS live binary checks nonzero
 exit status, stdout/stderr capture caps, interpreter identity and output arriving
 before command exit. It changes tests only; the exercised production handlers
 remain byte-equivalent to the live-tested implementation. The manifest's source
-hashes identify the source at those live runs rather than this later test addition.
+hashes identify the source at those live runs rather than the later test additions.
 The local rerun passed 3,602 tests (22 skipped), strict clippy and formatting.
 Logs are `/tmp/bro-six-tools-nextest-ci-prep.log` and
 `/tmp/bro-six-tools-clippy-ci-prep.log`. [Draft PR #951](https://github.com/bitrouter/bitrouter/pull/951), stacked on
@@ -166,4 +166,46 @@ started against six-tool commit `9e9f2cf42b13075d7f32a1206a9e2dd3c237b878`.
 The SDK rustdoc job found a redundant explicit Prompt link inherited from the
 baseline. The follow-up removes only that link target; local workspace rustdoc
 with `RUSTDOCFLAGS='-D warnings'` passed (`/tmp/bro-six-tools-rustdoc.log`).
-Hosted rerun results remain pending.
+The [corrected CI run](https://github.com/bitrouter/bitrouter/actions/runs/36821538609)
+passed all 22 jobs at `964addb5d846274bcd0fb7f9086ba57f33c7b02a`: Linux/macOS/Windows
+clippy, macOS and Windows all-feature tests, the complete split Linux test suite,
+MSRV, rustdoc/doctests, SDK API/isolation, generated dist, formatting, repository
+hygiene and the real plugin loader checks. [Compact CI evidence](evidence/bro-base-tools/ci.json)
+preserves job identities and relevant Windows log lines. Windows ran 3,487 tests:
+3,487 passed (one flaky), three skipped. All six-tool handler tests passed on the
+first attempt, including all four descendant cleanup paths.
+
+Both Windows runs reported the same verification fixture exceeding its three-second
+observation wait and passing on retry. The follow-up gives this test helper ten
+seconds on Windows; Unix retains three. Completion status, verification outcomes,
+exit-code assertions and production timeouts retain their contracts. The local all-feature rerun passed 3,602 tests (22 skipped), strict clippy
+and formatting. Final check logs are `/tmp/bro-six-tools-nextest-final-stable.log` and
+`/tmp/bro-six-tools-clippy-final-stable.log`; the follow-up CI result is pending.
+
+## Requirement audit
+
+The six-tool contract is checked against production source, targeted tests,
+separate-process fixtures, and the four preserved real-model runs. Current
+production handlers reconstruct to the manifest's live-source hashes after
+removing only the later Windows test and observation-wait adjustment. That comparison also confirms unchanged
+agent/verification/process-fixture source.
+
+| Contract requirement | Authoritative evidence |
+| --- | --- |
+| Six coding declarations / three read-only declarations | Registry profile test on each CI platform; every request in preserved real-model evidence uses its expected profile |
+| Legacy/effectful rejection before approval or launch | Agent's allowed/validate checks precede approval; registry legacy rejection and read-only no-approval/no-mutation tests |
+| Optional arguments and actual interpreter in SDK requests | Chat Completions/Responses adapter tests; process fixture captures real declarations; live shell/check results identify `/bin/bash` |
+| File/directory behavior and pagination | Directory pages, empty/end pages, byte-bound/oversized-record, case/name/symlink tests; live coding and read-only pages |
+| Containment and special-file rejection | Relative/canonical path validation and regular-file/directory dispatch; escape/symlink/socket tests; bounded complete-record tests |
+| Glob rename preserves search semantics | Basename/relative-path/directory/ignore/cancellation tests; shared walker excludes child symlinks |
+| Availability selection before sampling, no retry | Agent construction resolves once; ordered discovery and missing-after-selection tests; read-only constructs no interpreter |
+| Bounded command output and cleanup | Unix output/exit/streaming and descendant tests; Windows output/exit/streaming and four descendant tests passed in Windows CI |
+| Shared verification and history/approval identity | Verification clones the agent's selected tools; live result/check identities match. Store/context/history schemas and migration are unchanged from snapshot `55dad4a7`; legacy dispatch is unavailable before approvals |
+| Required source checks | Local all-feature nextest/clippy/fmt/doctests plus strict rustdoc; hosted checks are tracked separately by commit |
+| Shipped docs/skills/manifests | Six-tool CLI/skill references; all three manifest descriptions; hosted real plugin loader checks |
+
+Pending old-call continuation remains a conditional requirement on future R4,
+explicitly outside this slice. There is no restart continuation/replay command
+in the delivered runtime. This change neither rewrites old names/IDs nor creates
+aliases that can execute them or reuse their approvals. Cross-restart recovery
+is not counted as delivered by this audit.

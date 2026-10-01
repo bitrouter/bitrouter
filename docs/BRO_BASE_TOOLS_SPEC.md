@@ -3,7 +3,7 @@
 Version: **v0.2**. Updated: **2026-10-01**.
 
 Status: **approved implementation contract; implemented and verified locally on
-macOS. Windows runtime acceptance remains pending.** See the
+macOS; Windows declarations and shell execution passed hosted CI.** See the
 [acceptance record](BRO_BASE_TOOLS_ACCEPTANCE.md) for checks, real-model evidence,
 and the limits of the before/after comparison.
 
@@ -292,10 +292,11 @@ spec bodies or treat local implementation as release publication.
 
 ## Acceptance and review
 
-The gates below remain the contract. macOS evidence is recorded separately;
-combined Unix/Windows gates stay unchecked until Windows runtime checks pass:
+The gates below are verified for this slice. macOS real-model evidence and
+Windows hosted tests are recorded separately in the acceptance record. Future
+restart continuation remains outside this slice, as specified above:
 
-- [ ] Unix and Windows coding declarations expose exactly the six canonical
+- [x] Unix and Windows coding declarations expose exactly the six canonical
   names; read-only declarations expose only `read`, `glob`, and `grep`.
 - [x] Forged effectful/legacy calls are rejected before launch; new shell naming
   preserves approval, workspace exclusion, and verification restrictions.
@@ -311,10 +312,10 @@ combined Unix/Windows gates stay unchecked until Windows runtime checks pass:
 - [x] Interpreter selection happens before sampling. Missing preferred
   interpreters select the documented fallback; loss after selection never
   re-executes a command under another interpreter. Read-only works without one.
-- [ ] Commands stream bounded output and preserve exit/timeout/cancellation
+- [x] Commands stream bounded output and preserve exit/timeout/cancellation
   outcomes. Descendant cleanup passes on Unix and Windows, including dropped
   futures and background children after the parent exits.
-- [ ] Verification shares interpreter selection; historic records keep their
+- [x] Verification shares interpreter selection; historic records keep their
   names/IDs and pending old calls cannot reuse approvals or replay effects.
 - [x] Required source checks pass: `cargo nextest run --all-features` (or
   `cargo test --all-features`), `cargo clippy --all-features`, and
