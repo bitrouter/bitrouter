@@ -154,6 +154,7 @@ impl HttpExecutor {
         upstream.model = target.service_id.clone();
         upstream.stream = false;
         let mut body = adapter.render_request_for_target(&upstream, target)?;
+        let managed_expected = self.managed_expected_body(&body, target, ctx)?;
         apply_provider_continuation(&mut body, target, ctx)?;
         let url = transport.endpoint_url(target, false);
         let (client, timeouts) = self.client_for(target);
@@ -163,6 +164,7 @@ impl HttpExecutor {
                 timeouts: &timeouts,
                 url: &url,
                 body: &body,
+                managed_expected: managed_expected.as_ref(),
                 target,
                 transport,
                 ctx,

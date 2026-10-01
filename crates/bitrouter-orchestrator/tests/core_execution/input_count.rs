@@ -477,3 +477,98 @@ async fn counting_consumes_active_time_without_consuming_generation_attempts() -
     assert_eq!(counter.requests.lock().await.len(), 1);
     Ok(())
 }
+
+struct ManagedProtocolInput {
+    automatic_truncation: bool,
+}
+impl bitrouter_sdk::app::PromptTransform for ManagedProtocolInput {
+    fn apply(&self, prompt: &mut Prompt) {
+        prompt.params.store = Some(true);
+        if self.automatic_truncation {
+            prompt
+                .params
+                .extra
+                .insert("truncation".into(), json!("auto"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn managed_protocol_filters_lossy_candidate_before_count_or_attempt() -> TestResult {
+    for (automatic_truncation, count_good) in
+        [(false, false), (false, true), (true, false), (true, true)]
+    {
+        let counter = counter(false).await?;
+        let mut first = target("a-lossy-messages");
+        first.api_protocol = ApiProtocol::Messages;
+        first.api_base = counter.base.clone();
+        first.api_key = "count-fixture-key".into();
+        first.model_constraints.input_token_counting =
+            Some(bitrouter_sdk::language_model::native::InputTokenCounting::Responses);
+        let mut second = first.clone();
+        second.provider_name = "b-compatible-responses".into();
+        second.api_protocol = ApiProtocol::Responses;
+        second.model_constraints.input_token_counting = if count_good {
+            Some(bitrouter_sdk::language_model::native::InputTokenCounting::Responses)
+        } else {
+            None
+        };
+        let table = StaticRoutingTable::new();
+        table.insert("fixture-model", vec![first, second]);
+        let executor = Arc::new(HttpExecutor::with_defaults()?);
+        let app = App::builder()
+            .prompt_transform(Arc::new(ManagedProtocolInput {
+                automatic_truncation,
+            }))
+            .language_model(|builder| {
+                builder.routing_table(Arc::new(table)).executor(executor);
+            })
+            .build()?;
+        let session = bind_app(Arc::new(app), Arc::new(Harness::new(None, None))).await?;
+        start_counted(&session).await?;
+        let state = session.drive().await?;
+        let step = &state.root_turn().ok_or("missing turn")?.steps[0];
+        let decision = step.decision.as_ref().ok_or("missing decision")?;
+        assert!(
+            decision.routes[0]
+                .rejection_reasons
+                .iter()
+                .any(|reason| reason == "protocol_incompatible:protocol_render_failed"),
+            "routes={:?}",
+            decision.routes
+        );
+        let requests = counter.requests.lock().await;
+        if automatic_truncation {
+            assert!(step.attempts.is_empty());
+            assert!(step.input_counts.is_empty());
+            assert!(requests.is_empty());
+            assert_eq!(
+                state.run.as_ref().map(|run| run.status),
+                Some(RunStatus::Failed)
+            );
+            assert!(
+                decision.routes[1]
+                    .rejection_reasons
+                    .iter()
+                    .any(|reason| reason == "protocol_incompatible:automatic_truncation_forbidden")
+            );
+        } else {
+            assert_eq!(
+                state.run.as_ref().map(|run| run.status),
+                Some(RunStatus::Completed)
+            );
+            assert_eq!(step.attempts.len(), 1);
+            assert_eq!(step.attempts[0].index, 1);
+            assert_eq!(requests.len(), if count_good { 2 } else { 1 });
+            assert_eq!(step.input_counts.len(), usize::from(count_good));
+            if count_good {
+                assert_eq!(step.input_counts[0].route_index, 1);
+                assert_eq!(requests[0].0, "/v1/responses/input_tokens");
+            }
+            let generation = requests.last().ok_or("missing generation")?;
+            assert_eq!(generation.0, "/v1/responses");
+            assert_eq!(generation.1["store"], true);
+        }
+    }
+    Ok(())
+}

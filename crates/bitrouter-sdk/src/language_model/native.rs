@@ -168,9 +168,38 @@ pub struct NativeRoute {
     /// Counts belong to the prepared request and this concrete route.
     #[serde(default)]
     pub input_count: Option<NativeInputCount>,
+    /// Shared executor/adapter assessment of the actual prepared prompt.
+    #[serde(default)]
+    pub protocol_validation: NativeProtocolValidation,
+}
+
+/// Protocol feasibility is distinct from catalog capabilities and token counts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum NativeProtocolValidation {
+    /// An embedding executor has not established a wire-format guarantee.
+    #[default]
+    Unverified,
+    /// The serving adapter can preserve this request's required semantics.
+    Compatible,
+    /// A local check rejected the candidate before upstream work.
+    Rejected {
+        /// Stable controlled reason; never an upstream body or private identity.
+        reason: String,
+    },
 }
 
 impl NativeRoute {
+    /// A configured counter is required only for a locally viable candidate.
+    /// Rejected candidates must carry no count intent or outcome.
+    pub fn requires_input_count(&self) -> bool {
+        self.constraints.input_token_counting.is_some()
+            && !matches!(
+                self.protocol_validation,
+                NativeProtocolValidation::Rejected { .. }
+            )
+    }
+
     pub(crate) fn from_target(target: &RoutingTarget) -> Self {
         Self {
             provider: target.provider_name.clone(),
@@ -179,6 +208,7 @@ impl NativeRoute {
             constraints: target.model_constraints.clone(),
             output_token_limit_supported: None,
             input_count: None,
+            protocol_validation: Default::default(),
         }
     }
 }
@@ -186,6 +216,9 @@ impl NativeRoute {
 /// A managed request's immutable output bound, checked after provider shaping
 /// and authentication, immediately before the HTTP request can be sent.
 pub(crate) struct NativeOutputReservation(pub u32);
+
+/// Every controlled call carries this marker, even before output admission.
+pub(crate) struct NativeManagedRequest;
 
 /// A redacted snapshot after shared auth, prompt preparation and model policy.
 /// The pipeline executes this exact prompt and route chain without rerunning

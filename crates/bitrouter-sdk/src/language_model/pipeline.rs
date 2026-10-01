@@ -612,6 +612,11 @@ impl Pipeline {
             )
             .await?;
 
+        if control.is_some() {
+            ctx.insert_extension(Arc::new(
+                crate::language_model::native::NativeManagedRequest,
+            ));
+        }
         if control.is_some()
             && let Some(tokens) = ctx.prompt().params.max_tokens
         {
@@ -804,8 +809,11 @@ impl Pipeline {
                         .is_none_or(serde_json::Value::is_null)
             });
         for rebuild_round in 0..=1 {
-            for route in routes.iter_mut() {
+            for (route, target) in routes.iter_mut().zip(chain) {
                 route.input_count = None;
+                route.protocol_validation =
+                    self.executor
+                        .native_protocol_validation(target, ctx.prompt(), ctx);
             }
             let mut plan = NativePlan {
                 request_id: ctx.request_id().to_owned(),
@@ -817,7 +825,7 @@ impl Pipeline {
                 router: ctx.router_identity().cloned(),
             };
             for (index, target) in chain.iter().enumerate() {
-                if target.model_constraints.input_token_counting.is_none() {
+                if !routes[index].requires_input_count() {
                     continue;
                 }
                 let route_index = u32::try_from(index)
@@ -905,6 +913,16 @@ impl Pipeline {
                 }
             };
             admission.validate(routes.len())?;
+            if admission.route_indices.iter().any(|index| {
+                matches!(
+                    routes[*index as usize].protocol_validation,
+                    crate::language_model::native::NativeProtocolValidation::Rejected { .. }
+                )
+            }) {
+                return Err(BitrouterError::bad_request(
+                    "admitted route failed managed protocol validation",
+                ));
+            }
             if admission.route_indices.iter().any(|index| {
                 let route = &routes[*index as usize];
                 route.constraints.input_token_counting.is_some()
