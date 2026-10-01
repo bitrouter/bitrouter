@@ -20,7 +20,7 @@ mock-provider demonstration does not establish production integration.
 | Stage | Work | Status / evidence |
 | --- | --- | --- |
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
-| C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Pending |
+| C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Pending |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Pending |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
@@ -73,3 +73,40 @@ a production persistence implementation.
 
 These tests establish the contract primitives only. They do not yet prove A01–A23
 end-to-end execution, scheduling, recovery or production integration.
+
+## C1 evidence
+
+`core::session::CoreSession` implements new-session binding, idempotent root
+input, committed model plans and attempts, complete output validation, harness
+tool dispatch/results, explicit verification, and a separate terminal commit.
+State inspection remains available while a harness ACK is pending. The SDK's
+controlled native entry point uses the shared preparation, route selection,
+fallback, execution, and settlement machinery. Plans exclude provider credentials;
+each fallback has its own admitted attempt and complete outcome record.
+
+- `cargo nextest run -p bitrouter-sdk -p bitrouter-orchestrator --all-features`:
+  1119 passed, 2 skipped. This includes 21 core execution tests.
+- `cargo test -p bitrouter-orchestrator -p bitrouter-sdk --doc --all-features`:
+  5 SDK doctests passed, 1 ignored; orchestrator has no doctests.
+- `cargo clippy -p bitrouter-orchestrator -p bitrouter-sdk --all-targets
+  --all-features -- -D warnings`, `cargo fmt --all -- --check`, and
+  `git diff --check`: passed.
+- A real SDK HTTP executor connects to a loopback provider fixture, emits a
+  file-read call, consumes an actual temporary-file result, and finishes the
+  task. This is protocol integration evidence, not a credentialed live-provider
+  or production-harness run.
+- Independent review findings were fixed with targeted regressions: abandoned
+  drivers cannot duplicate model steps; observer callbacks precede final model
+  admission; disconnect interrupts ACK waits while allowing usage settlement;
+  invalid verification is rejected before acceptance; tool delivery survives
+  cancellation of its caller; stale or corrupt ACKs report unknown commit
+  status; unknown effects prevent subsequent tool dispatch; frozen tool sets,
+  tool choice, and parallel-call constraints govern output validation.
+- Fallback admission also checks the accumulated active-time bound. Unsettled
+  attempts take precedence over resource-limit terminal transitions.
+- Follow-up independent review found no remaining C1 blockers.
+
+This stage exposes the in-process root primitive only. It does not establish
+child scheduling, context selection, crash restoration, Responses/channel
+integration, or production-harness conformance. Those remain C2–C6 work; A01–A23
+remain unproven as complete end-to-end acceptance scenarios.

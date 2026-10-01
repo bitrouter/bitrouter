@@ -158,6 +158,33 @@ impl App {
             .await
     }
 
+    /// Execute a managed native turn with durable admission before each
+    /// provider attempt. Ordinary HTTP and native requests share preparation,
+    /// selection, execution and settlement; core-owned tools stay client-owned.
+    pub async fn execute_native_controlled(
+        &self,
+        prompt: Prompt,
+        caller: CallerContext,
+        control: Arc<dyn crate::language_model::native::NativeExecutionControl>,
+    ) -> Result<PipelineResponse> {
+        if prompt.stream {
+            return Err(crate::error::BitrouterError::bad_request(
+                "controlled model turns must be non-streaming",
+            ));
+        }
+        let pipeline = self.language_model.as_ref().ok_or_else(|| {
+            crate::error::BitrouterError::internal("no language_model pipeline configured")
+        })?;
+        let headers = http::HeaderMap::new();
+        let (prompt, original_model) =
+            prepare_model_prompt(prompt, &headers, &self.prompt_transforms);
+        let mut request = PipelineRequest::new(prompt.model.clone(), caller, prompt);
+        request.original_model = original_model;
+        Arc::clone(pipeline)
+            .execute_native_controlled(request, control)
+            .await
+    }
+
     /// Stream one native agent turn through the same routed and settled path.
     /// The embedding agent owns client tool calls, so SDK server tools are
     /// excluded just as they are for `execute_native`.

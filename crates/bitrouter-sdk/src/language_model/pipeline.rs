@@ -19,6 +19,9 @@ use crate::language_model::hooks::{
     ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
     RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
+use crate::language_model::native::{
+    NativeAttemptReport, NativeExecutionControl, NativePlan, NativeRoute,
+};
 use crate::language_model::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, MAX_REQUEST_CHECKS_PER_ROUTER,
     RequestCheckBinding, RequestCheckerRunner, content_fragments,
@@ -521,13 +524,15 @@ impl Pipeline {
         self: Arc<Self>,
         req: PipelineRequest,
     ) -> Result<PreparedPipelineResponse> {
-        self.execute_detached_prepared_with_mode(req, true).await
+        self.execute_detached_prepared_with_mode(req, true, None)
+            .await
     }
 
     async fn execute_detached_prepared_with_mode(
         self: Arc<Self>,
         req: PipelineRequest,
         run_server_tools: bool,
+        control: Option<Arc<dyn NativeExecutionControl>>,
     ) -> Result<PreparedPipelineResponse> {
         let pipeline = Arc::clone(&self);
         // `tokio::spawn` does not propagate the current tracing span, so attach
@@ -537,7 +542,9 @@ impl Pipeline {
         let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
         self.detached_executions.spawn(
             async move {
-                let result = pipeline.execute_prepared(req, run_server_tools).await;
+                let result = pipeline
+                    .execute_prepared(req, run_server_tools, control.as_deref())
+                    .await;
                 // A dropped handler drops the prepared delivery permit here;
                 // upstream execution and settlement have nevertheless run on
                 // this shutdown-tracked task.
@@ -554,7 +561,7 @@ impl Pipeline {
 
     /// Execute a non-streaming request: the four stages, in order.
     pub async fn execute(&self, req: PipelineRequest) -> Result<PipelineResponse> {
-        let prepared = self.execute_prepared(req, true).await?;
+        let prepared = self.execute_prepared(req, true, None).await?;
         prepared.delivery.deliver().await?;
         Ok(prepared.response)
     }
@@ -568,7 +575,19 @@ impl Pipeline {
         // A cancelled agent may stop waiting for a model turn. The accepted
         // upstream request still needs to settle before its result is dropped.
         let prepared = Arc::clone(&self)
-            .execute_detached_prepared_with_mode(req, false)
+            .execute_detached_prepared_with_mode(req, false, None)
+            .await?;
+        prepared.delivery.deliver().await?;
+        Ok(prepared.response)
+    }
+
+    pub(crate) async fn execute_native_controlled(
+        self: Arc<Self>,
+        req: PipelineRequest,
+        control: Arc<dyn NativeExecutionControl>,
+    ) -> Result<PipelineResponse> {
+        let prepared = self
+            .execute_detached_prepared_with_mode(req, false, Some(control))
             .await?;
         prepared.delivery.deliver().await?;
         Ok(prepared.response)
@@ -578,12 +597,28 @@ impl Pipeline {
         &self,
         req: PipelineRequest,
         run_server_tools: bool,
+        control: Option<&dyn NativeExecutionControl>,
     ) -> Result<PreparedPipelineResponse> {
         let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, false).await?;
 
+        let admission = match control {
+            Some(control) => {
+                control
+                    .plan(NativePlan {
+                        request_id: ctx.request_id().to_owned(),
+                        original_model: ctx.original_model().to_owned(),
+                        prompt: ctx.prompt().clone(),
+                        routes: chain.iter().map(NativeRoute::from_target).collect(),
+                    })
+                    .await
+            }
+            None => Ok(()),
+        };
+
         // ---- Stage 3: execution (with the server-side tool loop when configured) ----
-        let exec_outcome = match &self.server_tool_loop {
-            Some(server_loop) if run_server_tools => {
+        let exec_outcome = match (admission, &self.server_tool_loop) {
+            (Err(error), _) => Err(error),
+            (Ok(()), Some(server_loop)) if run_server_tools => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream = PipelineUpstream {
                     pipeline: self,
@@ -596,7 +631,7 @@ impl Pipeline {
                     .map(|outcome| (outcome.result, outcome.provider_terminal_exposed))
             }
             _ => self
-                .execute_with_fallback(&chain, ctx.prompt(), &ctx)
+                .execute_with_fallback_controlled(&chain, ctx.prompt(), &ctx, control)
                 .await
                 .map(|result| (result, true)),
         };
@@ -1287,11 +1322,45 @@ impl Pipeline {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
+        self.execute_with_fallback_controlled(chain, prompt, ctx, None)
+            .await
+    }
+
+    async fn execute_with_fallback_controlled(
+        &self,
+        chain: &[RoutingTarget],
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+        control: Option<&dyn NativeExecutionControl>,
+    ) -> Result<ExecutionResult> {
         let mut errors = Vec::new();
         for (attempt_index, target) in chain.iter().enumerate() {
             self.wait_before_fallback(attempt_index).await;
+            let index = u32::try_from(attempt_index)
+                .map_err(|_| BitrouterError::internal("provider attempt index exhausted"))?;
             self.observe_hop_start(ctx, target).await;
+            if let Some(control) = control
+                && let Err(error) = control.before_attempt(ctx.request_id(), index).await
+            {
+                self.observe_hop_end(ctx, target, HopOutcome::Failed(&error))
+                    .await;
+                return Err(error);
+            }
+            let started = Instant::now();
             let outcome = self.executor.execute(target, prompt, ctx).await;
+            if let Some(control) = control {
+                control
+                    .after_attempt(NativeAttemptReport {
+                        request_id: ctx.request_id().to_owned(),
+                        attempt_index: index,
+                        route: NativeRoute::from_target(target),
+                        actual_model: outcome.as_ref().ok().map(|result| result.model_id.clone()),
+                        result: outcome.as_ref().ok().map(|result| result.result.clone()),
+                        error: outcome.as_ref().err().map(ToString::to_string),
+                        elapsed_ms: crate::language_model::timing::elapsed_millis(started),
+                    })
+                    .await;
+            }
             match &outcome {
                 Ok(result) => {
                     self.observe_hop_end(ctx, target, HopOutcome::Generated(result))
