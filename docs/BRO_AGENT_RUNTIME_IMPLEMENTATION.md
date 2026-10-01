@@ -388,6 +388,33 @@ the new C0–C6 core stages or infer approval to build a second scheduling autho
 
 ## Evidence so far
 
+### CI compatibility follow-up (2026-10-01)
+
+Validated source: `ce7a1291a7ff98b487cf4860e32485cf9e85d732`, from the clean
+isolated PR checkout with Rust 1.97.0. The following ledger commit changes docs only.
+
+- Independent orchestrator crate: **102 passed, 0 skipped**, run
+  `fba91571-a6a3-4008-989b-9c6f4df02e14`.
+- Full workspace: **3677 passed, 22 skipped**, run
+  `5f958863-382a-4f6a-a503-4a285ed4028d`; no leak reported.
+  The preceding attempt stopped after a compatible CLI worker exceeded its
+  two-second probe deadline. The unchanged probe passed in the complete rerun;
+  the transient failure has not been root-caused.
+- Clippy all features/all targets with `-D warnings`, formatting and diff checks
+  pass. Strict workspace documentation with `RUSTDOCFLAGS="-D warnings"` passes;
+  workspace doc tests report **5 passed, 1 ignored**.
+- The old PR head's Rust 1.99 CI exposed a redundant rustdoc target, deprecated
+  `fetch_update` and a Unix-only test import on Windows. The follow-up removes
+  the redundant target, preserves the saturating atomic update and memory
+  ordering with an MSRV-compatible compare/exchange loop, and scopes the test
+  reference to its Unix use.
+- Clippy alone temporarily pins Rust 1.97.0 with warnings still denied because
+  Rust 1.99 reports `double_must_use` in `async-trait` expansions; see the
+  [upstream macro false-positive report](https://github.com/rust-lang/rust-clippy/issues/17529).
+  All other stable CI jobs retain their current toolchain selection.
+  New-head hosted CI remains pending; these local checks do not prove Windows,
+  Linux, credentialed providers, core integration or host operator recovery.
+
 ### Committed PR snapshot validation (2026-10-01)
 
 Runtime source: `f2ce258a1dbde6fb7c1ad6f8ae1a1bcfd14cef22`,
