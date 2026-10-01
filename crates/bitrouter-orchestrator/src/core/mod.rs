@@ -4,3 +4,4 @@
 
 pub mod checkpoint;
 pub mod protocol;
+pub mod session;

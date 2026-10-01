@@ -66,6 +66,7 @@ pub mod builder;
 pub mod context;
 pub mod executor;
 pub mod hooks;
+pub mod native;
 pub mod pipeline;
 pub mod protocol;
 pub mod request_checks;
