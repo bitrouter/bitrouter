@@ -89,6 +89,30 @@ pub struct RootRun {
     pub status: RunStatus,
     pub model_attempts: u32,
     pub active_ms: u64,
+    pub final_answer: Option<String>,
+    pub terminal_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStatus {
+    Runnable,
+    ModelRunning,
+    WaitingTool,
+    WaitingMessage,
+    Interrupted,
+    RecoveryRequired,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTurn {
+    pub run_id: String,
+    pub agent_turn_id: String,
+    pub input: TaskInput,
+    pub status: AgentStatus,
     pub steps: Vec<ModelStep>,
     pub invocations: Vec<Invocation>,
     pub final_answer: Option<String>,
@@ -96,14 +120,32 @@ pub struct RootRun {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentState {
+    pub agent_id: String,
+    pub parent_id: Option<String>,
+    pub display_path: String,
+    pub depth: u32,
+    pub context_revision: u64,
+    pub history: Vec<Message>,
+    pub turn: Option<AgentTurn>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSnapshot {
     pub session_id: String,
     pub agent_id: String,
-    pub context_revision: u64,
     pub manifest: HarnessManifest,
-    pub history: Vec<Message>,
+    pub agents: BTreeMap<String, AgentState>,
     pub run: Option<RootRun>,
     pub operations: BTreeMap<String, OperationReceipt>,
+}
+
+impl SessionSnapshot {
+    pub fn root_turn(&self) -> Option<&AgentTurn> {
+        self.agents
+            .get(&self.agent_id)
+            .and_then(|agent| agent.turn.as_ref())
+    }
 }
 
 struct LiveSession {
@@ -152,12 +194,21 @@ impl CoreSession {
                 "a nonempty session requires explicit restoration",
             ));
         }
+        let agent_id = id("agent");
+        let root = AgentState {
+            agent_id: agent_id.clone(),
+            parent_id: None,
+            display_path: "/root".into(),
+            depth: 0,
+            context_revision: 0,
+            history: Vec::new(),
+            turn: None,
+        };
         let state = SessionSnapshot {
             session_id: binding.grant.session_id.clone(),
-            agent_id: id("agent"),
-            context_revision: 0,
+            agent_id: agent_id.clone(),
             manifest: binding.manifest,
-            history: Vec::new(),
+            agents: BTreeMap::from([(agent_id, root)]),
             run: None,
             operations: BTreeMap::new(),
         };
@@ -240,8 +291,22 @@ impl CoreSession {
                 .limits
                 .clone()
                 .unwrap_or_else(|| self.shared.limits.clone());
-            state.history.push(Message::text(Role::User, &input.text));
-            state.context_revision += 1;
+            let agent = state
+                .agents
+                .get_mut(&state.agent_id)
+                .ok_or_else(|| reject(ErrorCode::CheckpointConflict, "root agent is absent"))?;
+            agent.history.push(Message::text(Role::User, &input.text));
+            agent.context_revision += 1;
+            agent.turn = Some(AgentTurn {
+                run_id: run_id.clone(),
+                agent_turn_id: turn_id.clone(),
+                input: input.clone(),
+                status: AgentStatus::Runnable,
+                steps: Vec::new(),
+                invocations: Vec::new(),
+                final_answer: None,
+                terminal_reason: None,
+            });
             state.run = Some(RootRun {
                 run_id: run_id.clone(),
                 agent_turn_id: turn_id.clone(),
@@ -250,8 +315,6 @@ impl CoreSession {
                 status: RunStatus::Running,
                 model_attempts: 0,
                 active_ms: 0,
-                steps: Vec::new(),
-                invocations: Vec::new(),
                 final_answer: None,
                 terminal_reason: None,
             });
@@ -339,21 +402,25 @@ impl CoreSession {
             if run.status.terminal() || run.status == RunStatus::RecoveryRequired {
                 return Ok(state);
             }
-            if run.invocations.iter().any(|call| !call.consumed) {
-                if run
+            let agent_id = state.agent_id.clone();
+            let turn = state
+                .root_turn()
+                .ok_or_else(|| reject(ErrorCode::CheckpointConflict, "root turn is absent"))?;
+            if turn.invocations.iter().any(|call| !call.consumed) {
+                if turn
                     .invocations
                     .iter()
                     .filter(|call| !call.consumed)
                     .all(|call| call.result.is_some())
                 {
-                    self.consume_results().await?;
+                    self.consume_results(&agent_id).await?;
                     continue;
                 }
-                self.dispatch_tools().await?;
+                self.dispatch_tools(&agent_id).await?;
                 return Ok(self.snapshot().await);
             }
-            if run.final_answer.is_some() {
-                let failed = run.invocations.iter().any(|call| {
+            if turn.final_answer.is_some() {
+                let failed = turn.invocations.iter().any(|call| {
                     call.dispatch.verification
                         && call
                             .result
@@ -367,7 +434,15 @@ impl CoreSession {
                         "run.completed"
                     },
                     |state, _| {
+                        let turn = agent_turn(state, &agent_id)?;
+                        turn.status = if failed {
+                            AgentStatus::Failed
+                        } else {
+                            AgentStatus::Completed
+                        };
+                        let answer = turn.final_answer.clone();
                         let run = active_run(state)?;
+                        run.final_answer = answer;
                         run.status = if failed {
                             RunStatus::Failed
                         } else {
@@ -387,80 +462,104 @@ impl CoreSession {
                 .await?;
                 continue;
             }
-            if run.steps.last().is_some_and(|step| !step.settled) {
-                self.transition("run.recovery_required", |state, _| {
-                    let run = active_run(state)?;
-                    run.status = RunStatus::RecoveryRequired;
-                    run.terminal_reason =
-                        Some("previous model driver ended before settlement was applied".into());
-                    Ok(json!({"reason":run.terminal_reason}))
-                })
-                .await?;
-                return Err(reject(
-                    ErrorCode::RecoveryRequired,
-                    "an interrupted model driver must be reconciled before retry",
-                ));
-            }
-            if run.model_attempts >= run.limits.model_attempts
-                || run.active_ms >= run.limits.active_seconds.saturating_mul(1000)
-            {
-                self.fail("run model or active-time limit reached").await?;
-                continue;
-            }
-            let prompt = match build_prompt(&state) {
-                Ok(prompt) => prompt,
-                Err(error) => {
-                    self.fail(&error.message).await?;
-                    return Err(error);
-                }
-            };
-            let step_id = id("step");
-            self.transition("model.step.preparing", |state, _| {
-                let revision = state.context_revision;
-                active_run(state)?.steps.push(ModelStep {
-                    step_id: step_id.clone(),
-                    decision_id: id("decision"),
-                    context_revision: revision,
-                    plan: None,
-                    attempts: Vec::new(),
-                    settled: false,
-                });
-                Ok(json!({"step_id":step_id}))
+            self.execute_agent_step(&agent_id).await?;
+        }
+    }
+
+    async fn execute_agent_step(&self, agent_id: &str) -> Result<(), CoreError> {
+        let state = self.snapshot().await;
+        let run = state
+            .run
+            .as_ref()
+            .ok_or_else(|| reject(ErrorCode::Busy, "no root task is accepted"))?;
+        let turn = state
+            .agents
+            .get(agent_id)
+            .and_then(|agent| agent.turn.as_ref())
+            .ok_or_else(|| reject(ErrorCode::Busy, "agent has no turn"))?;
+        if turn.steps.last().is_some_and(|step| !step.settled) {
+            self.transition("run.recovery_required", |state, _| {
+                agent_turn(state, agent_id)?.status = AgentStatus::RecoveryRequired;
+                let run = active_run(state)?;
+                run.status = RunStatus::RecoveryRequired;
+                run.terminal_reason =
+                    Some("previous model driver ended before settlement was applied".into());
+                Ok(json!({"reason":run.terminal_reason}))
             })
             .await?;
-            let control = Arc::new(StepControl {
-                session: self.clone(),
+            return Err(reject(
+                ErrorCode::RecoveryRequired,
+                "an interrupted model driver must be reconciled before retry",
+            ));
+        }
+        if run.model_attempts >= run.limits.model_attempts
+            || run.active_ms >= run.limits.active_seconds.saturating_mul(1000)
+        {
+            self.fail(agent_id, "run model or active-time limit reached")
+                .await?;
+            return Ok(());
+        }
+        let prompt = match build_prompt(&state, agent_id) {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                self.fail(agent_id, &error.message).await?;
+                return Err(error);
+            }
+        };
+        let step_id = id("step");
+        self.transition("model.step.preparing", |state, _| {
+            let agent = agent_mut(state, agent_id)?;
+            let revision = agent.context_revision;
+            let turn = agent
+                .turn
+                .as_mut()
+                .ok_or_else(|| reject(ErrorCode::Busy, "agent has no turn"))?;
+            turn.status = AgentStatus::ModelRunning;
+            turn.steps.push(ModelStep {
                 step_id: step_id.clone(),
+                decision_id: id("decision"),
+                context_revision: revision,
+                plan: None,
+                attempts: Vec::new(),
+                settled: false,
             });
-            let response = self
-                .shared
-                .app
-                .execute_native_controlled(prompt, self.shared.caller.clone(), control)
-                .await;
-            match response {
-                Ok(response) => {
-                    if let Err(error) = self
-                        .apply_output(&step_id, &response.request_id, &response.result)
-                        .await
-                    {
-                        if self.shared.live.lock().await.gate.can_dispatch() {
-                            self.fail(&error.message).await?;
-                        }
-                        return Err(error);
-                    }
-                }
-                Err(error) => {
+            Ok(json!({"step_id":step_id}))
+        })
+        .await?;
+        let control = Arc::new(StepControl {
+            session: self.clone(),
+            agent_id: agent_id.to_owned(),
+            step_id: step_id.clone(),
+        });
+        let response = self
+            .shared
+            .app
+            .execute_native_controlled(prompt, self.shared.caller.clone(), control)
+            .await;
+        match response {
+            Ok(response) => {
+                if let Err(error) = self
+                    .apply_output(agent_id, &step_id, &response.request_id, &response.result)
+                    .await
+                {
                     if self.shared.live.lock().await.gate.can_dispatch() {
-                        self.fail(&error.to_string()).await?;
-                    } else {
-                        return Err(reject(
-                            ErrorCode::CheckpointUnavailable,
-                            "model outcome awaits durable reconciliation",
-                        ));
+                        self.fail(agent_id, &error.message).await?;
                     }
+                    return Err(error);
+                }
+            }
+            Err(error) => {
+                if self.shared.live.lock().await.gate.can_dispatch() {
+                    self.fail(agent_id, &error.to_string()).await?;
+                } else {
+                    return Err(reject(
+                        ErrorCode::CheckpointUnavailable,
+                        "model outcome awaits durable reconciliation",
+                    ));
                 }
             }
         }
+        Ok(())
     }
 
     pub async fn tool_result(
@@ -494,8 +593,17 @@ impl CoreSession {
             ));
         }
         self.transition("tool.result", |state, head| {
-            let run = active_run(state)?;
-            let call = run
+            let turn = state
+                .agents
+                .values_mut()
+                .filter_map(|agent| agent.turn.as_mut())
+                .find(|turn| {
+                    turn.invocations
+                        .iter()
+                        .any(|call| call.dispatch.invocation_id == result.invocation_id)
+                })
+                .ok_or_else(|| reject(ErrorCode::InvalidToolResult, "unknown tool invocation"))?;
+            let call = turn
                 .invocations
                 .iter_mut()
                 .find(|call| call.dispatch.invocation_id == result.invocation_id)
@@ -517,7 +625,8 @@ impl CoreSession {
                 call.result = Some(result.clone());
             }
             if result.status == ToolOutcome::EffectUnknown {
-                run.status = RunStatus::RecoveryRequired;
+                turn.status = AgentStatus::RecoveryRequired;
+                active_run(state)?.status = RunStatus::RecoveryRequired;
             }
             state.manifest.workspace_revision = result.workspace_revision.clone();
             let receipt = OperationReceipt {
@@ -545,16 +654,18 @@ impl CoreSession {
 
     async fn apply_output(
         &self,
+        agent_id: &str,
         step_id: &str,
         request_id: &str,
         output: &bitrouter_sdk::language_model::types::GenerateResult,
     ) -> Result<(), CoreError> {
         self.transition("model.output.applied", |state, head| {
             let manifest = state.manifest.clone();
-            let agent_id = state.agent_id.clone();
-            let context_revision = state.context_revision;
-            let run = active_run(state)?;
-            let step = run
+            let limit = active_run(state)?.limits.outstanding_tools;
+            let agent = agent_mut(state, agent_id)?;
+            let context_revision = agent.context_revision;
+            let turn = agent.turn.as_mut().ok_or_else(|| reject(ErrorCode::Busy, "agent has no turn"))?;
+            let step = turn
                 .steps
                 .last_mut()
                 .filter(|step| step.step_id == step_id)
@@ -640,9 +751,9 @@ impl CoreSession {
                         dispatch: ToolExecute {
                             invocation_id: id("invocation"),
                             attempt_id: id("tool_attempt"),
-                            run_id: run.run_id.clone(),
-                            agent_id: agent_id.clone(),
-                            agent_turn_id: run.agent_turn_id.clone(),
+                            run_id: turn.run_id.clone(),
+                            agent_id: agent_id.to_owned(),
+                            agent_turn_id: turn.agent_turn_id.clone(),
                             step_id: step_id.to_owned(),
                             context_revision,
                             tool: name.clone(),
@@ -667,7 +778,7 @@ impl CoreSession {
             }) {
                 return Err(reject(ErrorCode::InvalidToolResult, "model output violates its frozen tool choice"));
             }
-            if calls.len() as u32 > run.limits.outstanding_tools {
+            if calls.len() as u32 > limit {
                 return Err(reject(
                     ErrorCode::LimitExceeded,
                     "model output exceeds outstanding tool limit",
@@ -686,15 +797,15 @@ impl CoreSession {
                         }
                     })
                     .collect::<String>();
-                run.final_answer = Some(answer);
-                if let Some(verification) = &run.input.verification {
+                turn.final_answer = Some(answer);
+                if let Some(verification) = &turn.input.verification {
                     calls.push(Invocation {
                         dispatch: ToolExecute {
                             invocation_id: id("invocation"),
                             attempt_id: id("tool_attempt"),
-                            run_id: run.run_id.clone(),
-                            agent_id,
-                            agent_turn_id: run.agent_turn_id.clone(),
+                            run_id: turn.run_id.clone(),
+                            agent_id: agent_id.to_owned(),
+                            agent_turn_id: turn.agent_turn_id.clone(),
                             step_id: step_id.to_owned(),
                             context_revision,
                             tool: verification.tool.clone(),
@@ -713,25 +824,31 @@ impl CoreSession {
                     });
                 }
             }
-            run.status = if calls.is_empty() {
-                RunStatus::Running
+            turn.status = if calls.is_empty() {
+                AgentStatus::Runnable
             } else {
-                RunStatus::Waiting
+                AgentStatus::WaitingTool
             };
-            run.invocations.extend(calls);
-            state.history.push(message);
-            state.context_revision += 1;
+            let waiting = turn.status == AgentStatus::WaitingTool;
+            turn.invocations.extend(calls);
+            agent.history.push(message);
+            agent.context_revision += 1;
+            active_run(state)?.status = if waiting { RunStatus::Waiting } else { RunStatus::Running };
             Ok(json!({"step_id":step_id,"request_id":request_id}))
         })
         .await
     }
 
-    async fn consume_results(&self) -> Result<(), CoreError> {
+    async fn consume_results(&self, agent_id: &str) -> Result<(), CoreError> {
         self.transition("tool.results.consumed", |state, _| {
-            let run = active_run(state)?;
+            let agent = agent_mut(state, agent_id)?;
+            let turn = agent
+                .turn
+                .as_mut()
+                .ok_or_else(|| reject(ErrorCode::Busy, "agent has no turn"))?;
             let mut messages = Vec::new();
             let mut verified = None;
-            for call in run.invocations.iter_mut().filter(|call| !call.consumed) {
+            for call in turn.invocations.iter_mut().filter(|call| !call.consumed) {
                 let result = call
                     .result
                     .as_ref()
@@ -767,18 +884,19 @@ impl CoreSession {
                 }
                 call.consumed = true;
             }
-            run.status = RunStatus::Running;
+            turn.status = AgentStatus::Runnable;
             if let Some(success) = verified {
-                run.terminal_reason = Some(format!("harness verification succeeded: {success}"));
+                turn.terminal_reason = Some(format!("harness verification succeeded: {success}"));
             }
-            state.history.extend(messages);
-            state.context_revision += 1;
+            agent.history.extend(messages);
+            agent.context_revision += 1;
+            active_run(state)?.status = RunStatus::Running;
             Ok(json!({}))
         })
         .await
     }
 
-    async fn dispatch_tools(&self) -> Result<(), CoreError> {
+    async fn dispatch_tools(&self, agent_id: &str) -> Result<(), CoreError> {
         loop {
             let (command, disconnected) = {
                 let mut live = self.shared.live.lock().await;
@@ -798,10 +916,17 @@ impl CoreSession {
                 }
                 let command = live
                     .state
-                    .run
-                    .as_ref()
-                    .and_then(|run| {
-                        run.invocations.iter().find(|call| {
+                    .agents
+                    .get(agent_id)
+                    .and_then(|agent| agent.turn.as_ref())
+                    .filter(|turn| {
+                        matches!(
+                            turn.status,
+                            AgentStatus::Runnable | AgentStatus::WaitingTool
+                        )
+                    })
+                    .and_then(|turn| {
+                        turn.invocations.iter().find(|call| {
                             call.result.is_none()
                                 && !live.sent_tools.contains(&call.dispatch.invocation_id)
                         })
@@ -840,8 +965,11 @@ impl CoreSession {
         }
     }
 
-    async fn fail(&self, reason: &str) -> Result<(), CoreError> {
+    async fn fail(&self, agent_id: &str, reason: &str) -> Result<(), CoreError> {
         self.transition("run.failed", |state, _| {
+            let turn = agent_turn(state, agent_id)?;
+            turn.status = AgentStatus::Failed;
+            turn.terminal_reason = Some(reason.to_owned());
             let run = active_run(state)?;
             run.status = RunStatus::Failed;
             run.terminal_reason = Some(reason.to_owned());
@@ -850,7 +978,7 @@ impl CoreSession {
         .await
     }
 
-    async fn ensure_dispatch(&self) -> Result<(), CoreError> {
+    async fn ensure_dispatch(&self, agent_id: &str) -> Result<(), CoreError> {
         let live = self.shared.live.lock().await;
         if !live.gate.can_dispatch()
             || live
@@ -858,6 +986,12 @@ impl CoreSession {
                 .run
                 .as_ref()
                 .is_none_or(|run| run.status != RunStatus::Running)
+            || live
+                .state
+                .agents
+                .get(agent_id)
+                .and_then(|agent| agent.turn.as_ref())
+                .is_none_or(|turn| turn.status != AgentStatus::ModelRunning)
         {
             return Err(reject(
                 ErrorCode::CheckpointUnavailable,
@@ -878,9 +1012,10 @@ impl CoreSession {
             let head = live.gate.head().clone();
             let payload = change(&mut next, &head)?;
             let artifacts = next
-                .run
-                .iter()
-                .flat_map(|run| &run.invocations)
+                .agents
+                .values()
+                .filter_map(|agent| agent.turn.as_ref())
+                .flat_map(|turn| &turn.invocations)
                 .filter_map(|call| call.result.as_ref())
                 .flat_map(|result| result.evidence.iter().cloned())
                 .map(|reference| (reference.artifact_id.clone(), reference))
@@ -950,6 +1085,7 @@ impl CoreSession {
 
 struct StepControl {
     session: CoreSession,
+    agent_id: String,
     step_id: String,
 }
 
@@ -958,7 +1094,7 @@ impl NativeExecutionControl for StepControl {
     async fn plan(&self, plan: NativePlan) -> bitrouter_sdk::Result<()> {
         self.session
             .transition("model.plan", |state, _| {
-                let step = current_step(state, &self.step_id)?;
+                let step = current_step(state, &self.agent_id, &self.step_id)?;
                 if step.plan.is_some() {
                     return Err(reject(
                         ErrorCode::OperationConflict,
@@ -980,7 +1116,9 @@ impl NativeExecutionControl for StepControl {
         self.session.transition("model.attempt.intent", |state, _| {
             let run = active_run(state)?;
             if run.status != RunStatus::Running || run.model_attempts >= run.limits.model_attempts || run.active_ms >= run.limits.active_seconds.saturating_mul(1000) { return Err(reject(ErrorCode::LimitExceeded, "model attempt is no longer admitted")); }
-            let step = run.steps.last_mut().filter(|step| step.step_id == self.step_id).ok_or_else(|| reject(ErrorCode::StaleRevision, "attempt step changed"))?;
+            let turn = agent_turn(state, &self.agent_id)?;
+            if turn.status != AgentStatus::ModelRunning { return Err(reject(ErrorCode::Busy, "agent is no longer running this model step")); }
+            let step = turn.steps.last_mut().filter(|step| step.step_id == self.step_id).ok_or_else(|| reject(ErrorCode::StaleRevision, "attempt step changed"))?;
             let plan = step.plan.as_ref().ok_or_else(|| reject(ErrorCode::CheckpointUnavailable, "model plan is not committed"))?;
             if plan.request_id != request_id || attempt_index as usize != step.attempts.len() || plan.routes.get(attempt_index as usize).is_none()
                 || step.attempts.last().is_some_and(|attempt| attempt.report.is_none()) {
@@ -988,18 +1126,21 @@ impl NativeExecutionControl for StepControl {
             }
             let attempt_id = id("attempt");
             step.attempts.push(AttemptRecord { attempt_id: attempt_id.clone(), index: attempt_index, report: None });
-            run.model_attempts += 1;
+            active_run(state)?.model_attempts += 1;
             Ok(json!({"attempt_id":attempt_id,"request_id":request_id,"attempt_index":attempt_index}))
         }).await.map_err(sdk_error)?;
-        self.session.ensure_dispatch().await.map_err(sdk_error)
+        self.session
+            .ensure_dispatch(&self.agent_id)
+            .await
+            .map_err(sdk_error)
     }
 
     async fn after_attempt(&self, report: NativeAttemptReport) {
         let recorded = self
             .session
             .transition("model.attempt.outcome", |state, _| {
-                let run = active_run(state)?;
-                let step = run
+                let turn = agent_turn(state, &self.agent_id)?;
+                let step = turn
                     .steps
                     .last_mut()
                     .filter(|step| step.step_id == self.step_id)
@@ -1031,6 +1172,7 @@ impl NativeExecutionControl for StepControl {
                     ));
                 }
                 attempt.report = Some(report.clone());
+                let run = active_run(state)?;
                 run.active_ms = run.active_ms.saturating_add(report.elapsed_ms);
                 encode(&report)
             })
@@ -1043,13 +1185,34 @@ impl NativeExecutionControl for StepControl {
 
 fn current_step<'a>(
     state: &'a mut SessionSnapshot,
+    agent_id: &str,
     step_id: &str,
 ) -> Result<&'a mut ModelStep, CoreError> {
-    active_run(state)?
+    agent_turn(state, agent_id)?
         .steps
         .last_mut()
         .filter(|step| step.step_id == step_id)
         .ok_or_else(|| reject(ErrorCode::StaleRevision, "model step changed"))
+}
+
+fn agent_mut<'a>(
+    state: &'a mut SessionSnapshot,
+    agent_id: &str,
+) -> Result<&'a mut AgentState, CoreError> {
+    state
+        .agents
+        .get_mut(agent_id)
+        .ok_or_else(|| reject(ErrorCode::UnauthorizedScope, "unknown agent"))
+}
+
+fn agent_turn<'a>(
+    state: &'a mut SessionSnapshot,
+    agent_id: &str,
+) -> Result<&'a mut AgentTurn, CoreError> {
+    agent_mut(state, agent_id)?
+        .turn
+        .as_mut()
+        .ok_or_else(|| reject(ErrorCode::Busy, "agent has no turn"))
 }
 
 fn active_run(state: &mut SessionSnapshot) -> Result<&mut RootRun, CoreError> {
@@ -1116,14 +1279,18 @@ fn parse_effort(effort: Option<&str>) -> Result<Option<ReasoningEffort>, CoreErr
         .transpose()
 }
 
-fn build_prompt(state: &SessionSnapshot) -> Result<Prompt, CoreError> {
-    let run = state
-        .run
+fn build_prompt(state: &SessionSnapshot, agent_id: &str) -> Result<Prompt, CoreError> {
+    let agent = state
+        .agents
+        .get(agent_id)
+        .ok_or_else(|| reject(ErrorCode::UnauthorizedScope, "unknown agent"))?;
+    let turn = agent
+        .turn
         .as_ref()
-        .ok_or_else(|| reject(ErrorCode::Busy, "no active run"))?;
-    crate::context::validate_history(&state.history)
+        .ok_or_else(|| reject(ErrorCode::Busy, "agent has no turn"))?;
+    crate::context::validate_history(&agent.history)
         .map_err(|message| reject(ErrorCode::InvalidToolResult, &message))?;
-    if let Some(verification) = &run.input.verification
+    if let Some(verification) = &turn.input.verification
         && !state
             .manifest
             .tools
@@ -1136,13 +1303,13 @@ fn build_prompt(state: &SessionSnapshot) -> Result<Prompt, CoreError> {
         ));
     }
     Ok(Prompt {
-        model: run.input.model.clone(),
+        model: turn.input.model.clone(),
         system: Some(format!(
             "You are the root agent for this task. Use only declared tools. Preserve user constraints and report observed results.\nAcceptance criteria:\n{}",
-            run.input.acceptance_criteria.join("\n")
+            turn.input.acceptance_criteria.join("\n")
         )),
         system_provider_metadata: Default::default(),
-        messages: state.history.clone(),
+        messages: agent.history.clone(),
         tools: state
             .manifest
             .tools
@@ -1156,7 +1323,7 @@ fn build_prompt(state: &SessionSnapshot) -> Result<Prompt, CoreError> {
             })
             .collect(),
         params: GenerationParams {
-            reasoning_effort: parse_effort(run.input.effort.as_deref())?,
+            reasoning_effort: parse_effort(turn.input.effort.as_deref())?,
             ..Default::default()
         },
         response_format: None,
