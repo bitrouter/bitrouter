@@ -2305,6 +2305,48 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "anthropic/claude-sonnet-5.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "anthropic.claude-sonnet-5-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "openai/gpt-6.1-sol",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.11,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 11.0
+            }
+          },
+          "provider_model_id": "openai.gpt-6.1-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "aws-bedrock",
@@ -2866,6 +2908,27 @@
             }
           },
           "provider_model_id": "claude-sonnet-5-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "openai/gpt-6.1-sol",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "gpt-6.1-sol",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -3991,6 +4054,50 @@
             }
           },
           "provider_model_id": "xiaomi/mimo-v2.6-pro-ultraspeed"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "anthropic/claude-sonnet-5.5",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "anthropic/claude-sonnet-5.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.7-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003,
+              "cache_write": 0.0375,
+              "no_cache": 0.03
+            },
+            "output_tokens": {
+              "text": 0.13
+            }
+          },
+          "provider_model_id": "qwen/qwen3.7-flash"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "qwen/qwen3.8-omni-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            }
+          },
+          "provider_model_id": "qwen/qwen3.8-omni-flash"
         }
       ],
       "name": "bitrouter",
@@ -4679,6 +4786,16 @@
           "api_protocol": "openai",
           "id": "openai/gpt-6-sol",
           "provider_model_id": "gpt-6-sol"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "anthropic/claude-sonnet-5.5",
+          "provider_model_id": "claude-sonnet-5.5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "openai/gpt-6.1-sol",
+          "provider_model_id": "gpt-6.1-sol"
         }
       ],
       "name": "github-copilot",
@@ -6039,6 +6156,27 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "openai/gpt-6.1-sol",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "gpt-6.1-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "openai",
@@ -6225,6 +6363,11 @@
           "api_protocol": "responses",
           "id": "openai/gpt-6-sol",
           "provider_model_id": "gpt-6-sol"
+        },
+        {
+          "api_protocol": "responses",
+          "id": "openai/gpt-6.1-sol",
+          "provider_model_id": "gpt-6.1-sol"
         }
       ],
       "name": "openai-codex",
@@ -7078,6 +7221,21 @@
             }
           },
           "provider_model_id": "qwen3.8-max"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "openai/gpt-6.1-sol",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "gpt-6.1-sol"
         }
       ],
       "name": "opencode-zen",
@@ -8618,6 +8776,44 @@
             }
           },
           "provider_model_id": "anthropic/claude-sonnet-5.5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "openai/gpt-6.1-sol",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "openai/gpt-6.1-sol"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "openai/gpt-6.1-sol-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "openai/gpt-6.1-sol-pro"
         }
       ],
       "name": "openrouter",

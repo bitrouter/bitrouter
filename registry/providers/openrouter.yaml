@@ -703,6 +703,24 @@ models:
         cache_write: 2.5
       output_tokens:
         text: 10
+  - id: openai/gpt-6.1-sol
+    provider_model_id: openai/gpt-6.1-sol
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.1
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+  - id: openai/gpt-6.1-sol-pro
+    provider_model_id: openai/gpt-6.1-sol-pro
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.1
+        cache_write: 2.5
+      output_tokens:
+        text: 10
 status: active
 weight: 1
 community: false

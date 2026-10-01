@@ -91,6 +91,8 @@ models:
     provider_model_id: gpt-6-luna
   - id: openai/gpt-6-sol
     provider_model_id: gpt-6-sol
+  - id: openai/gpt-6.1-sol
+    provider_model_id: gpt-6.1-sol
 status: active
 auto_sync:
   feed: models_dev
