@@ -728,6 +728,7 @@ dependencies = [
 name = "bitrouter-orchestrator"
 version = "1.0.0-alpha.33"
 dependencies = [
+ "async-trait",
  "bitrouter-sdk",
  "futures",
  "globset",
@@ -737,6 +738,7 @@ dependencies = [
  "rustix 1.1.4",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "similar",
  "tempfile",
  "tokio",

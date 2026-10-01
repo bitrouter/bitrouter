@@ -12,7 +12,7 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 | `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback; optional `sdk` retains legacy hooks |
 | `crates/bitrouter-telemetry`     | crate   | Optional telemetry egress: the OTLP exporter (traces + metrics, multi-tenant attribution), the inbound ingress span, and the `tracing` ↔ OTel bridge — all default-off |
-| `crates/bitrouter-orchestrator` | crate | Native model/tool loop, context, and process-local background task runtime |
+| `crates/bitrouter-orchestrator` | crate | Native model/tool loop, durable Thread/Turn facts and context, with instance-owned workers |
 | `crates/bitrouter-tui` | crate | Terminal rendering for BRO native task projections and ACP conversations, including the shared prompt editor |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App` and owns the management commands |
 
@@ -28,7 +28,7 @@ Clients reach BitRouter through its external **interfaces** — the ways *in*. T
 | **MCP gateway**           | `bitrouter-sdk` `mcp` feature plus app assembly: downstream `/mcp` aggregation, configured upstream clients, Skills-over-MCP relay, and server-side tool execution | `POST /mcp`; `bro mcp check` |
 | **ACP**                   | `bitrouter-sdk` `acp` feature (`crates/bitrouter-sdk/src/acp/`): `controller` is the ACP-client-facing server, `client` the transport-generic ACP client, `up` the agent-process transport, and `translate` the typed view of `session/update` used by `run`. The client-facing stdio bridge, one-shot runner, and Code session all consume the same controller/client stack. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bro acp serve`; `bro run` |
 | **ACP (interactive)**     | `crates/bitrouter-tui/src/code.rs` owns conversation state and rendering; `apps/bitrouter/src/chat/code.rs` drives asynchronous effects and ACP turns, with injected services in `actions/code.rs` and the shared `SessionHost` in `acp_cli.rs`. | `bro code <agent>` |
-| **BRO native agent** | `bitrouter-orchestrator` owns the native model/tool loop and an in-memory task runtime. App adapters share its snapshots, subscriptions, approvals, and cancellation. | Bare `bro code`; `bro task run`; local task socket; opt-in `/agent/v1` HTTP API |
+| **BRO native agent** | `bitrouter-orchestrator` owns the native model/tool loop, durable Thread/Turn facts and retained context, with instance-owned execution and bounded observations. App adapters currently expose one-shot Task projections; Thread/recovery transport controls remain under implementation. | Bare `bro code`; `bro task run`; local task socket; opt-in `/agent/v1` HTTP API |
 | **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bro <subcommand>` |
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
@@ -101,13 +101,38 @@ over, and which runtime it has — so the pump stays in the app
 `cargo tree -p bitrouter-tui | rg -c '^tokio'` printing `0` is how that is
 checked.
 
-The BRO runtime lives for one `bro serve` instance. CLI and TUI run only client
-projections; detaching does not cancel a task. Snapshot registration and event
+The current BRO runtime lives for one `bro serve` instance. CLI and TUI run only
+client projections; detaching does not cancel a task. Snapshot registration and event
 cutoffs share one state lock, and slow observers receive a fresh snapshot.
 Shutdown stops admission, cancels active tasks, and joins execution cleanup.
-There is no task journal or cross-restart recovery in this layer. Durable
-workflow ownership remains a separate design decision; router metering and
-ACP session ownership are unchanged. See `BRO_NATIVE_AGENT_SERVER_SPEC.md`.
+The host now commits native execution facts through its configured database.
+Live execution is still instance-owned. Core native Thread/legacy Task loading
+reconstructs a
+bounded read-only recovery view; safe restart continuation is under implementation.
+Native store commits now fence one instance/generation transactionally. Clean
+shutdown can persist a stopped proof after joins and durable queue pauses;
+active lost owners or legacy unfenced facts block native execution. Shared
+canonical workspace locks and persistent exclusion markers also fence cooperating
+local runtimes using separate stores. Bounded startup discovery indexes native
+Threads and legacy Tasks before admission and blocks unresolved cold workspaces.
+The native and legacy loaders now share a validator, preserving original Task
+identities, controls, Items and history record positions without replay. Unknown
+effect resolution, durable legacy Task conversion and checkpoint continuation
+remain incomplete.
+The retained [BRO runtime v0.2 spec](BRO_AGENT_RUNTIME_SPEC.md) records persistent
+Thread state, bounded tool concurrency,
+queue/steer and safe recovery. R1 durable Item lifecycle and R2 bounded read
+workers and R3 core context/queue/steering/observation pass local checks. Thread
+client delivery and R4 execution recovery remain incomplete.
+The former process-local design is
+historical scope, not a restriction on that refactor.
+Product 003 now gives orchestrator 004 v1.0 precedence for conflicting ownership,
+interfaces and later stages: core owns scheduling and model/context routing;
+harness owns workspace tools and durable workflow/session authority. The current
+runtime is a migration input, not proof that this separation or the new managed
+API exists. See the [migration handoff](BRO_AGENT_RUNTIME_HANDOFF.md) for source
+boundaries and the unavailable engineering-spec reference.
+Router metering and external ACP session ownership retain their own boundaries.
 
 The CLI is the **host** interface: it owns `main()` and mounts the other
 interfaces as subcommands. The SDK owns protocol interop such as the MCP

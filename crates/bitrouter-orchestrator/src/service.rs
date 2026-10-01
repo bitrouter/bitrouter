@@ -1,4 +1,4 @@
-//! Process-local agent runtime. State, execution and observation share one
+//! Server-owned agent runtime with transactional execution facts. State, execution and observation share one
 //! authority; disconnecting an observer never cancels its task.
 
 use std::collections::{HashMap, VecDeque};
@@ -14,8 +14,37 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::agent::{Agent, AgentConfig, ApprovalRequest, RunEvent, RunStatus, ToolMode};
+use crate::agent::{
+    Agent, AgentConfig, ApprovalRequest, RunChannels, RunEvent, RunInput, RunStatus, ToolMode,
+};
+use crate::store::{
+    CallOrigin, CallRecord, CommitRequest, EffectStatus, ExecutionRecord, ExecutionStore,
+    MemoryExecutionStore,
+};
+use crate::thread::{PermissionProfile, ThreadStatus};
 use crate::tools::WorkspaceTools;
+
+pub mod observation;
+#[cfg(test)]
+mod observation_tests;
+mod ownership;
+#[cfg(test)]
+mod ownership_tests;
+#[cfg(all(test, unix))]
+mod process_recovery_tests;
+mod recovery;
+#[cfg(test)]
+mod recovery_tests;
+pub mod startup;
+#[cfg(test)]
+mod startup_tests;
+mod steering;
+#[cfg(test)]
+mod steering_tests;
+#[cfg(test)]
+mod thread_tests;
+mod threads;
+mod workspace;
 
 const MAX_EVENT_PAGE: usize = 1000;
 const MAX_LIVE_BYTES: usize = 32 * 1024;
@@ -23,6 +52,7 @@ const MAX_LIVE_BYTES: usize = 32 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
+    Queued,
     Accepted,
     Running,
     WaitingForInput,
@@ -30,6 +60,7 @@ pub enum TaskStatus {
     Failed,
     Cancelled,
     Interrupted,
+    RecoveryRequired,
 }
 
 impl TaskStatus {
@@ -47,6 +78,8 @@ pub enum VerificationStatus {
     Passed,
     Failed,
     Unavailable,
+    NotRequested,
+    Denied,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +97,18 @@ pub struct VerificationEvidence {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TaskEventPayload {
+    SteeringUpdated {
+        receipt: crate::thread::SteeringReceipt,
+        text: Option<String>,
+    },
+    TurnQueued {
+        user_item_id: String,
+        prompt: String,
+        queue_order: u64,
+    },
     Accepted {
+        #[serde(default)]
+        user_item_id: String,
         prompt: String,
         workspace: PathBuf,
         model: String,
@@ -76,15 +120,32 @@ pub enum TaskEventPayload {
         request_fingerprint: Option<String>,
     },
     TaskStarted,
+    AssistantStarted {
+        step_id: String,
+        item_id: String,
+    },
     ModelTurn {
+        #[serde(default)]
+        step_id: String,
+        #[serde(default)]
+        item_id: String,
         request_id: String,
         requested_model: String,
         usage: Option<Usage>,
     },
     AssistantMessage {
+        #[serde(default)]
+        item_id: String,
         message: Message,
     },
+    AssistantInterrupted {
+        item_id: String,
+        partial: Message,
+        detail: String,
+    },
     AssistantDelta {
+        #[serde(default)]
+        item_id: String,
         text: String,
     },
     ToolOutputDelta {
@@ -93,10 +154,14 @@ pub enum TaskEventPayload {
         text: String,
     },
     ToolStarted {
+        #[serde(default)]
+        origin: crate::store::CallOrigin,
         id: String,
         name: String,
     },
     ToolFinished {
+        #[serde(default)]
+        origin: crate::store::CallOrigin,
         id: String,
         name: String,
         output: ToolResultOutput,
@@ -124,6 +189,8 @@ pub enum TaskEventPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskEvent {
+    #[serde(default)]
+    pub thread_id: Option<String>,
     pub server_instance_id: String,
     pub task_id: String,
     pub seq: u64,
@@ -133,6 +200,10 @@ pub struct TaskEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSnapshot {
+    #[serde(default)]
+    pub steering: Vec<crate::thread::SteeringReceipt>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
     pub server_instance_id: String,
     pub model: String,
     pub task_id: String,
@@ -154,6 +225,8 @@ pub struct TaskSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiveActivity {
+    #[serde(default)]
+    pub item_id: Option<String>,
     pub truncated: bool,
     pub kind: String,
     pub text: String,
@@ -170,12 +243,36 @@ pub struct InputRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeCapabilities {
+    #[serde(default)]
+    pub startup_discovery: Option<startup::StartupDiscovery>,
     pub server_instance_id: String,
     pub limits: RuntimeLimits,
+    #[serde(default)]
+    pub execution_ownership: Option<crate::store::OwnerClaim>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLimits {
+    pub startup_roots: usize,
+    pub startup_records: u64,
+    pub startup_metadata_bytes: usize,
+    pub recovery_readers: usize,
+    pub recovery_page_records: usize,
+    pub recovery_page_bytes: usize,
+    pub recovery_records_per_thread: u64,
+    pub history_page_bytes: usize,
+    pub events_per_thread: usize,
+    pub event_bytes_per_thread: usize,
+    pub subscribers_per_thread: usize,
+    pub subscriber_bytes_per_thread: usize,
+    pub steering_inputs_per_turn: usize,
+    pub steering_bytes_per_turn: usize,
+    pub hot_threads: usize,
+    pub queued_turns_per_thread: usize,
+    pub context_bytes_per_thread: usize,
+    pub hot_context_bytes: usize,
+    pub tools_per_task: usize,
+    pub global_tools: usize,
     pub active_tasks: usize,
     pub retained_tasks: usize,
     pub retained_bytes: usize,
@@ -190,6 +287,26 @@ pub struct RuntimeLimits {
 impl Default for RuntimeLimits {
     fn default() -> Self {
         Self {
+            startup_roots: 1024,
+            startup_records: 1_000_000,
+            startup_metadata_bytes: 4 * 1024 * 1024,
+            recovery_readers: 2,
+            recovery_page_records: 64,
+            recovery_page_bytes: 4 * 1024 * 1024,
+            recovery_records_per_thread: 1_000_000,
+            history_page_bytes: 2 * 1024 * 1024,
+            events_per_thread: 256,
+            event_bytes_per_thread: 2 * 1024 * 1024,
+            subscribers_per_thread: 8,
+            subscriber_bytes_per_thread: 8 * 1024 * 1024,
+            steering_inputs_per_turn: 32,
+            steering_bytes_per_turn: 64 * 1024,
+            hot_threads: 32,
+            queued_turns_per_thread: 32,
+            context_bytes_per_thread: 2 * 1024 * 1024,
+            hot_context_bytes: 64 * 1024 * 1024,
+            tools_per_task: 4,
+            global_tools: 16,
             active_tasks: 8,
             retained_tasks: 32,
             retained_bytes: 64 * 1024 * 1024,
@@ -206,6 +323,9 @@ impl Default for RuntimeLimits {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
+    UnknownThread,
+    Unauthorized,
+    RecoveryRequired,
     InvalidRequest,
     UnknownTask,
     Conflict,
@@ -213,6 +333,7 @@ pub enum ErrorCode {
     ShuttingDown,
     InstanceChanged,
     ResyncRequired,
+    StorageUnavailable,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,7 +377,7 @@ pub enum Observation {
         catchup: Vec<TaskEvent>,
     },
     Event {
-        event: TaskEvent,
+        event: Box<TaskEvent>,
     },
 }
 
@@ -264,7 +385,7 @@ pub enum Observation {
 pub struct TaskSubscription {
     service: TaskService,
     task_id: String,
-    receiver: broadcast::Receiver<TaskEvent>,
+    receiver: broadcast::Receiver<Observation>,
     initial: Option<Observation>,
     finished: bool,
 }
@@ -278,9 +399,17 @@ impl TaskSubscription {
             return Ok(None);
         }
         match self.receiver.recv().await {
-            Ok(event) => {
-                self.finished = matches!(event.payload, TaskEventPayload::TaskFinished { .. });
-                Ok(Some(Observation::Event { event }))
+            Ok(observation) => {
+                self.finished = match &observation {
+                    Observation::Event { event } => {
+                        matches!(event.payload, TaskEventPayload::TaskFinished { .. })
+                    }
+                    Observation::Snapshot { snapshot, .. } => {
+                        snapshot.status.terminal()
+                            || snapshot.status == TaskStatus::RecoveryRequired
+                    }
+                };
+                Ok(Some(observation))
             }
             Err(broadcast::error::RecvError::Lagged(_)) => {
                 let mut state = self.service.lock_state();
@@ -290,7 +419,8 @@ impl TaskSubscription {
                     .ok_or_else(unknown_task)?;
                 // Registration and snapshot cutoff are atomic with publication.
                 self.receiver = record.publisher.subscribe();
-                self.finished = record.snapshot.status.terminal();
+                self.finished = record.snapshot.status.terminal()
+                    || record.snapshot.status == TaskStatus::RecoveryRequired;
                 Ok(Some(Observation::Snapshot {
                     snapshot: Box::new(record.snapshot.clone()),
                     resynchronized: true,
@@ -322,17 +452,40 @@ struct PendingInput {
     response: oneshot::Sender<bool>,
 }
 
+struct VerificationBudget {
+    duration: Duration,
+    active_duration_ms: u64,
+    calls: u32,
+    max_calls: u32,
+}
+
 struct TaskRecord {
+    fence: Arc<crate::control::LaunchFence>,
+    steering: Vec<steering::SteeringInput>,
+    verification_budget: Option<(u64, u32)>,
+    thread_id: Option<String>,
+    permission_profile: PermissionProfile,
+    settled: Option<(Vec<Message>, u64)>,
     snapshot: TaskSnapshot,
     events: VecDeque<TaskEvent>,
     event_bytes: usize,
-    publisher: broadcast::Sender<TaskEvent>,
+    publisher: broadcast::Sender<Observation>,
     terminal_at: Option<Instant>,
     cancel: CancellationToken,
     pending: Option<PendingInput>,
+    commit_lock: Arc<tokio::sync::Mutex<()>>,
+    store_version: u64,
+    storage_error: Option<String>,
 }
 
 struct State {
+    startup_discovery: Option<startup::StartupDiscovery>,
+    cold_executions: HashMap<String, startup::ColdExecution>,
+    workspace_fences: HashMap<PathBuf, Arc<workspace::WorkspaceFence>>,
+    execution_ownership: Option<crate::store::OwnerClaim>,
+    threads: HashMap<String, threads::ThreadRecord>,
+    ready_threads: VecDeque<String>,
+    workspace_profiles: HashMap<PathBuf, Vec<PermissionProfile>>,
     tasks: HashMap<String, TaskRecord>,
     active_workspaces: HashMap<PathBuf, String>,
     allowed_workspaces: Vec<PathBuf>,
@@ -341,11 +494,18 @@ struct State {
 }
 
 struct Inner {
+    queue_waker_started: std::sync::atomic::AtomicBool,
+    ownership_init: tokio::sync::Mutex<()>,
+    cleanup_unconfirmed: std::sync::atomic::AtomicBool,
     app: Arc<App>,
     instance_id: String,
     limits: RuntimeLimits,
     workers: TaskTracker,
     state: Mutex<State>,
+    store: Arc<dyn ExecutionStore>,
+    admission: tokio::sync::Mutex<()>,
+    tool_workers: Arc<tokio::sync::Semaphore>,
+    recovery_readers: tokio::sync::Semaphore,
 }
 
 #[derive(Clone)]
@@ -355,15 +515,66 @@ pub struct TaskService {
 
 impl TaskService {
     pub fn new(app: Arc<App>, allowed_workspaces: &[PathBuf]) -> Result<Self, ServiceError> {
-        Self::with_limits(app, allowed_workspaces, RuntimeLimits::default())
+        Self::with_store(
+            app,
+            allowed_workspaces,
+            Arc::new(MemoryExecutionStore::default()),
+        )
     }
 
+    pub fn with_store(
+        app: Arc<App>,
+        allowed_workspaces: &[PathBuf],
+        store: Arc<dyn ExecutionStore>,
+    ) -> Result<Self, ServiceError> {
+        Self::with_limits_and_store(app, allowed_workspaces, RuntimeLimits::default(), store)
+    }
+
+    #[cfg(test)]
     fn with_limits(
         app: Arc<App>,
         allowed_workspaces: &[PathBuf],
         limits: RuntimeLimits,
     ) -> Result<Self, ServiceError> {
-        if limits.active_tasks == 0
+        Self::with_limits_and_store(
+            app,
+            allowed_workspaces,
+            limits,
+            Arc::new(MemoryExecutionStore::default()),
+        )
+    }
+
+    fn with_limits_and_store(
+        app: Arc<App>,
+        allowed_workspaces: &[PathBuf],
+        limits: RuntimeLimits,
+        store: Arc<dyn ExecutionStore>,
+    ) -> Result<Self, ServiceError> {
+        if limits.startup_roots == 0
+            || limits.startup_roots > 100_000
+            || limits.startup_records == 0
+            || limits.startup_records > 10_000_000
+            || limits.startup_metadata_bytes == 0
+            || limits.startup_metadata_bytes > 64 * 1024 * 1024
+            || limits.active_tasks == 0
+            || limits.recovery_readers == 0
+            || !(1..=128).contains(&limits.recovery_page_records)
+            || !(1..=4 * 1024 * 1024).contains(&limits.recovery_page_bytes)
+            || !(1..=1_000_000).contains(&limits.recovery_records_per_thread)
+            || limits.history_page_bytes < 2 * 1024 * 1024
+            || limits.history_page_bytes > 4 * 1024 * 1024
+            || limits.subscriber_bytes_per_thread < limits.history_page_bytes
+            || limits.events_per_thread == 0
+            || limits.event_bytes_per_thread == 0
+            || limits.subscribers_per_thread == 0
+            || limits.steering_inputs_per_turn == 0
+            || limits.steering_bytes_per_turn == 0
+            || limits.hot_threads == 0
+            || limits.queued_turns_per_thread == 0
+            || limits.context_bytes_per_thread == 0
+            || limits.hot_context_bytes < limits.context_bytes_per_thread
+            || limits.tools_per_task == 0
+            || limits.global_tools == 0
             || limits.retained_tasks == 0
             || limits.events_per_task == 0
             || limits.subscriber_queue == 0
@@ -378,11 +589,34 @@ impl TaskService {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             inner: Arc::new(Inner {
+                queue_waker_started: std::sync::atomic::AtomicBool::new(false),
+                ownership_init: tokio::sync::Mutex::new(()),
+                cleanup_unconfirmed: std::sync::atomic::AtomicBool::new(false),
                 app,
                 instance_id: uuid::Uuid::new_v4().to_string(),
+                tool_workers: Arc::new(tokio::sync::Semaphore::new(limits.global_tools)),
+                recovery_readers: tokio::sync::Semaphore::new(limits.recovery_readers),
                 limits,
                 workers: TaskTracker::new(),
+                store,
+                admission: tokio::sync::Mutex::new(()),
                 state: Mutex::new(State {
+                    startup_discovery: None,
+                    cold_executions: HashMap::new(),
+                    workspace_fences: HashMap::new(),
+                    execution_ownership: None,
+                    threads: HashMap::new(),
+                    ready_threads: VecDeque::new(),
+                    workspace_profiles: allowed_workspaces
+                        .iter()
+                        .cloned()
+                        .map(|workspace| {
+                            (
+                                workspace,
+                                vec![PermissionProfile::ReadOnly, PermissionProfile::Ask],
+                            )
+                        })
+                        .collect(),
                     tasks: HashMap::new(),
                     active_workspaces: HashMap::new(),
                     allowed_workspaces,
@@ -394,9 +628,12 @@ impl TaskService {
     }
 
     pub fn capabilities(&self) -> RuntimeCapabilities {
+        let state = self.lock_state();
         RuntimeCapabilities {
+            startup_discovery: state.startup_discovery.clone(),
             server_instance_id: self.inner.instance_id.clone(),
             limits: self.inner.limits.clone(),
+            execution_ownership: state.execution_ownership.clone(),
         }
     }
 
@@ -412,6 +649,7 @@ impl TaskService {
 
     pub async fn shutdown(&self) {
         {
+            let _admission = self.inner.admission.lock().await;
             let mut state = self.lock_state();
             state.closing = true;
             for record in state.tasks.values() {
@@ -421,6 +659,8 @@ impl TaskService {
             self.inner.workers.close();
         }
         self.inner.workers.wait().await;
+        self.pause_queues_after_shutdown().await;
+        self.stop_execution_owner().await;
     }
 
     pub fn observe(
@@ -466,7 +706,8 @@ impl TaskService {
                 resynchronized,
                 catchup,
             }),
-            finished: record.snapshot.status.terminal(),
+            finished: record.snapshot.status.terminal()
+                || record.snapshot.status == TaskStatus::RecoveryRequired,
         })
     }
 
@@ -524,12 +765,17 @@ impl TaskService {
             ));
         }
         if !state.allowed_workspaces.contains(&workspace) {
+            state.workspace_profiles.insert(
+                workspace.clone(),
+                vec![PermissionProfile::ReadOnly, PermissionProfile::Ask],
+            );
             state.allowed_workspaces.push(workspace.clone());
         }
         Ok(workspace)
     }
 
-    pub fn submit(&self, request: TaskRequest) -> Result<TaskSnapshot, ServiceError> {
+    pub async fn submit(&self, request: TaskRequest) -> Result<TaskSnapshot, ServiceError> {
+        let _admission = self.inner.admission.lock().await;
         if request.prompt.len()
             + request.config.instructions.len()
             + request.config.model.len()
@@ -539,6 +785,7 @@ impl TaskService {
             return Err("task request is too large".into());
         }
         if request.config.max_steps > 256
+            || request.config.max_tool_calls > 1024
             || request.config.max_context_bytes > 2 * 1024 * 1024
             || request.config.max_duration > Duration::from_secs(86400)
         {
@@ -577,6 +824,7 @@ impl TaskService {
             &request.verification_command,
             &request.config.instructions,
             request.config.max_steps,
+            request.config.max_tool_calls,
             request.config.max_duration.as_millis(),
             request.config.max_context_bytes,
             request.config.max_spend_microusd,
@@ -587,23 +835,30 @@ impl TaskService {
                 .map(|rates| (rates.prompt, rates.completion)),
         ))
         .map_err(|error| error.to_string())?;
+        let owner_key_id = request.caller.api_key_id().to_string();
+        let owner_user_id = request.caller.user_id().to_string();
+        let stored_config = request.config.clone();
         let agent = Agent::new(
             Arc::clone(&self.inner.app),
             request.caller,
             &workspace,
             request.config,
-        )?;
+        )?
+        .with_tool_workers(
+            Arc::clone(&self.inner.tool_workers),
+            self.inner.limits.tools_per_task,
+        );
         let task_id = uuid::Uuid::new_v4().to_string();
         let cancel = CancellationToken::new();
-        let mut state = self.lock_state();
-        self.prune(&mut state);
-        if state.closing {
-            return Err(ServiceError::new(
-                ErrorCode::ShuttingDown,
-                "runtime is shutting down",
-            ));
-        }
-        let accepted = {
+        {
+            let mut state = self.lock_state();
+            self.prune(&mut state);
+            if state.closing {
+                return Err(ServiceError::new(
+                    ErrorCode::ShuttingDown,
+                    "runtime is shutting down",
+                ));
+            }
             if let Some(key) = key.as_ref()
                 && let Some((existing_fingerprint, existing_id)) = state.idempotency.get(key)
             {
@@ -625,13 +880,52 @@ impl TaskService {
                     "active task limit reached",
                 ));
             }
-            if state.active_workspaces.contains_key(&workspace) {
-                return Err(ServiceError::new(
-                    ErrorCode::Conflict,
-                    "another task already owns this workspace",
-                ));
+            if let Some(error) = self.workspace_owner_error(&state, &workspace) {
+                return Err(error);
             }
+        }
+        let user_item_id = uuid::Uuid::new_v4().to_string();
+        self.initialize_execution().await?;
+        self.reserve_workspace(&workspace, &task_id).await?;
+        let event = TaskEvent {
+            thread_id: None,
+            server_instance_id: self.inner.instance_id.clone(),
+            task_id: task_id.clone(),
+            seq: 1,
+            timestamp_ms: now_ms(),
+            payload: TaskEventPayload::Accepted {
+                user_item_id: user_item_id.clone(),
+                prompt: request.prompt.clone(),
+                workspace: workspace.clone(),
+                model: agent.model().into(),
+                tool_mode,
+                idempotency_key: request.idempotency_key.clone(),
+                request_fingerprint: request
+                    .idempotency_key
+                    .as_ref()
+                    .map(|_| fingerprint.clone()),
+            },
+        };
+        let store_version = self
+            .commit_fenced(
+                &task_id,
+                0,
+                &[ExecutionRecord::Accepted {
+                    owner_key_id,
+                    owner_user_id,
+                    fingerprint: fingerprint.clone(),
+                    config: Box::new(stored_config),
+                    verification_command: request.verification_command.clone(),
+                    event,
+                }],
+            )
+            .await
+            .map_err(|error| ServiceError::new(ErrorCode::StorageUnavailable, error))?;
+        let accepted = {
+            let mut state = self.lock_state();
             let snapshot = TaskSnapshot {
+                steering: Vec::new(),
+                thread_id: None,
                 server_instance_id: self.inner.instance_id.clone(),
                 model: agent.model().to_string(),
                 task_id: task_id.clone(),
@@ -651,6 +945,16 @@ impl TaskService {
             state.tasks.insert(
                 task_id.clone(),
                 TaskRecord {
+                    fence: Arc::new(crate::control::LaunchFence::default()),
+                    steering: Vec::new(),
+                    verification_budget: None,
+                    thread_id: None,
+                    permission_profile: if tool_mode == ToolMode::ReadOnly {
+                        PermissionProfile::ReadOnly
+                    } else {
+                        PermissionProfile::Ask
+                    },
+                    settled: None,
                     snapshot,
                     events: VecDeque::new(),
                     event_bytes: 0,
@@ -658,12 +962,16 @@ impl TaskService {
                     terminal_at: None,
                     cancel: cancel.clone(),
                     pending: None,
+                    commit_lock: Arc::new(tokio::sync::Mutex::new(())),
+                    store_version,
+                    storage_error: None,
                 },
             );
             if let Err(error) = self.append_locked(
                 &mut state,
                 &task_id,
                 TaskEventPayload::Accepted {
+                    user_item_id: user_item_id.clone(),
                     prompt: request.prompt.clone(),
                     workspace: workspace.clone(),
                     model: agent.model().to_string(),
@@ -691,7 +999,15 @@ impl TaskService {
                 .ok_or_else(|| "accepted task disappeared".to_string())?
         };
         let service = self.clone();
-        let prompt = request.prompt;
+        let prompt = RunInput {
+            prompt: request.prompt,
+            user_item_id,
+            messages: Vec::new(),
+            context_version: 0,
+            checkpoint: None,
+            complete_checkpoint: false,
+            restored_verification: None,
+        };
         let verification_command = request.verification_command;
         let workspace_for_worker = accepted.workspace.clone();
         let worker_id = task_id.clone();
@@ -748,14 +1064,27 @@ impl TaskService {
             .collect())
     }
 
-    pub fn answer_input(
+    pub async fn answer_input(
         &self,
         task_id: &str,
         request_id: &str,
         approved: bool,
     ) -> Result<(), ServiceError> {
-        let sender = {
-            let mut state = self.lock_state();
+        let gate = self.commit_gate(task_id)?;
+        let _guard = gate.lock().await;
+        self.answer_input_serialized(task_id, request_id, approved, &[])
+            .await
+    }
+
+    async fn answer_input_serialized(
+        &self,
+        task_id: &str,
+        request_id: &str,
+        approved: bool,
+        extra_facts: &[ExecutionRecord],
+    ) -> Result<(), ServiceError> {
+        {
+            let state = self.lock_state();
             let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
             if record.snapshot.status != TaskStatus::WaitingForInput
                 || record.snapshot.pending_input_id.as_deref() != Some(request_id)
@@ -766,242 +1095,909 @@ impl TaskService {
                     "input is not pending for this task",
                 ));
             }
-            self.append_locked(
-                &mut state,
-                task_id,
-                TaskEventPayload::InputResolved {
-                    request_id: request_id.into(),
-                    approved,
-                },
-            )?;
-            state
-                .tasks
-                .get_mut(task_id)
-                .and_then(|record| record.pending.take())
-                .ok_or_else(|| "pending input channel is unavailable".to_string())?
-                .response
-        };
+        }
+        self.append_facts_serialized(
+            task_id,
+            TaskEventPayload::InputResolved {
+                request_id: request_id.into(),
+                approved,
+            },
+            extra_facts,
+        )
+        .await?;
+        let sender = self
+            .lock_state()
+            .tasks
+            .get_mut(task_id)
+            .and_then(|record| record.pending.take())
+            .ok_or_else(|| "pending input channel is unavailable".to_string())?
+            .response;
         sender.send(approved).map_err(|_| {
             ServiceError::new(ErrorCode::Conflict, "task stopped before accepting input")
         })
     }
 
-    pub fn cancel(&self, task_id: &str) -> Result<(), ServiceError> {
+    pub async fn cancel(&self, task_id: &str) -> Result<(), ServiceError> {
+        let gate = self.commit_gate(task_id)?;
+        let _guard = gate.lock().await;
         let token = {
-            let mut state = self.lock_state();
+            let state = self.lock_state();
             let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
-            if record.snapshot.status.terminal() {
+            if record.snapshot.status.terminal() || record.cancel.is_cancelled() {
                 return Ok(());
             }
-            let token = record.cancel.clone();
-            if token.is_cancelled() {
-                return Ok(());
+            if record.snapshot.status == TaskStatus::Queued {
+                return Err(ServiceError::new(
+                    ErrorCode::Conflict,
+                    "use targeted queued withdrawal for an unstarted Turn",
+                ));
             }
-            token.cancel();
-            self.resolve_pending(&mut state, task_id)?;
-            self.append_locked(&mut state, task_id, TaskEventPayload::CancelRequested)?;
-            token
+            record.cancel.clone()
         };
+        self.append_serialized(task_id, TaskEventPayload::CancelRequested)
+            .await?;
         token.cancel();
+        let pending = self
+            .lock_state()
+            .tasks
+            .get(task_id)
+            .and_then(|record| record.snapshot.pending_input_id.clone());
+        if let Some(request_id) = pending {
+            self.append_serialized(
+                task_id,
+                TaskEventPayload::InputResolved {
+                    request_id,
+                    approved: false,
+                },
+            )
+            .await?;
+            if let Some(pending) = self
+                .lock_state()
+                .tasks
+                .get_mut(task_id)
+                .and_then(|record| record.pending.take())
+            {
+                let _ = pending.response.send(false);
+            }
+        }
         Ok(())
     }
 
-    async fn run_task(
+    fn run_task(
         &self,
         task_id: String,
         agent: Agent,
-        prompt: String,
+        prompt: RunInput,
+        verification_command: Option<String>,
+        workspace: PathBuf,
+        cancel: CancellationToken,
+    ) -> futures::future::BoxFuture<'static, ()> {
+        let service = self.clone();
+        Box::pin(async move {
+            service
+                .run_task_inner(
+                    task_id,
+                    agent,
+                    prompt,
+                    verification_command,
+                    workspace,
+                    cancel,
+                )
+                .await
+        })
+    }
+
+    async fn run_task_inner(
+        &self,
+        task_id: String,
+        agent: Agent,
+        prompt: RunInput,
         verification_command: Option<String>,
         workspace: PathBuf,
         cancel: CancellationToken,
     ) {
         if self
             .append(&task_id, TaskEventPayload::TaskStarted)
+            .await
             .is_err()
         {
             cancel.cancel();
             return;
         }
-        let (event_tx, mut event_rx) = mpsc::channel(64);
-        let (approval_tx, mut approval_rx) = mpsc::channel(1);
-        let run_cancel = cancel.clone();
-        let mut run = tokio::spawn(async move {
-            agent
-                .run_with_approvals(prompt, run_cancel, Some(event_tx), Some(approval_tx))
-                .await
-        });
-        let report = loop {
-            tokio::select! {
-                Some(event) = event_rx.recv() => {
-                    if self.append_agent_event(&task_id, event).is_err() {
-                        break None;
+        let mut prompt = prompt;
+        loop {
+            let restored_verification = prompt.restored_verification.take();
+            let (event_tx, mut event_rx) = mpsc::channel(64);
+            let (approval_tx, mut approval_rx) = mpsc::channel(1);
+            let (commit_tx, mut commit_rx) = mpsc::channel::<CommitRequest>(1);
+            let (model_tx, mut model_rx) = mpsc::channel::<crate::control::ModelBoundary>(1);
+            let controls = self.lock_state().tasks.get(&task_id).and_then(|task| {
+                task.thread_id
+                    .as_ref()
+                    .map(|_| crate::control::TurnControl {
+                        fence: Arc::clone(&task.fence),
+                        models: model_tx,
+                    })
+            });
+            let run_cancel = cancel.clone();
+            let profile = self
+                .lock_state()
+                .tasks
+                .get(&task_id)
+                .map_or(PermissionProfile::Ask, |record| record.permission_profile);
+            let verification_limits = agent.verification_limits();
+            let runner = agent.clone();
+            let mut run = tokio::spawn(async move {
+                runner
+                    .run_context(
+                        prompt,
+                        run_cancel,
+                        RunChannels {
+                            events: Some(event_tx),
+                            approvals: if profile == PermissionProfile::AllowEffects {
+                                None
+                            } else {
+                                Some(approval_tx)
+                            },
+                            commits: Some(commit_tx),
+                            control: controls,
+                        },
+                    )
+                    .await
+            });
+            let report = loop {
+                tokio::select! {
+                    Some(mut request) = model_rx.recv() => {
+                        let result = self.prepare_model(&task_id, &mut request).await;
+                        let _ = request.response.send(result);
                     }
-                }
-                Some(request) = approval_rx.recv() => {
-                    // Agent control events precede its approval handoff. Drain
-                    // that finite prefix before publishing the input request.
-                    while let Ok(event) = event_rx.try_recv() {
-                        if self.append_agent_event(&task_id, event).is_err() {
-                            cancel.cancel();
+                    Some(request) = commit_rx.recv() => {
+                        let result = self.commit_records(&task_id, &request.records).await.map_err(|error| error.to_string());
+                        let failed = result.is_err();
+                        let _ = request.response.send(result);
+                        if failed { cancel.cancel(); }
+                    }
+                    Some(event) = event_rx.recv() => {
+                        if self.append_agent_event(&task_id, event).await.is_err() {
+                            break None;
                         }
                     }
-                    if self.request_approval(&task_id, request).is_err() {
-                        break None;
+                    Some(request) = approval_rx.recv() => {
+                        // Agent control events precede its approval handoff. Drain
+                        // that finite prefix before publishing the input request.
+                        while let Ok(event) = event_rx.try_recv() {
+                            if self.append_agent_event(&task_id, event).await.is_err() {
+                                cancel.cancel();
+                            }
+                        }
+                        if self.request_approval(&task_id, request).await.is_err() {
+                            break None;
+                        }
+                    }
+                    result = &mut run => match result {
+                        Ok(report) => break Some(report),
+                        Err(error) => {
+                            cancel.cancel();
+                            let _ = self.append(&task_id, TaskEventPayload::TaskFinished {
+                                status: TaskStatus::Interrupted, detail: format!("agent execution lost: {error}; effects may have occurred"),
+                                final_answer: None, verification: VerificationStatus::Unavailable, verification_evidence: None, unknown_effect: true,
+                            }).await;
+                            return;
+                        }
+                    },
+                }
+            };
+            if report.is_none() {
+                cancel.cancel();
+                // Continue draining while cancellation cleans up shell readers.
+                loop {
+                    tokio::select! {
+                        result = &mut run => { let _ = result; break; },
+                        Some(_) = event_rx.recv() => {},
+                        Some(request) = approval_rx.recv() => { let _ = request.response.send(false); },
+                        Some(request) = commit_rx.recv() => { let _ = request.response.send(Err("execution stopped after commit failure".into())); },
+                        Some(request) = model_rx.recv() => { let _ = request.response.send(Err("execution stopped after commit failure".into())); },
                     }
                 }
-                result = &mut run => match result {
-                    Ok(report) => break Some(report),
-                    Err(error) => {
-                        cancel.cancel();
-                        let _ = self.append(&task_id, TaskEventPayload::TaskFinished {
-                            status: TaskStatus::Interrupted, detail: format!("agent execution lost: {error}; effects may have occurred"),
-                            final_answer: None, verification: VerificationStatus::Unavailable, verification_evidence: None, unknown_effect: true,
-                        });
+                let _ = self
+                    .append(
+                        &task_id,
+                        TaskEventPayload::TaskFinished {
+                            status: TaskStatus::Interrupted,
+                            detail:
+                                "agent execution stopped unexpectedly; effects may have occurred"
+                                    .into(),
+                            final_answer: None,
+                            verification: VerificationStatus::Unavailable,
+                            verification_evidence: None,
+                            unknown_effect: true,
+                        },
+                    )
+                    .await;
+                return;
+            }
+            if let Some(mut report) = report {
+                while let Ok(event) = event_rx.try_recv() {
+                    if self.append_agent_event(&task_id, event).await.is_err() {
                         return;
                     }
-                },
-            }
-        };
-        if report.is_none() {
-            cancel.cancel();
-            // Continue draining while cancellation cleans up shell readers.
-            loop {
-                tokio::select! {
-                    result = &mut run => { let _ = result; break; },
-                    Some(_) = event_rx.recv() => {},
-                    Some(request) = approval_rx.recv() => { let _ = request.response.send(false); },
                 }
-            }
-            let _ = self.append(
-                &task_id,
-                TaskEventPayload::TaskFinished {
-                    status: TaskStatus::Interrupted,
-                    detail: "agent execution stopped unexpectedly; effects may have occurred"
-                        .into(),
-                    final_answer: None,
-                    verification: VerificationStatus::Unavailable,
-                    verification_evidence: None,
-                    unknown_effect: true,
-                },
-            );
-            return;
-        }
-        if let Some(report) = report {
-            while let Ok(event) = event_rx.try_recv() {
-                if self.append_agent_event(&task_id, event).is_err() {
-                    return;
+                let mut status = match report.status {
+                    RunStatus::Completed => TaskStatus::Completed,
+                    RunStatus::Cancelled => TaskStatus::Cancelled,
+                    RunStatus::Failed | RunStatus::BoundExceeded => TaskStatus::Failed,
+                };
+                if cancel.is_cancelled() {
+                    status = TaskStatus::Cancelled;
                 }
-            }
-            let mut status = match report.status {
-                RunStatus::Completed => TaskStatus::Completed,
-                RunStatus::Cancelled => TaskStatus::Cancelled,
-                RunStatus::Failed | RunStatus::BoundExceeded => TaskStatus::Failed,
-            };
-            if cancel.is_cancelled() {
-                status = TaskStatus::Cancelled;
-            }
-            let (verification, evidence) = if status == TaskStatus::Completed {
-                match verification_command {
-                    Some(command) => {
-                        let evidence = verify(&workspace, command, &cancel).await;
-                        let verification = if evidence.exit_status == Some(0)
-                            && !evidence.timed_out
-                            && evidence.error.is_none()
-                        {
-                            VerificationStatus::Passed
-                        } else {
-                            status = if cancel.is_cancelled() {
-                                TaskStatus::Cancelled
-                            } else {
-                                TaskStatus::Failed
+                if report.unknown_effect {
+                    status = TaskStatus::RecoveryRequired;
+                }
+                let mut unknown_effect = report.unknown_effect;
+                let (verification, evidence) = if status == TaskStatus::Completed {
+                    match (restored_verification, verification_command.clone()) {
+                        (Some((verification, evidence)), _) => (verification, Some(evidence)),
+                        (None, Some(command)) => {
+                            let budget = VerificationBudget {
+                                duration: verification_limits.0.saturating_sub(
+                                    Duration::from_millis(report.active_duration_ms),
+                                ),
+                                active_duration_ms: report.active_duration_ms,
+                                calls: report.tool_calls,
+                                max_calls: verification_limits.1,
                             };
-                            VerificationStatus::Failed
-                        };
-                        (verification, Some(evidence))
+                            let (verification, evidence, uncertain) = match self
+                                .run_verification(&task_id, &workspace, command, &cancel, budget)
+                                .await
+                            {
+                                Ok(result) => result,
+                                Err(_) => return,
+                            };
+                            unknown_effect |= uncertain;
+                            if verification != VerificationStatus::Passed {
+                                status = if uncertain {
+                                    TaskStatus::RecoveryRequired
+                                } else if cancel.is_cancelled() {
+                                    TaskStatus::Cancelled
+                                } else {
+                                    TaskStatus::Failed
+                                };
+                            }
+                            (verification, Some(evidence))
+                        }
+                        (None, None) => (VerificationStatus::NotRequested, None),
                     }
-                    None => (VerificationStatus::Unavailable, None),
-                }
-            } else {
-                (VerificationStatus::Unavailable, None)
-            };
-            let _ = self.append(
-                &task_id,
-                TaskEventPayload::TaskFinished {
-                    status,
-                    detail: if verification == VerificationStatus::Failed {
-                        "configured verification check failed".into()
+                } else {
+                    restored_verification.map_or(
+                        (VerificationStatus::Unavailable, None),
+                        |(status, evidence)| (status, Some(evidence)),
+                    )
+                };
+                if status == TaskStatus::Completed
+                    && !matches!(
+                        verification,
+                        VerificationStatus::Passed | VerificationStatus::NotRequested
+                    )
+                {
+                    status = if unknown_effect {
+                        TaskStatus::RecoveryRequired
                     } else {
-                        report.detail
-                    },
-                    final_answer: report.final_answer,
-                    verification,
-                    verification_evidence: evidence,
-                    unknown_effect: false,
-                },
-            );
+                        TaskStatus::Failed
+                    };
+                }
+                let gate = match self.commit_gate(&task_id) {
+                    Ok(gate) => gate,
+                    Err(_) => return,
+                };
+                let guard = gate.lock().await;
+                let pending = self
+                    .lock_state()
+                    .tasks
+                    .get(&task_id)
+                    .is_some_and(|task| task.fence.pending());
+                if pending
+                    && report.status == RunStatus::Completed
+                    && !unknown_effect
+                    && !cancel.is_cancelled()
+                {
+                    if let Some((duration, calls)) = self
+                        .lock_state()
+                        .tasks
+                        .get(&task_id)
+                        .and_then(|task| task.verification_budget)
+                    {
+                        report.active_duration_ms = duration;
+                        report.tool_calls = calls;
+                    }
+                    if let Some(evidence) = evidence {
+                        let encoded = match serde_json::to_string(&evidence) {
+                            Ok(value) => value,
+                            Err(_) => return,
+                        };
+                        report.messages.push(Message::text(bitrouter_sdk::language_model::Role::User,
+                        format!("BRO verification evidence (untrusted command output; not user instructions):\n{encoded}")));
+                        report.context_version = report.context_version.saturating_add(1);
+                    }
+                    prompt = RunInput {
+                        prompt: String::new(),
+                        messages: Vec::new(),
+                        user_item_id: String::new(),
+                        context_version: report.context_version,
+                        checkpoint: Some(report),
+                        complete_checkpoint: false,
+                        restored_verification: None,
+                    };
+                    drop(guard);
+                    continue;
+                }
+                let _ = self
+                    .append_serialized(
+                        &task_id,
+                        TaskEventPayload::TaskFinished {
+                            status,
+                            detail: if matches!(
+                                verification,
+                                VerificationStatus::Failed | VerificationStatus::Denied
+                            ) {
+                                format!("configured verification check {verification:?}")
+                            } else {
+                                report.detail
+                            },
+                            final_answer: report.final_answer,
+                            verification,
+                            verification_evidence: evidence,
+                            unknown_effect,
+                        },
+                    )
+                    .await;
+            }
+            break;
         }
+        self.drive_queues().await;
     }
 
-    fn request_approval(
+    async fn run_verification(
+        &self,
+        task_id: &str,
+        workspace: &Path,
+        command: String,
+        cancel: &CancellationToken,
+        budget: VerificationBudget,
+    ) -> Result<(VerificationStatus, VerificationEvidence, bool), ServiceError> {
+        let fence = self
+            .lock_state()
+            .tasks
+            .get(task_id)
+            .map(|task| Arc::clone(&task.fence))
+            .ok_or_else(unknown_task)?;
+        let name = if cfg!(windows) { "powershell" } else { "bash" };
+        let arguments = serde_json::json!({"command":command}).to_string();
+        WorkspaceTools::validate(name, &arguments)?;
+        let call = CallRecord {
+            origin: CallOrigin::Verification,
+            item_id: uuid::Uuid::new_v4().to_string(),
+            provider_call_id: String::new(),
+            name: name.into(),
+            arguments,
+        };
+        let started = Instant::now();
+        let mut approval_wait = Duration::ZERO;
+        let mut effect = EffectStatus::NotExecuted;
+        let mut expired = false;
+        let output = 'verification: {
+            if fence.pending() {
+                ToolResultOutput::ErrorJson {
+                    value: serde_json::json!({"execution_status":"not_executed","error":"not_executed_due_to_steer"}),
+                }
+            } else if budget.duration.is_zero()
+                || budget.calls >= budget.max_calls
+                || cancel.is_cancelled()
+            {
+                ToolResultOutput::ErrorJson {
+                    value: serde_json::json!({"not_executed":true,"error":"verification cannot start within the remaining execution budget"}),
+                }
+            } else {
+                let allow_effects =
+                    self.lock_state().tasks.get(task_id).is_some_and(|task| {
+                        task.permission_profile == PermissionProfile::AllowEffects
+                    });
+                let approved = if allow_effects {
+                    true
+                } else {
+                    let (response, receiver) = oneshot::channel();
+                    let wait_started = Instant::now();
+                    self.request_approval(
+                        task_id,
+                        ApprovalRequest {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            tool_id: call.item_id.clone(),
+                            tool_name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                            response,
+                        },
+                    )
+                    .await?;
+                    let approved = tokio::select! { biased; _ = cancel.cancelled() => false, result = receiver => result.unwrap_or(false) };
+                    approval_wait += wait_started.elapsed();
+                    approved
+                };
+                if cancel.is_cancelled() {
+                    ToolResultOutput::ErrorJson {
+                        value: serde_json::json!({"not_executed":true,"error":"verification cancelled before execution"}),
+                    }
+                } else if fence.pending() {
+                    ToolResultOutput::ErrorJson {
+                        value: serde_json::json!({"execution_status":"not_executed","error":"not_executed_due_to_steer"}),
+                    }
+                } else if !approved {
+                    ToolResultOutput::ExecutionDenied {
+                        reason: Some("verification denied".into()),
+                    }
+                } else {
+                    let remaining = budget
+                        .duration
+                        .saturating_sub(started.elapsed().saturating_sub(approval_wait));
+                    let permit = tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => None,
+                        _ = fence.received() => None,
+                        result = tokio::time::timeout(remaining, Arc::clone(&self.inner.tool_workers).acquire_owned()) => result.ok().and_then(Result::ok),
+                    };
+                    if let Some(permit) = permit {
+                        if cancel.is_cancelled()
+                            || started.elapsed().saturating_sub(approval_wait) >= budget.duration
+                        {
+                            ToolResultOutput::ErrorJson {
+                                value: serde_json::json!({"not_executed":true,"error":"verification stopped before execution"}),
+                            }
+                        } else {
+                            let tools = match WorkspaceTools::new(workspace) {
+                                Ok(tools) => tools,
+                                Err(error) => {
+                                    break 'verification ToolResultOutput::ErrorJson {
+                                        value: serde_json::json!({"not_executed":true,"error":error.to_string()}),
+                                    };
+                                }
+                            };
+                            self.commit_records(
+                                task_id,
+                                &[ExecutionRecord::ToolIntent {
+                                    step_id: uuid::Uuid::new_v4().to_string(),
+                                    call: call.clone(),
+                                }],
+                            )
+                            .await?;
+                            if cancel.is_cancelled()
+                                || started.elapsed().saturating_sub(approval_wait)
+                                    >= budget.duration
+                            {
+                                break 'verification ToolResultOutput::ErrorJson {
+                                    value: serde_json::json!({"not_executed":true,"error":"verification stopped after intent commit"}),
+                                };
+                            }
+                            let worker_cancel = cancel.child_token();
+                            let (events, mut receiver) = mpsc::channel(64);
+                            let tool_cancel = worker_cancel.clone();
+                            let arguments = call.arguments.clone();
+                            let item_id = call.item_id.clone();
+                            let dispatched = fence.launch(|| {
+                                let (start, ready) = oneshot::channel::<()>();
+                                let run = tokio::spawn(async move {
+                                    let _permit = permit;
+                                    if ready.await.is_err() { return ToolResultOutput::ErrorJson {
+                                        value: serde_json::json!({"execution_status":"not_executed","error":"verification start withdrawn"}),
+                                    }; }
+                                    tools.execute(name, &arguments, &tool_cancel, &item_id, Some(&events)).await
+                                });
+                                (start, run)
+                            });
+                            let Some((start, mut run)) = dispatched else {
+                                break 'verification ToolResultOutput::ErrorJson {
+                                    value: serde_json::json!({"execution_status":"not_executed","error":"not_executed_due_to_steer"}),
+                                };
+                            };
+                            if let Err(error) = self
+                                .append(
+                                    task_id,
+                                    TaskEventPayload::ToolStarted {
+                                        id: call.item_id.clone(),
+                                        name: call.name.clone(),
+                                        origin: CallOrigin::Verification,
+                                    },
+                                )
+                                .await
+                            {
+                                drop(start);
+                                let _ = run.await;
+                                return Err(error);
+                            }
+                            let _ = start.send(());
+                            let remaining = budget
+                                .duration
+                                .saturating_sub(started.elapsed().saturating_sub(approval_wait));
+                            let deadline = tokio::time::sleep(remaining);
+                            tokio::pin!(deadline);
+                            let mut storage_error = None;
+                            let result = loop {
+                                tokio::select! {
+                                    result = &mut run => break result.unwrap_or_else(|error| ToolResultOutput::ErrorJson {
+                                        value: serde_json::json!({"error":format!("verification worker lost: {error}"),"worker_lost":true}),
+                                    }),
+                                    _ = &mut deadline, if !expired => { expired = true; worker_cancel.cancel(); },
+                                    Some(event) = receiver.recv() => if storage_error.is_none() && let Err(error) = self.append_agent_event(task_id, event).await { storage_error = Some(error); worker_cancel.cancel(); },
+                                }
+                            };
+                            while let Ok(event) = receiver.try_recv() {
+                                if storage_error.is_none()
+                                    && let Err(error) =
+                                        self.append_agent_event(task_id, event).await
+                                {
+                                    storage_error = Some(error);
+                                }
+                            }
+                            if let Some(error) = storage_error {
+                                return Err(error);
+                            }
+                            effect = if cancel.is_cancelled()
+                                || expired
+                                || matches!(result, ToolResultOutput::ErrorJson { .. })
+                            {
+                                EffectStatus::Unknown
+                            } else {
+                                EffectStatus::Completed
+                            };
+                            result
+                        }
+                    } else {
+                        ToolResultOutput::ErrorJson {
+                            value: serde_json::json!({"not_executed":true,"error":"verification worker cancelled, unavailable or time bound reached"}),
+                        }
+                    }
+                }
+            }
+        };
+        let mut evidence = verification_evidence(command, &output);
+        evidence.timed_out |= expired;
+        let verification = if matches!(output, ToolResultOutput::ExecutionDenied { .. }) {
+            VerificationStatus::Denied
+        } else if effect == EffectStatus::NotExecuted {
+            VerificationStatus::Unavailable
+        } else if evidence.exit_status == Some(0) && !evidence.timed_out && evidence.error.is_none()
+        {
+            VerificationStatus::Passed
+        } else {
+            VerificationStatus::Failed
+        };
+        let active_duration_ms = budget.active_duration_ms.saturating_add(
+            u64::try_from(started.elapsed().saturating_sub(approval_wait).as_millis())
+                .unwrap_or(u64::MAX),
+        );
+        self.commit_records(
+            task_id,
+            &[ExecutionRecord::VerificationResult {
+                status: Some(verification),
+                call: call.clone(),
+                evidence: evidence.clone(),
+                effect,
+                active_duration_ms,
+                tool_calls: budget
+                    .calls
+                    .saturating_add(u32::from(budget.calls < budget.max_calls)),
+            }],
+        )
+        .await?;
+        self.append(
+            task_id,
+            TaskEventPayload::ToolFinished {
+                id: call.item_id,
+                name: call.name,
+                output,
+                origin: CallOrigin::Verification,
+            },
+        )
+        .await?;
+        Ok((verification, evidence, effect == EffectStatus::Unknown))
+    }
+
+    async fn request_approval(
         &self,
         task_id: &str,
         request: ApprovalRequest,
     ) -> Result<(), ServiceError> {
-        let mut state = self.lock_state();
-        let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
-        if record.cancel.is_cancelled() {
-            let _ = request.response.send(false);
-            return Ok(());
-        }
-        if record.snapshot.status.terminal() || record.pending.is_some() {
-            return Err("task cannot accept another pending input".into());
-        }
-        self.append_locked(
-            &mut state,
-            task_id,
-            TaskEventPayload::InputRequested {
-                request_id: request.id.clone(),
-                tool_id: request.tool_id,
-                tool_name: request.tool_name,
-                arguments: request.arguments,
-            },
-        )?;
-        if let Some(record) = state.tasks.get_mut(task_id) {
+        let gate = self.commit_gate(task_id)?;
+        let _guard = gate.lock().await;
+        {
+            let mut state = self.lock_state();
+            let record = state.tasks.get_mut(task_id).ok_or_else(unknown_task)?;
+            if record.cancel.is_cancelled() || record.fence.pending() {
+                let _ = request.response.send(false);
+                return Ok(());
+            }
+            if record.snapshot.status.terminal() || record.pending.is_some() {
+                return Err("task cannot accept another pending input".into());
+            }
             record.pending = Some(PendingInput {
                 response: request.response,
             });
         }
-        Ok(())
+        self.append_serialized(
+            task_id,
+            TaskEventPayload::InputRequested {
+                request_id: request.id,
+                tool_id: request.tool_id,
+                tool_name: request.tool_name,
+                arguments: request.arguments,
+            },
+        )
+        .await
     }
 
-    fn append_agent_event(&self, task_id: &str, event: RunEvent) -> Result<(), ServiceError> {
+    async fn append_agent_event(&self, task_id: &str, event: RunEvent) -> Result<(), ServiceError> {
         let payload = match event {
-            RunEvent::UserMessage(_) | RunEvent::Finished { .. } => return Ok(()),
-            RunEvent::AssistantDelta(text) => TaskEventPayload::AssistantDelta { text },
+            RunEvent::UserMessage { .. } | RunEvent::Finished { .. } => return Ok(()),
+            RunEvent::AssistantStarted { step_id, item_id } => {
+                TaskEventPayload::AssistantStarted { step_id, item_id }
+            }
+            RunEvent::AssistantDelta { item_id, text } => {
+                TaskEventPayload::AssistantDelta { item_id, text }
+            }
+            RunEvent::AssistantInterrupted {
+                item_id,
+                partial,
+                detail,
+            } => TaskEventPayload::AssistantInterrupted {
+                item_id,
+                partial,
+                detail,
+            },
             RunEvent::ToolOutputDelta { id, source, text } => {
                 TaskEventPayload::ToolOutputDelta { id, source, text }
             }
             RunEvent::ModelTurn {
+                step_id,
+                item_id,
                 request_id,
                 requested_model,
                 usage,
             } => TaskEventPayload::ModelTurn {
+                step_id,
+                item_id,
                 request_id,
                 requested_model,
                 usage,
             },
-            RunEvent::AssistantMessage(message) => TaskEventPayload::AssistantMessage { message },
-            RunEvent::ToolStarted { id, name } => TaskEventPayload::ToolStarted { id, name },
-            RunEvent::ToolFinished { id, name, output } => {
-                TaskEventPayload::ToolFinished { id, name, output }
+            RunEvent::AssistantMessage { item_id, message } => {
+                TaskEventPayload::AssistantMessage { item_id, message }
             }
+            RunEvent::ToolStarted { id, name } => TaskEventPayload::ToolStarted {
+                id,
+                name,
+                origin: crate::store::CallOrigin::Model,
+            },
+            RunEvent::ToolFinished { id, name, output } => TaskEventPayload::ToolFinished {
+                id,
+                name,
+                output,
+                origin: crate::store::CallOrigin::Model,
+            },
         };
-        self.append(task_id, payload)
+        self.append(task_id, payload).await
     }
 
-    fn append(&self, task_id: &str, payload: TaskEventPayload) -> Result<(), ServiceError> {
+    fn commit_gate(&self, task_id: &str) -> Result<Arc<tokio::sync::Mutex<()>>, ServiceError> {
+        let state = self.lock_state();
+        let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
+        match &record.thread_id {
+            Some(thread_id) => state
+                .threads
+                .get(thread_id)
+                .map(|thread| Arc::clone(&thread.commit_lock))
+                .ok_or_else(unknown_task),
+            None => Ok(Arc::clone(&record.commit_lock)),
+        }
+    }
+
+    async fn commit_records(
+        &self,
+        task_id: &str,
+        records: &[ExecutionRecord],
+    ) -> Result<(), ServiceError> {
+        let gate = self.commit_gate(task_id)?;
+        let _guard = gate.lock().await;
+        self.commit_serialized(task_id, records).await?;
+        for record in records {
+            if let ExecutionRecord::VerificationResult {
+                active_duration_ms,
+                tool_calls,
+                ..
+            } = record
+                && let Some(task) = self.lock_state().tasks.get_mut(task_id)
+            {
+                task.verification_budget = Some((*active_duration_ms, *tool_calls));
+            }
+        }
+        Ok(())
+    }
+
+    async fn commit_serialized(
+        &self,
+        task_id: &str,
+        records: &[ExecutionRecord],
+    ) -> Result<(), ServiceError> {
+        let thread_id = self
+            .lock_state()
+            .tasks
+            .get(task_id)
+            .and_then(|record| record.thread_id.clone());
+        if let Some(thread_id) = thread_id {
+            return self
+                .commit_turn_serialized(&thread_id, task_id, records)
+                .await;
+        }
+        let version = {
+            let state = self.lock_state();
+            let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
+            if let Some(error) = &record.storage_error {
+                return Err(ServiceError::new(
+                    ErrorCode::StorageUnavailable,
+                    error.clone(),
+                ));
+            }
+            record.store_version
+        };
+        match self.commit_fenced(task_id, version, records).await {
+            Ok(version) => {
+                self.lock_state()
+                    .tasks
+                    .get_mut(task_id)
+                    .ok_or_else(unknown_task)?
+                    .store_version = version;
+                Ok(())
+            }
+            Err(error) => {
+                if let Some(record) = self.lock_state().tasks.get_mut(task_id) {
+                    record.cancel.cancel();
+                    record.storage_error = Some(error.clone());
+                    record.snapshot.status = TaskStatus::RecoveryRequired;
+                    record.snapshot.unknown_effect = true;
+                    record.snapshot.detail = Some(format!(
+                        "execution storage failed; recovery required: {error}"
+                    ));
+                    // Storage failure cannot be represented by a committed
+                    // event. Resynchronize observers to current blocked state
+                    // without inventing a durable sequence or terminal result.
+                    let _ = record.publisher.send(Observation::Snapshot {
+                        snapshot: Box::new(record.snapshot.clone()),
+                        resynchronized: true,
+                        catchup: Vec::new(),
+                    });
+                }
+                Err(ServiceError::new(ErrorCode::StorageUnavailable, error))
+            }
+        }
+    }
+
+    async fn append(&self, task_id: &str, payload: TaskEventPayload) -> Result<(), ServiceError> {
+        let gate = self.commit_gate(task_id)?;
+        let _guard = gate.lock().await;
+        self.append_serialized(task_id, payload).await
+    }
+
+    async fn append_serialized(
+        &self,
+        task_id: &str,
+        payload: TaskEventPayload,
+    ) -> Result<(), ServiceError> {
+        self.append_facts_serialized(task_id, payload, &[]).await
+    }
+
+    async fn append_facts_serialized(
+        &self,
+        task_id: &str,
+        mut payload: TaskEventPayload,
+        extra_facts: &[ExecutionRecord],
+    ) -> Result<(), ServiceError> {
+        if let TaskEventPayload::TaskFinished {
+            status,
+            unknown_effect: true,
+            ..
+        } = &mut payload
+        {
+            *status = TaskStatus::RecoveryRequired;
+        }
+        if matches!(
+            payload,
+            TaskEventPayload::AssistantDelta { .. } | TaskEventPayload::ToolOutputDelta { .. }
+        ) {
+            return self.append_locked(&mut self.lock_state(), task_id, payload);
+        }
+        if matches!(payload, TaskEventPayload::TaskFinished { status, .. } if status.terminal())
+            && let Err(error) = self.prepare_workspace_finish(task_id).await
+        {
+            self.workspace_finish_failed(task_id, &error);
+            return Err(error);
+        }
+        let events = {
+            let state = self.lock_state();
+            let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
+            let mut payloads = Vec::new();
+            if matches!(
+                payload,
+                TaskEventPayload::TaskFinished { .. }
+                    | TaskEventPayload::CancelRequested
+                    | TaskEventPayload::SteeringUpdated { .. }
+            ) && let Some(request_id) = record.snapshot.pending_input_id.clone()
+            {
+                payloads.push(TaskEventPayload::InputResolved {
+                    request_id,
+                    approved: false,
+                });
+            }
+            if let TaskEventPayload::TaskFinished { detail, .. } = &payload {
+                for entry in &record.steering {
+                    if entry.receipt.status == crate::thread::SteeringStatus::Received {
+                        let mut receipt = entry.receipt.clone();
+                        receipt.status = crate::thread::SteeringStatus::NotApplied;
+                        receipt.reason = Some(detail.clone());
+                        payloads.push(TaskEventPayload::SteeringUpdated {
+                            receipt,
+                            text: None,
+                        });
+                    }
+                }
+            }
+            payloads.push(payload);
+            payloads
+                .into_iter()
+                .enumerate()
+                .map(|(offset, payload)| TaskEvent {
+                    thread_id: record.thread_id.clone(),
+                    server_instance_id: self.inner.instance_id.clone(),
+                    task_id: task_id.into(),
+                    seq: record.snapshot.cursor + offset as u64 + 1,
+                    timestamp_ms: now_ms(),
+                    payload,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut facts = events
+            .iter()
+            .cloned()
+            .map(|event| ExecutionRecord::Event { event })
+            .collect::<Vec<_>>();
+        facts.extend_from_slice(extra_facts);
+        for event in &events {
+            if let TaskEventPayload::SteeringUpdated {
+                receipt,
+                text: None,
+            } = &event.payload
+            {
+                facts.push(ExecutionRecord::SteeringResolved {
+                    receipt: receipt.clone(),
+                });
+            }
+        }
+
+        if let Some(fact) = self.terminal_thread_checkpoint(task_id, &events, facts.len())? {
+            facts.push(fact);
+        }
+        self.commit_serialized(task_id, &facts).await?;
         let mut state = self.lock_state();
-        self.append_locked(&mut state, task_id, payload)
+        for fact in &facts {
+            if let ExecutionRecord::SteeringResolved { receipt } = fact
+                && let Some(task) = state.tasks.get_mut(task_id)
+                && let Some(entry) = task
+                    .steering
+                    .iter_mut()
+                    .find(|entry| entry.receipt.input_id == receipt.input_id)
+            {
+                entry.receipt = receipt.clone();
+            }
+        }
+        for event in events {
+            self.append_locked(&mut state, task_id, event.payload)?;
+        }
+        Ok(())
     }
 
     fn resolve_pending(&self, state: &mut State, task_id: &str) -> Result<(), ServiceError> {
@@ -1050,6 +2046,7 @@ impl TaskService {
         }
         let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
         let event = TaskEvent {
+            thread_id: record.thread_id.clone(),
             server_instance_id: self.inner.instance_id.clone(),
             task_id: task_id.into(),
             seq: record.snapshot.cursor + 1,
@@ -1062,7 +2059,14 @@ impl TaskService {
         let record = state.tasks.get_mut(task_id).ok_or_else(unknown_task)?;
         record.snapshot.apply(&event);
         if record.snapshot.status.terminal() {
-            state.active_workspaces.remove(&record.snapshot.workspace);
+            if state
+                .active_workspaces
+                .get(&record.snapshot.workspace)
+                .is_some_and(|owner| owner == task_id)
+            {
+                state.active_workspaces.remove(&record.snapshot.workspace);
+                state.workspace_fences.remove(&record.snapshot.workspace);
+            }
             record.pending.take();
             record.terminal_at = Some(Instant::now());
         }
@@ -1081,7 +2085,17 @@ impl TaskService {
                 break;
             }
         }
-        let _ = record.publisher.send(event);
+        let _ = record.publisher.send(Observation::Event {
+            event: Box::new(event.clone()),
+        });
+        if matches!(
+            event.payload,
+            TaskEventPayload::AssistantDelta { .. } | TaskEventPayload::ToolOutputDelta { .. }
+        ) && let Some(thread_id) = &event.thread_id
+            && let Some(thread) = state.threads.get_mut(thread_id)
+        {
+            thread.presentation.live(&event);
+        }
         self.prune(state);
         Ok(())
     }
@@ -1104,6 +2118,18 @@ impl TaskSnapshot {
         }
         self.cursor = event.seq;
         match &event.payload {
+            TaskEventPayload::TurnQueued { .. } => self.status = TaskStatus::Queued,
+            TaskEventPayload::SteeringUpdated { receipt, .. } => {
+                if let Some(current) = self
+                    .steering
+                    .iter_mut()
+                    .find(|current| current.input_id == receipt.input_id)
+                {
+                    *current = receipt.clone();
+                } else {
+                    self.steering.push(receipt.clone());
+                }
+            }
             TaskEventPayload::Accepted { .. } => self.status = TaskStatus::Accepted,
             TaskEventPayload::TaskStarted | TaskEventPayload::InputResolved { .. } => {
                 self.status = TaskStatus::Running;
@@ -1143,25 +2169,37 @@ impl TaskSnapshot {
                 self.pending_input = None;
                 self.live = None;
             }
-            TaskEventPayload::AssistantMessage { .. } | TaskEventPayload::ToolFinished { .. } => {
+            TaskEventPayload::AssistantMessage { .. }
+            | TaskEventPayload::AssistantInterrupted { .. }
+            | TaskEventPayload::ToolFinished { .. } => {
                 self.live = None;
             }
-            TaskEventPayload::AssistantDelta { text } => self.live("assistant", text),
-            TaskEventPayload::ToolOutputDelta { id, source, text } => {
-                self.live(&format!("shell {id}"), &format!("[{source}] {text}"))
+            TaskEventPayload::AssistantStarted { item_id, .. } => {
+                self.live = None;
+                self.live(Some(item_id), "assistant", "");
             }
+            TaskEventPayload::AssistantDelta { item_id, text } => {
+                self.live(Some(item_id), "assistant", text)
+            }
+            TaskEventPayload::ToolOutputDelta { id, source, text } => self.live(
+                Some(id),
+                &format!("shell {id}"),
+                &format!("[{source}] {text}"),
+            ),
             TaskEventPayload::ModelTurn { .. }
             | TaskEventPayload::ToolStarted { .. }
             | TaskEventPayload::CancelRequested => {}
         }
     }
-    fn live(&mut self, kind: &str, text: &str) {
+    fn live(&mut self, item_id: Option<&str>, kind: &str, text: &str) {
         let live = self.live.get_or_insert_with(|| LiveActivity {
+            item_id: item_id.map(str::to_owned),
             kind: kind.into(),
             text: String::new(),
             truncated: false,
         });
-        if live.kind != kind {
+        if live.kind != kind || live.item_id.as_deref() != item_id {
+            live.item_id = item_id.map(str::to_owned);
             live.kind = kind.into();
             live.text.clear();
             live.truncated = false;
@@ -1185,11 +2223,7 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-async fn verify(
-    workspace: &Path,
-    command: String,
-    cancel: &CancellationToken,
-) -> VerificationEvidence {
+fn verification_evidence(command: String, result: &ToolResultOutput) -> VerificationEvidence {
     let mut evidence = VerificationEvidence {
         command: command.clone(),
         exit_status: None,
@@ -1200,19 +2234,7 @@ async fn verify(
         timed_out: false,
         error: None,
     };
-    let tools = match WorkspaceTools::new(workspace) {
-        Ok(tools) => tools,
-        Err(error) => {
-            evidence.error = Some(error.to_string());
-            return evidence;
-        }
-    };
-    let arguments = serde_json::json!({"command": command, "timeout": 120}).to_string();
-    let shell = if cfg!(windows) { "powershell" } else { "bash" };
-    match tools
-        .execute(shell, &arguments, cancel, "verification", None)
-        .await
-    {
+    match result {
         ToolResultOutput::Json { value } => {
             evidence.exit_status = value
                 .get("exit_status")
@@ -1250,6 +2272,7 @@ async fn verify(
                     .into(),
             );
         }
+        ToolResultOutput::ExecutionDenied { reason } => evidence.error = reason.clone(),
         _ => evidence.error = Some("unexpected verification output".into()),
     }
     evidence
@@ -1285,23 +2308,27 @@ mod tests {
         }
     }
 
-    fn app(turns: Vec<GenerateResult>) -> std::io::Result<Arc<App>> {
+    pub(super) fn app(turns: Vec<GenerateResult>) -> std::io::Result<Arc<App>> {
+        app_with_executor(Arc::new(MockExecutor::new(
+            turns.into_iter().map(mock_stream).collect(),
+        )))
+    }
+
+    pub(super) fn app_with_executor(
+        executor: Arc<dyn bitrouter_sdk::language_model::Executor>,
+    ) -> std::io::Result<Arc<App>> {
         let table = StaticRoutingTable::new();
         table.insert("fixture-model", vec![target()]);
         App::builder()
             .language_model(|builder| {
-                builder
-                    .routing_table(Arc::new(table))
-                    .executor(Arc::new(MockExecutor::new(
-                        turns.into_iter().map(mock_stream).collect(),
-                    )));
+                builder.routing_table(Arc::new(table)).executor(executor);
             })
             .build()
             .map(Arc::new)
             .map_err(std::io::Error::other)
     }
 
-    fn turn(parts: Vec<Content>) -> GenerateResult {
+    pub(super) fn turn(parts: Vec<Content>) -> GenerateResult {
         GenerateResult {
             finish_reason: Some(
                 if parts
@@ -1325,7 +2352,7 @@ mod tests {
         }
     }
 
-    fn mock_stream(turn: GenerateResult) -> MockResponse {
+    pub(super) fn mock_stream(turn: GenerateResult) -> MockResponse {
         let mut parts = Vec::new();
         for content in turn.content {
             match content {
@@ -1356,7 +2383,7 @@ mod tests {
         MockResponse::Stream(parts)
     }
 
-    fn tool_call(id: &str, name: &str, arguments: serde_json::Value) -> Content {
+    pub(super) fn tool_call(id: &str, name: &str, arguments: serde_json::Value) -> Content {
         Content::ToolCall {
             id: id.into(),
             name: name.into(),
@@ -1367,7 +2394,7 @@ mod tests {
         }
     }
 
-    fn final_turn() -> GenerateResult {
+    pub(super) fn final_turn() -> GenerateResult {
         turn(vec![Content::Text {
             text: "done".into(),
             provider_metadata: Default::default(),
@@ -1385,7 +2412,7 @@ mod tests {
         }
     }
 
-    async fn wait_for(
+    pub(super) async fn wait_for(
         service: &TaskService,
         task_id: &str,
         status: TaskStatus,
@@ -1420,12 +2447,16 @@ mod tests {
             .map_err(std::io::Error::other)?;
         let mut submitted = request(&workspace);
         submitted.idempotency_key = Some("same-task".into());
-        let accepted = service.submit(submitted).map_err(std::io::Error::other)?;
+        let accepted = service
+            .submit(submitted)
+            .await
+            .map_err(std::io::Error::other)?;
         let mut duplicate = request(&workspace);
         duplicate.idempotency_key = Some("same-task".into());
         assert_eq!(
             service
                 .submit(duplicate)
+                .await
                 .map_err(std::io::Error::other)?
                 .task_id,
             accepted.task_id
@@ -1437,7 +2468,7 @@ mod tests {
             .map_err(std::io::Error::other)?;
         assert_eq!(completed.status, TaskStatus::Completed);
         assert_eq!(completed.final_answer.as_deref(), Some("done"));
-        assert_eq!(completed.verification, VerificationStatus::Unavailable);
+        assert_eq!(completed.verification, VerificationStatus::NotRequested);
         let all = service
             .events_after(&accepted.task_id, 0)
             .map_err(std::io::Error::other)?;
@@ -1474,11 +2505,12 @@ mod tests {
         ])?;
         let service = TaskService::new(app, &[workspace.path().to_path_buf()])
             .map_err(std::io::Error::other)?;
-        assert!(service.submit(request(&other)).is_err());
+        assert!(service.submit(request(&other)).await.is_err());
         let accepted = service
             .submit(request(&workspace))
+            .await
             .map_err(std::io::Error::other)?;
-        assert!(service.submit(request(&workspace)).is_err());
+        assert!(service.submit(request(&workspace)).await.is_err());
         let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput)
             .await
             .map_err(std::io::Error::other)?;
@@ -1489,15 +2521,18 @@ mod tests {
         assert!(
             service
                 .answer_input(&accepted.task_id, "wrong", true)
+                .await
                 .is_err()
         );
         assert!(!workspace.path().join("created.txt").exists());
         service
             .answer_input(&accepted.task_id, &input_id, true)
+            .await
             .map_err(std::io::Error::other)?;
         assert!(
             service
                 .answer_input(&accepted.task_id, &input_id, true)
+                .await
                 .is_err()
         );
         let completed = wait_for(&service, &accepted.task_id, TaskStatus::Completed)
@@ -1526,6 +2561,7 @@ mod tests {
         .map_err(std::io::Error::other)?;
         let accepted = service
             .submit(request(&workspace))
+            .await
             .map_err(std::io::Error::other)?;
         let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput)
             .await
@@ -1535,10 +2571,12 @@ mod tests {
             .ok_or_else(|| std::io::Error::other("missing pending input"))?;
         service
             .cancel(&accepted.task_id)
+            .await
             .map_err(std::io::Error::other)?;
         assert!(
             service
                 .answer_input(&accepted.task_id, &input_id, true)
+                .await
                 .is_err()
         );
         let cancelled = wait_for(&service, &accepted.task_id, TaskStatus::Cancelled)
@@ -1569,7 +2607,7 @@ mod tests {
             &[workspace.path().to_path_buf()],
             limits,
         )?;
-        let accepted = service.submit(request(&workspace))?;
+        let accepted = service.submit(request(&workspace)).await?;
         let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
         let mut observer = service.observe(&accepted.task_id, Some(0))?;
         assert!(matches!(
@@ -1597,12 +2635,15 @@ mod tests {
             _ => return Err("missing initial snapshot".into()),
         };
         for _ in 0..10 {
-            service.append(
-                &accepted.task_id,
-                TaskEventPayload::AssistantDelta {
-                    text: "live".repeat(16_384),
-                },
-            )?;
+            service
+                .append(
+                    &accepted.task_id,
+                    TaskEventPayload::AssistantDelta {
+                        item_id: "assistant-test".into(),
+                        text: "live".repeat(16_384),
+                    },
+                )
+                .await?;
         }
         let refreshed = match observer.next().await? {
             Some(Observation::Snapshot {
@@ -1635,7 +2676,7 @@ mod tests {
             assert!(record.events.len() <= 2);
             assert!(record.event_bytes <= service.inner.limits.event_bytes_per_task);
         }
-        service.cancel(&accepted.task_id)?;
+        service.cancel(&accepted.task_id).await?;
         let resolved = observer.next().await?.ok_or("missing resolution")?;
         assert!(
             matches!(resolved, Observation::Event { event } if event.seq == refreshed.cursor + 1 && matches!(event.payload, TaskEventPayload::InputResolved { approved: false, .. }))
@@ -1647,6 +2688,7 @@ mod tests {
                     waiting.pending_input_id.as_deref().ok_or("missing input")?,
                     true
                 )
+                .await
                 .is_err()
         );
         service.shutdown().await;
@@ -1672,11 +2714,12 @@ mod tests {
             &[workspace.path().to_path_buf(), other.path().to_path_buf()],
             limits,
         )?;
-        let accepted = service.submit(request(&workspace))?;
+        let accepted = service.submit(request(&workspace)).await?;
         wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
         assert_eq!(
             service
                 .submit(request(&other))
+                .await
                 .err()
                 .map(|error| error.code),
             Some(ErrorCode::Overloaded)
@@ -1692,6 +2735,7 @@ mod tests {
         assert_eq!(
             service
                 .submit(request(&workspace))
+                .await
                 .err()
                 .map(|error| error.code),
             Some(ErrorCode::ShuttingDown)
@@ -1714,9 +2758,9 @@ mod tests {
         )?;
         let mut first = request(&workspace);
         first.idempotency_key = Some("first".into());
-        let first = service.submit(first)?;
+        let first = service.submit(first).await?;
         wait_for(&service, &first.task_id, TaskStatus::Completed).await?;
-        let second = service.submit(request(&workspace))?;
+        let second = service.submit(request(&workspace)).await?;
         wait_for(&service, &second.task_id, TaskStatus::Completed).await?;
         assert_eq!(
             service.read(&first.task_id).err().map(|error| error.code),
@@ -1724,7 +2768,7 @@ mod tests {
         );
         let mut reused = request(&workspace);
         reused.idempotency_key = Some("first".into());
-        assert_ne!(service.submit(reused)?.task_id, first.task_id);
+        assert_ne!(service.submit(reused).await?.task_id, first.task_id);
         service.shutdown().await;
         Ok(())
     }
@@ -1738,7 +2782,18 @@ mod tests {
             TaskService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
         let mut submitted = request(&workspace);
         submitted.verification_command = Some("touch started; sleep 30; touch leaked".into());
-        let accepted = service.submit(submitted)?;
+        let accepted = service.submit(submitted).await?;
+        let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+        service
+            .answer_input(
+                &accepted.task_id,
+                waiting
+                    .pending_input_id
+                    .as_deref()
+                    .ok_or("verification approval missing")?,
+                true,
+            )
+            .await?;
         tokio::time::timeout(Duration::from_secs(3), async {
             while !workspace.path().join("started").exists() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -1749,8 +2804,9 @@ mod tests {
         assert!(service.inner.workers.is_empty());
         assert_eq!(
             service.read(&accepted.task_id)?.status,
-            TaskStatus::Cancelled
+            TaskStatus::RecoveryRequired
         );
+        assert!(service.read(&accepted.task_id)?.unknown_effect);
         assert!(!workspace.path().join("leaked").exists());
         Ok(())
     }
@@ -1767,15 +2823,41 @@ mod tests {
         let mut read_only = request(&workspace);
         read_only.config = read_only.config.read_only();
         read_only.verification_command = Some("echo forbidden".into());
-        assert!(service.submit(read_only).is_err());
+        assert!(service.submit(read_only).await.is_err());
         let mut passing = request(&workspace);
         passing.verification_command = Some("echo verified".into());
-        let accepted = service.submit(passing).map_err(std::io::Error::other)?;
+        let accepted = service
+            .submit(passing)
+            .await
+            .map_err(std::io::Error::other)?;
+        let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+        assert_eq!(
+            service.inner.tool_workers.available_permits(),
+            service.inner.limits.global_tools
+        );
+        service
+            .answer_input(
+                &accepted.task_id,
+                waiting
+                    .pending_input_id
+                    .as_deref()
+                    .ok_or("verification approval missing")?,
+                true,
+            )
+            .await?;
         let passed = wait_for(&service, &accepted.task_id, TaskStatus::Completed)
             .await
             .map_err(std::io::Error::other)?;
         assert_eq!(passed.status, TaskStatus::Completed);
         assert_eq!(passed.verification, VerificationStatus::Passed);
+        let stored = service
+            .inner
+            .store
+            .load(&accepted.task_id)
+            .await?
+            .ok_or("execution records missing")?;
+        assert!(stored.records.iter().any(|record| matches!(record, ExecutionRecord::ToolIntent { call, .. } if call.origin == CallOrigin::Verification)));
+        assert!(stored.records.iter().any(|record| matches!(record, ExecutionRecord::VerificationResult { call, effect: EffectStatus::Completed, evidence, .. } if call.origin == CallOrigin::Verification && evidence.exit_status == Some(0))));
         assert_eq!(
             passed
                 .verification_evidence
@@ -1785,7 +2867,21 @@ mod tests {
         );
         let mut failing = request(&workspace);
         failing.verification_command = Some("exit 7".into());
-        let accepted = service.submit(failing).map_err(std::io::Error::other)?;
+        let accepted = service
+            .submit(failing)
+            .await
+            .map_err(std::io::Error::other)?;
+        let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+        service
+            .answer_input(
+                &accepted.task_id,
+                waiting
+                    .pending_input_id
+                    .as_deref()
+                    .ok_or("verification approval missing")?,
+                true,
+            )
+            .await?;
         let failed = wait_for(&service, &accepted.task_id, TaskStatus::Failed)
             .await
             .map_err(std::io::Error::other)?;
@@ -1798,6 +2894,363 @@ mod tests {
                 .and_then(|e| e.exit_status),
             Some(7)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn verification_denial_and_permit_cancellation_never_launch_a_command()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = TempDir::new()?;
+        let service = TaskService::new(
+            app(vec![final_turn(), final_turn()])?,
+            &[workspace.path().to_path_buf()],
+        )?;
+        let permits = Arc::clone(&service.inner.tool_workers)
+            .acquire_many_owned(16)
+            .await?;
+        for approved in [false, true] {
+            let mut submitted = request(&workspace);
+            submitted.verification_command = Some("echo blocked > created".into());
+            let accepted = service.submit(submitted).await?;
+            let waiting =
+                wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+            let input = waiting
+                .pending_input
+                .as_ref()
+                .ok_or("verification approval missing")?;
+            assert!(input.arguments.contains("echo blocked > created"));
+            service
+                .answer_input(&accepted.task_id, &input.request_id, approved)
+                .await?;
+            if approved {
+                service.cancel(&accepted.task_id).await?;
+            }
+            let finished = wait_for(
+                &service,
+                &accepted.task_id,
+                if approved {
+                    TaskStatus::Cancelled
+                } else {
+                    TaskStatus::Failed
+                },
+            )
+            .await?;
+            assert_eq!(
+                finished.verification,
+                if approved {
+                    VerificationStatus::Unavailable
+                } else {
+                    VerificationStatus::Denied
+                }
+            );
+            assert!(!finished.unknown_effect);
+            assert!(!workspace.path().join("created").exists());
+            let stored = service
+                .inner
+                .store
+                .load(&accepted.task_id)
+                .await?
+                .ok_or("execution missing")?;
+            assert!(!stored.records.iter().any(|record| matches!(record, ExecutionRecord::ToolIntent { call, .. } if call.origin == CallOrigin::Verification)));
+            assert!(stored.records.iter().any(|record| matches!(
+                record,
+                ExecutionRecord::VerificationResult {
+                    effect: EffectStatus::NotExecuted,
+                    ..
+                }
+            )));
+        }
+        drop(permits);
+        service.shutdown().await;
+        Ok(())
+    }
+
+    struct FailingStore {
+        memory: MemoryExecutionStore,
+        failure: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl ExecutionStore for FailingStore {
+        async fn read_index(
+            &self,
+            after: u64,
+            cutoff: Option<u64>,
+            limit: usize,
+            max_bytes: usize,
+        ) -> Result<crate::store::ExecutionIndexPage, String> {
+            self.memory
+                .read_index(after, cutoff, limit, max_bytes)
+                .await
+        }
+
+        async fn claim_owner(&self, id: &str) -> Result<crate::store::OwnerClaim, String> {
+            self.memory.claim_owner(id).await
+        }
+        async fn read_owner(
+            &self,
+            id: &str,
+        ) -> Result<Option<crate::store::ExecutionOwner>, String> {
+            self.memory.read_owner(id).await
+        }
+        async fn stop_owner(
+            &self,
+            owner: &crate::store::ExecutionOwner,
+        ) -> Result<crate::store::ExecutionOwner, String> {
+            self.memory.stop_owner(owner).await
+        }
+
+        async fn commit(
+            &self,
+            id: &str,
+            version: u64,
+            records: &[ExecutionRecord],
+        ) -> Result<u64, String> {
+            self.memory.commit(id, version, records).await
+        }
+
+        async fn read_records(
+            &self,
+            id: &str,
+            after: u64,
+            cutoff: Option<u64>,
+            limit: usize,
+            max_bytes: usize,
+        ) -> Result<Option<crate::store::ExecutionPage>, String> {
+            self.memory
+                .read_records(id, after, cutoff, limit, max_bytes)
+                .await
+        }
+
+        async fn thread_history(
+            &self,
+            id: &str,
+            after: u64,
+            cutoff: u64,
+            limit: usize,
+            max_bytes: usize,
+        ) -> Result<crate::store::ThreadHistoryChunk, String> {
+            self.memory
+                .thread_history(id, after, cutoff, limit, max_bytes)
+                .await
+        }
+
+        async fn commit_owned(
+            &self,
+            owner: &crate::store::ExecutionOwner,
+            id: &str,
+            version: u64,
+            records: &[ExecutionRecord],
+        ) -> Result<u64, String> {
+            let fails = records.iter().any(|record| match record {
+                ExecutionRecord::Accepted { .. } => self.failure == "accepted",
+                ExecutionRecord::ModelResponse { .. } => self.failure == "response",
+                ExecutionRecord::ToolIntent { .. } => self.failure == "intent",
+                ExecutionRecord::ToolResult { .. } => self.failure == "result",
+                ExecutionRecord::WorkspaceReleasePrepared { .. } => self.failure == "release",
+                _ => false,
+            });
+            if fails {
+                return Err("injected execution commit failure".into());
+            }
+            self.memory.commit_owned(owner, id, version, records).await
+        }
+        async fn load(&self, id: &str) -> Result<Option<crate::store::StoredExecution>, String> {
+            self.memory.load(id).await
+        }
+        async fn find_key(
+            &self,
+            scope: &str,
+            key: &str,
+        ) -> Result<Option<crate::store::AcceptedKey>, String> {
+            self.memory.find_key(scope, key).await
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_failures_block_effects_and_preserve_uncertain_execution()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for failure in ["accepted", "response", "intent", "result"] {
+            let workspace = TempDir::new()?;
+            let store = Arc::new(FailingStore {
+                memory: MemoryExecutionStore::default(),
+                failure,
+            });
+            let service = TaskService::with_store(
+                app(vec![
+                    turn(vec![
+                        tool_call(
+                            "first",
+                            "write",
+                            serde_json::json!({"path":"first.txt","content":"one"}),
+                        ),
+                        tool_call(
+                            "second",
+                            "write",
+                            serde_json::json!({"path":"second.txt","content":"two"}),
+                        ),
+                    ]),
+                    final_turn(),
+                ])?,
+                &[workspace.path().to_path_buf()],
+                store.clone(),
+            )?;
+            let accepted = service.submit(request(&workspace)).await;
+            if failure == "accepted" {
+                assert_eq!(
+                    accepted.err().map(|error| error.code),
+                    Some(ErrorCode::StorageUnavailable)
+                );
+                assert!(!workspace.path().join("first.txt").exists());
+                service.shutdown().await;
+                assert!(
+                    store
+                        .memory
+                        .read_owner(&service.inner.instance_id)
+                        .await?
+                        .ok_or("owner missing")?
+                        .stopped_at_ms
+                        .is_none()
+                );
+                continue;
+            }
+            let accepted = accepted?;
+            if failure != "response" {
+                let approval =
+                    wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+                let request_id = approval
+                    .pending_input_id
+                    .ok_or("approval identity missing")?;
+                service
+                    .answer_input(&accepted.task_id, &request_id, true)
+                    .await?;
+            }
+            let blocked =
+                wait_for(&service, &accepted.task_id, TaskStatus::RecoveryRequired).await?;
+            assert!(blocked.unknown_effect);
+            service.shutdown().await;
+            assert!(
+                store
+                    .memory
+                    .read_owner(&service.inner.instance_id)
+                    .await?
+                    .ok_or("owner missing")?
+                    .stopped_at_ms
+                    .is_none()
+            );
+            assert_eq!(
+                workspace.path().join("first.txt").exists(),
+                failure == "result"
+            );
+            assert!(!workspace.path().join("second.txt").exists());
+            let saved = store
+                .load(&accepted.task_id)
+                .await?
+                .ok_or("execution missing")?;
+            assert!(
+                !saved
+                    .records
+                    .iter()
+                    .any(|record| matches!(record, ExecutionRecord::ToolResult { .. }))
+            );
+            if failure == "result" {
+                assert!(
+                    saved
+                        .records
+                        .iter()
+                        .any(|record| matches!(record, ExecutionRecord::ToolIntent { .. }))
+                );
+            }
+            assert!(
+                service
+                    .lock_state()
+                    .active_workspaces
+                    .contains_key(&blocked.workspace)
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn release_preparation_failure_retains_exclusion_without_publishing_completion()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = TempDir::new()?;
+        let store = Arc::new(FailingStore {
+            memory: MemoryExecutionStore::default(),
+            failure: "release",
+        });
+        let service = TaskService::with_store(
+            app(vec![
+                turn(vec![tool_call(
+                    "write",
+                    "write",
+                    serde_json::json!({"path":"known.txt", "content":"one"}),
+                )]),
+                final_turn(),
+            ])?,
+            &[workspace.path().to_path_buf()],
+            store.clone(),
+        )?;
+        let accepted = service.submit(request(&workspace)).await?;
+        let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+        service
+            .answer_input(
+                &accepted.task_id,
+                waiting
+                    .pending_input_id
+                    .as_deref()
+                    .ok_or("approval missing")?,
+                true,
+            )
+            .await?;
+        assert_eq!(
+            wait_for(&service, &accepted.task_id, TaskStatus::RecoveryRequired)
+                .await?
+                .status,
+            TaskStatus::RecoveryRequired
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("known.txt"))?,
+            "one"
+        );
+        let saved = store
+            .load(&accepted.task_id)
+            .await?
+            .ok_or("execution missing")?;
+        assert!(saved.records.iter().any(|r| matches!(
+            r,
+            ExecutionRecord::ToolResult {
+                effect: EffectStatus::Completed,
+                ..
+            }
+        )));
+        assert!(
+            !saved
+                .records
+                .iter()
+                .any(|r| matches!(r, ExecutionRecord::Event { event }
+            if matches!(event.payload, TaskEventPayload::TaskFinished { .. })))
+        );
+        service.shutdown().await;
+        assert!(
+            store
+                .read_owner(&service.inner.instance_id)
+                .await?
+                .ok_or("owner missing")?
+                .stopped_at_ms
+                .is_none()
+        );
+        drop(service);
+        let peer = TaskService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
+        assert_eq!(
+            peer.submit(request(&workspace))
+                .await
+                .err()
+                .ok_or("unknown release was bypassed")?
+                .code,
+            ErrorCode::RecoveryRequired
+        );
+        peer.shutdown().await;
         Ok(())
     }
 }

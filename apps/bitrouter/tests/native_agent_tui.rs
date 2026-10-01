@@ -189,6 +189,8 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
     let mut tui = TerminalClient::open(binary, &config, &task_id)?;
     tui.wait_for("Approve edit")?;
     tui.send(b"y")?;
+    tui.wait_for("Approve bash")?;
+    tui.send(b"y")?;
     let completed = wait_status(&socket, &task_id, TaskStatus::Completed).await?;
     ensure!(completed.verification == VerificationStatus::Passed);
     ensure!(std::fs::read_to_string(workspace.join("note.txt"))? == "after\n");

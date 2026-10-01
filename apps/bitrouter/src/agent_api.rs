@@ -96,11 +96,15 @@ fn error(status: StatusCode, message: impl Into<String>) -> ApiError {
 
 fn runtime_error(failure: ServiceError) -> ApiError {
     let status = match failure.code {
-        ErrorCode::UnknownTask => StatusCode::NOT_FOUND,
-        ErrorCode::Conflict | ErrorCode::InstanceChanged | ErrorCode::ResyncRequired => {
-            StatusCode::CONFLICT
+        ErrorCode::UnknownTask | ErrorCode::UnknownThread => StatusCode::NOT_FOUND,
+        ErrorCode::Unauthorized => StatusCode::FORBIDDEN,
+        ErrorCode::Conflict
+        | ErrorCode::InstanceChanged
+        | ErrorCode::ResyncRequired
+        | ErrorCode::RecoveryRequired => StatusCode::CONFLICT,
+        ErrorCode::Overloaded | ErrorCode::ShuttingDown | ErrorCode::StorageUnavailable => {
+            StatusCode::SERVICE_UNAVAILABLE
         }
-        ErrorCode::Overloaded | ErrorCode::ShuttingDown => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::InvalidRequest => StatusCode::BAD_REQUEST,
     };
     (
@@ -280,6 +284,7 @@ async fn submit(
             verification_command: body.verification_command,
             idempotency_key: Some(key.to_string()),
         })
+        .await
         .map_err(runtime_error)?;
     Ok((
         StatusCode::ACCEPTED,
@@ -326,6 +331,7 @@ async fn input(
     state
         .service
         .answer_input(&id, &body.request_id, body.approved)
+        .await
         .map_err(runtime_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -338,7 +344,7 @@ async fn cancel(
     authenticated(&headers, &state.token)?;
     instance(&headers, &state.service)?;
     state.task(&id)?;
-    state.service.cancel(&id).map_err(runtime_error)?;
+    state.service.cancel(&id).await.map_err(runtime_error)?;
     Ok(StatusCode::ACCEPTED)
 }
 

@@ -43,7 +43,7 @@ answer. Standard output is NDJSON: an `accepted` record, ordered `event`
 records with per-task sequence numbers, and a `terminal` record with status,
 verification, final answer, and cursor. Failed, cancelled, or interrupted tasks
 exit nonzero. `--check` is a bounded shell command in the server workspace;
-without it verification is `unavailable`. `--effort`, `--workspace`, and
+without it verification is `not_requested`. `--effort`, `--workspace`, and
 `--config` are optional. This local headless client approves its own tool
 requests. `--read-only` restricts the entire task to inspection tools and
 cannot be combined with `--check`. Explicit remote contexts fail without local fallback.
@@ -105,12 +105,26 @@ shell deltas also carry sequenced events. Pending approvals include the request
 ID, tool ID/name, and arguments in the snapshot. The first valid response
 resolves an approval for all observers; cancellation resolves it as denied.
 
-Native tasks live in memory in one `bro serve` process. The local protocol is
-version 4; CLI/TUI subscribe to snapshots and events instead of polling.
+Live task state is owned by one `bro serve` process. The local protocol is
+version 13; CLI/TUI subscribe to snapshots and events instead of polling.
 Detaching keeps the task running. On shutdown the server stops admission,
 cancels tasks, and waits for Agent and verification cleanup. A restart creates
-a new instance with no previous task results or idempotency records. Clients
-must report instance loss and must not automatically repeat a submission.
+a new instance. The server commits admission, model snapshots/full responses,
+tool execution intents/results and settlement to dedicated records in its
+configured database. The Rust core can reconstruct continuous Threads in a
+bounded read-only recovery view. Safe restart continuation remains under
+implementation; clients must report instance loss and must not
+automatically repeat a submission. The Rust runtime now retains Thread context and
+durable FIFO/control keys, steering and bounded history/observation/reconnect;
+these Thread operations are not yet published through
+the CLI, HTTP or local transport. Legacy task submission still uses instance-local
+idempotency. A storage failure blocks the task as
+`recovery_required` and retains its workspace exclusion.
+
+Accepted user messages and assistant attempts have stable Item IDs. Assistant
+start, delta, full-message and interrupted events share the same ID; live
+snapshots retain it too. Cancelled, truncated or rejected model streams retain
+bounded interrupted evidence without entering model context or executing calls.
 
 Default runtime limits are 8 active tasks, 32 retained terminal tasks / 64 MiB for up to
 30 minutes, 256 cached events / 2 MiB per task, 8 observers per task, and a
@@ -120,6 +134,46 @@ idempotency is scoped to the caller and current instance. The local adapter
 admits at most 64 connections plus one bounded rejection reply; HTTP admits 64
 concurrent handlers. Overload, instance mismatch, expired task IDs, and cursor
 resynchronization use identified error codes.
+
+Core recovery scans allow 2 readers, 64 records / 4 MiB per page and 1,000,000
+records per Thread. These capability limits do not expose a CLI recovery command.
+Loaded Threads remain `recovery_required` until execution ownership, termination
+and effects are confirmed; reconstruction alone cannot resume work.
+
+Native startup claims a database execution owner. Protocol v13 capabilities
+report its instance/generation or a recovery blocker. Normal shutdown joins
+execution, persists queue pauses and a stopped proof before a later instance
+can claim. An active lost owner or legacy unfenced facts block new native work
+as `recovery_required`; inference remains available. Owner/effect resolution is
+still under implementation, with no published recovery command. Do not clear
+the blocker by deleting owner records or automatically repeating work.
+
+Native execution also requires a writable parent for its canonical workspace.
+The local v13 handshake rejects an older daemon before task submission.
+Shared `.bro-workspace-<sha256(canonical UTF-8 path)>.lock` / `.json` sidecars
+live in that parent, outside the workspace, and coordinate runtimes even when
+configured with different databases. A live owner reports conflict; an active
+marker without confirmed release reports `recovery_required` after process loss.
+Only joined work with committed release preparation can write an idle marker.
+Do not delete these files to clear a blocker: the lock inode must stay stable,
+and marker deletion cannot prove termination or effects. This is cooperating
+local-runtime exclusion; it is not an OS sandbox or power-loss guarantee.
+
+Native initialization also completes bounded cold discovery before admitting work.
+Defaults are 1024 stored roots, 1,000,000 scanned records and 4 MiB of cold metadata.
+Protocol v13 capabilities report aggregate scan progress/completion and failure;
+root identities and prompts are not exposed there. An incomplete scan blocks
+admission. Unknown cold execution blocks its workspace even before explicit load,
+including old Task submissions. Discovery creates no model request, runnable
+approval or hot context and does not automatically resume stored queues. Legacy
+Task conversion and safe same-Turn continuation remain under implementation.
+
+Each task runs up to 4 read workers and the server admits up to 16 tool workers
+globally. Contiguous `read`/`ls`/`find`/`grep` calls may overlap; write, edit, shell
+and verification wait for preceding reads and preserve their ordered barriers.
+Results commit as they finish, while model messages retain original call order.
+Configured verification uses an identified approval and the same global worker
+budget. Denial reports `denied`; interrupted effects block safe continuation.
 
 Per-provider credential commands are under `bro providers (login|logout)`; BitRouter Cloud sign-in is `bro cloud (login|logout|whoami)`.
 
@@ -537,6 +591,10 @@ bro route gpt-4o [--prompt <text>] [-c <path>] [--socket <path>]
 ```
 
 Resolves a model or router selector using the running daemon when reachable, otherwise the local configuration. Fixed routes include the provider fallback chain. A policy-bound router reports its binding and routable candidates with `policy_decision_executed: false`: the preview does not execute its dynamic policy or predict the selected model.
+
+The config fallback probes `auto_discover: true` providers with no declared
+models, using the same bounded discovery as `bro models`. A model shown by the
+config listing can therefore be previewed by the config route check.
 
 `--prompt` supplies request text for the existing static policy-table preview on the local config path. It does not execute a router's dynamic policy; live previews do not use it.
 

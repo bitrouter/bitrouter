@@ -2663,6 +2663,10 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
             }
             answered = Some(request_id.clone());
         }
+        if snapshot.status == TaskStatus::RecoveryRequired {
+            emit_task_json(serde_json::json!({"type": "blocked", "snapshot": snapshot}))?;
+            anyhow::bail!("BRO execution is blocked; inspect recovery state before continuing");
+        }
         if snapshot.status.terminal() {
             emit_task_json(serde_json::json!({
                 "type": "terminal", "task_id": snapshot.task_id, "status": snapshot.status,

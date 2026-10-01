@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 bitrouter-sdk.workspace = true
 futures.workspace = true
 globset.workspace = true
@@ -16,6 +17,7 @@ ignore.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 similar.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "macros", "sync", "time"] }

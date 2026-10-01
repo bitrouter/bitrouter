@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::daemon::transport;
 
-pub const CONTRACT_VERSION: u32 = 4;
+pub const CONTRACT_VERSION: u32 = 13;
 const MAX_COMMAND_BYTES: u64 = 64 * 1024;
 const MAX_REPLY_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -119,7 +119,7 @@ pub struct TaskReply {
 pub enum ReplyResult {
     Capabilities {
         operations: Vec<String>,
-        runtime: RuntimeCapabilities,
+        runtime: Box<RuntimeCapabilities>,
     },
     Observation {
         observation: Box<Observation>,
@@ -269,10 +269,15 @@ where
         }
     }
     let request_id = command.command_id.clone();
-    write_reply(&mut write, Some(&request_id), dispatch(&service, command)).await
+    write_reply(
+        &mut write,
+        Some(&request_id),
+        dispatch(&service, command).await,
+    )
+    .await
 }
 
-fn dispatch(service: &TaskService, command: TaskCommand) -> ReplyResult {
+async fn dispatch(service: &TaskService, command: TaskCommand) -> ReplyResult {
     if command.command_id.is_empty() || command.command_id.len() > 128 {
         return ReplyResult::Error {
             code: ErrorCode::InvalidRequest,
@@ -295,7 +300,7 @@ fn dispatch(service: &TaskService, command: TaskCommand) -> ReplyResult {
     let result = match command.operation {
         Operation::Capabilities => {
             return ReplyResult::Capabilities {
-                runtime: service.capabilities(),
+                runtime: Box::new(service.capabilities()),
                 operations: ["submit", "read", "events", "observe", "input", "cancel"]
                     .into_iter()
                     .map(str::to_string)
@@ -310,10 +315,9 @@ fn dispatch(service: &TaskService, command: TaskCommand) -> ReplyResult {
             read_only,
             verification_command,
             idempotency_key,
-        } => service
-            .register_local_workspace(&workspace)
-            .and_then(|workspace| {
-                service.submit(TaskRequest {
+        } => match service.register_local_workspace(&workspace) {
+            Ok(workspace) => service
+                .submit(TaskRequest {
                     prompt,
                     workspace,
                     caller: CallerContext::local(),
@@ -325,10 +329,12 @@ fn dispatch(service: &TaskService, command: TaskCommand) -> ReplyResult {
                     verification_command,
                     idempotency_key,
                 })
-            })
-            .map(|snapshot| ReplyResult::Task {
-                snapshot: Box::new(snapshot),
-            }),
+                .await
+                .map(|snapshot| ReplyResult::Task {
+                    snapshot: Box::new(snapshot),
+                }),
+            Err(error) => Err(error),
+        },
         Operation::Read { task_id } => service.read(&task_id).map(|snapshot| ReplyResult::Task {
             snapshot: Box::new(snapshot),
         }),
@@ -341,9 +347,10 @@ fn dispatch(service: &TaskService, command: TaskCommand) -> ReplyResult {
             approved,
         } => service
             .answer_input(&task_id, &request_id, approved)
+            .await
             .map(|()| ReplyResult::Ok),
         Operation::Observe { .. } => Err("observe requires a streaming connection".into()),
-        Operation::Cancel { task_id } => service.cancel(&task_id).map(|()| ReplyResult::Ok),
+        Operation::Cancel { task_id } => service.cancel(&task_id).await.map(|()| ReplyResult::Ok),
     };
     result.unwrap_or_else(|error| ReplyResult::Error {
         code: error.code,

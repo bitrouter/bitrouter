@@ -303,16 +303,40 @@ fn update_snapshot(state: &mut NativeState, snapshot: &TaskSnapshot) {
 
 fn format_event(event: &TaskEvent) -> String {
     let detail = match &event.payload {
+        TaskEventPayload::SteeringUpdated { receipt, .. } => {
+            format!("Steering {}: {:?}", receipt.input_id, receipt.status)
+        }
+        TaskEventPayload::TurnQueued {
+            prompt,
+            queue_order,
+            ..
+        } => format!("Queued #{queue_order}: {prompt}"),
         TaskEventPayload::Accepted {
             prompt, tool_mode, ..
         } => format!("Accepted ({tool_mode:?}): {prompt}"),
-        TaskEventPayload::AssistantDelta { text } => text.clone(),
+        TaskEventPayload::AssistantDelta { text, .. } => text.clone(),
+        TaskEventPayload::AssistantStarted { .. } => "Assistant started".into(),
+        TaskEventPayload::AssistantInterrupted {
+            detail, partial, ..
+        } => format!(
+            "Assistant interrupted: {detail}\n{}",
+            partial
+                .content
+                .iter()
+                .filter_map(|part| match part {
+                    Content::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
         TaskEventPayload::ToolOutputDelta { source, text, .. } => format!("[{source}] {text}"),
         TaskEventPayload::TaskStarted => "Started".into(),
         TaskEventPayload::ModelTurn {
             request_id,
             requested_model,
             usage,
+            ..
         } => format!(
             "Model turn {request_id} · requested {requested_model} · usage {}",
             usage.as_ref().map_or_else(
@@ -323,7 +347,7 @@ fn format_event(event: &TaskEvent) -> String {
                 )
             )
         ),
-        TaskEventPayload::AssistantMessage { message } => message
+        TaskEventPayload::AssistantMessage { message, .. } => message
             .content
             .iter()
             .filter_map(|content| match content {
@@ -332,9 +356,16 @@ fn format_event(event: &TaskEvent) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n"),
-        TaskEventPayload::ToolStarted { id, name } => format!("Tool {name} ({id}) started"),
-        TaskEventPayload::ToolFinished { id, name, output } => {
-            format!("Tool {name} ({id}): {output:?}")
+        TaskEventPayload::ToolStarted { id, name, origin } => {
+            format!("Tool {name} ({id}, {origin:?}) started")
+        }
+        TaskEventPayload::ToolFinished {
+            id,
+            name,
+            output,
+            origin,
+        } => {
+            format!("Tool {name} ({id}, {origin:?}): {output:?}")
         }
         TaskEventPayload::InputRequested {
             tool_name,

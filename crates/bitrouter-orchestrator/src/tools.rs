@@ -28,9 +28,129 @@ const MAX_FIND_RESULTS: usize = 1_000;
 const MAX_GREP_MATCHES: usize = 100;
 const MAX_GREP_LINE_CHARS: usize = 500;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolKind {
+    Read,
+    Ls,
+    Find,
+    Grep,
+    Write,
+    Edit,
+    Bash,
+    Powershell,
+}
+
+impl ToolKind {
+    const REGISTERED: [Self; 8] = [
+        Self::Read,
+        Self::Ls,
+        Self::Find,
+        Self::Grep,
+        Self::Write,
+        Self::Edit,
+        Self::Bash,
+        Self::Powershell,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Ls => "ls",
+            Self::Find => "find",
+            Self::Grep => "grep",
+            Self::Write => "write",
+            Self::Edit => "edit",
+            Self::Bash => "bash",
+            Self::Powershell => "powershell",
+        }
+    }
+
+    fn named(name: &str) -> Option<Self> {
+        Self::REGISTERED
+            .into_iter()
+            .find(|kind| kind.name() == name)
+    }
+
+    fn shared(self) -> bool {
+        matches!(self, Self::Read | Self::Ls | Self::Find | Self::Grep)
+    }
+
+    fn available(self, mode: ToolMode) -> bool {
+        self.shared()
+            || (mode == ToolMode::Coding
+                && match self {
+                    Self::Bash => !cfg!(windows),
+                    Self::Powershell => cfg!(windows),
+                    _ => true,
+                })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct WorkspaceTools {
     root: PathBuf,
+    #[cfg(test)]
+    read_gate: Option<std::sync::Arc<ReadGate>>,
+}
+
+/// Blocks inside real file workers so scheduler tests can establish overlap and
+/// cleanup without relying on filesystem speed or special blocking files.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct ReadGate {
+    state: std::sync::Mutex<ReadGateState>,
+    changed: std::sync::Condvar,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct ReadGateState {
+    entered: Vec<String>,
+    allowed: std::collections::HashSet<String>,
+    release_all: bool,
+    active: usize,
+    peak: usize,
+}
+
+#[cfg(test)]
+impl ReadGate {
+    fn enter(&self, arguments: &str) -> Result<(), String> {
+        let label = serde_json::from_str::<serde_json::Value>(arguments)
+            .map_err(|error| error.to_string())?
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        state.entered.push(label.clone());
+        state.active += 1;
+        state.peak = state.peak.max(state.active);
+        while !state.release_all && !state.allowed.contains(&label) {
+            state = self
+                .changed
+                .wait(state)
+                .map_err(|error| error.to_string())?;
+        }
+        state.active -= 1;
+        Ok(())
+    }
+
+    pub(crate) fn entered(&self) -> Result<(Vec<String>, usize), String> {
+        let state = self.state.lock().map_err(|error| error.to_string())?;
+        Ok((state.entered.clone(), state.peak))
+    }
+
+    pub(crate) fn allow(&self, label: Option<&str>) -> Result<(), String> {
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        match label {
+            Some(label) => {
+                state.allowed.insert(label.into());
+            }
+            None => state.release_all = true,
+        }
+        self.changed.notify_all();
+        Ok(())
+    }
 }
 
 #[derive(Deserialize)]
@@ -109,27 +229,63 @@ impl WorkspaceTools {
                 "workspace is not a directory",
             ));
         }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            #[cfg(test)]
+            read_gate: None,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_read_gate(&mut self, gate: std::sync::Arc<ReadGate>) {
+        self.read_gate = Some(gate);
     }
 
     pub(crate) fn allowed(mode: ToolMode, name: &str) -> bool {
-        match name {
-            "read" | "ls" | "find" | "grep" => true,
-            "write" | "edit" => mode == ToolMode::Coding,
-            "bash" => mode == ToolMode::Coding && !cfg!(windows),
-            "powershell" => mode == ToolMode::Coding && cfg!(windows),
-            _ => false,
-        }
+        ToolKind::named(name).is_some_and(|kind| kind.available(mode))
     }
 
     pub(crate) fn read_only(name: &str) -> bool {
-        matches!(name, "read" | "ls" | "find" | "grep")
+        ToolKind::named(name).is_some_and(ToolKind::shared)
+    }
+
+    pub(crate) fn validate(name: &str, arguments: &str) -> Result<(), String> {
+        fn parse<T: serde::de::DeserializeOwned>(arguments: &str) -> Result<(), String> {
+            serde_json::from_str::<T>(arguments)
+                .map(|_| ())
+                .map_err(|error| format!("invalid tool arguments: {error}"))
+        }
+        match ToolKind::named(name) {
+            Some(ToolKind::Read) => parse::<ReadArgs>(arguments),
+            Some(ToolKind::Ls) => parse::<LsArgs>(arguments),
+            Some(ToolKind::Find) => parse::<FindArgs>(arguments),
+            Some(ToolKind::Grep) => parse::<GrepArgs>(arguments),
+            Some(ToolKind::Write) => parse::<WriteArgs>(arguments),
+            Some(ToolKind::Edit) => parse::<EditArgs>(arguments),
+            Some(ToolKind::Bash | ToolKind::Powershell) => {
+                let args = serde_json::from_str::<BashArgs>(arguments)
+                    .map_err(|error| format!("invalid tool arguments: {error}"))?;
+                if args.command.trim().is_empty()
+                    || args
+                        .timeout
+                        .is_some_and(|timeout| timeout == 0 || timeout > MAX_BASH_SECONDS)
+                {
+                    Err(
+                        "command must be nonempty and timeout must be between 1 and 120 seconds"
+                            .into(),
+                    )
+                } else {
+                    Ok(())
+                }
+            }
+            None => Err("unknown tool".into()),
+        }
     }
 
     pub(crate) fn declarations(mode: ToolMode) -> Vec<Tool> {
         [
             (
-                "read",
+                ToolKind::Read,
                 "Read a UTF-8 workspace file. Output is limited to 2000 lines or 50 KiB; use offset and limit to read more.",
                 serde_json::json!({
                     "type": "object",
@@ -142,7 +298,7 @@ impl WorkspaceTools {
                 }),
             ),
             (
-                "ls",
+                ToolKind::Ls,
                 "List one workspace directory, including dotfiles. Directory names end with '/'. Returns at most 500 entries or 50 KiB.",
                 serde_json::json!({
                     "type": "object",
@@ -154,7 +310,7 @@ impl WorkspaceTools {
                 }),
             ),
             (
-                "find",
+                ToolKind::Find,
                 "Find workspace paths by glob, respecting .gitignore. Returns at most 1000 paths or 50 KiB.",
                 serde_json::json!({
                     "type": "object",
@@ -167,7 +323,7 @@ impl WorkspaceTools {
                 }),
             ),
             (
-                "grep",
+                ToolKind::Grep,
                 "Search workspace text files by regex, respecting .gitignore. Returns path:line matches, at most 100 matches or 50 KiB. Set literal for exact text.",
                 serde_json::json!({
                     "type": "object",
@@ -183,7 +339,7 @@ impl WorkspaceTools {
                 }),
             ),
             (
-                "write",
+                ToolKind::Write,
                 "Create or overwrite a UTF-8 workspace file, creating parent directories as needed.",
                 serde_json::json!({
                     "type": "object",
@@ -192,7 +348,7 @@ impl WorkspaceTools {
                 }),
             ),
             (
-                "edit",
+                ToolKind::Edit,
                 "Edit one existing workspace file. Each nonempty oldText must match exactly one non-overlapping region of the original file; all edits apply together.",
                 serde_json::json!({
                     "type": "object",
@@ -208,7 +364,7 @@ impl WorkspaceTools {
                 }),
             ),
             (
-                "bash",
+                ToolKind::Bash,
                 "Run a shell command in the server workspace. Commands can affect paths outside the workspace. Returns exit status and bounded stdout/stderr.",
                 serde_json::json!({
                     "type": "object",
@@ -220,7 +376,7 @@ impl WorkspaceTools {
                 }),
             ),
             (
-                "powershell",
+                ToolKind::Powershell,
                 "Run a PowerShell command in the server workspace on Windows. Commands can affect paths outside the workspace. Returns exit status and bounded stdout/stderr.",
                 serde_json::json!({
                     "type": "object",
@@ -233,9 +389,9 @@ impl WorkspaceTools {
             ),
         ]
         .into_iter()
-        .filter(|(name, _, _)| Self::allowed(mode, name))
-        .map(|(name, description, parameters)| Tool::Function {
-            name: name.into(),
+        .filter(|(kind, _, _)| kind.available(mode))
+        .map(|(kind, description, parameters)| Tool::Function {
+            name: kind.name().into(),
             description: Some(description.into()),
             parameters,
             // These tools intentionally accept omitted optional arguments.
@@ -254,14 +410,35 @@ impl WorkspaceTools {
         tool_id: &str,
         live: Option<&mpsc::Sender<RunEvent>>,
     ) -> ToolResultOutput {
-        let result = match name {
-            "read" => serde_json::from_str::<ReadArgs>(arguments)
-                .map_err(|error| format!("invalid read arguments: {error}"))
-                .and_then(|args| self.read(args)),
-            "ls" => serde_json::from_str::<LsArgs>(arguments)
-                .map_err(|error| format!("invalid ls arguments: {error}"))
-                .and_then(|args| self.ls(args)),
-            "find" => match serde_json::from_str::<FindArgs>(arguments) {
+        let result = match ToolKind::named(name) {
+            Some(kind @ (ToolKind::Read | ToolKind::Ls)) => {
+                let tools = self.clone();
+                let arguments = arguments.to_owned();
+                let cancel = cancel.clone();
+                match tokio::task::spawn_blocking(move || {
+                    if cancel.is_cancelled() {
+                        return Err("cancelled before reading".into());
+                    }
+                    #[cfg(test)]
+                    if let Some(gate) = &tools.read_gate {
+                        gate.enter(&arguments)?;
+                    }
+                    match kind {
+                        ToolKind::Read => serde_json::from_str::<ReadArgs>(&arguments)
+                            .map_err(|error| format!("invalid read arguments: {error}"))
+                            .and_then(|args| tools.read(args)),
+                        _ => serde_json::from_str::<LsArgs>(&arguments)
+                            .map_err(|error| format!("invalid ls arguments: {error}"))
+                            .and_then(|args| tools.ls(args)),
+                    }
+                })
+                .await
+                {
+                    Ok(result) => result,
+                    Err(error) => Err(error.to_string()),
+                }
+            }
+            Some(ToolKind::Find) => match serde_json::from_str::<FindArgs>(arguments) {
                 Ok(args) => {
                     let tools = self.clone();
                     let cancel = cancel.clone();
@@ -272,7 +449,7 @@ impl WorkspaceTools {
                 }
                 Err(error) => Err(format!("invalid find arguments: {error}")),
             },
-            "grep" => match serde_json::from_str::<GrepArgs>(arguments) {
+            Some(ToolKind::Grep) => match serde_json::from_str::<GrepArgs>(arguments) {
                 Ok(args) => {
                     let tools = self.clone();
                     let cancel = cancel.clone();
@@ -283,25 +460,25 @@ impl WorkspaceTools {
                 }
                 Err(error) => Err(format!("invalid grep arguments: {error}")),
             },
-            "write" => serde_json::from_str::<WriteArgs>(arguments)
+            Some(ToolKind::Write) => serde_json::from_str::<WriteArgs>(arguments)
                 .map_err(|error| format!("invalid write arguments: {error}"))
                 .and_then(|args| self.write(args)),
-            "edit" => serde_json::from_str::<EditArgs>(arguments)
+            Some(ToolKind::Edit) => serde_json::from_str::<EditArgs>(arguments)
                 .map_err(|error| format!("invalid edit arguments: {error}"))
                 .and_then(|args| self.edit(args)),
-            "bash" => match serde_json::from_str::<BashArgs>(arguments) {
+            Some(ToolKind::Bash) => match serde_json::from_str::<BashArgs>(arguments) {
                 Ok(args) if !cfg!(windows) => self.shell(args, "bash", cancel, tool_id, live).await,
                 Ok(_) => Err("bash requires a Bash shell; use powershell on Windows".into()),
                 Err(error) => Err(format!("invalid bash arguments: {error}")),
             },
-            "powershell" => match serde_json::from_str::<BashArgs>(arguments) {
+            Some(ToolKind::Powershell) => match serde_json::from_str::<BashArgs>(arguments) {
                 Ok(args) if cfg!(windows) => {
                     self.shell(args, "powershell", cancel, tool_id, live).await
                 }
                 Ok(_) => Err("powershell is available only on Windows".into()),
                 Err(error) => Err(format!("invalid powershell arguments: {error}")),
             },
-            _ => Err(format!("unknown tool: {name}")),
+            None => Err(format!("unknown tool: {name}")),
         };
         match result {
             Ok(value) => value,
@@ -841,6 +1018,13 @@ impl WorkspaceTools {
 }
 
 fn read_text(path: &Path) -> Result<String, String> {
+    if !path
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .is_file()
+    {
+        return Err("read requires a regular file".into());
+    }
     let mut file = File::open(path).map_err(|error| error.to_string())?;
     let mut bytes = Vec::new();
     Read::by_ref(&mut file)
