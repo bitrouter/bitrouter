@@ -388,14 +388,37 @@ the new C0–C6 core stages or infer approval to build a second scheduling autho
 
 ## Evidence so far
 
-### Standalone runtime acceptance (2026-10-01)
+### Committed PR snapshot validation (2026-10-01)
+
+Runtime source: `f2ce258a1dbde6fb7c1ad6f8ae1a1bcfd14cef22`,
+[PR #945](https://github.com/bitrouter/bitrouter/pull/945). Validation ran from a
+clean isolated checkout, excluding unrelated route/model-discovery edits retained
+in the development worktree. The validation-ledger follow-up changes docs only.
+
+- `cargo nextest run -p bitrouter-orchestrator --all-features --status-level leak
+  --final-status-level fail`: **102 passed, 0 skipped**, run
+  `880f8c38-babf-4f03-92ff-eb0c8cd932b8`; no leak reported.
+- `cargo nextest run --all-features --status-level leak --final-status-level fail`:
+  **3677 passed, 22 skipped**, run `95e23a94-aac5-4ec1-a9ef-38c43aabd766`;
+  no leak reported. The one-test difference from the development-worktree run
+  below is the unrelated unpublished regression, not a removed runtime test.
+- `cargo clippy --all-features --all-targets -- -D warnings`,
+  `cargo fmt --all -- --check` and `git diff --check` pass.
+  `cargo test --all-features --doc`: **5 passed, 1 ignored**; the orchestrator
+  itself has zero doc tests. Build profiles use dev/test debug=0 and incremental=0.
+- Plugin manifest JSON and eight internal-document local-link/fence checks pass.
+  Existing linker unwind-size and dependency future-compatibility notices remain.
+  This proves the local standalone runtime gate, not hosted CI, core integration,
+  credentialed providers/ACP, other platforms or host operator recovery.
+
+### Earlier standalone development-worktree acceptance (2026-10-01)
 
 - Independent crate: `cargo nextest run -p bitrouter-orchestrator --all-features
   --status-level leak --final-status-level fail`: **102 passed, 0 skipped**, run
   `981b0bd9-2037-4ae5-bfa6-5dbc21137160`; no leak reported. The earlier standalone
   baseline was 91 tests; 11 added tests cover the recovery operation and native
   process fixture/matrix.
-- Final workspace regression: `cargo nextest run --all-features --status-level
+- Development-worktree regression: `cargo nextest run --all-features --status-level
   leak --final-status-level fail`: **3678 passed, 22 skipped**, run
   `41c34282-ca46-4409-a7f6-35e39ac616cf`; no leak reported. The skipped tests remain
   skipped under the existing configuration. This is local evidence.
