@@ -1,8 +1,7 @@
 # BRO six base tools: implementation and acceptance
 
 Updated: 2026-10-01. Status: **implemented locally; macOS checks and real-model
-E2E passed; Windows runtime tests and hosted CI passed. A test-wait robustness
-follow-up is being checked separately.**
+E2E passed; Windows runtime tests and all 22 hosted CI jobs passed.**
 Contract: [six base tools v0.2](BRO_BASE_TOOLS_SPEC.md).
 
 ## Delivered behavior
@@ -180,7 +179,16 @@ observation wait and passing on retry. The follow-up gives this test helper ten
 seconds on Windows; Unix retains three. Completion status, verification outcomes,
 exit-code assertions and production timeouts retain their contracts. The local all-feature rerun passed 3,602 tests (22 skipped), strict clippy
 and formatting. Final check logs are `/tmp/bro-six-tools-nextest-final-stable.log` and
-`/tmp/bro-six-tools-clippy-final-stable.log`; the follow-up CI result is pending.
+`/tmp/bro-six-tools-clippy-final-stable.log`; the [final CI run](https://github.com/bitrouter/bitrouter/actions/runs/36822925832)
+passed all 22 jobs at `fa18a82ced09cd5f06fc39cddfeaeec759866cf5`. Windows ran
+3,487 tests: all passed on their first attempt, three skipped, zero flaky tests.
+The configured verification fixture passed in 1.787 seconds; output/exit/streaming
+and cancel/timeout/exit/drop descendant checks passed. Compact CI evidence
+records this final run and retains the preceding retry evidence.
+
+The final acceptance-record commit changes only Markdown and evidence JSON.
+Production and test source remain identical to this passing CI commit, so the
+new documentation does not require repeating the source checks or paid live runs.
 
 ## Requirement audit
 
