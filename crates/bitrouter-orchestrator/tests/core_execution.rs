@@ -515,6 +515,147 @@ impl ObserveHook for DisconnectOnHop {
 }
 
 struct RemoveTools;
+struct RemoveRequiredContext(bool);
+
+impl bitrouter_sdk::app::PromptTransform for RemoveRequiredContext {
+    fn apply(&self, prompt: &mut Prompt) {
+        if self.0 {
+            prompt.system = Some("replaced instructions".into());
+        } else {
+            prompt.messages.clear();
+        }
+    }
+}
+
+#[tokio::test]
+async fn context_preparation_rejection_is_durable_before_dispatch() -> TestResult {
+    for change_system in [true, false] {
+        let harness = Arc::new(Harness::new(None, None));
+        let table = StaticRoutingTable::new();
+        table.insert("fixture-model", vec![target("first")]);
+        let executor = Arc::new(RecordingExecutor {
+            mock: MockExecutor::always_text("must not execute"),
+            prompts: Mutex::new(Vec::new()),
+            calls: AtomicUsize::new(0),
+        });
+        let app = App::builder()
+            .prompt_transform(Arc::new(RemoveRequiredContext(change_system)))
+            .language_model(|builder| {
+                builder
+                    .routing_table(Arc::new(table))
+                    .executor(executor.clone());
+            })
+            .build()?;
+        let session = bind_app(Arc::new(app), harness).await?;
+        session.start("input", 1, input()).await?;
+        let done = session.drive().await?;
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            done.run.as_ref().map(|run| run.status),
+            Some(RunStatus::Failed)
+        );
+        let step = &done.root_turn().ok_or("missing root")?.steps[0];
+        let decision = step.decision.as_ref().ok_or("missing decision")?;
+        let applied = step.application.as_ref().ok_or("missing application")?;
+        assert_eq!(decision.decision_id, applied.decision_id);
+        assert!(matches!(
+            applied.disposition,
+            bitrouter_orchestrator::core::routing::ApplicationDisposition::Rejected
+        ));
+        assert_eq!(
+            applied.reason.as_ref().map(|error| error.code),
+            Some(ErrorCode::NoFeasibleRoute)
+        );
+        assert!(step.attempts.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn fresh_child_keeps_user_constraints_and_inherited_child_refreshes_materials() -> TestResult
+{
+    for fresh_context in [true, false] {
+        let harness = Arc::new(Harness::new(None, None));
+        let (session, executor, _) = setup(
+            vec![
+                output(vec![call("root-read")]),
+                output(vec![text("child done")]),
+            ],
+            harness,
+            false,
+        )
+        .await?;
+        session
+            .signals(
+                "v1",
+                signal_update(
+                    &session,
+                    vec![material("v1", "old material sentinel", true)],
+                )
+                .await,
+            )
+            .await?;
+        let mut task = input();
+        task.text = "Root instruction sentinel: never change workspace files".into();
+        let root = session
+            .start("input", session.head().await.state_revision, task.clone())
+            .await?
+            .assigned_ids["agent_id"]
+            .clone();
+        session.drive().await?;
+        session
+            .signals(
+                "v2",
+                signal_update(
+                    &session,
+                    vec![material("v2", "current material sentinel", true)],
+                )
+                .await,
+            )
+            .await?;
+        let mut child_work = work("focused child task");
+        child_work.fresh_context = fresh_context;
+        let child = session
+            .collaborate(
+                "child",
+                session.head().await.state_revision,
+                &root,
+                Action::Spawn { task: child_work },
+            )
+            .await?
+            .assigned_ids["agent_id"]
+            .clone();
+        session.drive().await?;
+        let prompts = executor.prompts.lock().await;
+        assert_eq!(prompts.len(), 2);
+        let child_prompt = &prompts[1];
+        assert!(
+            child_prompt
+                .system
+                .as_ref()
+                .is_some_and(|system| system.contains(&task.text))
+        );
+        let serialized = serde_json::to_string(child_prompt)?;
+        assert!(serialized.contains("current material sentinel"));
+        assert!(!serialized.contains("old material sentinel"));
+        let snapshot = session.snapshot().await;
+        let child_state = &snapshot.agents[&child];
+        let manifest = &child_state.turn.as_ref().ok_or("missing child")?.steps[0].context;
+        assert_eq!(manifest.materials[0].version, "v2");
+        assert_eq!(manifest.materials[0].provenance, "harness_document");
+        assert!(manifest.materials[0].content.is_none());
+        if fresh_context {
+            assert!(
+                !child_prompt
+                    .messages
+                    .iter()
+                    .any(|message| message.content == vec![text(&task.text)])
+            );
+        }
+    }
+    Ok(())
+}
+
 impl bitrouter_sdk::app::PromptTransform for RemoveTools {
     fn apply(&self, prompt: &mut Prompt) {
         prompt.tools.clear();
@@ -1411,8 +1552,14 @@ async fn current_run_followups_reuse_old_agent_context_in_fifo_order() -> TestRe
         session.drive().await?.run.map(|run| run.status),
         Some(RunStatus::Completed)
     );
+    let mut second_input = input();
+    second_input.text = "new root constraint: all follow-ups must remain read-only".into();
     let second = session
-        .start("second", session.head().await.state_revision, input())
+        .start(
+            "second",
+            session.head().await.state_revision,
+            second_input.clone(),
+        )
         .await?;
     let turn_before = session.snapshot().await.agents[&child]
         .turn
@@ -1519,6 +1666,12 @@ async fn current_run_followups_reuse_old_agent_context_in_fifo_order() -> TestRe
         })
         .collect::<Vec<_>>();
     assert_eq!(child_prompts.len(), 3);
+    assert!(child_prompts[1..].iter().all(|prompt| {
+        prompt
+            .system
+            .as_ref()
+            .is_some_and(|system| system.contains(&second_input.text))
+    }));
     assert!(
         child_prompts[1]
             .messages
@@ -2224,9 +2377,9 @@ async fn interruption_keeps_billed_child_output_but_discards_new_effects() -> Te
     assert!(child.final_answer.is_none());
     assert!(
         child.steps[0].attempts[0]
-            .report
+            .receipt
             .as_ref()
-            .is_some_and(|report| report.result.is_some())
+            .is_some_and(|receipt| receipt.report.result.is_some())
     );
     assert!(harness.sent.lock().await.is_empty());
     Ok(())
@@ -2379,8 +2532,8 @@ async fn children_overlap_with_bounded_slots_and_root_joins_their_results() -> T
         .filter_map(|agent| agent.turn.as_ref())
         .flat_map(|turn| &turn.steps)
         .flat_map(|step| &step.attempts)
-        .filter_map(|attempt| attempt.report.as_ref())
-        .map(|report| report.elapsed_ms)
+        .filter_map(|attempt| attempt.receipt.as_ref())
+        .map(|receipt| receipt.report.elapsed_ms)
         .sum::<u64>();
     let active_ms = done.run.as_ref().ok_or("missing run")?.active_ms;
     assert!(
@@ -2613,7 +2766,7 @@ async fn failed_output_commit_blocks_tools_but_sdk_still_settles_usage() -> Test
             .root_turn()
             .and_then(|turn| turn.steps.last())
             .and_then(|step| step.attempts.last())
-            .is_some_and(|attempt| attempt.report.is_none())
+            .is_some_and(|attempt| attempt.receipt.is_none())
     );
     Ok(())
 }
@@ -2640,15 +2793,42 @@ async fn fallbacks_have_separate_committed_attempts_and_actual_providers() -> Te
     assert_eq!(run.status, RunStatus::Completed);
     assert_eq!(run.model_attempts, 2);
     assert_eq!(turn.steps.len(), 1);
+    let step = &turn.steps[0];
+    let decision = step.decision.as_ref().ok_or("missing routing decision")?;
+    let applied = step
+        .application
+        .as_ref()
+        .ok_or("missing applied decision")?;
+    assert_eq!(decision.decision_id, step.decision_id);
+    assert_eq!(applied.decision_id, step.decision_id);
+    assert_eq!(applied.step_id, step.step_id);
+    assert_eq!(applied.agent_turn_id, turn.agent_turn_id);
+    assert!(matches!(
+        applied.disposition,
+        bitrouter_orchestrator::core::routing::ApplicationDisposition::Applied
+    ));
+    for attempt in &step.attempts {
+        let receipt = attempt
+            .receipt
+            .as_ref()
+            .ok_or("missing execution receipt")?;
+        assert_eq!(receipt.decision_id, decision.decision_id);
+        assert_eq!(receipt.attempt_id, attempt.attempt_id);
+        assert_eq!(
+            receipt.report.route,
+            step.plan.as_ref().ok_or("missing plan")?.routes[attempt.index as usize]
+        );
+        assert!(receipt.cost_micro_usd.is_none());
+    }
     assert_ne!(
         turn.steps[0].attempts[0].attempt_id,
         turn.steps[0].attempts[1].attempt_id
     );
     assert_eq!(
         turn.steps[0].attempts[1]
-            .report
+            .receipt
             .as_ref()
-            .map(|report| report.route.provider.as_str()),
+            .map(|receipt| receipt.report.route.provider.as_str()),
         Some("second")
     );
     assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
@@ -2666,6 +2846,70 @@ async fn fallbacks_have_separate_committed_attempts_and_actual_providers() -> Te
             .filter(|kind| kind.as_str() == "model.attempt.intent")
             .count(),
         2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_usage_totals_do_not_establish_cache_observations() -> TestResult {
+    let MockResponse::Generate(mut answer) = output(vec![text("answer with raw totals")]) else {
+        return Err("fixture must produce a generated answer".into());
+    };
+    let raw = json!({"prompt_tokens":7,"completion_tokens":3});
+    let usage = answer.usage.as_mut().ok_or("fixture usage missing")?;
+    usage.raw = Some(Box::new(raw.clone()));
+    let (session, _, _) = setup(
+        vec![MockResponse::Generate(answer)],
+        Arc::new(Harness::new(None, None)),
+        false,
+    )
+    .await?;
+    session.start("input", 1, input()).await?;
+    let state = session.drive().await?;
+    let receipt = state.root_turn().ok_or("missing root")?.steps[0].attempts[0]
+        .receipt
+        .as_ref()
+        .ok_or("missing receipt")?;
+    assert_eq!(receipt.cache_observation_source, "unknown");
+    assert_eq!(
+        receipt
+            .report
+            .result
+            .as_ref()
+            .and_then(|result| result.usage.as_ref())
+            .and_then(|usage| usage.raw.as_deref()),
+        Some(&raw)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_provider_usage_remains_unknown_in_execution_receipt() -> TestResult {
+    let MockResponse::Generate(mut answer) = output(vec![text("answer without usage")]) else {
+        return Err("fixture must produce a generated answer".into());
+    };
+    answer.usage = None;
+    let (session, _, _) = setup(
+        vec![MockResponse::Generate(answer)],
+        Arc::new(Harness::new(None, None)),
+        false,
+    )
+    .await?;
+    session.start("input", 1, input()).await?;
+    let state = session.drive().await?;
+    let receipt = state.root_turn().ok_or("missing root")?.steps[0].attempts[0]
+        .receipt
+        .as_ref()
+        .ok_or("missing receipt")?;
+    assert!(receipt.usage_origin.is_none());
+    assert!(receipt.cost_micro_usd.is_none());
+    assert_eq!(receipt.cache_observation_source, "unknown");
+    assert!(
+        receipt
+            .report
+            .result
+            .as_ref()
+            .is_some_and(|result| result.usage.is_none())
     );
     Ok(())
 }

@@ -57,6 +57,7 @@ pub struct ProviderContinuation {
     api_base: String,
     api_key: String,
     credential_authority: ContinuationAuthority,
+    effort_constraint: Option<Option<crate::language_model::types::ReasoningEffort>>,
 }
 
 /// Request-scoped marker requiring the selected native Responses target to
@@ -92,7 +93,25 @@ impl ProviderContinuation {
                 .clone()
                 .unwrap_or_else(|| target.api_key.clone()),
             credential_authority,
+            effort_constraint: None,
         }
+    }
+
+    /// Preserve an authoritative effort from the continuation record. `None`
+    /// means the recorded provider default, distinct from unknown provenance.
+    pub fn with_effort_constraint(
+        mut self,
+        effort: Option<crate::language_model::types::ReasoningEffort>,
+    ) -> Self {
+        self.effort_constraint = Some(effort);
+        self
+    }
+
+    pub(crate) fn admits_effort(
+        &self,
+        effort: Option<crate::language_model::types::ReasoningEffort>,
+    ) -> bool {
+        self.effort_constraint == Some(effort)
     }
 
     pub(crate) fn response_id(&self) -> &str {
@@ -504,6 +523,16 @@ impl PipelineContext {
         self.prompt.params.reasoning_effort = effort;
         self.prompt.params.reasoning_effort_source =
             crate::language_model::types::ReasoningEffortSource::Policy;
+    }
+
+    /// Restore the embedding caller's hard effort constraint after policy.
+    pub(crate) fn preserve_caller_effort(
+        &mut self,
+        effort: crate::language_model::types::ReasoningEffort,
+    ) {
+        self.prompt.params.reasoning_effort = Some(effort);
+        self.prompt.params.reasoning_effort_source =
+            crate::language_model::types::ReasoningEffortSource::Caller;
     }
 
     /// Apply preset prompt-body overrides. `system_prompt`, when

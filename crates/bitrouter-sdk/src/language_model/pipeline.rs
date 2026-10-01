@@ -20,7 +20,7 @@ use crate::language_model::hooks::{
     RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
 use crate::language_model::native::{
-    NativeAttemptReport, NativeExecutionControl, NativePlan, NativeRoute,
+    NativeAttemptReport, NativeExecutionControl, NativeModelSelection, NativePlan, NativeRoute,
 };
 use crate::language_model::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, MAX_REQUEST_CHECKS_PER_ROUTER,
@@ -599,7 +599,13 @@ impl Pipeline {
         run_server_tools: bool,
         control: Option<&dyn NativeExecutionControl>,
     ) -> Result<PreparedPipelineResponse> {
-        let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, false).await?;
+        let PreparedEntry { mut ctx, chain } = self
+            .prepare_entry(
+                req,
+                false,
+                control.map(NativeExecutionControl::model_selection),
+            )
+            .await?;
 
         let admission = match control {
             Some(control) => {
@@ -607,8 +613,11 @@ impl Pipeline {
                     .plan(NativePlan {
                         request_id: ctx.request_id().to_owned(),
                         original_model: ctx.original_model().to_owned(),
+                        effective_model: ctx.model().to_owned(),
+                        effort_source: ctx.prompt().params.reasoning_effort_source,
                         prompt: ctx.prompt().clone(),
                         routes: chain.iter().map(NativeRoute::from_target).collect(),
+                        router: ctx.router_identity().cloned(),
                     })
                     .await
             }
@@ -785,7 +794,7 @@ impl Pipeline {
         req: PipelineRequest,
         run_server_tools: bool,
     ) -> Result<PreparedPipelineStream> {
-        let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, true).await?;
+        let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, true, None).await?;
         let latest_attempt: SharedStreamAttempt = Arc::new(std::sync::Mutex::new(None));
 
         // Route Stage 3 through the server-side tool loop when configured: the
@@ -972,11 +981,16 @@ impl Pipeline {
 
     // ===== stage helpers =====
 
-    async fn prepare_entry(&self, req: PipelineRequest, streamed: bool) -> Result<PreparedEntry> {
+    async fn prepare_entry(
+        &self,
+        req: PipelineRequest,
+        streamed: bool,
+        selection: Option<NativeModelSelection>,
+    ) -> Result<PreparedEntry> {
         let mut ctx = PipelineContext::new(req);
         self.observe_start(&ctx).await;
 
-        match self.prepare_entry_stages(&mut ctx).await {
+        match self.prepare_entry_stages(&mut ctx, selection).await {
             Ok(chain) => {
                 self.observe_after(Phase::Route, &ctx).await;
                 log_request_received(&ctx, chain.first(), streamed);
@@ -999,7 +1013,15 @@ impl Pipeline {
     async fn prepare_entry_stages(
         &self,
         ctx: &mut PipelineContext,
+        selection: Option<NativeModelSelection>,
     ) -> std::result::Result<Vec<RoutingTarget>, EntryPreparationFailure> {
+        let fixed_selector =
+            (selection == Some(NativeModelSelection::Fixed)).then(|| ctx.model().to_owned());
+        let manual_effort = selection
+            .filter(|_| {
+                ctx.prompt().params.reasoning_effort_source == ReasoningEffortSource::Caller
+            })
+            .and(ctx.prompt().params.reasoning_effort);
         // Local auth/session/continuation normalization must finish before any
         // configured checker can cause external egress.
         self.run_pre_resolution(ctx)
@@ -1044,12 +1066,23 @@ impl Pipeline {
                 .map_err(EntryPreparationFailure::pre_request)?;
         }
 
+        if fixed_selector
+            .as_deref()
+            .is_some_and(|model| model != ctx.model())
+        {
+            return Err(EntryPreparationFailure::route(BitrouterError::bad_request(
+                "managed fixed model was changed during preparation",
+            )));
+        }
+        if let Some(effort) = manual_effort {
+            ctx.preserve_caller_effort(effort);
+        }
         self.run_request_checks(ctx, &binding.request_checks)
             .await
             .map_err(EntryPreparationFailure::request_check)?;
         self.observe_after(Phase::PreRequest, ctx).await;
 
-        self.resolve_route(ctx, binding)
+        self.resolve_route(ctx, binding, selection, manual_effort)
             .await
             .map_err(EntryPreparationFailure::route)
     }
@@ -1271,6 +1304,8 @@ impl Pipeline {
         &self,
         ctx: &mut PipelineContext,
         binding: ResolvedRequestBinding,
+        selection: Option<NativeModelSelection>,
+        manual_effort: Option<crate::language_model::types::ReasoningEffort>,
     ) -> Result<Vec<RoutingTarget>> {
         // Binding/default resolution already ran before local and external
         // request checks. Effective model selection remains here so existing
@@ -1282,12 +1317,18 @@ impl Pipeline {
         }
         let resolution = binding.resolution;
         ctx.set_model(resolution.clean_model);
-        if let Some(policy) = resolution.policy.as_deref() {
+        if selection != Some(NativeModelSelection::Fixed)
+            && let Some(policy) = resolution.policy.as_deref()
+        {
             for selector in &self.model_selectors {
                 selector
                     .select_variant(policy, resolution.variant.as_deref(), ctx)
                     .await?;
             }
+        }
+
+        if let Some(effort) = manual_effort {
+            ctx.preserve_caller_effort(effort);
         }
 
         // Restrict the chain to providers that advertise every capability this
@@ -1302,8 +1343,45 @@ impl Pipeline {
             .routing_table
             .route_resolved(ctx.model(), &prefs, ctx.caller())
             .await?;
+        let fixed_routes = (selection == Some(NativeModelSelection::Fixed)).then(|| {
+            chain
+                .iter()
+                .map(|target| (target.provider_name.clone(), target.service_id.clone()))
+                .collect::<Vec<_>>()
+        });
+        let selected_model = ctx.model().to_owned();
         for hook in &self.route_hooks {
             hook.resolve(&mut chain, ctx).await?;
+        }
+        if selection.is_some()
+            && ctx
+                .extension::<crate::language_model::context::ProviderContinuation>()
+                .is_some_and(|continuation| {
+                    !continuation.admits_effort(ctx.prompt().params.reasoning_effort)
+                })
+            && ctx
+                .extension::<crate::language_model::context::SuppressProviderContinuation>()
+                .is_none()
+        {
+            return Err(BitrouterError::bad_request(
+                "managed effort differs from the authoritative provider continuation or its constraint is unknown",
+            ));
+        }
+        if (selection == Some(NativeModelSelection::Fixed) && ctx.model() != selected_model)
+            || fixed_routes.is_some_and(|routes| {
+                chain.iter().any(|target| {
+                    !routes.contains(&(target.provider_name.clone(), target.service_id.clone()))
+                })
+            })
+            || manual_effort
+                .is_some_and(|effort| ctx.prompt().params.reasoning_effort != Some(effort))
+        {
+            return Err(BitrouterError::bad_request(
+                "a route hook changed a managed manual model or effort constraint",
+            ));
+        }
+        if let Some(effort) = manual_effort {
+            ctx.preserve_caller_effort(effort);
         }
         filter_reasoning_effort_targets(&mut chain, ctx.prompt())?;
         if chain.is_empty() {

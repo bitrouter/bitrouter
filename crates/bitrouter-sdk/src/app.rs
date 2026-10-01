@@ -176,8 +176,25 @@ impl App {
             crate::error::BitrouterError::internal("no language_model pipeline configured")
         })?;
         let headers = http::HeaderMap::new();
-        let (prompt, original_model) =
+        let requested_model = sanitize_model_name(&prompt.model);
+        let requested_effort = (prompt.params.reasoning_effort_source
+            == crate::language_model::types::ReasoningEffortSource::Caller)
+            .then_some(prompt.params.reasoning_effort)
+            .flatten();
+        let (mut prompt, original_model) =
             prepare_model_prompt(prompt, &headers, &self.prompt_transforms);
+        if (control.model_selection() == crate::language_model::native::NativeModelSelection::Fixed
+            && prompt.model != requested_model)
+            || requested_effort.is_some_and(|effort| prompt.params.reasoning_effort != Some(effort))
+        {
+            return Err(crate::error::BitrouterError::bad_request(
+                "managed request preparation changed a manual model or effort override",
+            ));
+        }
+        if requested_effort.is_some() {
+            prompt.params.reasoning_effort_source =
+                crate::language_model::types::ReasoningEffortSource::Caller;
+        }
         let mut request = PipelineRequest::new(prompt.model.clone(), caller, prompt);
         request.original_model = original_model;
         Arc::clone(pipeline)
