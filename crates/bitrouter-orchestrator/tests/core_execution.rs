@@ -159,11 +159,15 @@ impl HarnessPort for Harness {
                 .map_err(|error| {
                     CoreError::rejected(ErrorCode::CheckpointConflict, error.to_string())
                 })?;
-            let pending = snapshot.run.as_ref().is_some_and(|run| {
-                run.invocations
-                    .iter()
-                    .any(|invocation| invocation.dispatch == command && invocation.result.is_none())
-            });
+            let pending = snapshot
+                .agents
+                .values()
+                .filter_map(|agent| agent.turn.as_ref())
+                .any(|turn| {
+                    turn.invocations.iter().any(|invocation| {
+                        invocation.dispatch == command && invocation.result.is_none()
+                    })
+                });
             if !pending
                 || command.authorizing_event_seq > store.head.event_seq
                 || command.execution_epoch != store.grant.execution_epoch
@@ -509,6 +513,64 @@ async fn root_tool_roundtrip_preserves_attribution_and_durable_order() -> TestRe
 }
 
 #[tokio::test]
+async fn a_new_run_reuses_agent_context_but_gets_fresh_execution_identity() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, settlements) = setup(
+        vec![
+            output(vec![text("first task answer")]),
+            output(vec![call("call_1")]),
+            output(vec![text("second task answer")]),
+        ],
+        harness.clone(),
+        false,
+    )
+    .await?;
+    let first = session.start("input_1", 1, input()).await?;
+    session.drive().await?;
+    let mut second_input = input();
+    second_input.text = "Continue using the preceding answer".into();
+    let second = session
+        .start("input_2", session.head().await.state_revision, second_input)
+        .await?;
+    assert_eq!(
+        first.assigned_ids.get("agent_id"),
+        second.assigned_ids.get("agent_id")
+    );
+    assert_ne!(
+        first.assigned_ids.get("run_id"),
+        second.assigned_ids.get("run_id")
+    );
+    assert_ne!(
+        first.assigned_ids.get("agent_turn_id"),
+        second.assigned_ids.get("agent_turn_id")
+    );
+    let accepted = session.snapshot().await;
+    assert!(
+        accepted
+            .root_turn()
+            .is_some_and(|turn| turn.steps.is_empty() && turn.invocations.is_empty())
+    );
+    assert_eq!(accepted.run.as_ref().map(|run| run.model_attempts), Some(0));
+    session.drive().await?;
+    let command = harness.sent.lock().await[0].clone();
+    assert_eq!(second.assigned_ids.get("run_id"), Some(&command.run_id));
+    assert_eq!(
+        second.assigned_ids.get("agent_turn_id"),
+        Some(&command.agent_turn_id)
+    );
+    session.tool_result("result_2", result(&command)).await?;
+    let done = session.drive().await?;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    assert_eq!(done.run.as_ref().map(|run| run.model_attempts), Some(2));
+    assert_eq!(settlements.load(Ordering::SeqCst), 3);
+    assert!(executor.prompts.lock().await[1].messages.iter().flat_map(|message| &message.content).any(|content| matches!(content, Content::Text { text, .. } if text == "first task answer")));
+    Ok(())
+}
+
+#[tokio::test]
 async fn model_dispatch_waits_for_attempt_ack_and_state_reads_stay_live() -> TestResult {
     let harness = Arc::new(Harness::new(None, Some("model.attempt.intent")));
     let (session, executor, _) =
@@ -560,9 +622,8 @@ async fn failed_output_commit_blocks_tools_but_sdk_still_settles_usage() -> Test
         session
             .snapshot()
             .await
-            .run
-            .as_ref()
-            .and_then(|run| run.steps.last())
+            .root_turn()
+            .and_then(|turn| turn.steps.last())
             .and_then(|step| step.attempts.last())
             .is_some_and(|attempt| attempt.report.is_none())
     );
@@ -586,16 +647,17 @@ async fn fallbacks_have_separate_committed_attempts_and_actual_providers() -> Te
     .await?;
     session.start("input_1", 1, input()).await?;
     let state = session.drive().await?;
-    let run = state.run.ok_or("missing run")?;
+    let run = state.run.as_ref().ok_or("missing run")?;
+    let turn = state.root_turn().ok_or("missing root turn")?;
     assert_eq!(run.status, RunStatus::Completed);
     assert_eq!(run.model_attempts, 2);
-    assert_eq!(run.steps.len(), 1);
+    assert_eq!(turn.steps.len(), 1);
     assert_ne!(
-        run.steps[0].attempts[0].attempt_id,
-        run.steps[0].attempts[1].attempt_id
+        turn.steps[0].attempts[0].attempt_id,
+        turn.steps[0].attempts[1].attempt_id
     );
     assert_eq!(
-        run.steps[0].attempts[1]
+        turn.steps[0].attempts[1]
             .report
             .as_ref()
             .map(|report| report.route.provider.as_str()),
@@ -817,9 +879,8 @@ async fn abandoned_driver_cannot_start_a_duplicate_model_step() -> TestResult {
         session
             .snapshot()
             .await
-            .run
-            .as_ref()
-            .map(|run| run.steps.len()),
+            .root_turn()
+            .map(|turn| turn.steps.len()),
         Some(1)
     );
     Ok(())

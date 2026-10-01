@@ -21,7 +21,7 @@ mock-provider demonstration does not establish production integration.
 | --- | --- | --- |
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
-| C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Pending |
+| C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | In progress: agent-owned execution state established; scheduler/dispatcher pending |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Pending |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
@@ -110,3 +110,27 @@ This stage exposes the in-process root primitive only. It does not establish
 child scheduling, context selection, crash restoration, Responses/channel
 integration, or production-harness conformance. Those remain C2–C6 work; A01–A23
 remain unproven as complete end-to-end acceptance scenarios.
+
+## C2 preparation
+
+Execution state now belongs to `AgentState` and `AgentTurn`: each agent owns
+its history and context revision; each turn owns its model steps, tool
+invocations and provisional answer. `RootRun` retains the shared budget and
+committed overall outcome. The root uses the same agent-indexed model-step
+function that child scheduling will use. This is a state refactor, not evidence
+of concurrent child execution.
+
+- `cargo nextest run -p bitrouter-orchestrator --all-features`: 76 passed,
+  including 22 core execution tests. The additional regression starts a second
+  root run, preserves the stable agent context, and verifies fresh run/turn/tool
+  identities and reset shared counters.
+- Strict all-target/all-feature crate clippy, formatting and diff checks passed.
+- Independent review found no root-execution regression. Before enabling
+  children, remove the remaining root-only event attribution, derive aggregate
+  run status from all agents, and apply admission to both the run and selected
+  agent. The current driver deliberately still accepts only root execution.
+
+Next C2 work is the single collaboration dispatcher and bounded fair scheduler,
+including durable mailboxes, follow-ups, waits, subtree interruption, real
+overlapping provider requests, and provisional root completion until descendants
+and effects settle. C2 is not complete.
