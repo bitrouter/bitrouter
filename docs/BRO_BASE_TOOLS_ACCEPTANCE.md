@@ -159,5 +159,11 @@ remain byte-equivalent to the live-tested implementation. The manifest's source
 hashes identify the source at those live runs rather than this later test addition.
 The local rerun passed 3,602 tests (22 skipped), strict clippy and formatting.
 Logs are `/tmp/bro-six-tools-nextest-ci-prep.log` and
-`/tmp/bro-six-tools-clippy-ci-prep.log`. A draft PR will run the existing Windows
-matrix before the remaining cross-platform gates can be checked.
+`/tmp/bro-six-tools-clippy-ci-prep.log`. [Draft PR #951](https://github.com/bitrouter/bitrouter/pull/951), stacked on
+#945, runs the existing Windows matrix before the remaining cross-platform
+gates can be checked. Its first [CI run](https://github.com/bitrouter/bitrouter/actions/runs/36820996682)
+started against six-tool commit `9e9f2cf42b13075d7f32a1206a9e2dd3c237b878`.
+The SDK rustdoc job found a redundant explicit Prompt link inherited from the
+baseline. The follow-up removes only that link target; local workspace rustdoc
+with `RUSTDOCFLAGS='-D warnings'` passed (`/tmp/bro-six-tools-rustdoc.log`).
+Hosted rerun results remain pending.
