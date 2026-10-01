@@ -7,3 +7,4 @@ pub mod checkpoint;
 pub mod collaboration;
 pub mod protocol;
 pub mod session;
+pub mod signals;
