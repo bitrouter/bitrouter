@@ -58,7 +58,7 @@ server:
 database:
   url: "sqlite::memory:"
 registry:
-  inherit_defaults: false
+  enabled: false
 providers:
   fixture:
     api_base: "http://127.0.0.1:1"

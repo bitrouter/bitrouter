@@ -171,7 +171,7 @@ server:
 database:
   url: "sqlite://{}?mode=rwc"
 registry:
-  inherit_defaults: false
+  enabled: false
 acp_recording:
   enabled: true
 providers:
