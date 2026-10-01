@@ -20,6 +20,9 @@ use tokio::sync::Mutex;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+#[path = "orchestrator_core/native_http.rs"]
+mod native_http;
+
 #[derive(Default)]
 struct Store {
     head: DurableHead,

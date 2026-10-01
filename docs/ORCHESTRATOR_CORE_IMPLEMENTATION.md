@@ -328,9 +328,12 @@ snapshot. Core records each candidate's rejection and unverified constraints,
 then admits an ordered subset of the shared pipeline's frozen chain. No model
 reselection occurs. Rejected candidates do not consume provider attempts; actual
 fallbacks retain their original route indices in intents and receipts. Known
-unsupported capabilities, insufficient output limits, empty input capacity, and
+protocol incompatibilities, insufficient output limits, empty input capacity, and
 an output reservation exhausting the entire combined window reject a candidate.
 An empty admitted set produces a durable rejected decision before execution.
+Catalog capability declarations are positive observations, not an exhaustive
+inventory; the cross-entry audit below corrected the earlier missing-capability
+rejection to retain explicit uncertainty.
 
 Executor/provider declarations identify routes that cannot preserve output
 limits. The Codex subscription shaper removes this parameter, so managed core
@@ -437,7 +440,7 @@ C4–C6, the full A01–A23 audit, final independent review, PR and CI remain re
 
 ## C3 explicit optional-history reconstruction
 
-A rejected capacity/capability plan can now create one deterministic candidate
+A rejected capacity plan can now create one deterministic candidate
 from the same required materials and retained history. `TaskInput.discardable_history`
 is an explicit, task-scoped caller constraint, bound by SHA-256 to the complete
 canonical history before that task. Only listed settled assistant/tool messages
@@ -721,11 +724,72 @@ usage is not a reported charge, and the values must not be added together as
 independent bills. The existing authoritative settlement path should supply this
 evidence rather than introducing another charging implementation.
 
-A09 also needs a direct production-App comparison between controlled native
-execution and ordinary HTTP ingress under the same configuration and provider
-fixture. Current native-to-metering comparisons do not prove this cross-entry
-behavior. Compare constraints, actual fallback provider/model, usage and pricing
-version while preserving the distinct managed workflow contract. Requested
-effort remains a request fact, not a provider observation. A hard monetary limit
-is not currently offered; conservative monetary reservations become mandatory
-if that policy is enabled.
+The audit also identified missing direct native/HTTP evidence for A09; the
+cross-entry checks below address that part. Requested effort remains a request
+fact, not a provider observation. A hard monetary limit is not currently offered;
+conservative monetary reservations become mandatory if that policy is enabled.
+
+## C3 native and ordinary HTTP execution parity
+
+The production App now has direct cross-entry integration coverage. A controlled
+native call and an independently authored ordinary HTTP request use the same
+assembled pipeline and loopback provider. The gateway uses actual HTTP sockets.
+Sixteen inbound/outbound combinations cover Responses, Chat Completions, Messages
+and Generate Content for the common non-streaming function-tool subset. Tests
+compare complete provider request bodies and independently assert instruction
+roles, content/tool wrappers, array cardinality, schema, sampling controls,
+output limits, actual model or URL, response text and token totals. Each request
+has its own settlement identity; normalized usage, token estimate and pricing
+version match the native receipt without extra settlement rows.
+
+A richer Responses fixture covers a bound router and request checker, caller
+overrides of defaults, strict tools/output schema, effort and parallel-tool
+constraints, and an actual failed first provider followed by a differently named
+serving model. Captured wire models and attempt routes are bound to the frozen
+plan, not inferred from the mock's response. Context-tier prices and raw cache
+counters match request settlement. Missing usage and failed attempt costs remain
+unknown. Checker denial matches the public native/HTTP error contract and reaches
+neither provider. These fixtures use synthetic local callers, not authentication
+or cross-session isolation evidence.
+
+The comparison exposed a core interpretation defect: the shared configured
+catalog intentionally treats capabilities as positive observations, whereas core
+had treated any nonempty list as exhaustive. An omitted requirement now remains
+`required_capability_unknown` in the decision's unverified constraints. Empty
+inventories retain `capabilities_unknown`. Known adapter incompatibilities,
+unsupported output reservations, failed configured counts and exceeded limits
+still reject. Unknown catalog facts cannot cause reconstruction; the obsolete
+capability-rejection reconstruction branch was removed. A real App/CoreSession
+regression completes fallback with partial capability metadata, records the
+uncertainty, performs no rebuild and preserves unknown failed-attempt expense.
+
+Independent review confirmed the metadata semantics and found two potential
+false-positive test patterns: matching bodies without checking the actual model,
+and matching text without roles/tool wrappers. Both were replaced with independent
+wire expectations. Final read-only reviews found no remaining concrete issue in
+this segment; executable validation is separate below.
+
+The new fixtures retain a separate temporary configuration/runtime directory.
+Their first ordinary Responses runs exposed the default no-path assembly using
+the repository working directory for lazy continuation state, which violated
+the existing HTTP matrix's clean-directory precondition. Supplying the temporary
+config path fixes fixture isolation without changing production defaults or
+weakening those assertions. The matrix also checks that its execution leaves no
+installation/continuation files in the repository. Independent review confirmed
+the temporary directories remain alive through requests and settlement.
+
+- Final targeted integration binary: 5 passed, including 4 new tests and the
+  existing reconstruction integration. The new matrix executes all 16 protocol
+  combinations, in addition to the richer Responses and core regressions.
+- Final-tree `cargo nextest run --workspace --all-features --build-jobs 2
+  --test-threads 1 --no-fail-fast`: 3753 passed, 22 skipped, in 209.033 seconds.
+- Strict all-target/all-feature workspace clippy, all-feature workspace
+  doctests (5 passed, 1 ignored), formatting and diff checks passed.
+- The final run passed the existing clean-directory checks and left no runtime
+  state files in the repository. The earlier pre-isolation run failed those
+  preconditions; it is not included as passing evidence.
+
+This establishes non-streaming model-entry parity for these fixtures. It does not
+establish managed remote transport, private continuation or full monetary
+accounting. C3's continuation/cost contracts, C4–C6, the full A01–A23 audit, final
+independent review, PR and CI remain open.
