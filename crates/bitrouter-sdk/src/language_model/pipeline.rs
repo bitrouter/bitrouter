@@ -324,6 +324,8 @@ pub struct Pipeline {
     /// billing us for.
     pub(crate) detached_executions: tokio_util::task::TaskTracker,
     pub(crate) request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
+    pub(crate) native_cost_estimator:
+        Option<Arc<dyn super::native_accounting::NativeCostEstimator>>,
 }
 
 /// Adapts the pipeline's fallback execution into an [`UpstreamTurn`] so the
@@ -1654,17 +1656,31 @@ impl Pipeline {
             let started = Instant::now();
             let outcome = self.executor.execute(target, prompt, ctx).await;
             if let Some((control, route)) = attempt_control {
-                control
-                    .after_attempt(NativeAttemptReport {
-                        request_id: ctx.request_id().to_owned(),
-                        attempt_index: index,
-                        route: route.clone(),
-                        actual_model: outcome.as_ref().ok().map(|result| result.model_id.clone()),
-                        result: outcome.as_ref().ok().map(|result| result.result.clone()),
-                        error: outcome.as_ref().err().map(ToString::to_string),
-                        elapsed_ms: crate::language_model::timing::elapsed_millis(started),
-                    })
-                    .await;
+                let mut report = NativeAttemptReport {
+                    request_id: ctx.request_id().to_owned(),
+                    attempt_index: index,
+                    route: route.clone(),
+                    actual_provider: outcome
+                        .as_ref()
+                        .ok()
+                        .map(|result| result.provider_id.clone()),
+                    actual_model: outcome.as_ref().ok().map(|result| result.model_id.clone()),
+                    result: outcome.as_ref().ok().map(|result| result.result.clone()),
+                    error: outcome.as_ref().err().map(ToString::to_string),
+                    elapsed_ms: crate::language_model::timing::elapsed_millis(started),
+                    token_cost: Default::default(),
+                    cache: super::native_accounting::NativeCacheObservation::capture(
+                        &route.protocol,
+                        outcome
+                            .as_ref()
+                            .ok()
+                            .and_then(|result| result.result.usage.as_ref()),
+                    ),
+                };
+                if let Some(estimator) = &self.native_cost_estimator {
+                    report.token_cost = estimator.estimate(&report);
+                }
+                control.after_attempt(report).await;
             }
             match &outcome {
                 Ok(result) => {

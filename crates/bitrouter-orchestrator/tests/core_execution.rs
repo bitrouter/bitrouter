@@ -1,3 +1,5 @@
+#[path = "core_execution/accounting.rs"]
+mod accounting;
 #[path = "core_execution/input_count.rs"]
 mod input_count;
 #[path = "core_execution/reconstruction.rs"]
@@ -3488,7 +3490,8 @@ async fn interruption_keeps_billed_child_output_but_discards_new_effects() -> Te
         .language_model(|builder| {
             builder
                 .routing_table(Arc::new(table))
-                .executor(executor.clone());
+                .executor(executor.clone())
+                .native_cost_estimator(Arc::new(accounting::FixtureCost));
         })
         .build()?;
     let session = bind_app(Arc::new(app), harness.clone()).await?;
@@ -3561,6 +3564,20 @@ async fn interruption_keeps_billed_child_output_but_discards_new_effects() -> Te
             .receipt
             .as_ref()
             .is_some_and(|receipt| receipt.report.result.is_some())
+    );
+    let run = done.run.as_ref().ok_or("missing run")?;
+    let accounting = run.token_accounting.as_ref().ok_or("missing accounting")?;
+    assert_eq!(accounting.known_attempts, run.model_attempts);
+    assert_eq!(
+        accounting.complete_estimate_micro_usd(run.model_attempts),
+        Some(u64::from(run.model_attempts) * 7)
+    );
+    assert_eq!(
+        child.steps[0].attempts[0]
+            .receipt
+            .as_ref()
+            .and_then(|receipt| receipt.cost_micro_usd),
+        Some(7)
     );
     assert!(harness.sent.lock().await.is_empty());
     Ok(())
@@ -3984,6 +4001,13 @@ async fn fallbacks_have_separate_committed_attempts_and_actual_providers() -> Te
     let turn = state.root_turn().ok_or("missing root turn")?;
     assert_eq!(run.status, RunStatus::Completed);
     assert_eq!(run.model_attempts, 2);
+    let accounting = run.token_accounting.as_ref().ok_or("missing accounting")?;
+    assert_eq!(accounting.unknown_attempts, 2);
+    assert_eq!(accounting.pending_attempts(run.model_attempts), 0);
+    assert_eq!(
+        accounting.complete_estimate_micro_usd(run.model_attempts),
+        None
+    );
     assert_eq!(turn.steps.len(), 1);
     let step = &turn.steps[0];
     let decision = step.decision.as_ref().ok_or("missing routing decision")?;

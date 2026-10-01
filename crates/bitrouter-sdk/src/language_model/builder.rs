@@ -38,6 +38,7 @@ pub struct PipelineBuilder {
     keepalive_interval: Duration,
     fallback_backoff: Vec<Duration>,
     request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
+    native_cost_estimator: Option<Arc<dyn super::native_accounting::NativeCostEstimator>>,
 }
 
 impl PipelineBuilder {
@@ -61,6 +62,7 @@ impl PipelineBuilder {
             keepalive_interval: DEFAULT_KEEPALIVE,
             fallback_backoff: Vec::new(),
             request_checker_runner: None,
+            native_cost_estimator: None,
         }
     }
 
@@ -73,6 +75,16 @@ impl PipelineBuilder {
     /// Set the executor that performs upstream calls (required).
     pub fn executor(&mut self, executor: Arc<dyn Executor>) -> &mut Self {
         self.executor = Some(executor);
+        self
+    }
+
+    /// Attach local token accounting for every managed provider attempt. The
+    /// estimator must share the host's settlement price snapshot and perform no I/O.
+    pub fn native_cost_estimator(
+        &mut self,
+        estimator: Arc<dyn super::native_accounting::NativeCostEstimator>,
+    ) -> &mut Self {
+        self.native_cost_estimator = Some(estimator);
         self
     }
 
@@ -239,6 +251,7 @@ impl PipelineBuilder {
             pending_settlements: Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new())),
             detached_executions: tokio_util::task::TaskTracker::new(),
             request_checker_runner: self.request_checker_runner,
+            native_cost_estimator: self.native_cost_estimator,
         })
     }
 }
