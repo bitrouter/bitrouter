@@ -19,7 +19,7 @@ mock-provider demonstration does not establish production integration.
 
 | Stage | Work | Status / evidence |
 | --- | --- | --- |
-| C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | In progress |
+| C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Pending |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Pending |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Pending |
@@ -46,3 +46,30 @@ Local Rust: 1.95.0, aarch64-apple-darwin. Nextest is available. Builds use
 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`
 to keep the workspace within available disk capacity; these change build
 artifacts, not test selection or runtime assertions.
+
+## C0 evidence
+
+The `core::protocol` DTOs define the v1 harness operations, manifests, limits,
+errors and receipts. `core::checkpoint` validates exact payload bytes, epoch and
+scope, ordered appends, complete artifact references, and matching durable ACKs.
+`CommitGate` exposes only committed dispatch eligibility. The deterministic
+fixture atomically retains checkpoint batches and their original ACKs; it is not
+a production persistence implementation.
+
+- `cargo test -p bitrouter-orchestrator --test core_contract`: 18 passed.
+- `cargo nextest run -p bitrouter-orchestrator --all-features`: 54 passed.
+- `cargo test -p bitrouter-orchestrator --doc --all-features`: passed (no doctests).
+- `cargo clippy -p bitrouter-orchestrator --all-targets -- -D warnings`,
+  `cargo fmt --all -- --check`, and `git diff --check`: passed.
+- Independent review found and fixed four defects before stage completion:
+  divergent reconnect heads now fail closed; historical exact retransmissions
+  return the retained ACK without rewinding the head; base64 and the full wire
+  envelope count toward pending-output limits; inline materials carry media type.
+- Regression tests also reject unknown control fields and ensure old epochs
+  cannot use retained acknowledgements to bypass fencing.
+- A follow-up independent review found no remaining C0 blockers.
+- Strict clippy on Rust 1.95 exposed an inherited collapsible match in the
+  legacy context validator; collapsed the match guard without changing behavior.
+
+These tests establish the contract primitives only. They do not yet prove A01–A23
+end-to-end execution, scheduling, recovery or production integration.

@@ -731,9 +731,11 @@ name = "bitrouter-orchestrator"
 version = "1.0.0-alpha.33"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "bitrouter-sdk",
  "futures",
  "globset",
+ "hex",
  "http",
  "ignore",
  "process-wrap",
