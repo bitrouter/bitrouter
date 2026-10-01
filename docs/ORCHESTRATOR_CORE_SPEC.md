@@ -512,7 +512,14 @@ this task. Omission retains everything. Instructions, required material, current
 work and call/result integrity remain mandatory. This declaration is never
 inherited by child assignments; a material inventory alone does not establish
 that it replaces prior evidence. Reconstructed input must pass the frozen request
-checks and joint feasibility checks before any generation.
+checks and joint feasibility checks before any generation. Preparation-added
+messages need a separate dependency contract; the initial strategy rejects them.
+A durable reconstruction candidate does not replace visible agent history until
+read-only validation allows it under current source and dispatch gates and its
+activation checkpoint is acknowledged. Unactivated candidates cannot be inherited
+by children or later tasks. Validation has acknowledged intent/outcome barriers;
+unknown hook/transform contracts reject it, request checks precede route guards,
+and model selection and state registration are never repeated.
 
 Model selection reuses the existing named router/policy machinery. A chosen
 model/effort must not be independently selected again after the plan is frozen.

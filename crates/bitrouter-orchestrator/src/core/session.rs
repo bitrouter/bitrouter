@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::native::{
-    NativeAttemptReport, NativeExecutionControl, NativeInputCountReport, NativeModelSelection,
-    NativePlan, NativePlanAdmission,
+    NativeAttemptReport, NativeContextValidationReport, NativeExecutionControl,
+    NativeInputCountReport, NativeModelSelection, NativePlan, NativePlanAdmission,
 };
 use bitrouter_sdk::language_model::types::{
     Content, FinishReason, GenerationParams, Message, Prompt, ReasoningEffort, Role, Tool,
@@ -78,6 +78,15 @@ pub struct InputCountRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextValidationRecord {
+    pub request_id: String,
+    /// True only when the allowed candidate also passed the current source gate.
+    #[serde(default)]
+    pub applied: bool,
+    pub report: Option<NativeContextValidationReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelStep {
     pub step_id: String,
     pub decision_id: String,
@@ -100,6 +109,8 @@ pub struct ModelStep {
     pub rebuild: Option<super::reconstruction::RebuildRecord>,
     #[serde(default)]
     pub reconstructed_from: Option<String>,
+    #[serde(default)]
+    pub context_validation: Option<ContextValidationRecord>,
     pub attempts: Vec<AttemptRecord>,
     pub settled: bool,
 }
@@ -1828,6 +1839,7 @@ impl CoreSession {
                 input_counts: Vec::new(),
                 rebuild: None,
                 reconstructed_from: None,
+                context_validation: None,
                 attempts: Vec::new(),
                 settled: false,
             });
@@ -2602,12 +2614,27 @@ impl CoreSession {
     where
         F: FnOnce(&mut SessionSnapshot, &DurableHead) -> Result<Value, CoreError> + Send,
     {
+        self.transition_with_gate(agent_id, kind, |state, head, _| change(state, head))
+            .await
+    }
+
+    // The dispatch gate and candidate state share one live lock. Outcome records
+    // may still be committed while provisionally blocked, but cannot activate work.
+    async fn transition_with_gate<F>(
+        &self,
+        agent_id: Option<&str>,
+        kind: &str,
+        change: F,
+    ) -> Result<(), CoreError>
+    where
+        F: FnOnce(&mut SessionSnapshot, &DurableHead, bool) -> Result<Value, CoreError> + Send,
+    {
         let _commit = self.shared.commits.lock().await;
         let (batch, disconnected) = {
             let mut live = self.shared.live.lock().await;
             let mut next = live.state.clone();
             let head = live.gate.head().clone();
-            let payload = change(&mut next, &head)?;
+            let payload = change(&mut next, &head, live.gate.can_dispatch())?;
             if !matches!(kind, "run.completed" | "run.failed" | "run.cancelled") {
                 refresh_run(&mut next);
             }
@@ -2736,6 +2763,7 @@ impl NativeExecutionControl for StepControl {
                 |state, _| {
                     validate_step_source(state, &self.agent_id, &step_id)?;
                     let step = current_step(state, &self.agent_id, &step_id)?;
+                    validate_context_validation(step)?;
                     step.context.validate_prepared(&plan.prompt)?;
                     if step.plan.is_some()
                         || step.count_plan.as_ref().is_some_and(|prior| prior != plan)
@@ -2828,6 +2856,145 @@ impl NativeExecutionControl for StepControl {
         recorded.map_err(sdk_error)
     }
 
+    async fn before_context_validation(&self, request_id: &str) -> bitrouter_sdk::Result<()> {
+        let step_id = self.step_id.lock().await.clone();
+        self.session
+            .transition_for(
+                Some(&self.agent_id),
+                "context.validation.intent",
+                |state, _| {
+                    validate_step_source(state, &self.agent_id, &step_id)?;
+                    let turn = agent_turn(state, &self.agent_id)?;
+                    let source = turn
+                        .steps
+                        .last()
+                        .and_then(|step| step.reconstructed_from.as_ref())
+                        .and_then(|source_id| {
+                            turn.steps.iter().find(|step| &step.step_id == source_id)
+                        })
+                        .and_then(|source| source.plan.as_ref());
+                    if source.is_none_or(|plan| plan.request_id != request_id) {
+                        return Err(reject(
+                            ErrorCode::OperationConflict,
+                            "validation has no committed reconstruction source",
+                        ));
+                    }
+                    let step = current_step(state, &self.agent_id, &step_id)?;
+                    if step.context_validation.is_some()
+                        || step.plan.is_some()
+                        || !step.input_counts.is_empty()
+                        || !step.attempts.is_empty()
+                    {
+                        return Err(reject(
+                            ErrorCode::OperationConflict,
+                            "context validation is no longer pending",
+                        ));
+                    }
+                    step.context_validation = Some(ContextValidationRecord {
+                        request_id: request_id.into(),
+                        applied: false,
+                        report: None,
+                    });
+                    Ok(json!({"request_id":request_id,"step_id":step_id}))
+                },
+            )
+            .await
+            .map_err(sdk_error)?;
+        Ok(())
+    }
+
+    async fn check_context_validation(&self, request_id: &str) -> bitrouter_sdk::Result<()> {
+        // Pause between guards before waiting for another checkpoint's ACK.
+        // ensure_dispatch resumes activity only after its live gate succeeds.
+        self.session
+            .shared
+            .live
+            .lock()
+            .await
+            .activity
+            .finish(&format!("{request_id}/validation"));
+        let step_id = self.step_id.lock().await.clone();
+        let snapshot = self.session.snapshot().await;
+        let record = snapshot
+            .agents
+            .get(&self.agent_id)
+            .and_then(|agent| agent.turn.as_ref())
+            .and_then(|turn| turn.steps.last())
+            .filter(|step| step.step_id == step_id)
+            .and_then(|step| step.context_validation.as_ref());
+        if record.is_none_or(|record| record.request_id != request_id || record.report.is_some()) {
+            return Err(sdk_error(reject(
+                ErrorCode::OperationConflict,
+                "context validation has no pending intent",
+            )));
+        }
+        self.session
+            .ensure_dispatch(&self.agent_id, &step_id, format!("{request_id}/validation"))
+            .await
+            .map_err(sdk_error)
+    }
+
+    async fn after_context_validation(
+        &self,
+        report: NativeContextValidationReport,
+    ) -> bitrouter_sdk::Result<()> {
+        let step_id = self.step_id.lock().await.clone();
+        let active_ms = self
+            .session
+            .shared
+            .live
+            .lock()
+            .await
+            .activity
+            .finish(&format!("{}/validation", report.request_id));
+        let result = self
+            .session
+            .transition_with_gate(
+                Some(&self.agent_id),
+                "context.validation.outcome",
+                |state, _, can_dispatch| {
+                    let step = current_step(state, &self.agent_id, &step_id)?;
+                    let record = step
+                        .context_validation
+                        .as_mut()
+                        .filter(|record| {
+                            record.request_id == report.request_id && record.report.is_none()
+                        })
+                        .ok_or_else(|| {
+                            reject(
+                                ErrorCode::OperationConflict,
+                                "context validation has no pending intent",
+                            )
+                        })?;
+                    if report.allowed != report.error_code.is_none() {
+                        return Err(reject(
+                            ErrorCode::OperationConflict,
+                            "context validation outcome is inconsistent",
+                        ));
+                    }
+                    record.report = Some(report.clone());
+                    if report.allowed
+                        && can_dispatch
+                        && validate_step_source(state, &self.agent_id, &step_id).is_ok()
+                        && state.run.as_ref().is_some_and(|run| {
+                            matches!(run.status, RunStatus::Running | RunStatus::Waiting)
+                        })
+                        && agent_turn(state, &self.agent_id)?.status == AgentStatus::ModelRunning
+                    {
+                        activate_rebuilt_context(state, &self.agent_id, &step_id)?;
+                    }
+                    let run = active_run(state)?;
+                    run.active_ms = run.active_ms.max(active_ms);
+                    encode(&report)
+                },
+            )
+            .await;
+        if result.is_err() {
+            self.session.disconnect().await;
+        }
+        result.map_err(sdk_error)
+    }
+
     async fn plan(&self, plan: NativePlan) -> bitrouter_sdk::Result<NativePlanAdmission> {
         let step_id = self.step_id.lock().await.clone();
         let mut rejection = None;
@@ -2860,6 +3027,9 @@ impl NativeExecutionControl for StepControl {
                     ));
                 }
                 let step = current_step(state, &self.agent_id, &step_id)?;
+                if rejection.is_none() {
+                    rejection = validate_context_validation(step).err();
+                }
                 if rejection.is_none() {
                     rejection = step.context.validate_prepared(&plan.prompt).err();
                 }
@@ -2984,16 +3154,7 @@ impl NativeExecutionControl for StepControl {
             .await
             .map_err(sdk_error)?;
         let started = Instant::now();
-        // App-level transforms run before SDK hooks and can add dependencies
-        // absent from the caller's task-scoped history declaration.
-        let candidate = if self.session.shared.app.prompt_transforms().is_empty() {
-            candidate(&snapshot, &self.agent_id, step, plan)
-        } else {
-            Err(reject(
-                ErrorCode::NoFeasibleRoute,
-                "app prompt transforms do not support context reconstruction revalidation",
-            ))
-        };
+        let candidate = candidate(&snapshot, &self.agent_id, step, plan);
         let source_history_sha256 = digest(&step.input_history);
         let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
         let active_ms = self
@@ -3063,18 +3224,13 @@ impl NativeExecutionControl for StepControl {
                         "context changed during reconstruction",
                     ));
                 }
-                agent.history = candidate.history.clone();
-                agent.context_revision =
-                    agent.context_revision.checked_add(1).ok_or_else(|| {
-                        reject(ErrorCode::LimitExceeded, "context revision exhausted")
-                    })?;
-                let context_revision = agent.context_revision;
-                agent
-                    .turn
-                    .as_mut()
-                    .ok_or_else(|| reject(ErrorCode::Busy, "rebuild turn disappeared"))?
-                    .history_start = Some(candidate.history_start);
-                let context = ContextManifest::capture(state, &self.agent_id, &candidate.prompt)?;
+                let context_revision = agent.context_revision.checked_add(1).ok_or_else(|| {
+                    reject(ErrorCode::LimitExceeded, "context revision exhausted")
+                })?;
+                // Keep the visible history until validation permits activation.
+                let mut context =
+                    ContextManifest::capture(state, &self.agent_id, &candidate.prompt)?;
+                context.revision = context_revision;
                 let signal_revision = state.signals.revision;
                 agent_turn(state, &self.agent_id)?.steps.push(ModelStep {
                     step_id: rebuilt_step_id.clone(),
@@ -3093,6 +3249,7 @@ impl NativeExecutionControl for StepControl {
                     input_counts: Vec::new(),
                     rebuild: None,
                     reconstructed_from: Some(step_id.clone()),
+                    context_validation: None,
                     attempts: Vec::new(),
                     settled: false,
                 });
@@ -3206,6 +3363,85 @@ impl NativeExecutionControl for StepControl {
             self.session.disconnect().await;
         }
     }
+}
+
+fn activate_rebuilt_context(
+    state: &mut SessionSnapshot,
+    agent_id: &str,
+    step_id: &str,
+) -> Result<(), CoreError> {
+    let agent = agent_mut(state, agent_id)?;
+    let turn = agent
+        .turn
+        .as_mut()
+        .ok_or_else(|| reject(ErrorCode::Busy, "rebuild turn disappeared"))?;
+    let candidate = turn
+        .steps
+        .last()
+        .filter(|step| step.step_id == step_id)
+        .ok_or_else(|| reject(ErrorCode::StaleRevision, "rebuild step changed"))?;
+    let source = candidate
+        .reconstructed_from
+        .as_ref()
+        .and_then(|source_id| turn.steps.iter().find(|step| &step.step_id == source_id))
+        .ok_or_else(|| reject(ErrorCode::OperationConflict, "rebuild source disappeared"))?;
+    let rebuild = source
+        .rebuild
+        .as_ref()
+        .filter(|record| record.rebuilt_step_id.as_deref() == Some(step_id))
+        .ok_or_else(|| {
+            reject(
+                ErrorCode::OperationConflict,
+                "rebuild source has no candidate",
+            )
+        })?;
+    if agent.history != source.input_history || agent.context_revision != source.context_revision {
+        return Err(reject(
+            ErrorCode::StaleRevision,
+            "context changed before candidate activation",
+        ));
+    }
+    let history_start = turn
+        .history_start
+        .and_then(|start| start.checked_sub(rebuild.removed_history_messages))
+        .ok_or_else(|| {
+            reject(
+                ErrorCode::OperationConflict,
+                "rebuild boundary is inconsistent",
+            )
+        })?;
+    agent.history = candidate.input_history.clone();
+    agent.context_revision = candidate.context_revision;
+    turn.history_start = Some(history_start);
+    let validation = turn
+        .steps
+        .last_mut()
+        .and_then(|step| step.context_validation.as_mut())
+        .ok_or_else(|| {
+            reject(
+                ErrorCode::OperationConflict,
+                "rebuild validation disappeared",
+            )
+        })?;
+    validation.applied = true;
+    Ok(())
+}
+
+fn validate_context_validation(step: &ModelStep) -> Result<(), CoreError> {
+    if step.reconstructed_from.is_some()
+        && !step
+            .context_validation
+            .as_ref()
+            .filter(|record| record.applied)
+            .and_then(|record| record.report.as_ref())
+            .is_some_and(|report| report.allowed)
+    {
+        return Err(reject(
+            ErrorCode::NoFeasibleRoute,
+            "rebuilt context has no acknowledged validation",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_input_counts(step: &ModelStep, plan: &NativePlan) -> Result<(), CoreError> {

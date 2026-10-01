@@ -533,19 +533,23 @@ fn internal(error: anyhow::Error) -> BitrouterError {
 
 #[async_trait]
 impl PreRequestHook for EvolutionRuntime {
+    async fn revalidate_context(
+        &self,
+        ctx: &PipelineContext,
+    ) -> bitrouter_sdk::Result<HookDecision> {
+        // Reuse the original admission fence; never register or select again.
+        self.revalidate_admission(ctx).await?;
+        Ok(HookDecision::Allow)
+    }
+
     async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
         self.admit(ctx).await.map_err(internal)?;
         Ok(HookDecision::Allow)
     }
 }
 
-#[async_trait]
-impl RouteHook for EvolutionRuntime {
-    async fn resolve(
-        &self,
-        _chain: &mut Vec<RoutingTarget>,
-        ctx: &mut PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+impl EvolutionRuntime {
+    async fn revalidate_admission(&self, ctx: &PipelineContext) -> bitrouter_sdk::Result<()> {
         let Some(fence) = ctx.extension::<AdmissionFence>() else {
             return Ok(());
         };
@@ -574,6 +578,25 @@ impl RouteHook for EvolutionRuntime {
         }
         .await;
         check.map_err(internal)
+    }
+}
+
+#[async_trait]
+impl RouteHook for EvolutionRuntime {
+    async fn resolve(
+        &self,
+        _chain: &mut Vec<RoutingTarget>,
+        ctx: &mut PipelineContext,
+    ) -> bitrouter_sdk::Result<()> {
+        self.revalidate_admission(ctx).await
+    }
+
+    async fn revalidate_context(
+        &self,
+        _chain: &[RoutingTarget],
+        ctx: &PipelineContext,
+    ) -> bitrouter_sdk::Result<()> {
+        self.revalidate_admission(ctx).await
     }
 }
 

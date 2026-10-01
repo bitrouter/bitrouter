@@ -782,16 +782,9 @@ impl Pipeline {
         use crate::language_model::native::{
             NativeCountedRequests, NativeInputCount, NativeInputCountReport,
         };
-        // Mutable hooks have no read-only revalidation contract. Their Allow
-        // cannot authorize a different prompt, nor may they be rerun after
-        // model/effort/route selection. Retain the original rejection instead.
-        let can_rebuild = self.pre_resolution_hooks.is_empty()
-            && self.router_preparation_hooks.is_empty()
-            && self.pre_request_hooks.is_empty()
-            && self.route_hooks.is_empty()
-            && ctx
-                .extension::<crate::language_model::context::ProviderContinuation>()
-                .is_none()
+        let can_rebuild = ctx
+            .extension::<crate::language_model::context::ProviderContinuation>()
+            .is_none()
             && ctx
                 .extension::<crate::language_model::context::SuppressProviderContinuation>()
                 .is_none()
@@ -871,7 +864,39 @@ impl Pipeline {
                                     "managed rebuild lost its request-check bindings",
                                 )
                             })?;
-                        self.run_request_checks(ctx, &checks).await?;
+                        control.before_context_validation(ctx.request_id()).await?;
+                        let started = Instant::now();
+                        let validated = async {
+                            control.check_context_validation(ctx.request_id()).await?;
+                            control
+                                .validate_context_rebuild(
+                                    &plan.prompt,
+                                    ctx.prompt(),
+                                    ctx.request_id(),
+                                )
+                                .await?;
+                            self.revalidate_native_context(chain, ctx, &checks, control)
+                                .await
+                        }
+                        .await;
+                        control
+                            .after_context_validation(
+                                crate::language_model::native::NativeContextValidationReport {
+                                    request_id: ctx.request_id().to_owned(),
+                                    allowed: validated.is_ok(),
+                                    error_code: validated
+                                        .as_ref()
+                                        .err()
+                                        .map(|error| error.error_code().to_owned()),
+                                    elapsed_ms: started
+                                        .elapsed()
+                                        .as_millis()
+                                        .min(u128::from(u64::MAX))
+                                        as u64,
+                                },
+                            )
+                            .await?;
+                        validated?;
                         continue;
                     }
                     return Err(error);
@@ -893,6 +918,33 @@ impl Pipeline {
         Err(BitrouterError::bad_request(
             "managed context rebuild exhausted",
         ))
+    }
+
+    async fn revalidate_native_context(
+        &self,
+        chain: &[RoutingTarget],
+        ctx: &mut PipelineContext,
+        checks: &[RequestCheckBinding],
+        control: &dyn NativeExecutionControl,
+    ) -> Result<()> {
+        for hook in self
+            .pre_resolution_hooks
+            .iter()
+            .chain(&self.router_preparation_hooks)
+            .chain(&self.pre_request_hooks)
+        {
+            control.check_context_validation(ctx.request_id()).await?;
+            match hook.revalidate_context(ctx).await? {
+                HookDecision::Allow => {}
+                HookDecision::Deny(reason) => return Err(reason.into()),
+            }
+        }
+        self.run_request_checks(ctx, checks, Some(control)).await?;
+        for hook in &self.route_hooks {
+            control.check_context_validation(ctx.request_id()).await?;
+            hook.revalidate_context(chain, ctx).await?;
+        }
+        Ok(())
     }
 
     /// Execute a streaming request: Stages 1–3 run eagerly (so pre-stream
@@ -1221,7 +1273,7 @@ impl Pipeline {
         if let Some(effort) = manual_effort {
             ctx.preserve_caller_effort(effort);
         }
-        self.run_request_checks(ctx, &binding.request_checks)
+        self.run_request_checks(ctx, &binding.request_checks, None)
             .await
             .map_err(EntryPreparationFailure::request_check)?;
         ctx.insert_extension(Arc::new(FrozenRequestChecks(
@@ -1331,6 +1383,7 @@ impl Pipeline {
         &self,
         ctx: &mut PipelineContext,
         bindings: &[RequestCheckBinding],
+        validation: Option<&dyn NativeExecutionControl>,
     ) -> Result<()> {
         if bindings.is_empty() {
             return Ok(());
@@ -1345,6 +1398,9 @@ impl Pipeline {
             ));
         };
         for binding in bindings {
+            if let Some(control) = validation {
+                control.check_context_validation(ctx.request_id()).await?;
+            }
             let (content, coverage) = content_fragments(ctx.prompt(), binding.max_input_bytes)
                 .map_err(|_| BitrouterError::BadRequest {
                     message: "request exceeds the configured checker input limit".to_string(),

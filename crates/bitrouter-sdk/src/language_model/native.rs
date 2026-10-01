@@ -64,6 +64,19 @@ pub struct NativeInputCountReport {
     pub elapsed_ms: u64,
 }
 
+/// Read-only hook and bound-checker validation of a committed rebuilt context.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeContextValidationReport {
+    /// Canonical request whose prepared context was reconstructed.
+    pub request_id: String,
+    /// Whether every read-only guard and frozen request checker allowed it.
+    pub allowed: bool,
+    /// Controlled SDK error category only; never upstream diagnostic text.
+    pub error_code: Option<String>,
+    /// Validation time, excluding the intent and outcome checkpoint waits.
+    pub elapsed_ms: u64,
+}
+
 /// Kept inside the live pipeline; only request digests cross the core boundary.
 #[derive(Default)]
 pub(crate) struct NativeCountedRequests(std::sync::Mutex<Option<String>>);
@@ -235,6 +248,32 @@ pub trait NativeExecutionControl: Send + Sync {
         Ok(())
     }
 
+    /// Persist intent and check dispatch gates before rebuilt-context validation.
+    async fn before_context_validation(&self, _request_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Recheck the live gate before each hook/checker within that durable intent.
+    async fn check_context_validation(&self, _request_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// Validate embedding preparation contracts within an acknowledged validation
+    /// intent. The pipeline freezes every field except whole-message removal.
+    async fn validate_context_rebuild(
+        &self,
+        _original: &Prompt,
+        _rebuilt: &Prompt,
+        _request_id: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Commit validation outcome before a new count or provider attempt.
+    async fn after_context_validation(&self, _report: NativeContextValidationReport) -> Result<()> {
+        Ok(())
+    }
+
     /// Commit candidate assessments and return an ordered nonempty subset of
     /// the frozen routes, or reject the plan before any provider attempt.
     async fn plan(&self, plan: NativePlan) -> Result<NativePlanAdmission>;
@@ -245,8 +284,8 @@ pub trait NativeExecutionControl: Send + Sync {
     /// The pipeline re-counts and re-admits the frozen provider chain without
     /// rerunning authentication, preparation, model selection or route hooks.
     /// Frozen request checks run again before any new count or generation.
-    /// Provider continuation and mutable preparation/route hooks disable this
-    /// callback because they do not provide a safe revalidation contract.
+    /// Provider continuation disables this callback. Every preparation/route
+    /// hook must implement its read-only revalidation contract to proceed.
     async fn rebuild_context(&self, _rejected: &NativePlan) -> Result<Option<Vec<Message>>> {
         Ok(None)
     }

@@ -21,6 +21,15 @@ impl CodexRouter {
 }
 
 impl PromptTransform for CodexRouter {
+    fn validate_context_rebuild(
+        &self,
+        _original: &Prompt,
+        _rebuilt: &Prompt,
+    ) -> bitrouter_sdk::Result<()> {
+        // Keep the already selected model without repeating ingress classification.
+        Ok(())
+    }
+
     fn apply(&self, _prompt: &mut Prompt) {}
 
     fn apply_with_headers(&self, prompt: &mut Prompt, headers: &HeaderMap) {

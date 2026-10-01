@@ -104,6 +104,16 @@ pub trait PromptTransform: Send + Sync {
     ) {
         self.apply(prompt);
     }
+
+    /// Validate authorized history removal after model selection. Both prompts
+    /// are already prepared; this must not rerun the transform or its selection.
+    /// Implementations must reject removal of dependencies introduced by the
+    /// transform. Absence of this contract keeps reconstruction disabled.
+    fn validate_context_rebuild(&self, _original: &Prompt, _rebuilt: &Prompt) -> Result<()> {
+        Err(crate::error::BitrouterError::bad_request(
+            "prompt transform has no context revalidation contract",
+        ))
+    }
 }
 
 /// A fully assembled application: one pipeline per enabled protocol, plus the
@@ -197,6 +207,10 @@ impl App {
         }
         let mut request = PipelineRequest::new(prompt.model.clone(), caller, prompt);
         request.original_model = original_model;
+        let control = Arc::new(TransformCheckedControl {
+            inner: control,
+            transforms: self.prompt_transforms.clone(),
+        });
         Arc::clone(pipeline)
             .execute_native_controlled(request, control)
             .await
@@ -269,6 +283,77 @@ impl App {
     /// only per-server routes (`POST /mcp/{server}`) are mounted.
     pub fn mcp_aggregate_route(&self) -> Option<&str> {
         self.mcp_aggregate_route.as_deref()
+    }
+}
+
+/// Enforce the App's transform contract for every native embedding control.
+struct TransformCheckedControl {
+    inner: Arc<dyn crate::language_model::native::NativeExecutionControl>,
+    transforms: Vec<Arc<dyn PromptTransform>>,
+}
+
+#[async_trait::async_trait]
+impl crate::language_model::native::NativeExecutionControl for TransformCheckedControl {
+    fn model_selection(&self) -> crate::language_model::native::NativeModelSelection {
+        self.inner.model_selection()
+    }
+    async fn plan(
+        &self,
+        plan: crate::language_model::native::NativePlan,
+    ) -> Result<crate::language_model::native::NativePlanAdmission> {
+        self.inner.plan(plan).await
+    }
+    async fn before_input_count(
+        &self,
+        plan: &crate::language_model::native::NativePlan,
+        index: u32,
+    ) -> Result<()> {
+        self.inner.before_input_count(plan, index).await
+    }
+    async fn after_input_count(
+        &self,
+        report: crate::language_model::native::NativeInputCountReport,
+    ) -> Result<()> {
+        self.inner.after_input_count(report).await
+    }
+    async fn rebuild_context(
+        &self,
+        rejected: &crate::language_model::native::NativePlan,
+    ) -> Result<Option<Vec<language_model::types::Message>>> {
+        self.inner.rebuild_context(rejected).await
+    }
+    async fn validate_context_rebuild(
+        &self,
+        original: &Prompt,
+        rebuilt: &Prompt,
+        request_id: &str,
+    ) -> Result<()> {
+        self.inner
+            .validate_context_rebuild(original, rebuilt, request_id)
+            .await?;
+        for transform in &self.transforms {
+            self.inner.check_context_validation(request_id).await?;
+            transform.validate_context_rebuild(original, rebuilt)?;
+        }
+        Ok(())
+    }
+    async fn before_context_validation(&self, request_id: &str) -> Result<()> {
+        self.inner.before_context_validation(request_id).await
+    }
+    async fn check_context_validation(&self, request_id: &str) -> Result<()> {
+        self.inner.check_context_validation(request_id).await
+    }
+    async fn after_context_validation(
+        &self,
+        report: crate::language_model::native::NativeContextValidationReport,
+    ) -> Result<()> {
+        self.inner.after_context_validation(report).await
+    }
+    async fn before_attempt(&self, request_id: &str, index: u32) -> Result<()> {
+        self.inner.before_attempt(request_id, index).await
+    }
+    async fn after_attempt(&self, report: crate::language_model::native::NativeAttemptReport) {
+        self.inner.after_attempt(report).await
     }
 }
 

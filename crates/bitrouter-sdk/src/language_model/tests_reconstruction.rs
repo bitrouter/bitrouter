@@ -79,6 +79,9 @@ struct RebuildControl {
     rebuilds: AtomicUsize,
     replacement: Option<Vec<Message>>,
     always_reject: bool,
+    validation_reports: Mutex<Vec<native::NativeContextValidationReport>>,
+    gate_calls: AtomicUsize,
+    fail_gate: usize,
 }
 
 impl RebuildControl {
@@ -88,6 +91,9 @@ impl RebuildControl {
             rebuilds: AtomicUsize::new(0),
             replacement,
             always_reject,
+            validation_reports: Mutex::new(Vec::new()),
+            gate_calls: AtomicUsize::new(0),
+            fail_gate: usize::MAX,
         }
     }
 }
@@ -119,6 +125,19 @@ impl native::NativeExecutionControl for RebuildControl {
                 .cloned()
                 .collect()
         })))
+    }
+    async fn check_context_validation(&self, _: &str) -> Result<()> {
+        if self.gate_calls.fetch_add(1, Ordering::SeqCst) == self.fail_gate {
+            return Err(DenyReason::Forbidden("fixture live permission revoked".into()).into());
+        }
+        Ok(())
+    }
+    async fn after_context_validation(
+        &self,
+        report: native::NativeContextValidationReport,
+    ) -> Result<()> {
+        self.validation_reports.lock().await.push(report);
+        Ok(())
     }
     async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
         Ok(())
@@ -185,6 +204,7 @@ async fn managed_rebuild_rechecks_frozen_binding_before_any_new_egress() -> Resu
         let resolutions = Arc::new(AtomicUsize::new(0));
         let selections = Arc::new(AtomicUsize::new(0));
         let checks = Arc::new(AtomicUsize::new(0));
+        let route_validations = Arc::new(AtomicUsize::new(0));
         let executor = Arc::new(RebuildExecutor::default());
         let control = Arc::new(RebuildControl::new(None, false));
         let mut builder = PipelineBuilder::new();
@@ -192,6 +212,10 @@ async fn managed_rebuild_rechecks_frozen_binding_before_any_new_egress() -> Resu
             .routing_table(Arc::new(RebuildTable(resolutions.clone())))
             .executor(executor.clone())
             .model_selector(Arc::new(ModelAndEffortSelector(selections.clone())))
+            .route_hook(ReadOnlyGuard {
+                prepared: Arc::new(AtomicUsize::new(0)),
+                revalidated: route_validations.clone(),
+            })
             .request_checker_runner(Arc::new(HistoryChecker {
                 calls: checks.clone(),
                 require_approval,
@@ -204,6 +228,10 @@ async fn managed_rebuild_rechecks_frozen_binding_before_any_new_egress() -> Resu
         assert_eq!(resolutions.load(Ordering::SeqCst), 1);
         assert_eq!(selections.load(Ordering::SeqCst), 1);
         assert_eq!(checks.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            route_validations.load(Ordering::SeqCst),
+            usize::from(!require_approval)
+        );
         assert_eq!(control.rebuilds.load(Ordering::SeqCst), 1);
         let counts = executor.counts.lock().await;
         let generations = executor.generations.lock().await;
@@ -307,7 +335,10 @@ async fn managed_rebuild_cannot_repeat_or_bypass_mutable_hooks_and_continuation(
         );
         assert_eq!(
             control.rebuilds.load(Ordering::SeqCst),
-            usize::from(restriction == "none"),
+            usize::from(!matches!(
+                restriction,
+                "previous_response_id" | "conversation"
+            )),
             "{restriction}"
         );
         assert_eq!(
@@ -316,6 +347,182 @@ async fn managed_rebuild_cannot_repeat_or_bypass_mutable_hooks_and_continuation(
             "{restriction}"
         );
         assert!(executor.generations.lock().await.is_empty());
+    }
+    Ok(())
+}
+
+#[derive(Clone)]
+struct ReadOnlyGuard {
+    prepared: Arc<AtomicUsize>,
+    revalidated: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl PreRequestHook for ReadOnlyGuard {
+    async fn check(&self, _: &mut PipelineContext) -> Result<HookDecision> {
+        self.prepared.fetch_add(1, Ordering::SeqCst);
+        Ok(HookDecision::Allow)
+    }
+    async fn revalidate_context(&self, ctx: &PipelineContext) -> Result<HookDecision> {
+        self.revalidated.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(ctx.model(), "economy-model");
+        assert_eq!(
+            ctx.prompt().params.reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+        assert_eq!(ctx.prompt().messages.len(), 2);
+        Ok(HookDecision::Allow)
+    }
+}
+
+#[async_trait]
+impl RouteHook for ReadOnlyGuard {
+    async fn resolve(&self, _: &mut Vec<RoutingTarget>, _: &mut PipelineContext) -> Result<()> {
+        self.prepared.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    async fn revalidate_context(&self, chain: &[RoutingTarget], _: &PipelineContext) -> Result<()> {
+        self.revalidated.fetch_add(1, Ordering::SeqCst);
+        assert!(!chain.is_empty());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn read_only_guards_recheck_frozen_selection_with_a_live_gate_before_each_guard() -> Result<()>
+{
+    for fail_gate in [usize::MAX, 2, 4] {
+        let prepared = Arc::new(AtomicUsize::new(0));
+        let revalidated = Arc::new(AtomicUsize::new(0));
+        let selections = Arc::new(AtomicUsize::new(0));
+        let resolutions = Arc::new(AtomicUsize::new(0));
+        let checks = Arc::new(AtomicUsize::new(0));
+        let guard = ReadOnlyGuard {
+            prepared: prepared.clone(),
+            revalidated: revalidated.clone(),
+        };
+        let mut control = RebuildControl::new(None, false);
+        control.fail_gate = fail_gate;
+        let control = Arc::new(control);
+        let executor = Arc::new(RebuildExecutor::default());
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(RebuildTable(resolutions.clone())))
+            .executor(executor.clone())
+            .model_selector(Arc::new(ModelAndEffortSelector(selections.clone())))
+            .pre_resolution_hook(guard.clone())
+            .router_preparation_hook(guard.clone())
+            .pre_request_hook(guard.clone())
+            .route_hook(guard)
+            .request_checker_runner(Arc::new(HistoryChecker {
+                calls: checks.clone(),
+                require_approval: false,
+            }));
+        let pipeline = Arc::new(builder.build()?);
+        let result = pipeline
+            .clone()
+            .execute_native_controlled(rebuild_request(), control.clone())
+            .await;
+        assert_eq!(prepared.load(Ordering::SeqCst), 4);
+        assert_eq!(selections.load(Ordering::SeqCst), 1);
+        assert_eq!(resolutions.load(Ordering::SeqCst), 1);
+        let reports = control.validation_reports.lock().await;
+        assert_eq!(reports.len(), 1);
+        if fail_gate == usize::MAX {
+            result?;
+            assert_eq!(revalidated.load(Ordering::SeqCst), 4);
+            assert_eq!(checks.load(Ordering::SeqCst), 2);
+            assert_eq!(executor.counts.lock().await.len(), 2);
+            assert_eq!(executor.generations.lock().await.len(), 1);
+            assert!(reports[0].allowed);
+        } else {
+            assert!(result.is_err());
+            assert_eq!(revalidated.load(Ordering::SeqCst), fail_gate - 1);
+            assert_eq!(checks.load(Ordering::SeqCst), 1);
+            assert_eq!(executor.counts.lock().await.len(), 1);
+            assert!(executor.generations.lock().await.is_empty());
+            assert!(!reports[0].allowed);
+            assert!(reports[0].error_code.is_some());
+        }
+    }
+    Ok(())
+}
+
+struct FrozenTransform {
+    applied: Arc<AtomicUsize>,
+    validated: Arc<AtomicUsize>,
+    accepts: bool,
+}
+impl crate::app::PromptTransform for FrozenTransform {
+    fn apply(&self, _: &mut Prompt) {
+        self.applied.fetch_add(1, Ordering::SeqCst);
+    }
+    fn validate_context_rebuild(&self, original: &Prompt, rebuilt: &Prompt) -> Result<()> {
+        self.validated.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(original.messages.len(), 3);
+        assert_eq!(rebuilt.messages.len(), 2);
+        if self.accepts {
+            Ok(())
+        } else {
+            Err(BitrouterError::bad_request(
+                "transform depends on removed history",
+            ))
+        }
+    }
+}
+
+#[tokio::test]
+async fn app_transform_validation_cannot_be_bypassed_by_an_embedding_control() -> Result<()> {
+    for (accepts, fail_gate) in [(true, usize::MAX), (false, usize::MAX), (true, 1)] {
+        let applied = Arc::new(AtomicUsize::new(0));
+        let validated = Arc::new(AtomicUsize::new(0));
+        let executor = Arc::new(RebuildExecutor::default());
+        let mut control = RebuildControl::new(None, false);
+        control.fail_gate = fail_gate;
+        let control = Arc::new(control);
+        let app = crate::app::App::builder()
+            .prompt_transform(Arc::new(FrozenTransform {
+                applied: applied.clone(),
+                validated: validated.clone(),
+                accepts,
+            }))
+            .language_model(|builder| {
+                builder
+                    .routing_table(Arc::new(RebuildTable(Arc::new(AtomicUsize::new(0)))))
+                    .executor(executor.clone())
+                    .request_checker_runner(Arc::new(HistoryChecker {
+                        calls: Arc::new(AtomicUsize::new(0)),
+                        require_approval: false,
+                    }));
+            })
+            .build()?;
+        let result = app
+            .execute_native_controlled(
+                rebuild_request().prompt,
+                CallerContext::local(),
+                control.clone(),
+            )
+            .await;
+        assert_eq!(applied.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            validated.load(Ordering::SeqCst),
+            usize::from(fail_gate == usize::MAX)
+        );
+        let allowed = accepts && fail_gate == usize::MAX;
+        assert_eq!(control.validation_reports.lock().await[0].allowed, allowed);
+        assert_eq!(
+            executor.counts.lock().await.len(),
+            if allowed { 2 } else { 1 }
+        );
+        assert_eq!(
+            executor.generations.lock().await.len(),
+            usize::from(allowed)
+        );
+        if allowed {
+            result?;
+        } else {
+            assert!(result.is_err());
+        }
     }
     Ok(())
 }

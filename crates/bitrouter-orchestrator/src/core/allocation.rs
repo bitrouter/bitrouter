@@ -406,7 +406,17 @@ pub(crate) fn inherited_history(agent: &AgentState) -> &[Message] {
     agent
         .turn
         .as_ref()
-        .and_then(|turn| turn.steps.last())
+        .and_then(|turn| {
+            // A reconstruction candidate is durable before it is authorized.
+            // Runtime delegation must inherit the last activated source instead.
+            turn.steps.iter().rev().find(|step| {
+                step.reconstructed_from.is_none()
+                    || step
+                        .context_validation
+                        .as_ref()
+                        .is_some_and(|record| record.applied)
+            })
+        })
         .map_or(&[], |step| &step.input_history)
 }
 

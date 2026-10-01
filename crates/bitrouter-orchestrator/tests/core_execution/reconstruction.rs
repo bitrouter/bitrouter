@@ -70,6 +70,25 @@ async fn historical_task(
     with_material: bool,
     with_transform: bool,
 ) -> Result<(CoreSession, Arc<RebuildExecutor>, TaskInput), Box<dyn std::error::Error>> {
+    historical_task_with_guards(
+        harness,
+        mandatory_too_large,
+        with_material,
+        with_transform,
+        None,
+        None,
+    )
+    .await
+}
+
+async fn historical_task_with_guards(
+    harness: Arc<Harness>,
+    mandatory_too_large: bool,
+    with_material: bool,
+    with_transform: bool,
+    validation: Option<Arc<ValidationBarrier>>,
+    transform: Option<Arc<dyn bitrouter_sdk::app::PromptTransform>>,
+) -> Result<(CoreSession, Arc<RebuildExecutor>, TaskInput), Box<dyn std::error::Error>> {
     let executor = Arc::new(RebuildExecutor {
         mock: MockExecutor::new(vec![
             output(vec![call("old-call")]),
@@ -92,11 +111,26 @@ async fn historical_task(
     if with_transform {
         app_builder = app_builder.prompt_transform(Arc::new(ReferToPriorPlan));
     }
+    if let Some(transform) = transform {
+        app_builder = app_builder.prompt_transform(transform);
+    }
     let app = app_builder
         .language_model(|builder| {
             builder
                 .routing_table(Arc::new(table))
                 .executor(executor.clone());
+            if let Some(validation) = validation {
+                builder.pre_request_hook(ValidationHook {
+                    state: validation.clone(),
+                    first: true,
+                });
+                if !validation.skip_next {
+                    builder.pre_request_hook(ValidationHook {
+                        state: validation,
+                        first: false,
+                    });
+                }
+            }
         })
         .build()?;
     let session = bind_app(Arc::new(app), harness.clone()).await?;
@@ -220,7 +254,16 @@ async fn explicit_optional_history_rebuild_is_committed_recounted_and_auditable(
         .iter()
         .position(|kind| kind == "context.rebuild")
         .ok_or("rebuild event")?;
-    assert_eq!(kinds[rebuild + 1], "model.input_count.intent");
+    assert_eq!(kinds[rebuild + 1], "context.validation.intent");
+    assert_eq!(kinds[rebuild + 2], "context.validation.outcome");
+    assert_eq!(kinds[rebuild + 3], "model.input_count.intent");
+    assert!(
+        rebuilt
+            .context_validation
+            .as_ref()
+            .and_then(|record| record.report.as_ref())
+            .is_some_and(|report| report.allowed && report.error_code.is_none())
+    );
     Ok(())
 }
 
@@ -314,8 +357,15 @@ async fn mandatory_history_over_capacity_rejects_after_one_rebuild() -> TestResu
 
 #[tokio::test]
 async fn reconstruction_ack_is_a_barrier_for_recount_and_generation() -> TestResult {
-    for disconnect in [false, true] {
-        let harness = Arc::new(Harness::new(None, Some("context.rebuild")));
+    for (kind, disconnect) in [
+        "context.rebuild",
+        "context.validation.intent",
+        "context.validation.outcome",
+    ]
+    .into_iter()
+    .flat_map(|kind| [false, true].map(|disconnect| (kind, disconnect)))
+    {
+        let harness = Arc::new(Harness::new(None, Some(kind)));
         let (session, executor, task) =
             historical_task(harness.clone(), false, true, false).await?;
         current_result(&session, &harness, task).await?;
@@ -336,8 +386,22 @@ async fn reconstruction_ack_is_a_barrier_for_recount_and_generation() -> TestRes
                 .ok_or("turn")?
                 .steps
                 .len(),
-            2
+            if kind == "context.rebuild" { 2 } else { 3 }
         );
+        let state = session.snapshot().await;
+        if kind == "context.validation.outcome" {
+            assert!(
+                serde_json::to_string(&state.agents[&state.agent_id].history)?
+                    .contains("artifact-42")
+            );
+            assert!(
+                state
+                    .root_turn()
+                    .and_then(|turn| turn.steps.last())
+                    .and_then(|step| step.context_validation.as_ref())
+                    .is_some_and(|record| record.report.is_none())
+            );
+        }
         if disconnect {
             session.disconnect().await;
         }
@@ -436,5 +500,392 @@ async fn history_permissions_are_task_scoped_and_never_inherited_by_assignments(
             .is_none()
     );
     assert!(child.queue[0].input.discardable_history.is_none());
+    Ok(())
+}
+
+struct ValidationBarrier {
+    entered: Semaphore,
+    release: Semaphore,
+    next_calls: AtomicUsize,
+    deny: bool,
+    skip_next: bool,
+    returned: Semaphore,
+}
+struct ValidationHook {
+    state: Arc<ValidationBarrier>,
+    first: bool,
+}
+#[async_trait]
+impl bitrouter_sdk::language_model::hooks::PreRequestHook for ValidationHook {
+    async fn check(
+        &self,
+        _: &mut PipelineContext,
+    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::hooks::HookDecision> {
+        Ok(bitrouter_sdk::language_model::hooks::HookDecision::Allow)
+    }
+    async fn revalidate_context(
+        &self,
+        _: &PipelineContext,
+    ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::hooks::HookDecision> {
+        use bitrouter_sdk::language_model::hooks::{DenyReason, HookDecision};
+        if self.first {
+            self.state.entered.add_permits(1);
+            self.state
+                .release
+                .acquire()
+                .await
+                .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                .forget();
+            self.state.returned.add_permits(1);
+            if self.state.deny {
+                return Ok(HookDecision::Deny(DenyReason::Forbidden(
+                    "sensitive guard diagnostic".into(),
+                )));
+            }
+        } else {
+            self.state.next_calls.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(HookDecision::Allow)
+    }
+}
+
+#[tokio::test]
+async fn validation_denial_and_live_source_changes_stop_later_guards_and_counts() -> TestResult {
+    for mode in ["deny", "signal", "cancel", "disconnect"] {
+        let harness = Arc::new(Harness::new(None, None));
+        let validation = Arc::new(ValidationBarrier {
+            entered: Semaphore::new(0),
+            release: Semaphore::new(0),
+            next_calls: AtomicUsize::new(0),
+            deny: mode == "deny",
+            skip_next: false,
+            returned: Semaphore::new(0),
+        });
+        let (session, executor, task) = historical_task_with_guards(
+            harness.clone(),
+            false,
+            true,
+            false,
+            Some(validation.clone()),
+            None,
+        )
+        .await?;
+        current_result(&session, &harness, task).await?;
+        let driver = tokio::spawn({
+            let session = session.clone();
+            async move { session.drive().await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), validation.entered.acquire())
+            .await??
+            .forget();
+        match mode {
+            "signal" => {
+                let mut update = signal_update(
+                    &session,
+                    vec![material("v1", "Unrelated required README", true)],
+                )
+                .await;
+                update.manifest.permission_revision += 1;
+                session.signals("permissions-changed", update).await?;
+            }
+            "cancel" => {
+                let state = session.snapshot().await;
+                session
+                    .cancel_run(
+                        "cancel-validation",
+                        session.head().await.state_revision,
+                        &state.run.as_ref().ok_or("run")?.run_id,
+                    )
+                    .await?;
+            }
+            "disconnect" => session.disconnect().await,
+            _ => {}
+        }
+        validation.release.add_permits(1);
+        let _outcome = tokio::time::timeout(Duration::from_secs(5), driver).await??;
+        assert_eq!(validation.next_calls.load(Ordering::SeqCst), 0, "{mode}");
+        assert_eq!(executor.counts.lock().await.len(), 4, "{mode}");
+        assert_eq!(executor.generated.lock().await.len(), 3, "{mode}");
+        let state = session.snapshot().await;
+        let record = state
+            .root_turn()
+            .and_then(|turn| turn.steps.last())
+            .and_then(|step| step.context_validation.as_ref())
+            .ok_or("validation record")?;
+        if mode != "disconnect" {
+            let report = record.report.as_ref().ok_or("validation report")?;
+            assert!(!record.applied, "{mode}");
+            assert!(
+                serde_json::to_string(&state.agents[&state.agent_id].history)?
+                    .contains("artifact-42")
+            );
+            assert!(!report.allowed, "{mode}");
+            assert!(report.error_code.is_some());
+            assert!(!serde_json::to_string(report)?.contains("sensitive guard diagnostic"));
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn checkpoint_wait_between_validation_guards_does_not_spend_active_budget() -> TestResult {
+    let harness = Arc::new(Harness::new(None, Some("collaboration.runtime")));
+    let validation = Arc::new(ValidationBarrier {
+        entered: Semaphore::new(0),
+        release: Semaphore::new(0),
+        next_calls: AtomicUsize::new(0),
+        deny: false,
+        skip_next: false,
+        returned: Semaphore::new(0),
+    });
+    let (session, executor, mut task) = historical_task_with_guards(
+        harness.clone(),
+        false,
+        true,
+        false,
+        Some(validation.clone()),
+        None,
+    )
+    .await?;
+    task.limits = Some(Limits {
+        active_seconds: 1,
+        ..Default::default()
+    });
+    current_result(&session, &harness, task).await?;
+    let driver = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), validation.entered.acquire())
+        .await??
+        .forget();
+    let list = tokio::spawn({
+        let session = session.clone();
+        async move {
+            let root = session.snapshot().await.agent_id;
+            session
+                .collaborate(
+                    "list-during-validation",
+                    session.head().await.state_revision,
+                    &root,
+                    Action::List {},
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
+        .await??
+        .forget();
+    validation.release.add_permits(1);
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(validation.next_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.counts.lock().await.len(), 4);
+    harness.resume.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(5), list).await???;
+    let result = tokio::time::timeout(Duration::from_secs(5), driver).await???;
+    assert_eq!(
+        result.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    assert!(result.run.as_ref().is_some_and(|run| run.active_ms < 1000));
+    assert_eq!(validation.next_calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+struct RejectHistoryRemoval;
+impl bitrouter_sdk::app::PromptTransform for RejectHistoryRemoval {
+    fn apply(&self, _: &mut Prompt) {}
+    fn validate_context_rebuild(&self, _: &Prompt, _: &Prompt) -> bitrouter_sdk::Result<()> {
+        Err(bitrouter_sdk::BitrouterError::bad_request(
+            "this workflow still needs prior evidence",
+        ))
+    }
+}
+
+#[tokio::test]
+async fn rejected_transform_candidate_never_replaces_history_for_the_next_task() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, task) = historical_task_with_guards(
+        harness.clone(),
+        false,
+        true,
+        false,
+        None,
+        Some(Arc::new(RejectHistoryRemoval)),
+    )
+    .await?;
+    current_result(&session, &harness, task).await?;
+    let _outcome = session.drive().await;
+    let rejected = session.snapshot().await;
+    let source = &rejected.root_turn().ok_or("turn")?.steps[1];
+    assert_eq!(
+        rejected.agents[&rejected.agent_id].history,
+        source.input_history
+    );
+    assert_eq!(
+        rejected.agents[&rejected.agent_id].context_revision,
+        source.context_revision
+    );
+    let record = rejected
+        .root_turn()
+        .and_then(|turn| turn.steps.last())
+        .and_then(|step| step.context_validation.as_ref())
+        .ok_or("validation record")?;
+    assert!(!record.applied);
+    assert!(record.report.as_ref().is_some_and(|report| !report.allowed));
+    let mut next = input();
+    next.text = "Follow the prior plan and artifact-42.".into();
+    assert!(next.discardable_history.is_none());
+    session
+        .start("next-task", session.head().await.state_revision, next)
+        .await?;
+    let _outcome = session.drive().await;
+    let counts = executor.counts.lock().await;
+    assert_eq!(counts.len(), 5);
+    assert!(serde_json::to_string(&counts[4])?.contains("historical-result with artifact-42"));
+    assert_eq!(executor.generated.lock().await.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn inherited_child_never_reads_a_pending_context_candidate() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let validation = Arc::new(ValidationBarrier {
+        entered: Semaphore::new(0),
+        release: Semaphore::new(0),
+        next_calls: AtomicUsize::new(0),
+        deny: true,
+        skip_next: false,
+        returned: Semaphore::new(0),
+    });
+    let (session, executor, mut task) = historical_task_with_guards(
+        harness.clone(),
+        false,
+        true,
+        false,
+        Some(validation.clone()),
+        None,
+    )
+    .await?;
+    task.limits = Some(Limits {
+        active_models: 1,
+        ..Default::default()
+    });
+    current_result(&session, &harness, task).await?;
+    let driver = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), validation.entered.acquire())
+        .await??
+        .forget();
+    let state = session.snapshot().await;
+    let mut task = work("Continue from the verified historical evidence.");
+    task.fresh_context = false;
+    let child = session
+        .collaborate(
+            "inherit-during-validation",
+            session.head().await.state_revision,
+            &state.agent_id,
+            Action::Spawn { task },
+        )
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    let staged = session.snapshot().await;
+    assert!(
+        serde_json::to_string(&staged.agents[&child].history)?
+            .contains("historical-result with artifact-42")
+    );
+    session
+        .cancel_run(
+            "cancel-pending-child",
+            session.head().await.state_revision,
+            &state.run.as_ref().ok_or("run")?.run_id,
+        )
+        .await?;
+    validation.release.add_permits(1);
+    let _outcome = tokio::time::timeout(Duration::from_secs(5), driver).await??;
+    assert_eq!(executor.generated.lock().await.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn provisional_signal_block_prevents_candidate_activation_after_allow() -> TestResult {
+    let harness = Arc::new(Harness::new(None, Some("collaboration.runtime")));
+    let validation = Arc::new(ValidationBarrier {
+        entered: Semaphore::new(0),
+        release: Semaphore::new(0),
+        next_calls: AtomicUsize::new(0),
+        deny: false,
+        skip_next: true,
+        returned: Semaphore::new(0),
+    });
+    let (session, executor, task) = historical_task_with_guards(
+        harness.clone(),
+        false,
+        true,
+        false,
+        Some(validation.clone()),
+        None,
+    )
+    .await?;
+    current_result(&session, &harness, task).await?;
+    let driver = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), validation.entered.acquire())
+        .await??
+        .forget();
+    let list = tokio::spawn({
+        let session = session.clone();
+        async move {
+            let root = session.snapshot().await.agent_id;
+            session
+                .collaborate(
+                    "hold-input-lock",
+                    session.head().await.state_revision,
+                    &root,
+                    Action::List {},
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
+        .await??
+        .forget();
+    let mut update = signal_update(
+        &session,
+        vec![material("v1", "Unrelated required README", true)],
+    )
+    .await;
+    update.manifest.permission_revision += 1;
+    // Poll through block_dispatch to the held input lock without committing the
+    // signal. The final guard can now finish against the old durable snapshot.
+    let mut signal = Box::pin(session.signals("provisional-permission", update));
+    assert!(futures::poll!(signal.as_mut()).is_pending());
+    validation.release.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(5), validation.returned.acquire())
+        .await??
+        .forget();
+    harness.resume.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(5), list).await???;
+    signal.await?;
+    let _outcome = tokio::time::timeout(Duration::from_secs(5), driver).await??;
+    let state = session.snapshot().await;
+    let record = state
+        .root_turn()
+        .and_then(|turn| turn.steps.last())
+        .and_then(|step| step.context_validation.as_ref())
+        .ok_or("validation")?;
+    assert!(record.report.as_ref().is_some_and(|report| report.allowed));
+    assert!(!record.applied);
+    assert!(
+        serde_json::to_string(&state.agents[&state.agent_id].history)?
+            .contains("historical-result with artifact-42")
+    );
+    assert_eq!(executor.counts.lock().await.len(), 4);
+    assert_eq!(executor.generated.lock().await.len(), 3);
     Ok(())
 }
