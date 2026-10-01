@@ -849,6 +849,76 @@ impl native::NativeExecutionControl for ManagedSelectionControl {
 
 struct ModelAndEffortSelector(Arc<AtomicUsize>);
 
+struct FailedCounter(Arc<AtomicUsize>);
+
+#[async_trait]
+impl Executor for FailedCounter {
+    async fn count_input_tokens(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> Result<native::NativeInputCount> {
+        Err(BitrouterError::bad_request(
+            "SECRET_RAW_CREDENTIAL and NATIVE_CONTINUATION_ID",
+        ))
+    }
+
+    async fn execute(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(BitrouterError::internal("must not generate"))
+    }
+
+    async fn execute_stream(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        Err(BitrouterError::internal("must not stream"))
+    }
+}
+
+#[tokio::test]
+async fn count_errors_are_redacted_and_cannot_be_admitted_as_unknown() -> Result<()> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let table = Arc::new(StaticRoutingTable::new());
+    let mut route = target("first");
+    route.model_constraints.input_token_counting = Some(native::InputTokenCounting::Responses);
+    table.insert("test-model", vec![route]);
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(table)
+        .executor(Arc::new(FailedCounter(calls.clone())));
+    let control = Arc::new(ManagedSelectionControl {
+        selection: native::NativeModelSelection::Fixed,
+        plans: tokio::sync::Mutex::new(Vec::new()),
+        reports: tokio::sync::Mutex::new(Vec::new()),
+    });
+    let pipeline = Arc::new(builder.build()?);
+    assert!(
+        pipeline
+            .clone()
+            .execute_native_controlled(request(), control.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let plans = control.plans.lock().await;
+    assert_eq!(plans.len(), 1);
+    let serialized = serde_json::to_string(&plans[0])
+        .map_err(|_| BitrouterError::internal("fixture serialization failed"))?;
+    assert!(!serialized.contains("SECRET_RAW_CREDENTIAL"));
+    assert!(!serialized.contains("NATIVE_CONTINUATION_ID"));
+    assert!(serialized.contains("input_count_failed:invalid_request:400"));
+    Ok(())
+}
+
 #[cfg(feature = "config_file")]
 struct ReloadAfterRoute {
     table: Arc<crate::config::ConfigRoutingTable>,

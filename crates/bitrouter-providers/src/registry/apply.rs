@@ -286,6 +286,7 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
             pricing: m.pricing.as_ref().and_then(map_pricing),
             capabilities: m.capabilities.clone(),
             token_limits: Default::default(),
+            input_token_counting: None,
             reasoning_effort: m.reasoning_effort.clone(),
             compatibility: m.compatibility.clone(),
         })
@@ -801,6 +802,7 @@ mod tests {
             pricing: None,
             capabilities: Vec::new(),
             token_limits: Default::default(),
+            input_token_counting: None,
             reasoning_effort: None,
             compatibility: Default::default(),
         }];

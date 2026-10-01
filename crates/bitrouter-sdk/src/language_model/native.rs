@@ -23,6 +23,73 @@ pub struct ModelTokenLimits {
     pub context_window: Option<u64>,
 }
 
+/// Explicit provider support, never inferred from a compatible generation API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputTokenCounting {
+    /// POST /responses/input_tokens on the same provider endpoint.
+    Responses,
+}
+
+/// Provider-reported input size bound to the finalized generation request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum NativeInputCount {
+    /// A count is evidence for one request, not an estimate for other routes.
+    Counted {
+        /// Provider-reported full input, including protocol framing and tools.
+        input_tokens: u64,
+        /// SHA-256 commitment to serving identity, endpoint and final JSON.
+        request_sha256: String,
+        /// Counter provenance, independent of generated usage or cache claims.
+        source: String,
+    },
+    /// A configured count failed; this cannot silently become a verified fit.
+    Unavailable {
+        /// Credential-free failure detail supplied by the executor.
+        reason: String,
+    },
+}
+
+/// Complete observation of a count operation, separate from generated usage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeInputCountReport {
+    /// Request identity shared with the prepared and admitted plans.
+    pub request_id: String,
+    /// Original position in the frozen provider candidate chain.
+    pub route_index: u32,
+    /// Complete count or an explicit unavailability reason.
+    pub outcome: NativeInputCount,
+    /// Count operation time; does not include durable acknowledgement waits.
+    pub elapsed_ms: u64,
+}
+
+/// Kept inside the live pipeline; only request digests cross the core boundary.
+#[derive(Default)]
+pub(crate) struct NativeCountedRequests(std::sync::Mutex<Option<String>>);
+
+impl NativeCountedRequests {
+    pub(crate) fn select(&self, count: Option<&NativeInputCount>) -> Result<()> {
+        let mut current = self.0.lock().map_err(|_| {
+            crate::error::BitrouterError::internal("input count binding unavailable")
+        })?;
+        *current = match count {
+            Some(NativeInputCount::Counted { request_sha256, .. }) => Some(request_sha256.clone()),
+            _ => None,
+        };
+        Ok(())
+    }
+
+    pub(crate) fn matches(&self, digest: &str) -> Result<bool> {
+        Ok(self
+            .0
+            .lock()
+            .map_err(|_| crate::error::BitrouterError::internal("input count binding unavailable"))?
+            .as_deref()
+            == Some(digest))
+    }
+}
+
 /// Credential-free facts about one concrete provider/model candidate.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeRouteConstraints {
@@ -30,6 +97,9 @@ pub struct NativeRouteConstraints {
     pub capabilities: Vec<Capability>,
     /// Known limits for this exact route.
     pub token_limits: ModelTokenLimits,
+    /// Opt-in counting contract for this exact provider/model.
+    #[serde(default)]
+    pub input_token_counting: Option<InputTokenCounting>,
     /// No source means that the routing table supplied no authoritative facts.
     pub source: Option<String>,
 }
@@ -82,6 +152,9 @@ pub struct NativeRoute {
     pub constraints: NativeRouteConstraints,
     /// Executor/provider declaration; final wire validation is still required.
     pub output_token_limit_supported: Option<bool>,
+    /// Counts belong to the prepared request and this concrete route.
+    #[serde(default)]
+    pub input_count: Option<NativeInputCount>,
 }
 
 impl NativeRoute {
@@ -92,6 +165,7 @@ impl NativeRoute {
             protocol: target.api_protocol.clone(),
             constraints: target.model_constraints.clone(),
             output_token_limit_supported: None,
+            input_count: None,
         }
     }
 }
@@ -148,6 +222,17 @@ pub trait NativeExecutionControl: Send + Sync {
     /// effective-model policy. Explicit effort remains caller-owned in either mode.
     fn model_selection(&self) -> NativeModelSelection {
         NativeModelSelection::Policy
+    }
+
+    /// Persist the exact prepared input and count intent before contacting a
+    /// configured provider counter. Recheck source, permission and cancellation.
+    async fn before_input_count(&self, _plan: &NativePlan, _route_index: u32) -> Result<()> {
+        Ok(())
+    }
+
+    /// Preserve count evidence before another count or final plan admission.
+    async fn after_input_count(&self, _report: NativeInputCountReport) -> Result<()> {
+        Ok(())
     }
 
     /// Commit candidate assessments and return an ordered nonempty subset of

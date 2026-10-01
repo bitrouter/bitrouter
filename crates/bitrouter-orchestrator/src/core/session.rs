@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::native::{
-    NativeAttemptReport, NativeExecutionControl, NativeModelSelection, NativePlan,
-    NativePlanAdmission,
+    NativeAttemptReport, NativeExecutionControl, NativeInputCountReport, NativeModelSelection,
+    NativePlan, NativePlanAdmission,
 };
 use bitrouter_sdk::language_model::types::{
     Content, FinishReason, GenerationParams, Message, Prompt, ReasoningEffort, Role, Tool,
@@ -72,6 +72,12 @@ pub struct AttemptRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputCountRecord {
+    pub route_index: u32,
+    pub report: Option<NativeInputCountReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelStep {
     pub step_id: String,
     pub decision_id: String,
@@ -86,6 +92,10 @@ pub struct ModelStep {
     pub decision: Option<RoutingDecision>,
     pub application: Option<DecisionApplied>,
     pub plan: Option<NativePlan>,
+    #[serde(default)]
+    pub count_plan: Option<NativePlan>,
+    #[serde(default)]
+    pub input_counts: Vec<InputCountRecord>,
     pub attempts: Vec<AttemptRecord>,
     pub settled: bool,
 }
@@ -1803,6 +1813,8 @@ impl CoreSession {
                 decision: None,
                 application: None,
                 plan: None,
+                count_plan: None,
+                input_counts: Vec::new(),
                 attempts: Vec::new(),
                 settled: false,
             });
@@ -2697,6 +2709,109 @@ impl NativeExecutionControl for StepControl {
         self.model_selection
     }
 
+    async fn before_input_count(
+        &self,
+        plan: &NativePlan,
+        route_index: u32,
+    ) -> bitrouter_sdk::Result<()> {
+        self.session
+            .transition_for(
+                Some(&self.agent_id),
+                "model.input_count.intent",
+                |state, _| {
+                    validate_step_source(state, &self.agent_id, &self.step_id)?;
+                    let step = current_step(state, &self.agent_id, &self.step_id)?;
+                    step.context.validate_prepared(&plan.prompt)?;
+                    if step.plan.is_some()
+                        || step.count_plan.as_ref().is_some_and(|prior| prior != plan)
+                        || plan.routes.iter().any(|route| route.input_count.is_some())
+                        || plan
+                            .routes
+                            .get(route_index as usize)
+                            .is_none_or(|route| route.constraints.input_token_counting.is_none())
+                        || step.input_counts.last().is_some_and(|prior| {
+                            prior.route_index >= route_index || prior.report.is_none()
+                        })
+                    {
+                        return Err(reject(
+                            ErrorCode::OperationConflict,
+                            "input count does not follow its prepared plan",
+                        ));
+                    }
+                    step.count_plan = Some(plan.clone());
+                    step.input_counts.push(InputCountRecord {
+                        route_index,
+                        report: None,
+                    });
+                    Ok(json!({"request_id":plan.request_id,"route_index":route_index}))
+                },
+            )
+            .await
+            .map_err(sdk_error)?;
+        self.session
+            .ensure_dispatch(
+                &self.agent_id,
+                &self.step_id,
+                format!("{}/count/{route_index}", plan.request_id),
+            )
+            .await
+            .map_err(sdk_error)
+    }
+
+    async fn after_input_count(&self, report: NativeInputCountReport) -> bitrouter_sdk::Result<()> {
+        let active_ms = self
+            .session
+            .shared
+            .live
+            .lock()
+            .await
+            .activity
+            .finish(&format!(
+                "{}/count/{}",
+                report.request_id, report.route_index
+            ));
+        let recorded = self
+            .session
+            .transition_for(
+                Some(&self.agent_id),
+                "model.input_count.outcome",
+                |state, _| {
+                    let step = current_step(state, &self.agent_id, &self.step_id)?;
+                    if step
+                        .count_plan
+                        .as_ref()
+                        .is_none_or(|plan| plan.request_id != report.request_id)
+                    {
+                        return Err(reject(
+                            ErrorCode::OperationConflict,
+                            "input count has no prepared plan",
+                        ));
+                    }
+                    let record = step
+                        .input_counts
+                        .last_mut()
+                        .filter(|record| {
+                            record.route_index == report.route_index && record.report.is_none()
+                        })
+                        .ok_or_else(|| {
+                            reject(
+                                ErrorCode::OperationConflict,
+                                "input count has no pending intent",
+                            )
+                        })?;
+                    record.report = Some(report.clone());
+                    let run = active_run(state)?;
+                    run.active_ms = run.active_ms.max(active_ms);
+                    encode(&report)
+                },
+            )
+            .await;
+        if recorded.is_err() {
+            self.session.disconnect().await;
+        }
+        recorded.map_err(sdk_error)
+    }
+
     async fn plan(&self, plan: NativePlan) -> bitrouter_sdk::Result<NativePlanAdmission> {
         let mut rejection = None;
         let routes = super::routing::assess_routes(&plan).map_err(sdk_error)?;
@@ -2722,6 +2837,9 @@ impl NativeExecutionControl for StepControl {
                 let step = current_step(state, &self.agent_id, &self.step_id)?;
                 if rejection.is_none() {
                     rejection = step.context.validate_prepared(&plan.prompt).err();
+                }
+                if rejection.is_none() {
+                    rejection = validate_input_counts(step, &plan).err();
                 }
                 if rejection.is_none() && route_indices.is_empty() {
                     rejection = Some(reject(
@@ -2752,10 +2870,7 @@ impl NativeExecutionControl for StepControl {
                     selected_candidate_id: candidate,
                     selected_model: plan.effective_model.clone(),
                     selected_effort: plan.prompt.params.reasoning_effort,
-                    reason_codes: vec![
-                        "continue_current_work".into(),
-                        "token_capacity_unknown".into(),
-                    ],
+                    reason_codes: vec!["continue_current_work".into()],
                     routes: routes.clone(),
                 };
                 let application = DecisionApplied {
@@ -2879,6 +2994,54 @@ impl NativeExecutionControl for StepControl {
             self.session.disconnect().await;
         }
     }
+}
+
+fn validate_input_counts(step: &ModelStep, plan: &NativePlan) -> Result<(), CoreError> {
+    let expected = plan
+        .routes
+        .iter()
+        .enumerate()
+        .filter(|(_, route)| route.constraints.input_token_counting.is_some())
+        .collect::<Vec<_>>();
+    if expected.len() != step.input_counts.len() {
+        return Err(reject(
+            ErrorCode::OperationConflict,
+            "prepared input counts are incomplete",
+        ));
+    }
+    if expected.is_empty() {
+        if plan.routes.iter().any(|route| route.input_count.is_some()) {
+            return Err(reject(
+                ErrorCode::OperationConflict,
+                "input count has no configured provenance",
+            ));
+        }
+        return Ok(());
+    }
+    let mut uncounted = plan.clone();
+    for route in &mut uncounted.routes {
+        route.input_count = None;
+    }
+    if step.count_plan.as_ref() != Some(&uncounted) {
+        return Err(reject(
+            ErrorCode::OperationConflict,
+            "prepared input changed after counting",
+        ));
+    }
+    for ((index, route), record) in expected.into_iter().zip(&step.input_counts) {
+        if record.route_index as usize != index
+            || record.report.as_ref().is_none_or(|report| {
+                report.request_id != plan.request_id
+                    || Some(&report.outcome) != route.input_count.as_ref()
+            })
+        {
+            return Err(reject(
+                ErrorCode::OperationConflict,
+                "input count differs from its committed receipt",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_step_source(

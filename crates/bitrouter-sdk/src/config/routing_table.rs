@@ -234,6 +234,7 @@ fn build_targets(
             |model| crate::language_model::native::NativeRouteConstraints {
                 capabilities: model.capabilities.clone(),
                 token_limits: model.token_limits.clone(),
+                input_token_counting: model.input_token_counting,
                 source: Some("provider_model_config".into()),
             },
         )

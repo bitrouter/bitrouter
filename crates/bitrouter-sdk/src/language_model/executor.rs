@@ -28,6 +28,8 @@ use crate::language_model::types::{
     StreamPart,
 };
 
+mod input_count;
+
 /// A boxed stream of canonical stream parts.
 pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>;
 
@@ -39,6 +41,19 @@ pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send
 /// upstream call. Custom executors that don't need propagation can ignore it.
 #[async_trait]
 pub trait Executor: Send + Sync {
+    /// Count the exact managed input when explicitly configured. Unsupported
+    /// executors fail that candidate rather than claim a known capacity fit.
+    async fn count_input_tokens(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> Result<crate::language_model::native::NativeInputCount> {
+        Err(BitrouterError::bad_request(
+            "input token counting is unsupported",
+        ))
+    }
+
     /// Whether this executor/target is known to preserve output-token limits.
     /// Unknown implementations retain `None`, never an asserted guarantee.
     fn output_token_limit_support(&self, _target: &RoutingTarget) -> Option<bool> {
@@ -962,6 +977,20 @@ impl HttpExecutor {
                 ));
             }
         }
+        if input
+            .target
+            .model_constraints
+            .input_token_counting
+            .is_some()
+            && let Some(counted) = input
+                .ctx
+                .extension::<crate::language_model::native::NativeCountedRequests>()
+            && !counted.matches(&input_count::request_digest(&request, input.target)?)?
+        {
+            return Err(BitrouterError::bad_request(
+                "managed request changed after provider input token counting",
+            ));
+        }
         Ok(request)
     }
 
@@ -1280,6 +1309,15 @@ fn forward_inbound_anthropic_beta(
 
 #[async_trait]
 impl Executor for HttpExecutor {
+    async fn count_input_tokens(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> Result<crate::language_model::native::NativeInputCount> {
+        self.count_managed_input(target, prompt, ctx).await
+    }
+
     fn output_token_limit_support(&self, target: &RoutingTarget) -> Option<bool> {
         if !self
             .dispatch
@@ -2123,6 +2161,97 @@ mod beta_forward_tests {
         );
         assert_eq!(request.headers()["x-opencode-session"], "request-session");
         assert_eq!(request.headers()["x-bitrouter-request-id"], "t");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn counted_request_revalidates_body_credential_headers_and_selected_candidate()
+    -> crate::Result<()> {
+        use crate::language_model::native::{
+            InputTokenCounting, NativeCountedRequests, NativeInputCount,
+        };
+        let mut ctx = ctx_with_headers(http::HeaderMap::new());
+        let mut target = target(ApiProtocol::Responses);
+        target.model_constraints.input_token_counting = Some(InputTokenCounting::Responses);
+        target.api_key = "first-account-secret".into();
+        let executor = HttpExecutor::with_defaults()?;
+        let (_, transport) = executor
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| BitrouterError::internal("missing Responses transport"))?;
+        let (client, timeouts) = executor.client_for(&target);
+        let body = serde_json::json!({"model":"fixture","input":"required text","tools":[]});
+        let initial = executor
+            .build_authenticated_request(&RequestBuildInput {
+                client: &client,
+                timeouts: &timeouts,
+                url: "https://example.invalid/v1/responses",
+                body: &body,
+                target: &target,
+                transport,
+                ctx: &ctx,
+                trace_headers: None,
+            })
+            .await?;
+        let count = NativeInputCount::Counted {
+            input_tokens: 10,
+            request_sha256: input_count::request_digest(&initial, &target)?,
+            source: "fixture".into(),
+        };
+        let counted = Arc::new(NativeCountedRequests::default());
+        counted.select(Some(&count))?;
+        ctx.insert_extension(counted.clone());
+        let build = |body, target, ctx| RequestBuildInput {
+            client: &client,
+            timeouts: &timeouts,
+            url: "https://example.invalid/v1/responses",
+            body,
+            target,
+            transport,
+            ctx,
+            trace_headers: None,
+        };
+        executor
+            .build_authenticated_request(&build(&body, &target, &ctx))
+            .await?;
+        let changed =
+            serde_json::json!({"model":"fixture","input":"different required text","tools":[]});
+        assert!(
+            executor
+                .build_authenticated_request(&build(&changed, &target, &ctx))
+                .await
+                .is_err()
+        );
+        let mut account = target.clone();
+        account.api_key = "second-account-secret".into();
+        assert!(
+            executor
+                .build_authenticated_request(&build(&body, &account, &ctx))
+                .await
+                .is_err()
+        );
+        let mut headers = target.clone();
+        headers.headers = vec![OutboundHeaderRule::new(
+            "openai-organization",
+            Some("other-org"),
+            false,
+        )?];
+        assert!(
+            executor
+                .build_authenticated_request(&build(&body, &headers, &ctx))
+                .await
+                .is_err()
+        );
+        // Even an identical target cannot borrow a previous candidate's success.
+        counted.select(Some(&NativeInputCount::Unavailable {
+            reason: "fixture failure".into(),
+        }))?;
+        assert!(
+            executor
+                .build_authenticated_request(&build(&body, &target, &ctx))
+                .await
+                .is_err()
+        );
         Ok(())
     }
 

@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: reviewed signals, prepared-plan records, worker allocation and output reservations below; input-token feasibility and reconstruction pending |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared-plan records, worker allocation, output reservations and provider-counted input bounds below; reconstruction and accounting remain pending |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -368,5 +368,63 @@ The preceding full-workspace reruns were not clean: a two-thread run passed
 connection timeout in the second. The background fixture now includes daemon
 log tails and last observed run state on timeouts without changing its deadline
 or success assertions; this diagnostic change also passed independent review.
-These intermittent failures have not been explained or fixed. A new full run
-after the output-reservation changes remains required for final delivery.
+These intermittent failures have not been explained or fixed. The subsequent
+full serial run at `47086108` completed: 3697 passed, 22 skipped in 330.272 seconds.
+That is evidence of a passing workspace run, not an explanation of the preceding
+intermittent failures. Final delivery still requires validation of its final tree.
+
+## C3 provider input counting and joint token capacity
+
+Provider models can explicitly configure `input_token_counting: responses`.
+Only managed native execution invokes it; API wire compatibility does not imply
+the provider implements a counting endpoint. Without a configured counter the
+input count remains unknown. A configured counter must succeed for that candidate
+to be admitted; unavailable or malformed counts cannot downgrade to unknown fit.
+
+The HTTP path uses the actual Responses renderer, provider model, static
+transport authentication and final request body. It sends the documented input
+fields, including instructions, tools, structured output and origin-bound prior
+response references, to `/responses/input_tokens`. Unknown input extensions,
+mutable provider conversations, automatic truncation, unsupported protocols and
+dynamic authentication fail this counting candidate. Counting is bounded by a
+30-second total request deadline and a 16-KiB response limit. Upstream error text
+is not saved in routing records; only controlled error categories are retained.
+
+The receipt commits the final generation body, endpoint and authenticated headers
+to a digest. Immediately before generation the HTTP executor checks this digest
+against the count selected for that exact attempt. Changed content, credentials
+or semantic headers invalidate it; another candidate's successful count cannot
+authorize a failed counter. Input counts are route-specific observations, separate
+from model-independent context size estimates, generated usage and cache evidence.
+
+Core commits count intent before contacting the provider and count outcome before
+another count or plan admission. Source revisions, permissions, cancellation and
+the durable dispatch gate are checked again. Counting consumes active wall time
+but not a generation attempt. It does not fabricate generated tokens or a zero
+price. Successful counts enforce both independent input limits and the combined
+input-plus-output window, including exact boundaries and arithmetic overflow.
+Model/effort selection and provider candidate identities stay frozen throughout.
+
+- SDK/orchestrator/providers all-feature nextest: 1435 passed, 2 skipped,
+  including 74 core execution tests.
+- Real HTTP loopback regressions exercise count payloads, concrete provider
+  filtering, a successful Responses terminal, malformed/unavailable counts,
+  exact combined-window limits, Unicode/tool input, durable ACK ordering,
+  permission changes, cancellation, disconnect, commit failure and active-time
+  exhaustion. They are provider-protocol evidence, not a live-provider run.
+- Independent review found and repaired raw diagnostic leakage and count proof
+  sharing across candidates. Added regressions exercise error redaction, request
+  mutation, credentials/organization headers and failed-candidate isolation.
+- Core read-only review found no concrete blocker in the count barriers or
+  capacity checks. SDK follow-up review confirmed both repairs with no remaining
+  concrete blocker in this segment. Strict all-target/all-feature workspace
+  clippy, formatting, diff and generated-distribution checks passed. Workspace
+  all-feature doctests passed (5 passed, 1 ignored). A new serial workspace
+  nextest run is in progress for this tree; the preceding 3697-test passing run
+  covered the output-reservation checkpoint, not this new implementation.
+
+C3 still requires infeasible-context reconstruction, complete capability and
+continuation feasibility, priced receipts and protocol-aware cache accounting.
+Other provider counters remain unknown unless a supported counter is explicitly
+configured; these observations must not become assertions of universal fit.
+C4–C6, the full A01–A23 audit, final independent review, PR and CI remain required.

@@ -614,7 +614,7 @@ impl Pipeline {
                 crate::language_model::native::NativeOutputReservation(tokens),
             ));
         }
-        let native_routes = if control.is_some() {
+        let mut native_routes = if control.is_some() {
             chain
                 .iter()
                 .map(|target| {
@@ -628,21 +628,10 @@ impl Pipeline {
             Vec::new()
         };
         let admission = match control {
-            Some(control) => control
-                .plan(NativePlan {
-                    request_id: ctx.request_id().to_owned(),
-                    original_model: ctx.original_model().to_owned(),
-                    effective_model: ctx.model().to_owned(),
-                    effort_source: ctx.prompt().params.reasoning_effort_source,
-                    prompt: ctx.prompt().clone(),
-                    routes: native_routes.clone(),
-                    router: ctx.router_identity().cloned(),
-                })
+            Some(control) => self
+                .admit_native_plan(&chain, &mut ctx, &mut native_routes, control)
                 .await
-                .and_then(|admission| {
-                    admission.validate(native_routes.len())?;
-                    Ok(Some(admission))
-                }),
+                .map(Some),
             None => Ok(None),
         };
 
@@ -778,6 +767,74 @@ impl Pipeline {
             #[cfg(feature = "server")]
             model_id,
         })
+    }
+
+    async fn admit_native_plan(
+        &self,
+        chain: &[RoutingTarget],
+        ctx: &mut PipelineContext,
+        routes: &mut [NativeRoute],
+        control: &dyn NativeExecutionControl,
+    ) -> Result<crate::language_model::native::NativePlanAdmission> {
+        use crate::language_model::native::{
+            NativeCountedRequests, NativeInputCount, NativeInputCountReport,
+        };
+        let mut plan = NativePlan {
+            request_id: ctx.request_id().to_owned(),
+            original_model: ctx.original_model().to_owned(),
+            effective_model: ctx.model().to_owned(),
+            effort_source: ctx.prompt().params.reasoning_effort_source,
+            prompt: ctx.prompt().clone(),
+            routes: routes.to_vec(),
+            router: ctx.router_identity().cloned(),
+        };
+        for (index, target) in chain.iter().enumerate() {
+            if target.model_constraints.input_token_counting.is_none() {
+                continue;
+            }
+            let route_index = u32::try_from(index)
+                .map_err(|_| BitrouterError::bad_request("route index exhausted"))?;
+            control.before_input_count(&plan, route_index).await?;
+            let started = Instant::now();
+            let outcome = match self
+                .executor
+                .count_input_tokens(target, ctx.prompt(), ctx)
+                .await
+            {
+                Ok(outcome) => outcome,
+                // Errors can contain parser body previews, native continuation
+                // IDs or credentials from extensions. Persist categories only.
+                Err(error) => NativeInputCount::Unavailable {
+                    reason: format!(
+                        "input_count_failed:{}:{}",
+                        error.error_code(),
+                        error.status()
+                    ),
+                },
+            };
+            let report = NativeInputCountReport {
+                request_id: plan.request_id.clone(),
+                route_index,
+                outcome: outcome.clone(),
+                elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            };
+            control.after_input_count(report).await?;
+            routes[index].input_count = Some(outcome);
+        }
+        ctx.insert_extension(Arc::new(NativeCountedRequests::default()));
+        plan.routes = routes.to_vec();
+        let admission = control.plan(plan).await?;
+        admission.validate(routes.len())?;
+        if admission.route_indices.iter().any(|index| {
+            let route = &routes[*index as usize];
+            route.constraints.input_token_counting.is_some()
+                && !matches!(route.input_count, Some(NativeInputCount::Counted { .. }))
+        }) {
+            return Err(BitrouterError::bad_request(
+                "admitted route has no successful configured input count",
+            ));
+        }
+        Ok(admission)
     }
 
     /// Execute a streaming request: Stages 1–3 run eagerly (so pre-stream
@@ -1461,6 +1518,12 @@ impl Pipeline {
                 )),
                 None => None,
             };
+            if let Some((_, route)) = attempt_control
+                && let Some(counted) =
+                    ctx.extension::<crate::language_model::native::NativeCountedRequests>()
+            {
+                counted.select(route.input_count.as_ref())?;
+            }
             self.wait_before_fallback(dispatched).await;
             dispatched += 1;
             self.observe_hop_start(ctx, target).await;
