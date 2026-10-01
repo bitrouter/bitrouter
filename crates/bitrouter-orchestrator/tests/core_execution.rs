@@ -275,6 +275,7 @@ impl HarnessPort for Harness {
 
 struct RecordingExecutor {
     mock: MockExecutor,
+    agent_once: Mutex<std::collections::BTreeMap<String, Vec<Content>>>,
     prompts: Mutex<Vec<Prompt>>,
     calls: AtomicUsize,
 }
@@ -476,6 +477,23 @@ impl Executor for RecordingExecutor {
     ) -> bitrouter_sdk::Result<ExecutionResult> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.prompts.lock().await.push(prompt.clone());
+        let content = {
+            let mut scripted = self.agent_once.lock().await;
+            let actor = scripted
+                .keys()
+                .find(|id| {
+                    prompt.system.as_ref().is_some_and(|system| {
+                        system.starts_with(&format!("You are agent {id} for this task."))
+                    })
+                })
+                .cloned();
+            actor.and_then(|id| scripted.remove(&id))
+        };
+        if let Some(content) = content {
+            return MockExecutor::new(vec![output(content)])
+                .execute(target, prompt, ctx)
+                .await;
+        }
         self.mock.execute(target, prompt, ctx).await
     }
     async fn execute_stream(
@@ -535,6 +553,7 @@ async fn context_preparation_rejection_is_durable_before_dispatch() -> TestResul
         table.insert("fixture-model", vec![target("first")]);
         let executor = Arc::new(RecordingExecutor {
             mock: MockExecutor::always_text("must not execute"),
+            agent_once: Mutex::new(Default::default()),
             prompts: Mutex::new(Vec::new()),
             calls: AtomicUsize::new(0),
         });
@@ -813,6 +832,7 @@ async fn setup(
     table.insert("fixture-model", targets);
     let executor = Arc::new(RecordingExecutor {
         mock: MockExecutor::new(responses),
+        agent_once: Mutex::new(Default::default()),
         prompts: Mutex::new(Vec::new()),
         calls: AtomicUsize::new(0),
     });
@@ -1689,6 +1709,855 @@ async fn current_run_followups_reuse_old_agent_context_in_fifo_order() -> TestRe
     Ok(())
 }
 
+async fn idle_workers(
+    count: usize,
+    known_workspace: bool,
+) -> Result<
+    (
+        CoreSession,
+        Arc<RecordingExecutor>,
+        Arc<Harness>,
+        String,
+        Vec<String>,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(
+        (0..40)
+            .map(|_| output(vec![text("completed task")]))
+            .collect(),
+        harness.clone(),
+        false,
+    )
+    .await?;
+    let mut update = signal_update(&session, vec![material("v1", "current evidence", true)]).await;
+    if known_workspace {
+        update.workspace_revision = Some("workspace-v1".into());
+        update.manifest.workspace_revision = update.workspace_revision.clone();
+    }
+    session.signals("initial-facts", update).await?;
+    let root = session
+        .start("first", session.head().await.state_revision, input())
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    let mut workers = Vec::new();
+    for index in 0..count {
+        let receipt = session
+            .collaborate(
+                &format!("spawn-{index}"),
+                session.head().await.state_revision,
+                &root,
+                Action::Spawn {
+                    task: work(&format!("initial worker task {index}")),
+                },
+            )
+            .await?;
+        workers.push(receipt.assigned_ids["agent_id"].clone());
+    }
+    assert_eq!(
+        session.drive().await?.run.map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    workers.sort();
+    Ok((session, executor, harness, root, workers))
+}
+
+#[tokio::test]
+async fn delegate_reuses_the_stable_idle_candidate_and_joins_its_model_receipts() -> TestResult {
+    use bitrouter_orchestrator::core::allocation::ContextKind;
+    use bitrouter_orchestrator::core::protocol::{ContextMode, ModelMode};
+    for mode in [ContextMode::Fixed, ContextMode::Auto] {
+        let (session, executor, harness, root, workers) = idle_workers(2, true).await?;
+        let mut second = input();
+        second.routing.context = mode;
+        second.routing.model = ModelMode::Policy;
+        second.text = "New root constraint: keep the workspace unchanged".into();
+        session
+            .start(
+                "second",
+                session.head().await.state_revision,
+                second.clone(),
+            )
+            .await?;
+        let mut task = work("perform another bounded task");
+        task.fresh_context = false;
+        task.model = Some("fixture-model".into());
+        task.effort = Some("low".into());
+        let revision = session.head().await.state_revision;
+        let action = Action::Delegate {
+            task,
+            agent_id: None,
+        };
+        let receipt = session
+            .collaborate("delegate", revision, &root, action.clone())
+            .await?;
+        assert_eq!(
+            session
+                .collaborate("delegate", revision, &root, action)
+                .await?,
+            receipt
+        );
+        assert_eq!(receipt.assigned_ids["agent_id"], workers[0]);
+        let allocation_id = &receipt.assigned_ids["allocation_id"];
+        let reserved = session.snapshot().await;
+        let allocation = &reserved.allocations[allocation_id];
+        assert_eq!(allocation.input_state_revision, revision);
+        assert_eq!(allocation.input.routing.model, ModelMode::Fixed);
+        assert_eq!(allocation.input.routing.context, mode);
+        assert_eq!(allocation.input.effort.as_deref(), Some("low"));
+        assert!(allocation.applied_state_revision.is_none());
+        assert_eq!(allocation.candidates[0].kind, ContextKind::Reuse);
+        assert!(allocation.candidates[0].rejection_reasons.is_empty());
+        assert_eq!(reserved.agents.len(), 3);
+        let done = session.drive().await?;
+        assert_eq!(
+            done.run.as_ref().map(|run| run.status),
+            Some(RunStatus::Completed)
+        );
+        assert!(
+            done.allocations[allocation_id]
+                .applied_state_revision
+                .is_some()
+        );
+        let turn = done.agents[&workers[0]]
+            .turn
+            .as_ref()
+            .ok_or("missing reused turn")?;
+        assert_eq!(turn.allocation_id.as_ref(), Some(allocation_id));
+        let step = turn.steps.first().ok_or("reused worker did not execute")?;
+        assert_eq!(
+            step.decision
+                .as_ref()
+                .and_then(|decision| decision.allocation_id.as_ref()),
+            Some(allocation_id)
+        );
+        assert!(step.attempts[0].receipt.is_some());
+        let prompts = executor.prompts.lock().await;
+        let prompt = prompts
+            .iter()
+            .find(|prompt| {
+                prompt.system.as_ref().is_some_and(|system| {
+                    system.contains(&workers[0]) && system.contains("perform another bounded task")
+                })
+            })
+            .ok_or("reused prompt missing")?;
+        assert!(
+            prompt
+                .system
+                .as_ref()
+                .is_some_and(|system| system.contains(&second.text))
+        );
+        assert!(prompt.messages.iter().flat_map(|message| &message.content).any(|part| matches!(part, Content::Text { text, .. } if text.starts_with("initial worker task"))));
+        drop(prompts);
+        let store = harness.store.lock().await;
+        let durable = store
+            .batches
+            .last()
+            .ok_or("missing checkpoint")?
+            .decode(&store.limits)?;
+        let restored: SessionSnapshot = serde_json::from_value(durable.checkpoint.state)?;
+        assert_eq!(
+            restored.allocations[allocation_id]
+                .selected_agent_id
+                .as_ref(),
+            Some(&workers[0])
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn ambiguous_delegate_uses_fresh_context_with_recorded_reuse_rejections() -> TestResult {
+    use bitrouter_orchestrator::core::allocation::ContextKind;
+    for (case, reason) in [
+        ("unknown", "workspace_revision_unknown"),
+        ("workspace", "workspace_revision_changed"),
+        ("permission", "permission_revision_changed"),
+        ("tools", "tool_manifest_changed"),
+        ("material", "material_version_changed"),
+        ("mailbox", "worker_not_idle"),
+        ("queue", "worker_not_idle"),
+        ("independent", "isolated_context_required"),
+        ("fresh", "isolated_context_required"),
+        ("scope", "task_scope_mismatch"),
+    ] {
+        let (session, executor, _, root, workers) = idle_workers(1, case != "unknown").await?;
+        let mut update =
+            signal_update(&session, vec![material("v1", "current evidence", true)]).await;
+        match case {
+            "workspace" => {
+                update.workspace_revision = Some("workspace-v2".into());
+                update.manifest.workspace_revision = update.workspace_revision.clone();
+            }
+            "permission" => update.manifest.permission_revision += 1,
+            "tools" => {
+                update.manifest.tools.clear();
+                update.manifest.tool_manifest_digest = HarnessManifest::digest(&[])?;
+            }
+            "material" => update.materials = vec![material("v2", "replacement evidence", true)],
+            _ => {}
+        }
+        session.signals("updated-facts", update).await?;
+        session
+            .start("second", session.head().await.state_revision, input())
+            .await?;
+        if case == "mailbox" {
+            session
+                .collaborate(
+                    "message",
+                    session.head().await.state_revision,
+                    &root,
+                    Action::Message {
+                        agent_id: workers[0].clone(),
+                        text: "pending guidance".into(),
+                    },
+                )
+                .await?;
+        }
+        if case == "queue" {
+            let mut queued = work("already queued work");
+            queued.fresh_context = false;
+            session
+                .collaborate(
+                    "followup",
+                    session.head().await.state_revision,
+                    &root,
+                    Action::Followup {
+                        agent_id: workers[0].clone(),
+                        task: queued,
+                    },
+                )
+                .await?;
+        }
+        let mut task = work("new focused delegation");
+        task.fresh_context = case == "fresh";
+        task.independent_review = case == "independent";
+        if case == "scope" {
+            task.task_scope = None;
+        }
+        let receipt = session
+            .collaborate(
+                "delegate",
+                session.head().await.state_revision,
+                &root,
+                Action::Delegate {
+                    task: task.clone(),
+                    agent_id: None,
+                },
+            )
+            .await?;
+        let state = session.snapshot().await;
+        let id = &receipt.assigned_ids["agent_id"];
+        assert_ne!(id, &workers[0], "{case}");
+        let allocation = &state.allocations[&receipt.assigned_ids["allocation_id"]];
+        assert!(
+            allocation.candidates[0]
+                .rejection_reasons
+                .iter()
+                .any(|actual| actual == reason),
+            "{case}: {:?}",
+            allocation.candidates[0]
+        );
+        assert_eq!(
+            allocation.candidates.last().map(|candidate| candidate.kind),
+            Some(ContextKind::Fresh)
+        );
+        assert_eq!(state.agents[id].history.len(), 1, "{case}");
+        assert_eq!(state.agents[id].history[0].content, vec![text(&task.text)]);
+        assert!(state.agents[id].context_sources.is_empty());
+        if matches!(case, "workspace" | "material" | "independent") {
+            assert_eq!(
+                session.drive().await?.run.map(|run| run.status),
+                Some(RunStatus::Completed)
+            );
+            assert!(executor.prompts.lock().await.iter().any(|prompt| {
+                prompt.system.as_ref().is_some_and(|system| system.contains(id))
+                    && !prompt.messages.iter().flat_map(|message| &message.content).any(|part| matches!(part, Content::Text { text, .. } if text.starts_with("initial worker task")))
+            }));
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn exact_ineligible_delegate_is_durable_replayable_and_never_retargeted() -> TestResult {
+    let (session, executor, _, root, workers) = idle_workers(1, false).await?;
+    session
+        .start("second", session.head().await.state_revision, input())
+        .await?;
+    let before = session.head().await;
+    let calls = executor.calls.load(Ordering::SeqCst);
+    let mut task = work("exact target task");
+    task.fresh_context = false;
+    let action = Action::Delegate {
+        task,
+        agent_id: Some(workers[0].clone()),
+    };
+    let rejected = session
+        .collaborate("delegate", before.state_revision, &root, action.clone())
+        .await
+        .err()
+        .ok_or("ineligible target was accepted")?;
+    assert_eq!(rejected.code, ErrorCode::NoFeasibleRoute);
+    assert_eq!(rejected.commit_status, CommitStatus::Committed);
+    assert_eq!(
+        session
+            .collaborate("delegate", before.state_revision, &root, action)
+            .await
+            .err(),
+        Some(rejected)
+    );
+    assert_eq!(
+        session.head().await.state_revision,
+        before.state_revision + 1
+    );
+    let receipt = session
+        .operation("delegate")
+        .await
+        .ok_or("missing rejection receipt")?;
+    let state = session.snapshot().await;
+    let allocation = &state.allocations[&receipt.assigned_ids["allocation_id"]];
+    assert_eq!(allocation.candidates.len(), 1);
+    assert!(allocation.selected_candidate_id.is_none());
+    assert!(allocation.error.is_some());
+    assert_eq!(state.agents.len(), 2);
+    assert!(state.agents[&workers[0]].queue.is_empty());
+    assert_eq!(executor.calls.load(Ordering::SeqCst), calls);
+    Ok(())
+}
+
+#[tokio::test]
+async fn reused_reservation_is_revalidated_after_signals_change() -> TestResult {
+    let (session, executor, _, root, workers) = idle_workers(1, true).await?;
+    session
+        .start("second", session.head().await.state_revision, input())
+        .await?;
+    let mut task = work("reserved task must not execute");
+    task.fresh_context = false;
+    let receipt = session
+        .collaborate(
+            "delegate",
+            session.head().await.state_revision,
+            &root,
+            Action::Delegate {
+                task,
+                agent_id: None,
+            },
+        )
+        .await?;
+    assert_eq!(receipt.assigned_ids["agent_id"], workers[0]);
+    let update = signal_update(&session, vec![material("v2", "changed material", true)]).await;
+    session.signals("changed", update).await?;
+    let done = session.drive().await?;
+    let allocation = &done.allocations[&receipt.assigned_ids["allocation_id"]];
+    assert!(allocation.applied_state_revision.is_none());
+    assert!(
+        allocation
+            .application_error
+            .as_ref()
+            .is_some_and(|error| error.code == ErrorCode::NoFeasibleRoute)
+    );
+    let child = done.agents[&workers[0]]
+        .turn
+        .as_ref()
+        .ok_or("missing child turn")?;
+    assert_eq!(
+        child.status,
+        bitrouter_orchestrator::core::session::AgentStatus::Failed
+    );
+    assert!(child.steps.is_empty());
+    assert!(child.notified);
+    assert_eq!(
+        executor
+            .prompts
+            .lock()
+            .await
+            .iter()
+            .filter(|prompt| prompt
+                .system
+                .as_ref()
+                .is_some_and(|system| system.contains(&workers[0])))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn reuse_activation_checks_requirements_pinned_after_the_original_decision() -> TestResult {
+    let (session, executor, _, root, workers) = idle_workers(1, true).await?;
+    executor
+        .agent_once
+        .lock()
+        .await
+        .insert(root.clone(), vec![call("hold-root")]);
+    session
+        .start("second", session.head().await.state_revision, input())
+        .await?;
+    session.drive().await?;
+    let mut task = work("reserved task with new requirements");
+    task.fresh_context = false;
+    let receipt = session
+        .collaborate(
+            "delegate",
+            session.head().await.state_revision,
+            &root,
+            Action::Delegate {
+                task,
+                agent_id: None,
+            },
+        )
+        .await?;
+    let existing = material("v1", "current evidence", true);
+    let mut newly_required = material("v1", "new required evidence", true);
+    newly_required.material_id = "newly_required".into();
+    session
+        .signals(
+            "new-requirement",
+            signal_update(&session, vec![existing.clone(), newly_required.clone()]).await,
+        )
+        .await?;
+    session
+        .signals(
+            "omit-requirement",
+            signal_update(&session, vec![existing]).await,
+        )
+        .await?;
+    let state = session.snapshot().await;
+    let allocation_id = &receipt.assigned_ids["allocation_id"];
+    assert!(
+        !state.allocations[allocation_id]
+            .input
+            .required_materials
+            .contains(&newly_required.material_id)
+    );
+    assert!(
+        state.agents[&workers[0]].queue[0]
+            .input
+            .required_materials
+            .contains(&newly_required.material_id)
+    );
+    // Root waits on its dispatched tool, so its own missing material cannot
+    // stop this regression before the reserved child's activation boundary.
+    session.drive().await?;
+    let done = session.snapshot().await;
+    assert!(
+        done.allocations[allocation_id]
+            .applied_state_revision
+            .is_none()
+    );
+    assert!(done.allocations[allocation_id].application_error.is_some());
+    let child = done.agents[&workers[0]]
+        .turn
+        .as_ref()
+        .ok_or("child turn missing")?;
+    assert!(child.steps.is_empty());
+    assert_eq!(
+        child.status,
+        bitrouter_orchestrator::core::session::AgentStatus::Failed
+    );
+    assert_eq!(
+        executor
+            .prompts
+            .lock()
+            .await
+            .iter()
+            .filter(|prompt| prompt
+                .system
+                .as_ref()
+                .is_some_and(|system| system.contains(&workers[0])))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn later_steps_do_not_certify_stale_history_as_fresh() -> TestResult {
+    let (session, _, _, root, workers) = idle_workers(1, true).await?;
+    let update = signal_update(&session, vec![material("v2", "changed material", true)]).await;
+    session.signals("changed", update).await?;
+    session
+        .start("second", session.head().await.state_revision, input())
+        .await?;
+    let mut task = work("explicit follow-up on retained history");
+    task.fresh_context = false;
+    session
+        .collaborate(
+            "followup",
+            session.head().await.state_revision,
+            &root,
+            Action::Followup {
+                task: task.clone(),
+                agent_id: workers[0].clone(),
+            },
+        )
+        .await?;
+    session.drive().await?;
+    let state = session.snapshot().await;
+    let versions = state.agents[&workers[0]]
+        .context_sources
+        .iter()
+        .flat_map(|source| &source.materials)
+        .map(|material| material.version.as_str())
+        .collect::<Vec<_>>();
+    assert!(versions.contains(&"v1"));
+    assert!(versions.contains(&"v2"));
+    session
+        .start("third", session.head().await.state_revision, input())
+        .await?;
+    let receipt = session
+        .collaborate(
+            "delegate",
+            session.head().await.state_revision,
+            &root,
+            Action::Delegate {
+                task,
+                agent_id: None,
+            },
+        )
+        .await?;
+    assert_ne!(receipt.assigned_ids["agent_id"], workers[0]);
+    let state = session.snapshot().await;
+    assert!(
+        state.allocations[&receipt.assigned_ids["allocation_id"]].candidates[0]
+            .rejection_reasons
+            .contains(&"material_version_changed".into())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_delegate_rejection_retains_allocation_and_call_pairing() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let mut task = work("missing exact target");
+    task.fresh_context = false;
+    let (session, executor, _) = setup(
+        vec![
+            output(vec![core_call(
+                "delegate_task",
+                json!({"task":task,"agent_id":"missing-agent"}),
+                "delegate-call",
+            )]),
+            output(vec![text("reported allocation failure")]),
+        ],
+        harness.clone(),
+        false,
+    )
+    .await?;
+    session.start("first", 1, input()).await?;
+    let done = session.drive().await?;
+    assert_eq!(done.agents.len(), 1);
+    assert_eq!(done.allocations.len(), 1);
+    let call = &done.root_turn().ok_or("missing root")?.core_calls[0];
+    let result = call.result.as_ref().ok_or("missing result")?;
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["error"]["commit_status"], "committed");
+    let allocation_id = result["allocation_id"]
+        .as_str()
+        .ok_or("missing allocation ID")?;
+    assert!(done.allocations[allocation_id].error.is_some());
+    assert!(call.consumed);
+    assert!(harness.sent.lock().await.is_empty());
+    let prompts = executor.prompts.lock().await;
+    let parts = prompts[1]
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        parts
+            .iter()
+            .filter(|part| matches!(part, Content::ToolCall { id, .. } if id == "delegate-call"))
+            .count(),
+        1
+    );
+    assert_eq!(parts.iter().filter(|part| matches!(part, Content::ToolResult { call_id, .. } if call_id == "delegate-call")).count(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_result_workspace_provenance_prevents_incorrect_reuse() -> TestResult {
+    for observed in [None, Some("workspace-v2")] {
+        let (session, executor, harness, root, workers) = idle_workers(1, true).await?;
+        session
+            .start("second", session.head().await.state_revision, input())
+            .await?;
+        let mut task = work("inspect an additional file");
+        task.fresh_context = false;
+        executor
+            .agent_once
+            .lock()
+            .await
+            .insert(workers[0].clone(), vec![call("read-evidence")]);
+        session
+            .collaborate(
+                "followup",
+                session.head().await.state_revision,
+                &root,
+                Action::Followup {
+                    task: task.clone(),
+                    agent_id: workers[0].clone(),
+                },
+            )
+            .await?;
+        session.drive().await?;
+        let command = harness
+            .sent
+            .lock()
+            .await
+            .last()
+            .cloned()
+            .ok_or("read was not dispatched")?;
+        assert_eq!(command.agent_id, workers[0]);
+        let mut report = result(&command);
+        report.workspace_revision = observed.map(str::to_owned);
+        session.tool_result("read-result", report).await?;
+        let done = session.drive().await?;
+        assert_eq!(
+            done.manifest.workspace_revision.as_deref(),
+            Some("workspace-v1")
+        );
+        assert!(
+            done.agents[&workers[0]]
+                .context_sources
+                .iter()
+                .any(|source| source.workspace_revision.as_deref() == observed)
+        );
+        session
+            .start("third", session.head().await.state_revision, input())
+            .await?;
+        let receipt = session
+            .collaborate(
+                "delegate",
+                session.head().await.state_revision,
+                &root,
+                Action::Delegate {
+                    task,
+                    agent_id: None,
+                },
+            )
+            .await?;
+        assert_ne!(receipt.assigned_ids["agent_id"], workers[0]);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn wait_observation_carries_the_conclusions_original_context() -> TestResult {
+    let (session, executor, _, root, workers) = idle_workers(1, true).await?;
+    let mut update = signal_update(&session, vec![material("v1", "current evidence", true)]).await;
+    update.workspace_revision = Some("workspace-v2".into());
+    update.manifest.workspace_revision = update.workspace_revision.clone();
+    session.signals("new-workspace", update).await?;
+    session
+        .start("second", session.head().await.state_revision, input())
+        .await?;
+    let observer = session
+        .collaborate(
+            "observer",
+            session.head().await.state_revision,
+            &root,
+            Action::Spawn {
+                task: work("observe an earlier worker conclusion"),
+            },
+        )
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    executor.agent_once.lock().await.insert(
+        observer.clone(),
+        vec![core_call(
+            "wait_agent",
+            json!({"agent_ids":[workers[0]],"timeout_ms":0}),
+            "observe-worker",
+        )],
+    );
+    let done = session.drive().await?;
+    let sources = &done.agents[&observer].context_sources;
+    assert!(
+        sources
+            .iter()
+            .any(|source| source.workspace_revision.as_deref() == Some("workspace-v1"))
+    );
+    assert!(
+        sources
+            .iter()
+            .any(|source| source.workspace_revision.as_deref() == Some("workspace-v2"))
+    );
+    let result = done.agents[&observer]
+        .turn
+        .as_ref()
+        .ok_or("observer turn missing")?
+        .core_calls[0]
+        .result
+        .as_ref()
+        .ok_or("wait result missing")?;
+    assert_eq!(
+        result["value"]["agents"][0]["context_sources"][0]["workspace_revision"],
+        "workspace-v1"
+    );
+    session
+        .start("third", session.head().await.state_revision, input())
+        .await?;
+    let mut task = work("next observation");
+    task.fresh_context = false;
+    let receipt = session
+        .collaborate(
+            "delegate",
+            session.head().await.state_revision,
+            &root,
+            Action::Delegate {
+                task,
+                agent_id: None,
+            },
+        )
+        .await?;
+    assert_ne!(receipt.assigned_ids["agent_id"], observer);
+    assert_ne!(receipt.assigned_ids["agent_id"], workers[0]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn unavailable_optional_history_falls_back_to_a_feasible_fresh_context() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, _, _) = setup(
+        (0..20).map(|_| output(vec![text("done")])).collect(),
+        harness.clone(),
+        false,
+    )
+    .await?;
+    let mut optional = material("v1", "optional evidence", true);
+    optional.required = false;
+    let mut update = signal_update(&session, vec![optional.clone()]).await;
+    update.workspace_revision = Some("workspace-v1".into());
+    update.manifest.workspace_revision = update.workspace_revision.clone();
+    session.signals("initial", update).await?;
+    let root = session
+        .start("first", session.head().await.state_revision, input())
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    let mut initial = work("use optional evidence");
+    initial
+        .required_materials
+        .push(optional.material_id.clone());
+    let worker = session
+        .collaborate(
+            "worker",
+            session.head().await.state_revision,
+            &root,
+            Action::Spawn {
+                task: initial.clone(),
+            },
+        )
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    session.drive().await?;
+    session
+        .signals("remove", signal_update(&session, Vec::new()).await)
+        .await?;
+    optional.content = None;
+    session
+        .signals("reintroduce", signal_update(&session, vec![optional]).await)
+        .await?;
+    session
+        .start("second", session.head().await.state_revision, input())
+        .await?;
+    initial.task_scope = Some("different fetch task".into());
+    session
+        .collaborate(
+            "fetcher",
+            session.head().await.state_revision,
+            &root,
+            Action::Spawn { task: initial },
+        )
+        .await?;
+    session.drive().await?;
+    let request = harness
+        .material_requests
+        .lock()
+        .await
+        .last()
+        .cloned()
+        .ok_or("missing material request")?;
+    session
+        .material_result(
+            "unavailable",
+            &request.0,
+            None,
+            Some("material is unavailable".into()),
+        )
+        .await?;
+    let mut task = work("work that does not need the optional evidence");
+    task.fresh_context = false;
+    let receipt = session
+        .collaborate(
+            "delegate",
+            session.head().await.state_revision,
+            &root,
+            Action::Delegate {
+                task,
+                agent_id: None,
+            },
+        )
+        .await?;
+    assert_ne!(receipt.assigned_ids["agent_id"], worker);
+    let state = session.snapshot().await;
+    let allocation = &state.allocations[&receipt.assigned_ids["allocation_id"]];
+    let candidate = allocation
+        .candidates
+        .iter()
+        .find(|candidate| candidate.agent_id.as_ref() == Some(&worker))
+        .ok_or("old worker not evaluated")?;
+    assert!(
+        candidate
+            .rejection_reasons
+            .contains(&"required_material_unavailable".into())
+    );
+    assert!(allocation.input.required_materials.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn delegate_skips_an_unavailable_earlier_worker_without_losing_the_later_candidate()
+-> TestResult {
+    let (session, _, _, root, workers) = idle_workers(2, true).await?;
+    session
+        .start("second", session.head().await.state_revision, input())
+        .await?;
+    session
+        .collaborate(
+            "message",
+            session.head().await.state_revision,
+            &root,
+            Action::Message {
+                agent_id: workers[0].clone(),
+                text: "unconsumed evidence".into(),
+            },
+        )
+        .await?;
+    let mut task = work("bounded new work");
+    task.fresh_context = false;
+    let receipt = session
+        .collaborate(
+            "delegate",
+            session.head().await.state_revision,
+            &root,
+            Action::Delegate {
+                task,
+                agent_id: None,
+            },
+        )
+        .await?;
+    assert_eq!(receipt.assigned_ids["agent_id"], workers[1]);
+    assert_eq!(session.snapshot().await.agents.len(), 3);
+    Ok(())
+}
+
 #[tokio::test]
 async fn assignment_cycles_include_idle_intermediate_ancestors() -> TestResult {
     let harness = Arc::new(Harness::new(None, Some("model.step.preparing")));
@@ -1769,6 +2638,7 @@ async fn assignment_cycles_include_idle_intermediate_ancestors() -> TestResult {
             agent_id: children[0].clone(),
             task,
         },
+        0,
         0,
     );
     assert_eq!(
@@ -2434,11 +3304,22 @@ async fn graph_capacity_and_ancestor_wait_reject_without_partial_acceptance() ->
             .map(|error| error.code),
         Some(ErrorCode::LimitExceeded)
     );
+    let after_rejection = session.head().await;
+    assert_eq!(after_rejection.state_revision, before.state_revision + 1);
+    assert_eq!(session.snapshot().await.agents.len(), 2);
+    assert_eq!(
+        session
+            .operation("overflow")
+            .await
+            .ok_or("missing rejection")?
+            .disposition,
+        bitrouter_orchestrator::core::protocol::OperationDisposition::Rejected
+    );
     assert_eq!(
         session
             .collaborate(
                 "cycle",
-                before.state_revision,
+                after_rejection.state_revision,
                 child,
                 Action::Wait {
                     agent_ids: vec![root.clone()],
@@ -2450,7 +3331,7 @@ async fn graph_capacity_and_ancestor_wait_reject_without_partial_acceptance() ->
             .map(|error| error.code),
         Some(ErrorCode::OperationConflict)
     );
-    assert_eq!(session.head().await, before);
+    assert_eq!(session.head().await, after_rejection);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
     Ok(())
 }
@@ -3218,6 +4099,7 @@ async fn observer_disconnect_prevents_attempt_and_transformed_tools_remain_froze
         table.insert("fixture-model", vec![target("first")]);
         let executor = Arc::new(RecordingExecutor {
             mock: MockExecutor::new(vec![output(vec![call("call_1")])]),
+            agent_once: Mutex::new(Default::default()),
             prompts: Mutex::new(Vec::new()),
             calls: AtomicUsize::new(0),
         });

@@ -8,6 +8,7 @@ use bitrouter_sdk::language_model::types::{Message, Role, Tool};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::allocation::{self, ContextKind, ContextSource, Intent};
 use super::protocol::{CoreError, ErrorCode, TaskInput};
 use super::session::{AgentState, AgentStatus, AgentTurn, RunStatus, SessionSnapshot};
 
@@ -88,6 +89,7 @@ pub struct Mail {
     pub sender_turn_id: String,
     pub kind: String,
     pub content: Value,
+    pub context_sources: Vec<ContextSource>,
     pub consumed: bool,
 }
 
@@ -98,6 +100,7 @@ pub struct Assignment {
     pub sender_id: String,
     pub input: TaskInput,
     pub required_instructions: Vec<String>,
+    pub allocation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +138,10 @@ pub struct Call {
 pub enum Applied {
     Complete(Value),
     Waiting(WaitState),
+    Rejected {
+        allocation_id: String,
+        error: CoreError,
+    },
 }
 
 pub fn declarations() -> Vec<Tool> {
@@ -164,6 +171,7 @@ pub fn apply(
     actor_id: &str,
     action: &Action,
     now_ms: u64,
+    state_revision: u64,
 ) -> Result<Applied, CoreError> {
     let actor = state
         .agents
@@ -188,39 +196,17 @@ pub fn apply(
         ));
     }
     let result = match action {
-        Action::Spawn { task } => spawn(state, actor_id, task)?,
+        Action::Spawn { task } => {
+            return allocate(state, actor_id, task, Intent::Spawn, state_revision);
+        }
         Action::Delegate { task, agent_id } => {
-            if let Some(target) = agent_id {
-                reuse(state, actor_id, target, task)?
-            } else {
-                let eligible =
-                    if task.fresh_context || task.independent_review || task.task_scope.is_none() {
-                        None
-                    } else {
-                        state
-                            .agents
-                            .iter()
-                            .find(|(id, candidate)| {
-                                id.as_str() != state.agent_id
-                                    && candidate.task_scope == task.task_scope
-                                    && candidate.permission_revision
-                                        == state.manifest.permission_revision
-                                    && candidate.workspace_revision
-                                        == state.manifest.workspace_revision
-                                    && candidate
-                                        .turn
-                                        .as_ref()
-                                        .is_some_and(|turn| turn.status.terminal())
-                                    && candidate.queue.is_empty()
-                            })
-                            .map(|(id, _)| id.clone())
-                    };
-                if let Some(target) = eligible {
-                    reuse(state, actor_id, &target, task)?
-                } else {
-                    spawn(state, actor_id, task)?
-                }
-            }
+            return allocate(
+                state,
+                actor_id,
+                task,
+                Intent::Delegate(agent_id.as_deref()),
+                state_revision,
+            );
         }
         Action::Message { agent_id, text } => {
             if text.is_empty() {
@@ -326,38 +312,85 @@ pub fn apply(
     Ok(Applied::Complete(result))
 }
 
-fn spawn(state: &mut SessionSnapshot, actor_id: &str, task: &Work) -> Result<Value, CoreError> {
-    let work = assignment(state, actor_id, task)?;
-    let run = state
-        .run
-        .as_ref()
-        .ok_or_else(|| reject(ErrorCode::Busy, "no active run"))?;
+fn allocate(
+    state: &mut SessionSnapshot,
+    actor_id: &str,
+    task: &Work,
+    intent: Intent<'_>,
+    state_revision: u64,
+) -> Result<Applied, CoreError> {
+    let mut work = assignment(state, actor_id, task)?;
+    let mut decision = allocation::choose(state, actor_id, task, &work, intent, state_revision)?;
+    let allocation_id = decision.allocation_id.clone();
+    work.allocation_id = Some(allocation_id.clone());
+    if let Some(error) = &decision.error {
+        let error = error.clone();
+        state.allocations.insert(allocation_id.clone(), decision);
+        return Ok(Applied::Rejected {
+            allocation_id,
+            error,
+        });
+    }
+    let chosen = decision
+        .candidates
+        .iter()
+        .find(|candidate| Some(&candidate.candidate_id) == decision.selected_candidate_id.as_ref())
+        .ok_or_else(|| {
+            reject(
+                ErrorCode::CheckpointConflict,
+                "allocation has no selected candidate",
+            )
+        })?;
+    let turn_id = work.assignment_id.clone();
+    let (agent_id, created) = if chosen.kind == ContextKind::Reuse {
+        let target = chosen.agent_id.as_ref().ok_or_else(|| {
+            reject(
+                ErrorCode::CheckpointConflict,
+                "reuse candidate has no agent",
+            )
+        })?;
+        let agent = non_root_mut(state, target)?;
+        // Evidence retained in the reused history remains a required dependency
+        // of the new task, even when it was optional to the assigning agent.
+        work.input = allocation::reuse_input(&work.input, agent);
+        decision.input = work.input.clone();
+        agent.queue.push_back(work);
+        (target.clone(), false)
+    } else {
+        decision.applied_state_revision = Some(state_revision + 1);
+        (spawn(state, actor_id, task, work, chosen.kind)?, true)
+    };
+    decision.selected_agent_id = Some(agent_id.clone());
+    state.allocations.insert(allocation_id.clone(), decision);
+    Ok(Applied::Complete(
+        json!({"agent_id":agent_id,"agent_turn_id":turn_id,"created":created,"allocation_id":allocation_id}),
+    ))
+}
+
+fn spawn(
+    state: &mut SessionSnapshot,
+    actor_id: &str,
+    task: &Work,
+    work: Assignment,
+    kind: ContextKind,
+) -> Result<String, CoreError> {
     let parent = state
         .agents
         .get(actor_id)
         .ok_or_else(|| reject(ErrorCode::UnauthorizedScope, "unknown parent"))?;
-    if state.agents.len() >= run.limits.agents as usize || parent.depth >= run.limits.child_depth {
-        return Err(reject(
-            ErrorCode::LimitExceeded,
-            "agent tree capacity exhausted",
-        ));
-    }
     let agent_id = id("agent");
-    let mut history = if task.fresh_context || task.independent_review {
-        Vec::new()
+    let mut history = if kind == ContextKind::Inherited {
+        allocation::inherited_history(parent).to_vec()
     } else {
-        // Inherit paired history, excluding injected materials: each child
-        // resolves the current inventory instead of carrying stale versions.
-        parent
-            .turn
-            .as_ref()
-            .and_then(|turn| turn.steps.last())
-            .map(|step| step.input_history.clone())
-            .unwrap_or_default()
+        Vec::new()
+    };
+    let context_sources = if kind == ContextKind::Inherited {
+        parent.context_sources.clone()
+    } else {
+        Vec::new()
     };
     let required_instructions = work.required_instructions.clone();
     history.push(Message::text(Role::User, &work.input.text));
-    let turn_id = work.assignment_id.clone();
     state.agents.insert(
         agent_id.clone(),
         AgentState {
@@ -372,54 +405,11 @@ fn spawn(state: &mut SessionSnapshot, actor_id: &str, task: &Work) -> Result<Val
             queue: VecDeque::new(),
             mailbox: Vec::new(),
             task_scope: task.task_scope.clone(),
-            permission_revision: state.manifest.permission_revision,
-            workspace_revision: state.manifest.workspace_revision.clone(),
+            context_sources,
             last_scheduled: 0,
         },
     );
-    Ok(json!({"agent_id":agent_id,"agent_turn_id":turn_id,"created":true}))
-}
-
-fn reuse(
-    state: &mut SessionSnapshot,
-    actor_id: &str,
-    target: &str,
-    task: &Work,
-) -> Result<Value, CoreError> {
-    if task.fresh_context || task.independent_review {
-        return Err(reject(
-            ErrorCode::NoFeasibleRoute,
-            "fresh or independent work cannot reuse a context",
-        ));
-    }
-    if reaches(state, target, actor_id, &mut BTreeSet::new()) {
-        return Err(reject(
-            ErrorCode::OperationConflict,
-            "assignment would create a dependency cycle",
-        ));
-    }
-    let work = assignment(state, actor_id, task)?;
-    let permission = state.manifest.permission_revision;
-    let workspace = state.manifest.workspace_revision.clone();
-    let agent = non_root_mut(state, target)?;
-    if agent
-        .turn
-        .as_ref()
-        .is_none_or(|turn| !turn.status.terminal())
-        || !agent.queue.is_empty()
-        || task.task_scope.is_none()
-        || agent.task_scope != task.task_scope
-        || agent.permission_revision != permission
-        || agent.workspace_revision != workspace
-    {
-        return Err(reject(
-            ErrorCode::NoFeasibleRoute,
-            "target context is not eligible for reuse",
-        ));
-    }
-    let turn_id = work.assignment_id.clone();
-    agent.queue.push_back(work);
-    Ok(json!({"agent_id":target,"agent_turn_id":turn_id,"created":false}))
+    Ok(agent_id)
 }
 
 fn assignment(
@@ -471,6 +461,7 @@ fn assignment(
         sender_id: actor_id.into(),
         input,
         required_instructions,
+        allocation_id: None,
     })
 }
 
@@ -480,6 +471,7 @@ pub fn new_turn(work: Assignment) -> AgentTurn {
         agent_turn_id: work.assignment_id,
         assigned_by: work.sender_id,
         input: work.input,
+        allocation_id: work.allocation_id,
         status: AgentStatus::Runnable,
         steps: Vec::new(),
         invocations: Vec::new(),
@@ -497,10 +489,14 @@ pub fn enqueue_mail(
     kind: &str,
     content: Value,
 ) -> Result<String, CoreError> {
-    let sender_turn_id = state
+    let sender_agent = state
         .agents
         .get(sender)
-        .and_then(|agent| agent.turn.as_ref())
+        .ok_or_else(|| reject(ErrorCode::UnauthorizedScope, "unknown message sender"))?;
+    let context_sources = sender_agent.context_sources.clone();
+    let sender_turn_id = sender_agent
+        .turn
+        .as_ref()
         .map(|turn| turn.agent_turn_id.clone())
         .ok_or_else(|| reject(ErrorCode::UnauthorizedScope, "unknown message sender"))?;
     let limit = state
@@ -538,6 +534,7 @@ pub fn enqueue_mail(
         sender_turn_id,
         kind: kind.into(),
         content,
+        context_sources,
         consumed: archived,
     });
     Ok(message_id)
@@ -576,14 +573,21 @@ fn wait_target(agent: &AgentState) -> Option<WaitTarget> {
 pub fn wait_result(state: &SessionSnapshot, wait: &WaitState, now_ms: u64) -> Value {
     let agents = wait.targets.keys().filter_map(|id| state.agents.get(id)).filter_map(|agent| {
         let target = wait_target(agent)?;
+        let answer = agent.turn.as_ref().filter(|turn| turn.agent_turn_id == target.agent_turn_id).and_then(|turn| turn.final_answer.as_ref());
         Some(json!({
             "agent_id":agent.agent_id,
             "agent_turn_id":target.agent_turn_id,
             "status":target.status.map_or_else(|| json!("queued"), |status| json!(status)),
-            "final_answer":agent.turn.as_ref().filter(|turn| turn.agent_turn_id == target.agent_turn_id).and_then(|turn| turn.final_answer.as_ref()),
+            "final_answer":answer,
+            "provenance":"agent_conclusion",
+            "context_sources":if answer.is_some() { agent.context_sources.as_slice() } else { &[] },
         }))
     }).collect::<Vec<_>>();
     json!({"timed_out":now_ms>=wait.deadline_ms,"agents":agents})
+}
+
+pub(crate) fn assignment_cycle(state: &SessionSnapshot, target: &str, actor: &str) -> bool {
+    reaches(state, target, actor, &mut BTreeSet::new())
 }
 
 fn reaches(state: &SessionSnapshot, from: &str, target: &str, seen: &mut BTreeSet<String>) -> bool {

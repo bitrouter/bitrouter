@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: reviewed signals and prepared-plan records below; joint feasibility and allocation pending |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: reviewed signals, prepared-plan records and worker allocation below; model capacity and reconstruction pending |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -254,3 +254,62 @@ capacity/output-allowance checks, reconstruction, priced cost receipts and
 protocol-specific cache observations remain pending. Token estimates/capacity,
 cost and cache observations are explicitly unknown in these records. The full
 C4–C6 delivery, A01–A23 audit, final workspace checks, PR and CI remain required.
+
+## C3 worker allocation and retained context provenance
+
+Explicit spawn and bounded delegation now commit context candidate evaluations.
+Delegation prefers eligible idle workers in stable agent-ID order, then a fresh
+child. An exact target has no fallback; independent/fresh work cannot reuse a
+worker. Fixed context mode permits these explicit operations just as auto mode
+does. A selected allocation is referenced by the assignment, turn and subsequent
+model decisions. Context eligibility does not assert model/token feasibility.
+
+Reuse requires an exact nonempty scope, settled calls and effects, no queued work
+or unconsumed mail, no dependent work/cycle, paired history, known matching
+workspace versions, and matching permissions, tool manifests and material
+identities. Retained context keeps cumulative provenance across turns, inherited
+history, messages, wait observations and harness results. A newer model step
+cannot certify older evidence as newly observed. Tool-result workspace revisions
+remain per-result evidence rather than overwriting the current harness signal.
+
+Candidate material checks include dependencies retained by the proposed worker,
+not just the assigning task. An unavailable optional historical dependency can
+exclude reuse while leaving the fresh candidate feasible. Queued activation and
+first-step admission check effective work requirements again, including IDs
+pinned by later signals. Stale activation is durably rejected without a model
+attempt; the assigning agent receives the failed task outcome.
+
+Rejected allocation decisions and their operation receipts are durable. Runtime
+errors then report `commit_status=committed` for the rejection record, without
+accepting or retargeting the requested work. Same-ID retries return the original
+error; clients can inspect the operation and allocation IDs and must use the new
+committed revision for a different operation. Model-originated rejections retain
+the same decision evidence and a paired failed collaboration result.
+
+- SDK/orchestrator all-feature nextest: 1164 passed, 2 skipped, including
+  62 core execution tests.
+- SDK/orchestrator all-feature doctests: 5 passed, 1 ignored. Strict
+  all-target/all-feature SDK/orchestrator clippy, formatting and diff checks
+  passed.
+- Regressions execute real worker reuse in both routing modes; stable ties and
+  exclusion of unavailable earlier candidates; fresh fallback for unknown or
+  changed facts, isolation and busy workers; exact-target rejection/replay;
+  context/decision/attempt joins; and reservation invalidation after signals.
+- Independent review found and fixed missing tool-result and wait-conclusion
+  provenance, availability checks that omitted retained optional dependencies,
+  and activation checks that used the original input instead of requirements
+  pinned by later signals. Each has an executable regression. Follow-up review
+  found no remaining concrete blocker within this segment.
+
+Workspace validation at this checkpoint is incomplete. The default-concurrency
+`cargo nextest run --all-features` stopped after 1600 of 3686 selected tests:
+1595 passed and five background CLI tests hit their 15-second deadlines. All
+eight tests selected by `test(background::)` subsequently passed with one test
+thread. This narrows the issue to investigate but does not establish a passing
+full run. Workspace all-feature doctests passed (5 passed, 1 ignored); a bounded
+full nextest run and workspace clippy still need to finish before final delivery.
+
+C3 remains open: provider capability/capacity and output-reservation checks,
+infeasible continuation reconstruction, priced cost receipts and protocol-aware
+cache/continuation observations still require implementation and review. C4–C6,
+the full A01–A23 audit, final workspace validation, PR and CI remain required.
