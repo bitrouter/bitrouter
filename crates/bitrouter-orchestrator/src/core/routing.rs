@@ -107,6 +107,8 @@ impl ContextManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingDecision {
     pub decision_id: String,
+    /// The committed task allocation is shared by every step in this turn.
+    pub allocation_id: Option<String>,
     pub policy_id: String,
     pub source: String,
     pub input_state_revision: u64,

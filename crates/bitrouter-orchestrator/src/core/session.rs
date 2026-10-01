@@ -21,6 +21,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 
 use super::activity::Activity;
+use super::allocation::{ContextAllocation, ContextSource};
 use super::checkpoint::{
     BatchIdentity, Checkpoint, CheckpointAck, CheckpointBatch, CheckpointPayload, CommitGate,
     DurableEvent, DurableHead, sha256,
@@ -145,6 +146,7 @@ pub struct AgentTurn {
     pub agent_turn_id: String,
     pub assigned_by: String,
     pub input: TaskInput,
+    pub allocation_id: Option<String>,
     pub status: AgentStatus,
     pub steps: Vec<ModelStep>,
     pub invocations: Vec<Invocation>,
@@ -167,8 +169,7 @@ pub struct AgentState {
     pub queue: VecDeque<Assignment>,
     pub mailbox: Vec<Mail>,
     pub task_scope: Option<String>,
-    pub permission_revision: u64,
-    pub workspace_revision: Option<String>,
+    pub context_sources: Vec<ContextSource>,
     pub last_scheduled: u64,
 }
 
@@ -182,6 +183,7 @@ pub struct SessionSnapshot {
     pub operations: BTreeMap<String, OperationReceipt>,
     pub waits: BTreeMap<String, RuntimeWait>,
     pub signals: SignalState,
+    pub allocations: BTreeMap<String, ContextAllocation>,
 }
 
 impl SessionSnapshot {
@@ -257,8 +259,7 @@ impl CoreSession {
             queue: VecDeque::new(),
             mailbox: Vec::new(),
             task_scope: None,
-            permission_revision: binding.manifest.permission_revision,
-            workspace_revision: binding.manifest.workspace_revision.clone(),
+            context_sources: Vec::new(),
             last_scheduled: 0,
         };
         let state = SessionSnapshot {
@@ -270,6 +271,7 @@ impl CoreSession {
             signals: SignalState::default(),
             run: None,
             operations: BTreeMap::new(),
+            allocations: BTreeMap::new(),
         };
         let session = Self {
             shared: Arc::new(Shared {
@@ -372,6 +374,7 @@ impl CoreSession {
                 agent_turn_id: turn_id.clone(),
                 assigned_by: agent.agent_id.clone(),
                 input: input.clone(),
+                allocation_id: None,
                 status: AgentStatus::Runnable,
                 steps: Vec::new(),
                 invocations: Vec::new(),
@@ -861,8 +864,29 @@ impl CoreSession {
                 };
             }
             if !agent.queue.is_empty() {
-                self.transition_for(Some(agent_id), "agent.followup.started", |state, _| {
+                self.transition_for(Some(agent_id), "agent.followup.started", |state, head| {
                     let run_id = active_run(state)?.run_id.clone();
+                    let source = state.agents.get(agent_id).ok_or_else(|| {
+                        reject(ErrorCode::UnauthorizedScope, "unknown queued agent")
+                    })?;
+                    let queued = source
+                        .queue
+                        .front()
+                        .ok_or_else(|| reject(ErrorCode::Busy, "follow-up queue is empty"))?;
+                    let allocation_id = queued.allocation_id.clone();
+                    let rejection = allocation_id.as_ref().and_then(|id| {
+                        super::allocation::validate_reuse(state, source, id, &queued.input, true)
+                            .err()
+                    });
+                    if let Some(id) = &allocation_id {
+                        let record = state.allocations.get_mut(id).ok_or_else(|| {
+                            reject(ErrorCode::CheckpointConflict, "queued allocation missing")
+                        })?;
+                        record.application_error = rejection.clone();
+                        if rejection.is_none() {
+                            record.applied_state_revision = Some(head.state_revision + 1);
+                        }
+                    }
                     let agent = agent_mut(state, agent_id)?;
                     if agent
                         .turn
@@ -876,6 +900,13 @@ impl CoreSession {
                         .queue
                         .pop_front()
                         .ok_or_else(|| reject(ErrorCode::Busy, "follow-up queue is empty"))?;
+                    if let Some(error) = rejection {
+                        let mut turn = collaboration::new_turn(work);
+                        turn.status = AgentStatus::Failed;
+                        turn.terminal_reason = Some(error.to_string());
+                        agent.turn = Some(turn);
+                        return Ok(json!({"allocation_id":allocation_id,"error":error}));
+                    }
                     agent
                         .history
                         .push(Message::text(Role::User, &work.input.text));
@@ -948,6 +979,9 @@ impl CoreSession {
                     return Err(reject(ErrorCode::Busy, "mailbox safe boundary changed"));
                 }
                 let mail = agent.mailbox.iter_mut().filter(|mail| !mail.consumed).map(|mail| { mail.consumed = true; mail.clone() }).collect::<Vec<_>>();
+                for source in mail.iter().flat_map(|mail| &mail.context_sources) {
+                    if !agent.context_sources.contains(source) { agent.context_sources.push(source.clone()); }
+                }
                 agent.history.push(Message::text(Role::User, format!("Messages from agents (unverified conclusions retain provenance):\n{}", serde_json::to_string(&mail).map_err(json_error)?)));
                 agent.context_revision += 1;
                 if let Some(turn) = &mut agent.turn { turn.final_answer = None; turn.status = AgentStatus::Runnable; }
@@ -1288,7 +1322,7 @@ impl CoreSession {
         if interrupt {
             self.block_dispatch(&call.invocation_id).await;
         }
-        let committed = self.transition_for(Some(agent_id), "collaboration.applied", |state, _| {
+        let committed = self.transition_for(Some(agent_id), "collaboration.applied", |state, head| {
             let limit = active_run(state)?.limits.input_bytes;
             let applied = if let Some(wait) = &call.wait {
                 Ok(Applied::Complete(collaboration::wait_result(state,wait,now)))
@@ -1296,7 +1330,7 @@ impl CoreSession {
                 Err(reject(ErrorCode::LimitExceeded, "collaboration input exceeds bound"))
             } else {
                 let mut candidate = state.clone();
-                match collaboration::apply(&mut candidate, agent_id, &call.action, now) {
+                match collaboration::apply(&mut candidate, agent_id, &call.action, now, head.state_revision) {
                     Ok(applied) => { *state = candidate; Ok(applied) }
                     Err(error) => Err(error),
                 }
@@ -1306,6 +1340,10 @@ impl CoreSession {
             match applied {
                 Ok(Applied::Complete(value)) => retained.result = Some(json!({"ok":true,"value":value})),
                 Ok(Applied::Waiting(wait)) => retained.wait = Some(wait),
+                Ok(Applied::Rejected { allocation_id, mut error }) => {
+                    error.commit_status = CommitStatus::Committed;
+                    retained.result = Some(json!({"ok":false,"error":error,"allocation_id":allocation_id}));
+                }
                 Err(error) => retained.result = Some(json!({"ok":false,"error":error})),
             }
             let result = retained.result.clone();
@@ -1336,7 +1374,7 @@ impl CoreSession {
             &json!({"source":"runtime","actor_id":actor_id,"expected_state_revision":expected_revision,"action":action}),
         )?;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
-            return Ok(receipt);
+            return collaboration_receipt(receipt);
         }
         let interrupt = matches!(action, Action::Interrupt { .. });
         if interrupt {
@@ -1348,7 +1386,7 @@ impl CoreSession {
                 if interrupt {
                     self.resolve_dispatch_block(operation_id, &Ok(())).await;
                 }
-                return Ok(receipt);
+                return collaboration_receipt(receipt);
             }
             Err(error) => {
                 if interrupt {
@@ -1375,9 +1413,10 @@ impl CoreSession {
                         "runtime action exceeds input bound",
                     ));
                 }
-                let applied = collaboration::apply(state, actor_id, &action, now_ms()?)?;
-                let (value, disposition) = match applied {
-                    Applied::Complete(value) => (value, OperationDisposition::Applied),
+                let applied =
+                    collaboration::apply(state, actor_id, &action, now_ms()?, head.state_revision)?;
+                let (value, disposition, error) = match applied {
+                    Applied::Complete(value) => (value, OperationDisposition::Applied, None),
                     Applied::Waiting(wait) => {
                         state.waits.insert(
                             operation_id.into(),
@@ -1390,6 +1429,18 @@ impl CoreSession {
                         (
                             json!({"wait_id":operation_id}),
                             OperationDisposition::Accepted,
+                            None,
+                        )
+                    }
+                    Applied::Rejected {
+                        allocation_id,
+                        mut error,
+                    } => {
+                        error.commit_status = CommitStatus::Committed;
+                        (
+                            json!({"allocation_id":allocation_id}),
+                            OperationDisposition::Rejected,
+                            Some(error),
                         )
                     }
                 };
@@ -1411,7 +1462,7 @@ impl CoreSession {
                         disposition,
                         assigned_ids,
                         state_revision: head.state_revision + 1,
-                        error: None,
+                        error,
                     },
                 );
                 Ok(json!({"source":"runtime","action":action,"result":value}))
@@ -1421,12 +1472,15 @@ impl CoreSession {
             self.resolve_dispatch_block(operation_id, &result).await;
         }
         result?;
-        self.operation(operation_id).await.ok_or_else(|| {
-            reject(
-                ErrorCode::CheckpointUnavailable,
-                "runtime action receipt missing",
-            )
-        })
+        self.operation(operation_id)
+            .await
+            .ok_or_else(|| {
+                reject(
+                    ErrorCode::CheckpointUnavailable,
+                    "runtime action receipt missing",
+                )
+            })
+            .and_then(collaboration_receipt)
     }
 
     /// Runtime waits observe committed state without taking an agent model
@@ -2092,6 +2146,7 @@ impl CoreSession {
                 ));
             }
             step.settled = true;
+            let context_source = ContextSource::capture(&step.context);
             if calls.is_empty() && core_calls.is_empty() {
                 let answer = message
                     .content
@@ -2115,6 +2170,9 @@ impl CoreSession {
             turn.invocations.extend(calls);
             turn.core_calls.extend(core_calls);
             agent.history.push(message);
+            if !agent.context_sources.contains(&context_source) {
+                agent.context_sources.push(context_source);
+            }
             agent.context_revision += 1;
             Ok(json!({"step_id":step_id,"request_id":request_id}))
         })
@@ -2225,6 +2283,7 @@ impl CoreSession {
                 .as_mut()
                 .ok_or_else(|| reject(ErrorCode::Busy, "agent has no turn"))?;
             let mut messages = Vec::new();
+            let mut context_sources = Vec::new();
             let mut verified = None;
             for call in turn.invocations.iter_mut().filter(|call| !call.consumed) {
                 let result = call
@@ -2236,6 +2295,14 @@ impl CoreSession {
                         ErrorCode::RecoveryRequired,
                         "tool effect is unknown",
                     ));
+                }
+                if matches!(result.status, ToolOutcome::Succeeded | ToolOutcome::Failed) {
+                    context_sources.push(ContextSource {
+                        permission_revision: call.dispatch.permission_revision,
+                        workspace_revision: result.workspace_revision.clone(),
+                        tool_manifest_digest: call.dispatch.tool_manifest_digest.clone(),
+                        materials: Vec::new(),
+                    });
                 }
                 if call.dispatch.verification {
                     verified = Some(result.status == ToolOutcome::Succeeded);
@@ -2266,6 +2333,16 @@ impl CoreSession {
                 let result = call.result.as_ref().ok_or_else(|| {
                     reject(ErrorCode::Busy, "collaboration batch is not complete")
                 })?;
+                if matches!(call.action, Action::Wait { .. })
+                    && let Some(observations) = result["value"]["agents"].as_array()
+                {
+                    for observation in observations {
+                        let sources: Vec<ContextSource> =
+                            serde_json::from_value(observation["context_sources"].clone())
+                                .map_err(json_error)?;
+                        context_sources.extend(sources);
+                    }
+                }
                 messages.push(Message {
                     role: Role::Tool,
                     content: vec![Content::ToolResult {
@@ -2287,6 +2364,11 @@ impl CoreSession {
                 turn.terminal_reason = Some(format!("harness verification succeeded: {success}"));
             }
             agent.history.extend(messages);
+            for source in context_sources {
+                if !agent.context_sources.contains(&source) {
+                    agent.context_sources.push(source);
+                }
+            }
             agent.context_revision += 1;
             Ok(json!({}))
         })
@@ -2621,6 +2703,7 @@ impl NativeExecutionControl for StepControl {
                 rejection = validate_step_source(state, &self.agent_id, &self.step_id).err();
                 let turn = agent_turn(state, &self.agent_id)?;
                 let modes = turn.input.routing.clone();
+                let allocation_id = turn.allocation_id.clone();
                 if let Some(effort) = parse_effort(turn.input.effort.as_deref())?
                     && plan.prompt.params.reasoning_effort != Some(effort)
                 {
@@ -2642,6 +2725,7 @@ impl NativeExecutionControl for StepControl {
                 let candidate = format!("{}:{}", step.context.context_id, step.context.revision);
                 let decision = RoutingDecision {
                     decision_id: step.decision_id.clone(),
+                    allocation_id,
                     policy_id: "core_rules_v1".into(),
                     source: if modes.model == super::protocol::ModelMode::Fixed {
                         "fixed_override".into()
@@ -2784,6 +2868,16 @@ fn validate_step_source(
     agent_id: &str,
     step_id: &str,
 ) -> Result<(), CoreError> {
+    let agent = state
+        .agents
+        .get(agent_id)
+        .ok_or_else(|| reject(ErrorCode::UnauthorizedScope, "unknown step agent"))?;
+    if let Some(turn) = &agent.turn
+        && turn.steps.len() == 1
+        && let Some(allocation_id) = &turn.allocation_id
+    {
+        super::allocation::validate_reuse(state, agent, allocation_id, &turn.input, false)?;
+    }
     let step = state
         .agents
         .get(agent_id)
@@ -2807,7 +2901,7 @@ fn final_verification(turn: &AgentTurn) -> Option<&Invocation> {
         .find(|call| call.dispatch.verification && call.dispatch.step_id == step.step_id)
 }
 
-fn pending_dependencies(state: &SessionSnapshot, agent_id: &str) -> bool {
+pub(crate) fn pending_dependencies(state: &SessionSnapshot, agent_id: &str) -> bool {
     let descendants = collaboration::subtree(state, agent_id);
     state.agents.values().any(|agent| {
         if agent.agent_id == agent_id {
@@ -3092,4 +3186,11 @@ fn refresh_run(state: &mut SessionSnapshot) {
     } else {
         RunStatus::Waiting
     };
+}
+
+fn collaboration_receipt(receipt: OperationReceipt) -> Result<OperationReceipt, CoreError> {
+    match &receipt.error {
+        Some(error) => Err(error.clone()),
+        None => Ok(receipt),
+    }
 }
