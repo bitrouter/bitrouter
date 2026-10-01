@@ -17,6 +17,8 @@ metadata:
 # BitRouter
 BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4.
 
+Native BRO execution commits task/model/tool facts to the database; `references/cli.md` covers capabilities and restart limitations.
+
 ## Activate in one pass
 Work top to bottom, probing before asking.
 
@@ -28,8 +30,7 @@ bro providers list     # ID  MODELS  ACTIVE  API_BASE
 ```
 
 These emit JSON by default (`--human` is readable). Branch on the result:
-missing command → §2; no active providers → §3; stopped daemon → `start`; both
-ready → §5.
+missing command → §2; no active providers → §3; stopped daemon → `start`; both ready → §5.
 
 ### 2. Install
 ```bash
@@ -45,7 +46,6 @@ Verify with `bro --version`; on failure read `references/diagnose.md`.
 A human runs `bro` to complete onboarding using searchable Up/Down lists of registry
 providers (including BitRouter Cloud), ACP harnesses and actions. Credentials alone do not mark setup complete.
 For scripted setup:
-
 ```bash
 bro init --yes --use-detected --harness codex --after exit
 ```
@@ -69,7 +69,6 @@ bro providers login bitrouter      # hosted; same sign-in as `cloud login`
 ```
 
 Auth is catalog-derived; `references/providers.md` lists each login method.
-
 **b. Hosted BitRouter for everything else.** Signing in adds a managed
 `bitrouter` provider to this daemon; it is not a second deployment.
 
@@ -104,9 +103,10 @@ Same-worktree runs require the warned override. Read `references/sessions.md` fi
 `bro task run` joins `bro serve`, subscribes to NDJSON events, requires `--model`, and
 approves its own tools. `--check` adds verification; otherwise it is unavailable.
 Bare `bro code` streams assistant and shell output and asks before effects.
-`--read-only` on either native entry point permits `read`, `ls`, `find`, `grep`.
+`--read-only` on either native entry point permits `read`, `glob`, `grep`.
 Coding tasks also expose `write`, `edit` (unique `edits: [{oldText, newText}]`),
-and `bash` on Unix or `powershell` on Windows. `code <agent>` and `run <agent>`
+and `shell` on Unix and Windows. `read` accepts files/directories including `"."`;
+`shell` declares the server-selected interpreter and shares it with `--check`. `code <agent>` and `run <agent>`
 stay ACP. Native tasks are held in server memory: detach keeps them running;
 restart loses them. Never automatically resubmit after instance loss.
 See `references/cli.md` for reattach, task API, and interface details.
@@ -152,7 +152,6 @@ For administration from another computer, use a named `--context`; see
 boundaries. Remote errors never fall back to this machine's configuration.
 
 ## References — read on demand, not upfront
-
 | File | When to read |
 |---|---|
 | `references/cli.md` | Full subcommand reference — the primary reference |

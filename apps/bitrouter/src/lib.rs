@@ -24,6 +24,7 @@ pub mod agent_api;
 pub mod agent_local;
 pub mod agent_registry;
 pub mod agent_sessions;
+pub mod agent_store;
 pub mod agents;
 pub mod assemble;
 pub mod auth;

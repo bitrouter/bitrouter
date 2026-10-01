@@ -26,9 +26,12 @@ async fn separate_process_client_and_server_finish_verified_coding_task() -> Res
             let turn = turns_for_reply.fetch_add(1, Ordering::SeqCst);
             let body = if turn == 0 {
                 tool_sse(vec![
-                    tool_call(0, "read-1", "read", json!({"path": "note.txt"})),
+                    tool_call(0, "read-1", "read", json!({"path": ".", "limit": 1})),
+                    tool_call(3, "glob-1", "glob", json!({"pattern": "*.txt"})),
+                    tool_call(4, "grep-1", "grep", json!({"pattern": "before"})),
+                    tool_call(5, "write-1", "write", json!({"path": "NOTES.md", "content": "Updated note."})),
                     tool_call(1, "edit-1", "edit", json!({"path": "note.txt", "edits": [{"oldText": "before", "newText": "after"}]})),
-                    tool_call(2, "bash-1", "bash", json!({"command": "cat note.txt"})),
+                    tool_call(2, "shell-1", "shell", json!({"command": "cat note.txt"})),
                 ])
             } else {
                 text_sse("Changed note.txt and checked it.")
@@ -90,6 +93,28 @@ async fn separate_process_client_and_server_finish_verified_coding_task() -> Res
         turns.load(Ordering::SeqCst) == 2,
         "expected two routed model turns"
     );
+    ensure!(std::fs::read_to_string(workspace.join("NOTES.md"))? == "Updated note.");
+    for request in upstream
+        .received_requests()
+        .await
+        .context("missing model requests")?
+    {
+        let body: Value = serde_json::from_slice(&request.body)?;
+        let names: Vec<_> = body["tools"]
+            .as_array()
+            .context("missing tools")?
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        ensure!(names == ["read", "glob", "grep", "write", "edit", "shell"]);
+        ensure!(
+            body["tools"][5]["function"]["description"]
+                .as_str()
+                .is_some_and(
+                    |description| description.contains("Bash") || description.contains("POSIX sh")
+                )
+        );
+    }
     let lines = stdout
         .lines()
         .map(serde_json::from_str::<Value>)

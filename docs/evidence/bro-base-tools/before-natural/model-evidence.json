@@ -1,0 +1,363 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "name": "read",
+      "description": "Read a UTF-8 workspace file. Output is limited to 2000 lines or 50 KiB; use offset and limit to read more.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "ls",
+      "description": "List one workspace directory, including dotfiles. Directory names end with '/'. Returns at most 500 entries or 50 KiB.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "find",
+      "description": "Find workspace paths by glob, respecting .gitignore. Returns at most 1000 paths or 50 KiB.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "grep",
+      "description": "Search workspace text files by regex, respecting .gitignore. Returns path:line matches, at most 100 matches or 50 KiB. Set literal for exact text.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "glob": {
+            "type": "string"
+          },
+          "ignoreCase": {
+            "type": "boolean"
+          },
+          "literal": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "write",
+      "description": "Create or overwrite a UTF-8 workspace file, creating parent directories as needed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "edit",
+      "description": "Edit one existing workspace file. Each nonempty oldText must match exactly one non-overlapping region of the original file; all edits apply together.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "edits": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "oldText": {
+                  "type": "string"
+                },
+                "newText": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "oldText",
+                "newText"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "path",
+          "edits"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "bash",
+      "description": "Run a shell command in the server workspace. Commands can affect paths outside the workspace. Returns exit status and bounded stdout/stderr.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    }
+  ],
+  "records": [
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "ls",
+        "find",
+        "grep",
+        "write",
+        "edit",
+        "bash"
+      ],
+      "tools_sha256": "9275de631ac37e693947473822ce1a063096a847ae6d9b735bf7a16df72c8d28"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 652,
+        "completion_tokens": 59,
+        "reasoning_tokens": 0,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 652,
+          "completion_tokens": 59,
+          "total_tokens": 711
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "ls",
+        "find",
+        "grep",
+        "write",
+        "edit",
+        "bash"
+      ],
+      "tools_sha256": "9275de631ac37e693947473822ce1a063096a847ae6d9b735bf7a16df72c8d28"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 752,
+        "completion_tokens": 65,
+        "reasoning_tokens": 0,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 752,
+          "completion_tokens": 65,
+          "total_tokens": 817
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "ls",
+        "find",
+        "grep",
+        "write",
+        "edit",
+        "bash"
+      ],
+      "tools_sha256": "9275de631ac37e693947473822ce1a063096a847ae6d9b735bf7a16df72c8d28"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 967,
+        "completion_tokens": 57,
+        "reasoning_tokens": 0,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 967,
+          "completion_tokens": 57,
+          "total_tokens": 1024
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "ls",
+        "find",
+        "grep",
+        "write",
+        "edit",
+        "bash"
+      ],
+      "tools_sha256": "9275de631ac37e693947473822ce1a063096a847ae6d9b735bf7a16df72c8d28"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 1094,
+        "completion_tokens": 58,
+        "reasoning_tokens": 0,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 1094,
+          "completion_tokens": 58,
+          "total_tokens": 1152
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "ls",
+        "find",
+        "grep",
+        "write",
+        "edit",
+        "bash"
+      ],
+      "tools_sha256": "9275de631ac37e693947473822ce1a063096a847ae6d9b735bf7a16df72c8d28"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 1173,
+        "completion_tokens": 29,
+        "reasoning_tokens": 0,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 1173,
+          "completion_tokens": 29,
+          "total_tokens": 1202
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "ls",
+        "find",
+        "grep",
+        "write",
+        "edit",
+        "bash"
+      ],
+      "tools_sha256": "9275de631ac37e693947473822ce1a063096a847ae6d9b735bf7a16df72c8d28"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 1282,
+        "completion_tokens": 44,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 1152,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 1282,
+          "completion_tokens": 44,
+          "total_tokens": 1326,
+          "prompt_tokens_details": {
+            "cached_tokens": 1152
+          }
+        }
+      }
+    }
+  ]
+}

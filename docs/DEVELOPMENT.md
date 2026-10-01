@@ -101,13 +101,25 @@ over, and which runtime it has — so the pump stays in the app
 `cargo tree -p bitrouter-tui | rg -c '^tokio'` printing `0` is how that is
 checked.
 
-The BRO runtime lives for one `bro serve` instance. CLI and TUI run only client
-projections; detaching does not cancel a task. Snapshot registration and event
+BRO native tools are `read`, `glob`, `grep`, `write`, `edit`, and `shell`.
+`read` dispatches known workspace paths to file lines or direct directory
+entries. The three inspection tools form the read-only profile. The server
+resolves one interpreter before a coding execution; model commands and
+verification share it. See [the six-tool contract](BRO_BASE_TOOLS_SPEC.md).
+
+The current BRO runtime lives for one `bro serve` instance. CLI and TUI run only
+client projections; detaching does not cancel a task. Snapshot registration and event
 cutoffs share one state lock, and slow observers receive a fresh snapshot.
 Shutdown stops admission, cancels active tasks, and joins execution cleanup.
-There is no task journal or cross-restart recovery in this layer. Durable
-workflow ownership remains a separate design decision; router metering and
-ACP session ownership are unchanged. See `BRO_NATIVE_AGENT_SERVER_SPEC.md`.
+The host now commits native execution facts through its configured database.
+Live task state is still instance-local; Thread loading and safe restart
+continuation are under implementation.
+The target [BRO runtime v0.2 spec](BRO_AGENT_RUNTIME_SPEC.md), aligned with product
+document 003, requires persistent Thread state, bounded tool concurrency,
+queue/steer and safe recovery. R1 storage and commit gating are in progress; concurrency, continuous input
+and recovery are not yet delivered. The former process-local design is
+historical scope, not a restriction on that refactor.
+Router metering and external ACP session ownership retain their own boundaries.
 
 The CLI is the **host** interface: it owns `main()` and mounts the other
 interfaces as subcommands. The SDK owns protocol interop such as the MCP
