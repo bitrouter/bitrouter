@@ -39,6 +39,12 @@ pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send
 /// upstream call. Custom executors that don't need propagation can ignore it.
 #[async_trait]
 pub trait Executor: Send + Sync {
+    /// Whether this executor/target is known to preserve output-token limits.
+    /// Unknown implementations retain `None`, never an asserted guarantee.
+    fn output_token_limit_support(&self, _target: &RoutingTarget) -> Option<bool> {
+        None
+    }
+
     /// Execute a non-streaming request against `target`.
     async fn execute(
         &self,
@@ -929,6 +935,34 @@ impl HttpExecutor {
             credential_authority.filter(|authority| authority.validates_final_request(&request));
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
         input.ctx.record_credential_authority(credential_authority);
+        if let Some(reservation) = input
+            .ctx
+            .extension::<crate::language_model::native::NativeOutputReservation>()
+        {
+            let (adapter, _) = self
+                .dispatch
+                .lookup(&input.target.api_protocol)
+                .ok_or_else(|| {
+                    BitrouterError::bad_request(
+                        "managed output reservation cannot be verified for this protocol",
+                    )
+                })?;
+            let bytes = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .ok_or_else(|| {
+                    BitrouterError::bad_request(
+                        "managed output reservation requires a verifiable request body",
+                    )
+                })?;
+            let body = serde_json::from_slice(bytes)
+                .map_err(|_| BitrouterError::bad_request("managed request body is not JSON"))?;
+            if adapter.output_token_limit(&body)? != Some(reservation.0) {
+                return Err(BitrouterError::bad_request(
+                    "provider shaping changed the managed output reservation",
+                ));
+            }
+        }
         Ok(request)
     }
 
@@ -1247,6 +1281,20 @@ fn forward_inbound_anthropic_beta(
 
 #[async_trait]
 impl Executor for HttpExecutor {
+    fn output_token_limit_support(&self, target: &RoutingTarget) -> Option<bool> {
+        if !self
+            .dispatch
+            .lookup(&target.api_protocol)
+            .is_some_and(|(adapter, _)| adapter.supports_output_token_limit_validation())
+        {
+            return Some(false);
+        }
+        match self.auth_appliers.lookup(&target.provider_name) {
+            Some(applier) => applier.output_token_limit_support(target),
+            None => Some(true),
+        }
+    }
+
     async fn execute(
         &self,
         target: &RoutingTarget,
@@ -1913,6 +1961,7 @@ mod beta_forward_tests {
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -2091,6 +2140,115 @@ mod beta_forward_tests {
         Ok(())
     }
 
+    struct RewriteOutputLimit;
+
+    #[async_trait]
+    impl crate::language_model::auth::AuthApplier for RewriteOutputLimit {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _: &RoutingTarget,
+        ) -> Result<reqwest::Request> {
+            let bytes = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .ok_or_else(|| BitrouterError::internal("fixture body missing"))?;
+            let mut body: serde_json::Value = serde_json::from_slice(bytes)
+                .map_err(|error| BitrouterError::internal(error.to_string()))?;
+            body["max_tokens"] = 4096.into();
+            *request.body_mut() = Some(
+                serde_json::to_vec(&body)
+                    .map_err(|error| BitrouterError::internal(error.to_string()))?
+                    .into(),
+            );
+            Ok(request)
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_output_limit_is_checked_after_auth_body_mutation() -> crate::Result<()> {
+        let target = target(ApiProtocol::ChatCompletions);
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            Default::default(),
+            OutboundDispatch::builtin(),
+            AuthAppliers::new().with(&target.provider_name, Arc::new(RewriteOutputLimit)),
+        )?;
+        let (_, transport) = executor
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| BitrouterError::internal("missing fixture transport"))?;
+        let (client, timeouts) = executor.client_for(&target);
+        let body = serde_json::json!({"model":"m","messages":[{"role":"user","content":"hello"}],"max_tokens":128});
+        for managed in [false, true] {
+            let mut ctx = ctx_with_beta(None);
+            if managed {
+                ctx.insert_extension(Arc::new(
+                    crate::language_model::native::NativeOutputReservation(128),
+                ));
+            }
+            let result = executor
+                .build_authenticated_request(&RequestBuildInput {
+                    client: &client,
+                    timeouts: &timeouts,
+                    url: "https://example.invalid/v1/chat/completions",
+                    body: &body,
+                    target: &target,
+                    transport,
+                    ctx: &ctx,
+                    trace_headers: None,
+                })
+                .await;
+            assert_eq!(result.is_err(), managed);
+            if managed {
+                assert!(result.err().is_some_and(|error| {
+                    error
+                        .to_string()
+                        .contains("changed the managed output reservation")
+                }));
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn managed_output_limit_survives_each_builtin_wire_renderer() -> crate::Result<()> {
+        let executor = HttpExecutor::with_defaults()?;
+        for protocol in [
+            ApiProtocol::ChatCompletions,
+            ApiProtocol::Responses,
+            ApiProtocol::Messages,
+            ApiProtocol::GenerateContent,
+        ] {
+            let target = target(protocol);
+            let mut ctx = ctx_with_beta(None);
+            ctx.insert_extension(Arc::new(
+                crate::language_model::native::NativeOutputReservation(128),
+            ));
+            let mut prompt = ctx.prompt().clone();
+            prompt.messages = vec![Message::text(Role::User, "hello")];
+            prompt.params.max_tokens = Some(128);
+            let (adapter, transport) = executor
+                .dispatch
+                .lookup(&target.api_protocol)
+                .ok_or_else(|| BitrouterError::internal("missing fixture adapter"))?;
+            let body = adapter.render_request_for_target(&prompt, &target)?;
+            let (client, timeouts) = executor.client_for(&target);
+            executor
+                .build_authenticated_request(&RequestBuildInput {
+                    client: &client,
+                    timeouts: &timeouts,
+                    url: "https://example.invalid/fixture",
+                    body: &body,
+                    target: &target,
+                    transport,
+                    ctx: &ctx,
+                    trace_headers: None,
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
     #[test]
     fn provider_headers_cannot_take_over_auth_or_internal_fields() {
         for name in [
@@ -2129,6 +2287,7 @@ mod provider_continuation_tests {
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: Some("primary".into()),
             api_key_override: None,
             api_base_override: None,
@@ -2384,6 +2543,7 @@ mod client_selection_tests {
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -2507,6 +2667,7 @@ mod client_selection_tests {
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,
@@ -2632,6 +2793,7 @@ mod openai_codex_stream_bridge_tests {
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,

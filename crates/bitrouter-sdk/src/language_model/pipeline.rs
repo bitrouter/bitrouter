@@ -607,27 +607,49 @@ impl Pipeline {
             )
             .await?;
 
+        if control.is_some()
+            && let Some(tokens) = ctx.prompt().params.max_tokens
+        {
+            ctx.insert_extension(Arc::new(
+                crate::language_model::native::NativeOutputReservation(tokens),
+            ));
+        }
+        let native_routes = if control.is_some() {
+            chain
+                .iter()
+                .map(|target| {
+                    let mut route = NativeRoute::from_target(target);
+                    route.output_token_limit_supported =
+                        self.executor.output_token_limit_support(target);
+                    route
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let admission = match control {
-            Some(control) => {
-                control
-                    .plan(NativePlan {
-                        request_id: ctx.request_id().to_owned(),
-                        original_model: ctx.original_model().to_owned(),
-                        effective_model: ctx.model().to_owned(),
-                        effort_source: ctx.prompt().params.reasoning_effort_source,
-                        prompt: ctx.prompt().clone(),
-                        routes: chain.iter().map(NativeRoute::from_target).collect(),
-                        router: ctx.router_identity().cloned(),
-                    })
-                    .await
-            }
-            None => Ok(()),
+            Some(control) => control
+                .plan(NativePlan {
+                    request_id: ctx.request_id().to_owned(),
+                    original_model: ctx.original_model().to_owned(),
+                    effective_model: ctx.model().to_owned(),
+                    effort_source: ctx.prompt().params.reasoning_effort_source,
+                    prompt: ctx.prompt().clone(),
+                    routes: native_routes.clone(),
+                    router: ctx.router_identity().cloned(),
+                })
+                .await
+                .and_then(|admission| {
+                    admission.validate(native_routes.len())?;
+                    Ok(Some(admission))
+                }),
+            None => Ok(None),
         };
 
         // ---- Stage 3: execution (with the server-side tool loop when configured) ----
         let exec_outcome = match (admission, &self.server_tool_loop) {
             (Err(error), _) => Err(error),
-            (Ok(()), Some(server_loop)) if run_server_tools => {
+            (Ok(_), Some(server_loop)) if run_server_tools => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream = PipelineUpstream {
                     pipeline: self,
@@ -639,8 +661,15 @@ impl Pipeline {
                     .await
                     .map(|outcome| (outcome.result, outcome.provider_terminal_exposed))
             }
-            _ => self
-                .execute_with_fallback_controlled(&chain, ctx.prompt(), &ctx, control)
+            (Ok(admission), _) => self
+                .execute_with_fallback_controlled(
+                    &chain,
+                    ctx.prompt(),
+                    &ctx,
+                    control
+                        .zip(admission.as_ref())
+                        .map(|(control, admission)| (control, native_routes.as_slice(), admission)),
+                )
                 .await
                 .map(|result| (result, true)),
         };
@@ -1409,15 +1438,33 @@ impl Pipeline {
         chain: &[RoutingTarget],
         prompt: &Prompt,
         ctx: &PipelineContext,
-        control: Option<&dyn NativeExecutionControl>,
+        control: Option<(
+            &dyn NativeExecutionControl,
+            &[NativeRoute],
+            &crate::language_model::native::NativePlanAdmission,
+        )>,
     ) -> Result<ExecutionResult> {
         let mut errors = Vec::new();
+        let mut dispatched = 0;
         for (attempt_index, target) in chain.iter().enumerate() {
-            self.wait_before_fallback(attempt_index).await;
             let index = u32::try_from(attempt_index)
                 .map_err(|_| BitrouterError::internal("provider attempt index exhausted"))?;
+            if control.is_some_and(|(_, _, admission)| !admission.route_indices.contains(&index)) {
+                continue;
+            }
+            let attempt_control = match control {
+                Some((control, routes, _)) => Some((
+                    control,
+                    routes.get(attempt_index).ok_or_else(|| {
+                        BitrouterError::internal("managed route snapshot missing")
+                    })?,
+                )),
+                None => None,
+            };
+            self.wait_before_fallback(dispatched).await;
+            dispatched += 1;
             self.observe_hop_start(ctx, target).await;
-            if let Some(control) = control
+            if let Some((control, _)) = attempt_control
                 && let Err(error) = control.before_attempt(ctx.request_id(), index).await
             {
                 self.observe_hop_end(ctx, target, HopOutcome::Failed(&error))
@@ -1426,12 +1473,12 @@ impl Pipeline {
             }
             let started = Instant::now();
             let outcome = self.executor.execute(target, prompt, ctx).await;
-            if let Some(control) = control {
+            if let Some((control, route)) = attempt_control {
                 control
                     .after_attempt(NativeAttemptReport {
                         request_id: ctx.request_id().to_owned(),
                         attempt_index: index,
-                        route: NativeRoute::from_target(target),
+                        route: route.clone(),
                         actual_model: outcome.as_ref().ok().map(|result| result.model_id.clone()),
                         result: outcome.as_ref().ok().map(|result| result.result.clone()),
                         error: outcome.as_ref().err().map(ToString::to_string),
@@ -1833,6 +1880,7 @@ mod policy_effort_target_tests {
                 levels,
                 default: None,
             }),
+            model_constraints: Default::default(),
             account_label: None,
             api_key_override: None,
             api_base_override: None,

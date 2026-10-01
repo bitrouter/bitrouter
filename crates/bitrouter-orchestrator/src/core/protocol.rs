@@ -399,6 +399,10 @@ pub struct TaskInput {
     pub text: String,
     pub model: String,
     pub effort: Option<String>,
+    /// Per-step output reservation. Omission uses the core's explicit 4096
+    /// token default; this is independent of all byte-count limits.
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
     #[serde(default)]
     pub routing: RoutingSettings,
     pub acceptance_criteria: Vec<String>,

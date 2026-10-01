@@ -2319,6 +2319,9 @@ pub struct RoutingTarget {
     /// Exact qualitative reasoning-effort support for this provider/model.
     /// `None` means unknown, not unsupported.
     pub reasoning_effort: Option<ReasoningEffortConfig>,
+    /// Model facts captured alongside this target, from the same configuration
+    /// snapshot. Route hooks replacing a target must replace these facts too.
+    pub model_constraints: crate::language_model::native::NativeRouteConstraints,
     /// Which account of a multi-account provider this target came from
     /// — `None` for a single-credential provider. Surfaced in the
     /// request log so an operator can see which subscription served a
@@ -2356,6 +2359,7 @@ impl std::fmt::Debug for RoutingTarget {
                 &self.chat_supports_stream_options,
             )
             .field("reasoning_effort", &self.reasoning_effort)
+            .field("model_constraints", &self.model_constraints)
             .field("account_label", &self.account_label)
             .field(
                 "api_key_override",

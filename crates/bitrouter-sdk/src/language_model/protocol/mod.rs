@@ -289,6 +289,25 @@ pub trait OutboundAdapter: Send + Sync {
     /// The wire protocol this adapter speaks.
     fn protocol(&self) -> ApiProtocol;
 
+    /// Whether this adapter can inspect the output bound in a final request,
+    /// including any provider envelope. Custom adapters opt in by overriding
+    /// this and [`Self::output_token_limit`].
+    fn supports_output_token_limit_validation(&self) -> bool {
+        inbound_adapter_for(&self.protocol()).is_some()
+    }
+
+    /// Read the output-token bound after all provider/auth body mutations.
+    /// Built-in wires reuse their canonical parser. A custom adapter must
+    /// understand its final envelope rather than assuming a public wire shape.
+    fn output_token_limit(&self, body: &serde_json::Value) -> Result<Option<u32>> {
+        let adapter = inbound_adapter_for(&self.protocol()).ok_or_else(|| {
+            BitrouterError::bad_request(
+                "output reservation validation is unsupported for this protocol",
+            )
+        })?;
+        Ok(adapter.parse_request(body.clone())?.params.max_tokens)
+    }
+
     /// Render a canonical [`Prompt`] into this protocol's upstream request body.
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value>;
 

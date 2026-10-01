@@ -740,6 +740,7 @@ dependencies = [
  "ignore",
  "process-wrap",
  "regex",
+ "reqwest",
  "rmcp",
  "rustix 1.1.4",
  "serde",

@@ -329,6 +329,10 @@ fn go_platform() -> &'static str {
 
 #[async_trait]
 impl AuthApplier for AntigravityAuthApplier {
+    fn output_token_limit_support(&self, _target: &RoutingTarget) -> Option<bool> {
+        Some(true)
+    }
+
     async fn apply(
         &self,
         mut request: reqwest::Request,
@@ -385,6 +389,51 @@ impl AuthApplier for AntigravityAuthApplier {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn managed_output_reservation_is_verified_inside_the_provider_envelope() -> Result<()> {
+        use bitrouter_sdk::language_model::auth::AuthAppliers;
+        use bitrouter_sdk::language_model::executor::{Executor, HttpExecutor};
+        use bitrouter_sdk::language_model::protocol::OutboundAdapter;
+        use bitrouter_sdk::language_model::protocol::OutboundDispatch;
+        let applier = Arc::new(AntigravityAuthApplier::new(
+            "unused-managed-admission-store",
+        )?);
+        applier
+            .token_cache
+            .lock()
+            .map_err(|_| BitrouterError::internal("fixture token lock poisoned"))?
+            .insert(
+                DEFAULT_LABEL.into(),
+                OAuthToken {
+                    access_token: "fixture-token".into(),
+                    expires_at: 0,
+                    refresh_token: None,
+                },
+            );
+        applier
+            .project_cache
+            .lock()
+            .map_err(|_| BitrouterError::internal("fixture project lock poisoned"))?
+            .insert(DEFAULT_LABEL.into(), "fixture-project".into());
+        let target = target();
+        let mut body = serde_json::json!({"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":128}});
+        applier.prepare_body(&mut body, &target).await?;
+        let adapter = protocol::AntigravityAdapter::new();
+        assert_eq!(adapter.output_token_limit(&body)?, Some(128));
+        body["request"]["generationConfig"] = serde_json::json!({});
+        body["generationConfig"] = serde_json::json!({"maxOutputTokens":128});
+        assert_eq!(adapter.output_token_limit(&body)?, None);
+        let mut dispatch = OutboundDispatch::builtin();
+        dispatch.register(Arc::new(adapter), Arc::new(protocol::AntigravityTransport));
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            Default::default(),
+            dispatch,
+            AuthAppliers::new().with(PROVIDER_ID, applier),
+        )?;
+        assert_eq!(executor.output_token_limit_support(&target), Some(true));
+        Ok(())
+    }
+
     use std::path::PathBuf;
 
     use bitrouter_sdk::language_model::types::ApiProtocol;
@@ -420,6 +469,7 @@ mod tests {
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
+            model_constraints: Default::default(),
         }
     }
 

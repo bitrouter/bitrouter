@@ -81,6 +81,15 @@ impl OutboundAdapter for AntigravityAdapter {
         antigravity_protocol()
     }
 
+    fn supports_output_token_limit_validation(&self) -> bool {
+        true
+    }
+
+    fn output_token_limit(&self, body: &Value) -> Result<Option<u32>> {
+        self.inner
+            .output_token_limit(body.get("request").unwrap_or(body))
+    }
+
     fn render_request(&self, prompt: &Prompt) -> Result<Value> {
         // The bare Gemini body; the applier wraps it in the
         // `{model, project, request}` envelope in `prepare_body`.
@@ -196,6 +205,7 @@ mod tests {
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
+            model_constraints: Default::default(),
         }
     }
 

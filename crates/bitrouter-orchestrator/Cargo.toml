@@ -31,8 +31,11 @@ tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "macro
 tokio-util = { workspace = true, features = ["rt"] }
 uuid.workspace = true
 
+[dev-dependencies]
+bitrouter-sdk = { workspace = true, features = ["config_file"] }
+reqwest.workspace = true
+wiremock = "0.6"
+
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process"] }
 
-[dev-dependencies]
-wiremock = "0.6"
