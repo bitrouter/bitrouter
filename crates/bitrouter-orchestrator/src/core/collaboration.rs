@@ -452,6 +452,7 @@ fn assignment(
         }
     }
     super::session::validate_input(&input, &run.limits)?;
+    super::session::pin_required_materials(state, &mut input)?;
     Ok(Assignment {
         assignment_id: id("turn"),
         run_id: run.run_id.clone(),

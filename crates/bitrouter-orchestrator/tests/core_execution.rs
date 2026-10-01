@@ -11,8 +11,8 @@ use bitrouter_orchestrator::core::checkpoint::{
 use bitrouter_orchestrator::core::collaboration::{Action, Work};
 use bitrouter_orchestrator::core::protocol::{
     ArtifactRef, Bind, Capabilities, CommitStatus, CoreError, ErrorCode, HarnessManifest,
-    HarnessTool, Limits, OwnershipGrant, RoutingSettings, ServerMessage, TaskInput, ToolEffect,
-    ToolExecute, ToolOutcome, ToolResult, Verification,
+    HarnessTool, Limits, MaterialRef, OwnershipGrant, RoutingSettings, ServerMessage, SignalUpdate,
+    TaskInput, ToolEffect, ToolExecute, ToolOutcome, ToolResult, Verification,
 };
 use bitrouter_orchestrator::core::session::{CoreSession, HarnessPort, RunStatus, SessionSnapshot};
 use bitrouter_sdk::App;
@@ -39,12 +39,14 @@ struct Harness {
     sent: Mutex<Vec<ToolExecute>>,
     cancelled: Mutex<Vec<(String, String, u64)>>,
     cancel_seen: Semaphore,
+    material_requests: Mutex<Vec<(String, String, String)>>,
     fail_kind: Option<&'static str>,
     hold_kind: Option<&'static str>,
     hold_enabled: AtomicBool,
     wrong_ack: Option<bool>,
     hold_send: bool,
     hold_after_send: bool,
+    hold_material_send: bool,
     seen: Semaphore,
     resume: Semaphore,
     delivered: Semaphore,
@@ -57,12 +59,14 @@ impl Harness {
             sent: Mutex::new(Vec::new()),
             cancelled: Mutex::new(Vec::new()),
             cancel_seen: Semaphore::new(0),
+            material_requests: Mutex::new(Vec::new()),
             fail_kind,
             hold_kind,
             hold_enabled: AtomicBool::new(true),
             wrong_ack: None,
             hold_send: false,
             hold_after_send: false,
+            hold_material_send: false,
             seen: Semaphore::new(0),
             resume: Semaphore::new(0),
             delivered: Semaphore::new(0),
@@ -144,6 +148,59 @@ impl HarnessPort for Harness {
     }
 
     async fn send(&self, message: ServerMessage) -> Result<(), CoreError> {
+        if let ServerMessage::MaterialRequest {
+            request_id,
+            material_id,
+            version,
+        } = &message
+        {
+            if self.hold_material_send {
+                self.seen.add_permits(1);
+                self.resume
+                    .acquire()
+                    .await
+                    .map_err(|_| {
+                        CoreError::rejected(ErrorCode::CheckpointUnavailable, "fixture stopped")
+                    })?
+                    .forget();
+            }
+            let store = self.store.lock().await;
+            let payload = store
+                .batches
+                .last()
+                .ok_or_else(|| {
+                    CoreError::rejected(
+                        ErrorCode::CheckpointUnavailable,
+                        "missing material checkpoint",
+                    )
+                })?
+                .decode(&store.limits)?;
+            let state: SessionSnapshot =
+                serde_json::from_value(payload.checkpoint.state).map_err(|error| {
+                    CoreError::rejected(ErrorCode::CheckpointConflict, error.to_string())
+                })?;
+            if state
+                .signals
+                .requests
+                .get(request_id)
+                .is_none_or(|request| {
+                    request.resolved
+                        || request.reference.material_id != *material_id
+                        || request.reference.version != *version
+                })
+            {
+                return Err(CoreError::rejected(
+                    ErrorCode::UnauthorizedScope,
+                    "material request has no committed authorization",
+                ));
+            }
+            self.material_requests.lock().await.push((
+                request_id.clone(),
+                material_id.clone(),
+                version.clone(),
+            ));
+            return Ok(());
+        }
         if let ServerMessage::ToolCancel {
             invocation_id,
             attempt_id,
@@ -526,6 +583,33 @@ fn work(text: &str) -> Work {
     }
 }
 
+fn material(version: &str, body: &str, inline: bool) -> MaterialRef {
+    MaterialRef {
+        material_id: "required_document".into(),
+        version: version.into(),
+        sha256: sha256(body.as_bytes()),
+        media_type: "text/plain".into(),
+        provenance: "harness_document".into(),
+        required: true,
+        artifact: None,
+        content: inline.then(|| body.to_owned()),
+    }
+}
+
+async fn signal_update(session: &CoreSession, materials: Vec<MaterialRef>) -> SignalUpdate {
+    let snapshot = session.snapshot().await;
+    SignalUpdate {
+        signal_revision: snapshot.signals.revision + 1,
+        observed_at: "2026-10-01T12:00:00Z".into(),
+        scope: snapshot.session_id,
+        source: "harness_1".into(),
+        workspace_revision: snapshot.manifest.workspace_revision.clone(),
+        manifest: snapshot.manifest,
+        materials,
+        facts: Default::default(),
+    }
+}
+
 fn text(value: &str) -> Content {
     Content::Text {
         text: value.into(),
@@ -662,6 +746,561 @@ fn result(command: &ToolExecute) -> ToolResult {
         evidence: Vec::new(),
         workspace_revision: Some("workspace-v2".into()),
     }
+}
+
+#[tokio::test]
+async fn restored_material_inventory_fetches_a_resolved_version_again() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(
+        vec![output(vec![text("first")]), output(vec![text("second")])],
+        harness.clone(),
+        false,
+    )
+    .await?;
+    session
+        .signals(
+            "first-inventory",
+            signal_update(&session, vec![material("v1", "document", false)]).await,
+        )
+        .await?;
+    session
+        .start("first", session.head().await.state_revision, input())
+        .await?;
+    session.drive().await?;
+    let first = harness.material_requests.lock().await[0].clone();
+    session
+        .material_result(
+            "first-material",
+            &first.0,
+            Some(material("v1", "document", true)),
+            None,
+        )
+        .await?;
+    session.drive().await?;
+    session
+        .signals("empty-inventory", signal_update(&session, Vec::new()).await)
+        .await?;
+    session
+        .signals(
+            "restored-inventory",
+            signal_update(&session, vec![material("v1", "document", false)]).await,
+        )
+        .await?;
+    session
+        .start("second", session.head().await.state_revision, input())
+        .await?;
+    let waiting = session.drive().await?;
+    assert_eq!(
+        waiting.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Waiting)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    let second = harness.material_requests.lock().await[1].clone();
+    assert_ne!(first.0, second.0);
+    session
+        .material_result(
+            "second-material",
+            &second.0,
+            Some(material("v1", "document", true)),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        session.drive().await?.run.map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn material_send_disconnect_releases_the_driver() -> TestResult {
+    let mut harness = Harness::new(None, None);
+    harness.hold_material_send = true;
+    let harness = Arc::new(harness);
+    let (session, executor, _) = setup(Vec::new(), harness.clone(), false).await?;
+    session
+        .signals(
+            "inventory",
+            signal_update(&session, vec![material("v1", "document", false)]).await,
+        )
+        .await?;
+    session
+        .start("input", session.head().await.state_revision, input())
+        .await?;
+    let driving = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
+        .await??
+        .forget();
+    session.disconnect().await;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), driving)
+            .await??
+            .is_err()
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    assert!(harness.material_requests.lock().await.is_empty());
+    let retried = tokio::time::timeout(Duration::from_secs(5), session.drive()).await?;
+    assert_ne!(retried.err().map(|error| error.code), Some(ErrorCode::Busy));
+    Ok(())
+}
+
+#[tokio::test]
+async fn conflicting_material_artifact_id_rejects_before_submission() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, _, _) = setup(Vec::new(), harness.clone(), false).await?;
+    let mut first = material("v1", "one", true);
+    let mut second = material("v1", "two", true);
+    second.material_id = "other".into();
+    for material in [&mut first, &mut second] {
+        material.artifact = Some(ArtifactRef {
+            artifact_id: "same-artifact".into(),
+            sha256: material.sha256.clone(),
+            bytes: 3,
+            media_type: material.media_type.clone(),
+        });
+    }
+    let before = session.head().await;
+    let error = session
+        .signals(
+            "conflicting",
+            signal_update(&session, vec![first, second]).await,
+        )
+        .await
+        .err()
+        .ok_or("accepted conflicting artifact identity")?;
+    assert_eq!(error.code, ErrorCode::CheckpointConflict);
+    assert_eq!(error.commit_status, CommitStatus::NotCommitted);
+    assert_eq!(session.head().await, before);
+    assert_eq!(harness.store.lock().await.batches.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn admitted_output_bound_and_new_workspace_signal_survive_late_result() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, _, _) = setup(
+        vec![output(vec![call("old-read")]), output(vec![text("done")])],
+        harness.clone(),
+        false,
+    )
+    .await?;
+    let mut initial = signal_update(&session, Vec::new()).await;
+    initial.workspace_revision = Some("w1".into());
+    initial.manifest.workspace_revision = initial.workspace_revision.clone();
+    session.signals("initial", initial).await?;
+    session
+        .start("input", session.head().await.state_revision, input())
+        .await?;
+    session.drive().await?;
+    let command = harness.sent.lock().await[0].clone();
+    let mut updated = signal_update(&session, Vec::new()).await;
+    updated.workspace_revision = Some("w2".into());
+    updated.manifest.workspace_revision = updated.workspace_revision.clone();
+    updated.manifest.max_tool_output_bytes = 1024;
+    session.signals("changed", updated).await?;
+    let mut report = result(&command);
+    report.output = "x".repeat(2048);
+    report.workspace_revision = Some("w1".into());
+    session.tool_result("late-result", report).await?;
+    let snapshot = session.snapshot().await;
+    assert_eq!(snapshot.manifest.workspace_revision.as_deref(), Some("w2"));
+    assert_eq!(
+        snapshot.root_turn().ok_or("missing root")?.invocations[0].result_limit_bytes,
+        8192
+    );
+    assert_eq!(
+        session.drive().await?.run.map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn duplicate_write_result_preserves_newer_workspace_facts() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, _, _) = setup(
+        vec![output(vec![call("write-once")])],
+        harness.clone(),
+        false,
+    )
+    .await?;
+    let mut initial = signal_update(&session, Vec::new()).await;
+    initial.manifest.tools[0].effect = ToolEffect::Write;
+    initial.manifest.tool_manifest_digest = HarnessManifest::digest(&initial.manifest.tools)?;
+    session.signals("initial", initial).await?;
+    session
+        .start("input", session.head().await.state_revision, input())
+        .await?;
+    session.drive().await?;
+    let report = result(&harness.sent.lock().await[0]);
+    session.tool_result("first-result", report.clone()).await?;
+    assert_eq!(session.snapshot().await.manifest.workspace_revision, None);
+    let mut update = signal_update(&session, Vec::new()).await;
+    update.workspace_revision = Some("w2".into());
+    update.manifest.workspace_revision = update.workspace_revision.clone();
+    session.signals("new-workspace", update).await?;
+    session.tool_result("duplicate-result", report).await?;
+    assert_eq!(
+        session
+            .snapshot()
+            .await
+            .manifest
+            .workspace_revision
+            .as_deref(),
+        Some("w2")
+    );
+    assert_eq!(harness.sent.lock().await.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn late_tool_removal_cannot_authorize_verification() -> TestResult {
+    let harness = Arc::new(Harness::new(None, Some("model.attempt.outcome")));
+    let (session, executor, _) = setup(
+        vec![output(vec![text("provisional final")])],
+        harness.clone(),
+        false,
+    )
+    .await?;
+    let mut task = input();
+    task.verification = Some(Verification {
+        tool: "read".into(),
+        arguments: json!({"path":"file.txt"}),
+    });
+    session.start("input", 1, task).await?;
+    let driving = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
+        .await??
+        .forget();
+    let mut update = signal_update(&session, Vec::new()).await;
+    update.manifest.permission_revision += 1;
+    update.manifest.tools.clear();
+    update.manifest.tool_manifest_digest = HarnessManifest::digest(&update.manifest.tools)?;
+    let updating = tokio::spawn({
+        let session = session.clone();
+        async move { session.signals("removed", update).await }
+    });
+    tokio::task::yield_now().await;
+    harness.hold_enabled.store(false, Ordering::SeqCst);
+    harness.resume.add_permits(1);
+    updating.await??;
+    assert!(driving.await?.is_err());
+    assert!(harness.sent.lock().await.is_empty());
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn signal_scope_material_identity_and_aggregate_quota_reject_without_mutation() -> TestResult
+{
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(Vec::new(), harness, false).await?;
+    let mut foreign = signal_update(&session, Vec::new()).await;
+    foreign.scope = "other_session".into();
+    let before = session.head().await;
+    assert_eq!(
+        session
+            .signals("foreign", foreign)
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::UnauthorizedScope)
+    );
+    assert_eq!(session.head().await, before);
+    session
+        .signals(
+            "first",
+            signal_update(&session, vec![material("v1", "original", true)]).await,
+        )
+        .await?;
+    session
+        .signals("omitted", signal_update(&session, Vec::new()).await)
+        .await?;
+    let before = session.head().await;
+    let conflicting = signal_update(
+        &session,
+        vec![material("v1", "changed under the same version", true)],
+    )
+    .await;
+    assert_eq!(
+        session
+            .signals("conflict", conflicting)
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::OperationConflict)
+    );
+    assert_eq!(session.head().await, before);
+    let one = material("v2", &"a".repeat(5000), true);
+    let mut two = material("v1", &"b".repeat(5000), true);
+    two.material_id = "second_document".into();
+    let mut excessive = signal_update(&session, vec![one, two]).await;
+    excessive.manifest.artifact_quota_bytes = 8192;
+    assert_eq!(
+        session
+            .signals("excessive", excessive)
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::LimitExceeded)
+    );
+    assert_eq!(session.head().await, before);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn unavailable_required_material_blocks_until_a_valid_inventory_update() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) =
+        setup(vec![output(vec![text("resolved")])], harness.clone(), false).await?;
+    session
+        .signals(
+            "first",
+            signal_update(&session, vec![material("v1", "document", false)]).await,
+        )
+        .await?;
+    session
+        .start("input", session.head().await.state_revision, input())
+        .await?;
+    session.drive().await?;
+    let request = harness.material_requests.lock().await[0].clone();
+    session
+        .material_result(
+            "unavailable",
+            &request.0,
+            None,
+            Some("temporary storage failure".into()),
+        )
+        .await?;
+    assert_eq!(
+        session.drive().await.err().map(|error| error.code),
+        Some(ErrorCode::ArtifactUnavailable)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    session
+        .signals(
+            "resolved",
+            signal_update(&session, vec![material("v1", "document", true)]).await,
+        )
+        .await?;
+    assert_eq!(
+        session.drive().await?.run.map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn required_material_waits_for_request_ack_and_validated_resolution() -> TestResult {
+    let harness = Arc::new(Harness::new(None, Some("material.requested")));
+    let (session, executor, _) = setup(
+        vec![output(vec![text("used required material")])],
+        harness.clone(),
+        false,
+    )
+    .await?;
+    let reference = material("v1", "required design constraints", false);
+    let update = signal_update(&session, vec![reference.clone()]).await;
+    let accepted = session.signals("signals", update.clone()).await?;
+    assert_eq!(session.signals("signals", update.clone()).await?, accepted);
+    let before = session.head().await;
+    assert_eq!(
+        session
+            .signals("stale-signals", update)
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::StaleRevision)
+    );
+    assert_eq!(session.head().await, before);
+    let mut task = input();
+    task.required_materials.push(reference.material_id.clone());
+    session.start("input", before.state_revision, task).await?;
+    let driving = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
+        .await??
+        .forget();
+    assert!(harness.material_requests.lock().await.is_empty());
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    harness.resume.add_permits(1);
+    let waiting = driving.await??;
+    assert_eq!(
+        waiting.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Waiting)
+    );
+    let request = harness.material_requests.lock().await[0].clone();
+    session.drive().await?;
+    assert_eq!(harness.material_requests.lock().await.len(), 1);
+    let mut wrong = reference.clone();
+    wrong.content = Some("different content".into());
+    assert_eq!(
+        session
+            .material_result("bad-material", &request.0, Some(wrong), None)
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::ArtifactUnavailable)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    let mut complete = reference;
+    complete.content = Some("required design constraints".into());
+    let receipt = session
+        .material_result("material", &request.0, Some(complete.clone()), None)
+        .await?;
+    assert_eq!(
+        session
+            .material_result("material", &request.0, Some(complete), None)
+            .await?,
+        receipt
+    );
+    let done = session.drive().await?;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    assert_eq!(
+        done.root_turn().ok_or("missing root")?.steps[0].signal_revision,
+        1
+    );
+    let prompts = executor.prompts.lock().await;
+    assert!(prompts[0].messages.iter().flat_map(|message|&message.content).any(|part|matches!(part,Content::Text{text,..} if text.contains("required design constraints") && text.contains("harness_document") && text.contains("v1"))));
+    Ok(())
+}
+
+#[tokio::test]
+async fn changed_material_version_rejects_old_content_before_model_dispatch() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(
+        vec![output(vec![text("used new material")])],
+        harness.clone(),
+        false,
+    )
+    .await?;
+    session
+        .signals(
+            "signals-v1",
+            signal_update(&session, vec![material("v1", "old content", false)]).await,
+        )
+        .await?;
+    session
+        .start("input", session.head().await.state_revision, input())
+        .await?;
+    session.drive().await?;
+    let old = harness.material_requests.lock().await[0].clone();
+    session
+        .signals(
+            "signals-v2",
+            signal_update(&session, vec![material("v2", "new content", false)]).await,
+        )
+        .await?;
+    assert_eq!(
+        session
+            .material_result(
+                "old-result",
+                &old.0,
+                Some(material("v1", "old content", true)),
+                None
+            )
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::StaleRevision)
+    );
+    session.drive().await?;
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    let current = harness.material_requests.lock().await[1].clone();
+    session
+        .material_result(
+            "new-result",
+            &current.0,
+            Some(material("v2", "new content", true)),
+            None,
+        )
+        .await?;
+    let done = session.drive().await?;
+    let step = &done.root_turn().ok_or("missing root")?.steps[0];
+    assert_eq!(step.materials[0].version, "v2");
+    assert_eq!(step.signal_revision, 2);
+    let prompt = &executor.prompts.lock().await[0];
+    assert!(!serde_json::to_string(prompt)?.contains("old content"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn permission_update_preserves_frozen_calls_but_denies_unstarted_tools() -> TestResult {
+    for revoke_tool in [true, false] {
+        let harness = Arc::new(Harness::new(None, Some("model.attempt.outcome")));
+        let (session, executor, _) = setup(
+            vec![
+                output(vec![call("old-permission")]),
+                output(vec![text("permission change acknowledged")]),
+            ],
+            harness.clone(),
+            false,
+        )
+        .await?;
+        session.start("input", 1, input()).await?;
+        let driving = tokio::spawn({
+            let session = session.clone();
+            async move { session.drive().await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
+            .await??
+            .forget();
+        let mut update = signal_update(&session, Vec::new()).await;
+        if revoke_tool {
+            update.manifest.permission_revision += 1;
+            update.manifest.tools.clear();
+            update.manifest.tool_manifest_digest = HarnessManifest::digest(&update.manifest.tools)?;
+        } else {
+            update
+                .materials
+                .push(material("v1", "changed task constraints", true));
+        }
+        let updating = tokio::spawn({
+            let session = session.clone();
+            async move { session.signals("revoke", update).await }
+        });
+        tokio::task::yield_now().await;
+        harness.hold_enabled.store(false, Ordering::SeqCst);
+        harness.resume.add_permits(1);
+        updating.await??;
+        let done = driving.await??;
+        assert_eq!(
+            done.run.as_ref().map(|run| run.status),
+            Some(RunStatus::Completed)
+        );
+        assert!(harness.sent.lock().await.is_empty());
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+        let turn = done.root_turn().ok_or("missing root")?;
+        assert_eq!(turn.steps[0].manifest.permission_revision, 1);
+        assert_eq!(
+            turn.steps[1].manifest.permission_revision,
+            if revoke_tool { 2 } else { 1 }
+        );
+        assert_eq!(turn.invocations[0].signal_revision, 0);
+        assert_eq!(turn.invocations.len(), 1);
+        assert_eq!(
+            turn.invocations[0]
+                .result
+                .as_ref()
+                .map(|result| result.status),
+            Some(ToolOutcome::Denied)
+        );
+        assert!(turn.invocations[0].consumed);
+    }
+    Ok(())
 }
 
 #[tokio::test]

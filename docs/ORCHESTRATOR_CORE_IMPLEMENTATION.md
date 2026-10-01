@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Pending |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: reviewed signal/material groundwork below; joint routing pending |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -176,3 +176,30 @@ context feasibility, crash restoration, remote transport parity, production
 harness integration, or tool-active-time accounting from harness status signals.
 Reuse policy hardening and decision receipts remain C3; restoration and durable
 root queue/steering remain C4. C5/C6 and the full A01–A23 audit remain pending.
+
+## C3 signal and material groundwork
+
+Revisioned harness signals are bound to the authenticated session and harness.
+Material inventories retain immutable version/digest/provenance identities,
+including removed versions. Required references are pinned to accepted work;
+missing content is requested only after a matching checkpoint ACK, then verified
+before model dispatch. Inventory changes invalidate stale plans and unstarted
+effects at safe boundaries. Every step retains its admitted manifest and
+materials, so later permission changes cannot reinterpret emitted calls.
+
+- SDK/orchestrator all-feature nextest: 1145 passed, 2 skipped, including
+  47 core execution tests. All-feature doctests: 5 passed, 1 ignored.
+- Strict all-target/all-feature SDK/orchestrator clippy, formatting, and diff
+  checks passed.
+- Regressions cover wrong signal scope, immutable identity conflicts, aggregate
+  quotas, missing/corrupt/stale material, removed and restored inventory,
+  material-send disconnect, output-bound changes, tool removal, and required
+  context changes while a provider outcome awaits acknowledgement.
+- Independent review found and repaired stale verification admission, result
+  bounds taken from a later manifest, conflicting artifact IDs, resolved-ref
+  refetch deadlock, noninterruptible material sends, and late tool observations
+  overwriting current workspace facts. Duplicate result delivery under a new
+  operation ID now also preserves newer workspace signals.
+- Follow-up review confirmed the repairs. This is groundwork, not completion
+  of C3: joint context/model decisions, reuse feasibility and execution receipts
+  still require implementation and review. C4–C6 and full acceptance remain open.
