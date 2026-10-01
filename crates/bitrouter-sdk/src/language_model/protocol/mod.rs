@@ -351,6 +351,12 @@ pub trait OutboundAdapter: Send + Sync {
 /// async key fetches can run them here.
 #[async_trait]
 pub trait Transport: Send + Sync {
+    /// A counting URL is opt-in to the transport, not inferred from wire
+    /// compatibility. Ordinary model calls never use this endpoint.
+    fn input_token_count_endpoint(&self, _target: &RoutingTarget) -> Option<String> {
+        None
+    }
+
     /// The wire protocol this transport speaks. Must match the paired
     /// [`OutboundAdapter`]'s [`protocol()`](OutboundAdapter::protocol).
     fn protocol(&self) -> ApiProtocol;

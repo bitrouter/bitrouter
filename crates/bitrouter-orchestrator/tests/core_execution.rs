@@ -1,3 +1,5 @@
+#[path = "core_execution/input_count.rs"]
+mod input_count;
 mod support;
 
 use std::sync::Arc;

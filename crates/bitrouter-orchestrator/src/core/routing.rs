@@ -1,7 +1,7 @@
 //! Immutable context evidence and model-step routing records. Estimates are
 //! distinct from observed usage; unknown token capacity is never a verified fit.
 
-use bitrouter_sdk::language_model::native::{NativeAttemptReport, NativePlan};
+use bitrouter_sdk::language_model::native::{NativeAttemptReport, NativeInputCount, NativePlan};
 use bitrouter_sdk::language_model::types::{Message, Prompt, ReasoningEffort, UsageOrigin};
 use serde::{Deserialize, Serialize};
 
@@ -143,7 +143,22 @@ pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, 
             let mut assessment = RouteFeasibility {
                 route_index: u32::try_from(index).map_err(|_| invalid("route index exhausted"))?,
                 rejection_reasons: Vec::new(),
-                unverified_constraints: vec!["input_token_count_unknown".into()],
+                unverified_constraints: Vec::new(),
+            };
+            let input_tokens = match &route.input_count {
+                Some(NativeInputCount::Counted { input_tokens, .. }) => Some(*input_tokens),
+                Some(NativeInputCount::Unavailable { .. }) => {
+                    assessment
+                        .rejection_reasons
+                        .push("input_token_count_unavailable".into());
+                    None
+                }
+                None => {
+                    assessment
+                        .unverified_constraints
+                        .push("input_token_count_unknown".into());
+                    None
+                }
             };
             if route.constraints.capabilities.is_empty() {
                 assessment
@@ -158,6 +173,13 @@ pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, 
                     .push("required_capability_unsupported".into());
             }
             let limits = &route.constraints.token_limits;
+            if let (Some(input), Some(limit)) = (input_tokens, limits.max_input_tokens)
+                && input > limit
+            {
+                assessment
+                    .rejection_reasons
+                    .push("input_limit_exceeded".into());
+            }
             match route.output_token_limit_supported {
                 Some(false) => assessment
                     .rejection_reasons
@@ -181,6 +203,15 @@ pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, 
                     .rejection_reasons
                     .push("output_reservation_missing".into()),
                 Some(output) => {
+                    if let (Some(input), Some(window)) = (input_tokens, limits.context_window)
+                        && input
+                            .checked_add(u64::from(output))
+                            .is_none_or(|total| total > window)
+                    {
+                        assessment
+                            .rejection_reasons
+                            .push("context_window_exceeded".into());
+                    }
                     if limits
                         .max_output_tokens
                         .is_some_and(|limit| u64::from(output) > limit)
