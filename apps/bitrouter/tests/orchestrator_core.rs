@@ -107,7 +107,9 @@ async fn assembled_app_revalidates_rebuilt_context_before_fresh_count_and_execut
             ResponseTemplate::new(200).set_body_json(json!({
                 "id":"resp_fixture", "object":"response", "status":"completed", "model":"counted",
                 "output":[{"id":"msg_fixture", "type":"message", "role":"assistant", "status":"completed", "content":[{"type":"output_text", "text":text,"annotations":[]}]}],
-                "usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105}
+                "usage":{"input_tokens":100,"output_tokens":5,"total_tokens":105,
+                    "input_tokens_details":{"cached_tokens":30,"cache_write_tokens":10},
+                    "output_tokens_details":{"reasoning_tokens":2}}
             }))
         }).mount(&upstream).await;
     let config = bitrouter_sdk::config::parse_with(
@@ -125,6 +127,11 @@ providers:
         api_protocol: responses
         capabilities: [tools]
         input_token_counting: responses
+        pricing:
+          input_micro_usd_per_token: 2
+          cache_read_micro_usd_per_token: 0.5
+          cache_write_micro_usd_per_token: 3
+          output_micro_usd_per_token: 4
         token_limits:
           max_input_tokens: 500
           max_output_tokens: 128
@@ -245,6 +252,27 @@ models:
     assert_eq!(turn.steps.len(), 2);
     assert!(turn.steps[0].attempts.is_empty());
     assert_eq!(turn.steps[1].attempts.len(), 1);
+    let receipt = turn.steps[1].attempts[0]
+        .receipt
+        .as_ref()
+        .context("missing execution receipt")?;
+    assert_eq!(receipt.cost_micro_usd, Some(185));
+    assert_eq!(receipt.cost_source, "configured_token_estimate");
+    assert_eq!(receipt.report.actual_provider.as_deref(), Some("fixture"));
+    assert_eq!(receipt.report.actual_model.as_deref(), Some("counted"));
+    assert_eq!(receipt.report.cache.read_tokens, Some(30));
+    assert_eq!(receipt.report.cache.write_tokens, Some(10));
+    assert_eq!(receipt.cache_observation_source, "responses_usage");
+    let run = final_state.run.as_ref().context("missing run")?;
+    let accounting = run
+        .token_accounting
+        .as_ref()
+        .context("missing accounting")?;
+    assert_eq!(run.model_attempts, 1);
+    assert_eq!(
+        accounting.complete_estimate_micro_usd(run.model_attempts),
+        Some(185)
+    );
     assert!(
         turn.steps[1]
             .context_validation
@@ -309,5 +337,27 @@ models:
         .await?
         .context("request count")?;
     assert_eq!(row.try_get::<i64>("", "n")?, 2);
+    let rows = db
+        .query_all(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT estimated_charge_micro_usd, charge_status, charge_evidence_json FROM requests",
+        ))
+        .await?;
+    let bitrouter_sdk::language_model::native_accounting::NativeTokenCost::ConfiguredEstimate {
+        pricing_version,
+        normalized_usage,
+        ..
+    } = &receipt.report.token_cost
+    else {
+        anyhow::bail!("missing native estimate");
+    };
+    for row in rows {
+        assert_eq!(row.try_get::<i64>("", "estimated_charge_micro_usd")?, 185);
+        assert_eq!(row.try_get::<String>("", "charge_status")?, "computed");
+        let evidence: bitrouter::metering::pricing::ChargeEvidence =
+            serde_json::from_str(&row.try_get::<String>("", "charge_evidence_json")?)?;
+        assert_eq!(&evidence.pricing_version, pricing_version);
+        assert_eq!(&evidence.normalized_usage, normalized_usage);
+    }
     Ok(())
 }

@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared-plan records, worker allocation, output/input capacity and constrained reconstruction below; production hook revalidation below; accounting remains pending |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared-plan records, worker allocation, output/input capacity, constrained reconstruction, production hook revalidation and token/cache evidence below; full protocol/continuation feasibility and complete accounting acceptance remain open |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -557,3 +557,72 @@ Fresh counts and final admission require both acknowledged Allow and activation.
 C3 still requires full protocol/continuation feasibility and priced/cache
 receipts. C4–C6, A01–A23, final independent audit, final workspace validation,
 PR and CI remain open.
+
+## C3 configured token estimates and cache evidence
+
+Each actual managed provider attempt now retains its execution provider/model,
+an optional configured token estimate, and explicit raw cache observations. The
+production App supplies the same immutable pricing-table Arc used by its
+MeteringRecorder. The estimator uses the existing tier resolution, normalized
+token buckets, deterministic rounding and price-version calculation. It performs
+no I/O and writes no additional metering row. The selected route and actual
+execution identity remain distinct, including custom executors and fallbacks.
+
+Configured estimates retain integer micro-USD, usage origin, normalized counters,
+effective rates, pricing identity and version. Unknown usage, missing required
+raw totals, invalid bucket/shape/counter evidence, unpriced nonzero buckets,
+unconfigured prices, excessive token counts, invalid rates and saturated charges
+remain unknown. Explicitly configured zero rates can produce a known zero. A
+failed attempt without usage remains unknown even when request settlement uses
+its legacy zero-usage rejection normalization.
+
+Cache evidence uses explicit fields in Responses, Chat Completions, Messages and
+Generate Content usage. Missing cache counters are not observed zeros. Messages
+streaming input/cache fields use cumulative delta values when present, including
+zero, and otherwise initial values; final output totals must come from the final
+delta. Malformed wrappers/details are rejected. Cache counters must match their
+canonical buckets and do not establish KV transfer, reuse savings or final bills.
+
+The root run accumulates known token estimates and unknown outcomes in the same
+acknowledged checkpoint as each unique attempt receipt. Admitted intents without
+acknowledged outcomes stay pending. Child/follow-up turn replacement cannot erase
+earlier costs; a new root run starts a new subtotal. Overflow makes the subtotal
+unknown, and legacy snapshots without this ledger retain `None`. A complete token
+estimate requires known outcomes for every admitted attempt. It must not be
+added to request settlement or presented as a full run invoice.
+
+These are model-token estimates only. Provider tools, counter fees, storage,
+account adjustments, preparation/integration charges and final reconciliation
+are outside this subtotal. Existing preparation/count/rebuild/validation records
+retain elapsed work separately; missing monetary evidence is not a zero charge.
+This segment does not establish full A09/A21 acceptance, monetary reservation
+policy, C4 recovery or C6 production conformance.
+
+Independent review found and repaired an initial-output fallback that could
+misinterpret incomplete Messages streaming usage as a known final zero. Both
+accounting reviews found no remaining concrete blocker in this segment after
+that repair. Reviews were read-only; executable validation is recorded below.
+
+- The 17 targeted regressions passed, including a production App/HTTP-executor
+  fixture that matches native cost, normalized usage and pricing version against
+  the existing two metering rows. Rejected reconstruction candidates do not add
+  attempts or a second settlement record. This remains loopback-provider and
+  embedding-harness evidence, not live-provider or production-harness acceptance.
+- Core regressions cover pending/failed outcome ACKs, repeated drive, unknown
+  failed fallback costs, retained child/follow-up totals, root-run reset, legacy
+  absence, interrupted child outcomes and subtotal overflow. SDK/product tests
+  cover raw protocol counters, incomplete Messages output, malformed containers,
+  actual pricing identities, context tiers, missing usage/prices and invalid
+  rates/counts/amounts.
+- `cargo nextest run --workspace --all-features --build-jobs 2 --test-threads 1
+  --no-fail-fast`: 3740 passed, 22 skipped, in 303.963 seconds. The earlier
+  intermittent background CLI timeout did not reproduce; its cause remains
+  unresolved.
+- Strict all-target/all-feature workspace clippy, workspace all-feature
+  doctests (5 passed, 1 ignored), formatting and diff checks passed.
+
+The next C3 segment must freeze shared adapter prompt compatibility into route
+feasibility, reject known lossy protocol conversions and automatic truncation,
+and bind or reject provider-private native continuation with redacted adjustment
+receipts. Full accounting acceptance, C4–C6, A01–A23, final independent audit,
+final workspace validation, PR and CI remain open.

@@ -2,6 +2,7 @@
 //! workspace execution and the durable checkpoint authority. Neither local
 //! embedding nor an HTTP adapter may bypass the checkpoint acknowledgement.
 
+pub mod accounting;
 mod activity;
 pub mod allocation;
 pub mod checkpoint;

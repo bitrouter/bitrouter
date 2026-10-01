@@ -135,6 +135,9 @@ pub struct RootRun {
     pub limits: Limits,
     pub status: RunStatus,
     pub model_attempts: u32,
+    /// None for legacy snapshots without complete run-wide accounting evidence.
+    #[serde(default)]
+    pub token_accounting: Option<super::accounting::RunTokenAccounting>,
     pub active_ms: u64,
     pub cancellation: Option<String>,
     pub final_answer: Option<String>,
@@ -422,6 +425,7 @@ impl CoreSession {
                 limits,
                 status: RunStatus::Running,
                 model_attempts: 0,
+                token_accounting: Some(Default::default()),
                 active_ms: 0,
                 cancellation: None,
                 final_answer: None,
@@ -3356,6 +3360,9 @@ impl NativeExecutionControl for StepControl {
                 attempt.receipt = Some(receipt.clone());
                 let run = active_run(state)?;
                 run.active_ms = run.active_ms.max(active_ms);
+                if let Some(accounting) = &mut run.token_accounting {
+                    accounting.record(&receipt.report.token_cost);
+                }
                 encode(&receipt)
             })
             .await;

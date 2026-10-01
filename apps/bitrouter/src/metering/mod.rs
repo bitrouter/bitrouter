@@ -22,6 +22,7 @@
 
 pub mod db;
 pub mod entities;
+mod native_cost;
 pub mod pricing;
 pub mod reader;
 pub mod reconciliation;

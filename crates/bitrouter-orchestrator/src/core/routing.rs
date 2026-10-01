@@ -274,8 +274,9 @@ pub struct ExecutionReceipt {
     /// Canonical serving request effort, not a provider-observed effort value.
     pub requested_effort: Option<ReasoningEffort>,
     pub usage_origin: Option<UsageOrigin>,
-    /// A missing price or usage is unknown. It must not become a zero charge.
-    pub cost_micro_usd: Option<f64>,
+    /// Configured model-token estimate only, not an authoritative charge.
+    /// A missing price or usage stays unknown; auxiliary fees are not included.
+    pub cost_micro_usd: Option<u64>,
     pub cost_source: String,
     /// Usage without raw cache counters does not prove cache savings.
     pub cache_observation_source: String,
@@ -297,11 +298,14 @@ impl ExecutionReceipt {
             attempt_id: attempt_id.into(),
             requested_effort: plan.prompt.params.reasoning_effort,
             usage_origin: usage.map(|usage| usage.origin),
-            cost_micro_usd: None,
-            cost_source: "unknown_price_or_receipt".into(),
-            // Raw totals do not prove cache activity. Preserve the raw report
-            // for auditing; cache counters require protocol-specific evidence.
-            cache_observation_source: "unknown".into(),
+            cost_micro_usd: report.token_cost.estimated_micro_usd(),
+            cost_source: if report.token_cost.estimated_micro_usd().is_some() {
+                "configured_token_estimate"
+            } else {
+                "unknown_price_or_receipt"
+            }
+            .into(),
+            cache_observation_source: report.cache.source.clone(),
             report,
         }
     }

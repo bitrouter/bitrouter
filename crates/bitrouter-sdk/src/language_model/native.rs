@@ -218,6 +218,9 @@ pub struct NativeAttemptReport {
     pub attempt_index: u32,
     /// Selected provider candidate for this attempt.
     pub route: NativeRoute,
+    /// Actual execution provider, using the same identity as SDK settlement.
+    #[serde(default)]
+    pub actual_provider: Option<String>,
     /// Actual execution model, when an upstream result is available.
     pub actual_model: Option<String>,
     /// Complete output and optional reported usage. Missing usage stays unknown.
@@ -226,6 +229,12 @@ pub struct NativeAttemptReport {
     pub error: Option<String>,
     /// Provider execution wall time, excluding durable admission waits.
     pub elapsed_ms: u64,
+    /// Host token estimate, independent of provider billing and settlement writes.
+    #[serde(default)]
+    pub token_cost: super::native_accounting::NativeTokenCost,
+    /// Explicit raw provider cache counters with their serving-protocol provenance.
+    #[serde(default)]
+    pub cache: super::native_accounting::NativeCacheObservation,
 }
 
 /// Per-request durable controls supplied by a native embedding runtime.
