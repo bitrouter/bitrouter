@@ -1,5 +1,7 @@
 #[path = "core_execution/input_count.rs"]
 mod input_count;
+#[path = "core_execution/reconstruction.rs"]
+mod reconstruction;
 mod support;
 
 use std::sync::Arc;
@@ -1031,6 +1033,7 @@ fn input() -> TaskInput {
         effort: None,
         max_output_tokens: None,
         routing: RoutingSettings::default(),
+        discardable_history: None,
         acceptance_criteria: vec!["Use the actual tool result".into()],
         required_materials: Vec::new(),
         verification: None,

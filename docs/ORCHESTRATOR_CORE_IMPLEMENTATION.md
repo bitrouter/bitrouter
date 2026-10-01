@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared-plan records, worker allocation, output reservations and provider-counted input bounds below; reconstruction and accounting remain pending |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared-plan records, worker allocation, output/input capacity and constrained reconstruction below; production hook revalidation and accounting remain pending |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -419,12 +419,77 @@ Model/effort selection and provider candidate identities stay frozen throughout.
   capacity checks. SDK follow-up review confirmed both repairs with no remaining
   concrete blocker in this segment. Strict all-target/all-feature workspace
   clippy, formatting, diff and generated-distribution checks passed. Workspace
-  all-feature doctests passed (5 passed, 1 ignored). A new serial workspace
-  nextest run is in progress for this tree; the preceding 3697-test passing run
-  covered the output-reservation checkpoint, not this new implementation.
+  all-feature doctests passed (5 passed, 1 ignored). The serial workspace nextest
+  run at `1f37fe64` finished with 3705 passed, two failed and 22 skipped in
+  374.316 seconds. Both failures were background CLI startup/exit deadlines:
+  `background_load_and_resume_use_advertised_native_capabilities` and
+  `background_permissions_default_to_ask_and_explicit_modes_win`. The daemon log
+  tails were empty. Their cause remains unresolved; this is not a passing full
+  run. The preceding 3697-test passing run covered the output-reservation
+  checkpoint, not this input-counting implementation.
 
 C3 still requires infeasible-context reconstruction, complete capability and
 continuation feasibility, priced receipts and protocol-aware cache accounting.
 Other provider counters remain unknown unless a supported counter is explicitly
 configured; these observations must not become assertions of universal fit.
 C4–C6, the full A01–A23 audit, final independent review, PR and CI remain required.
+
+
+## C3 explicit optional-history reconstruction
+
+A rejected capacity/capability plan can now create one deterministic candidate
+from the same required materials and retained history. `TaskInput.discardable_history`
+is an explicit, task-scoped caller constraint, bound by SHA-256 to the complete
+canonical history before that task. Only listed settled assistant/tool messages
+can be removed. Missing or stale declarations retain all evidence; a finished
+work unit or an unrelated required document never authorizes deletion. Children,
+worker assignments and follow-ups do not inherit the declaration.
+
+The candidate retains user/system instructions, all current work, required
+material bodies and preparation additions, and validates complete call/result
+pairing. Core records the rejected source step, a reconstruction receipt, source
+history digest and a new context revision/step. Its CPU work consumes active time;
+checkpoint ACK waiting does not. No second count or provider attempt begins until
+the reconstruction checkpoint is acknowledged. A still-infeasible candidate is
+rejected without another reconstruction loop or model reselection.
+
+The shared SDK accepts only a strict ordered message subset, keeps generation
+parameters/model/effort/provider candidates frozen, reruns the original request
+checker bindings and performs fresh provider counts. A checker denial prevents
+both the second count and generation. Private continuation, App ingress prompt transforms, and all four mutable
+preparation/route-hook groups disable automatic reconstruction because those
+hooks have no immutable revalidation contract. This is an explicit functional
+limit: this path is usable in a hook-free embedding, not evidence that an
+assembled production App with such hooks supports automatic reconstruction.
+
+- SDK/orchestrator all-feature nextest: 1192 passed, 2 skipped, including
+  80 core execution tests.
+- Regressions cover explicit reduction and preserved required/current evidence;
+  a task depending on the prior plan/artifact with only an unrelated README;
+  stale, unordered, out-of-range or instruction-removing declarations; broken
+  call pairs; fixed mode; missing material; mandatory context still too large;
+  reconstruction ACK ordering, disconnect and commit failure; App transforms
+  adding dependencies on prior evidence; task fingerprinting
+  and child/follow-up isolation; frozen checker denial before egress; one model
+  selection; invalid rewrites; mutable hooks and continuation restrictions.
+- Independent SDK review confirmed the frozen checker repair and found no
+  remaining concrete blocker in that segment. Core follow-up review confirmed
+  task-scoped declarations and the ACK boundary.
+  An additional audit found App ingress transforms outside the SDK hook groups;
+  core now refuses reconstruction when those transforms are installed. Review
+  of that repair confirmed the boundary without remaining concrete blockers.
+  The broad serial workspace run completed with 3715 passed, one background
+  CLI timeout and 22 skipped in 302.986 seconds. It preceded the final App
+  transform guard. The failing test was again
+  `background_load_and_resume_use_advertised_native_capabilities`, with an empty
+  daemon log at its unchanged 15-second deadline. The cause remains unresolved.
+  After the App-transform repair, SDK/orchestrator nextest again passed all
+  1192 tests (2 skipped). Strict all-target/all-feature workspace clippy,
+  workspace all-feature doctests (5 passed, 1 ignored), formatting and diff
+  checks passed. These do not resolve the background CLI failure above.
+
+C3 remains open for the production hook revalidation contract, full protocol and
+continuation feasibility, priced receipts and protocol-aware cache accounting.
+The typed in-process declaration does not establish a remote context-inventory
+API or the C5 wire mapping. C4–C6, the complete A01–A23 audit, final independent
+review, final-tree workspace checks, PR and CI remain required.

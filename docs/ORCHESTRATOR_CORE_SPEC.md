@@ -503,6 +503,17 @@ must not be presented as verified fit. An infeasible candidate is rejected;
 required context is not silently truncated. Summarization/rebuild work is
 explicit and counted, with its result validated before execution.
 
+Settled work is not implicitly disposable. The initial deterministic history
+reduction accepts an optional task-scoped `discardable_history` constraint from
+the authenticated caller: `history_sha256` commits to the serialized canonical
+history before that task, and `message_indices` identifies a strictly ordered
+subset of old assistant/tool messages which the caller declares unnecessary for
+this task. Omission retains everything. Instructions, required material, current
+work and call/result integrity remain mandatory. This declaration is never
+inherited by child assignments; a material inventory alone does not establish
+that it replaces prior evidence. Reconstructed input must pass the frozen request
+checks and joint feasibility checks before any generation.
+
 Model selection reuses the existing named router/policy machinery. A chosen
 model/effort must not be independently selected again after the plan is frozen.
 Execution revalidates hard constraints and records any fallback/continuation
