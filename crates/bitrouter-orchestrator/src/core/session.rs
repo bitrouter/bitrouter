@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::native::{
-    NativeAttemptReport, NativeExecutionControl, NativePlan,
+    NativeAttemptReport, NativeExecutionControl, NativeModelSelection, NativePlan,
 };
 use bitrouter_sdk::language_model::types::{
     Content, FinishReason, GenerationParams, Message, Prompt, ReasoningEffort, Role, Tool,
@@ -30,6 +30,9 @@ use super::protocol::{
     Bind, Capabilities, CommitStatus, CoreError, ErrorCode, HarnessManifest, Limits, MaterialRef,
     OperationDisposition, OperationReceipt, ServerMessage, SignalUpdate, TaskInput, ToolExecute,
     ToolOutcome, ToolResult, VERSION, validate_id,
+};
+use super::routing::{
+    ApplicationDisposition, ContextManifest, DecisionApplied, ExecutionReceipt, RoutingDecision,
 };
 use super::signals::{self, MaterialRequest, SignalState};
 
@@ -63,7 +66,7 @@ impl RunStatus {
 pub struct AttemptRecord {
     pub attempt_id: String,
     pub index: u32,
-    pub report: Option<NativeAttemptReport>,
+    pub receipt: Option<ExecutionReceipt>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +77,12 @@ pub struct ModelStep {
     pub signal_revision: u64,
     pub manifest: HarnessManifest,
     pub materials: Vec<MaterialRef>,
+    pub context: ContextManifest,
+    pub input_state_revision: u64,
+    /// Complete paired history before material injection or app transforms.
+    pub input_history: Vec<Message>,
+    pub decision: Option<RoutingDecision>,
+    pub application: Option<DecisionApplied>,
     pub plan: Option<NativePlan>,
     pub attempts: Vec<AttemptRecord>,
     pub settled: bool,
@@ -153,6 +162,7 @@ pub struct AgentState {
     pub depth: u32,
     pub context_revision: u64,
     pub history: Vec<Message>,
+    pub required_instructions: Vec<String>,
     pub turn: Option<AgentTurn>,
     pub queue: VecDeque<Assignment>,
     pub mailbox: Vec<Mail>,
@@ -242,6 +252,7 @@ impl CoreSession {
             depth: 0,
             context_revision: 0,
             history: Vec::new(),
+            required_instructions: Vec::new(),
             turn: None,
             queue: VecDeque::new(),
             mailbox: Vec::new(),
@@ -352,6 +363,9 @@ impl CoreSession {
                 .get_mut(&state.agent_id)
                 .ok_or_else(|| reject(ErrorCode::CheckpointConflict, "root agent is absent"))?;
             agent.history.push(Message::text(Role::User, &input.text));
+            if !agent.required_instructions.contains(&input.text) {
+                agent.required_instructions.push(input.text.clone());
+            }
             agent.context_revision += 1;
             agent.turn = Some(AgentTurn {
                 run_id: run_id.clone(),
@@ -865,6 +879,11 @@ impl CoreSession {
                     agent
                         .history
                         .push(Message::text(Role::User, &work.input.text));
+                    for instruction in &work.required_instructions {
+                        if !agent.required_instructions.contains(instruction) {
+                            agent.required_instructions.push(instruction.clone());
+                        }
+                    }
                     agent.context_revision += 1;
                     agent.turn = Some(collaboration::new_turn(work));
                     Ok(json!({}))
@@ -1680,6 +1699,7 @@ impl CoreSession {
             }
         };
         let step_id = id("step");
+        let context = ContextManifest::capture(&state, agent_id, &prompt)?;
         let source_signal_revision = state.signals.revision;
         let source_manifest = state.manifest.clone();
         let source_context_revision = state
@@ -1706,6 +1726,7 @@ impl CoreSession {
             let agent = agent_mut(state, agent_id)?;
             agent.last_scheduled = head.event_seq + 1;
             let revision = agent.context_revision;
+            let input_history = agent.history.clone();
             let turn = agent
                 .turn
                 .as_mut()
@@ -1721,6 +1742,11 @@ impl CoreSession {
                 signal_revision,
                 manifest,
                 materials,
+                context,
+                input_state_revision: head.state_revision,
+                input_history,
+                decision: None,
+                application: None,
                 plan: None,
                 attempts: Vec::new(),
                 settled: false,
@@ -1732,6 +1758,10 @@ impl CoreSession {
             session: self.clone(),
             agent_id: agent_id.to_owned(),
             step_id: step_id.clone(),
+            model_selection: match turn.input.routing.model {
+                super::protocol::ModelMode::Fixed => NativeModelSelection::Fixed,
+                super::protocol::ModelMode::Policy => NativeModelSelection::Policy,
+            },
         });
         let response = self
             .shared
@@ -1934,7 +1964,8 @@ impl CoreSession {
             let observed = step
                 .attempts
                 .last()
-                .and_then(|attempt| attempt.report.as_ref())
+                .and_then(|attempt| attempt.receipt.as_ref())
+                .map(|receipt| &receipt.report)
                 .ok_or_else(|| {
                     reject(
                         ErrorCode::CheckpointUnavailable,
@@ -2353,7 +2384,10 @@ impl CoreSession {
             let turn = agent_turn(state, agent_id)?;
             if turn.status == AgentStatus::Cancelling {
                 if let Some(step) = turn.steps.last_mut()
-                    && step.attempts.iter().all(|attempt| attempt.report.is_some())
+                    && step
+                        .attempts
+                        .iter()
+                        .all(|attempt| attempt.receipt.is_some())
                 {
                     step.settled = true;
                 }
@@ -2571,22 +2605,33 @@ struct StepControl {
     session: CoreSession,
     agent_id: String,
     step_id: String,
+    model_selection: NativeModelSelection,
 }
 
 #[async_trait]
 impl NativeExecutionControl for StepControl {
+    fn model_selection(&self) -> NativeModelSelection {
+        self.model_selection
+    }
+
     async fn plan(&self, plan: NativePlan) -> bitrouter_sdk::Result<()> {
+        let mut rejection = None;
         self.session
-            .transition_for(Some(&self.agent_id), "model.plan", |state, _| {
-                validate_step_source(state, &self.agent_id, &self.step_id)?;
+            .transition_for(Some(&self.agent_id), "model.plan", |state, head| {
+                rejection = validate_step_source(state, &self.agent_id, &self.step_id).err();
+                let turn = agent_turn(state, &self.agent_id)?;
+                let modes = turn.input.routing.clone();
+                if let Some(effort) = parse_effort(turn.input.effort.as_deref())?
+                    && plan.prompt.params.reasoning_effort != Some(effort)
+                {
+                    rejection = Some(reject(
+                        ErrorCode::NoFeasibleRoute,
+                        "prepared plan changed manual effort",
+                    ));
+                }
                 let step = current_step(state, &self.agent_id, &self.step_id)?;
-                for material in &step.materials {
-                    if !plan.prompt.messages.contains(&material_message(material)?) {
-                        return Err(reject(
-                            ErrorCode::NoFeasibleRoute,
-                            "shared model preparation removed required material",
-                        ));
-                    }
+                if rejection.is_none() {
+                    rejection = step.context.validate_prepared(&plan.prompt).err();
                 }
                 if step.plan.is_some() {
                     return Err(reject(
@@ -2594,11 +2639,47 @@ impl NativeExecutionControl for StepControl {
                         "model plan is already frozen",
                     ));
                 }
+                let candidate = format!("{}:{}", step.context.context_id, step.context.revision);
+                let decision = RoutingDecision {
+                    decision_id: step.decision_id.clone(),
+                    policy_id: "core_rules_v1".into(),
+                    source: if modes.model == super::protocol::ModelMode::Fixed {
+                        "fixed_override".into()
+                    } else {
+                        "named_model_policy".into()
+                    },
+                    input_state_revision: step.input_state_revision,
+                    modes,
+                    context: step.context.prepared_manifest(&plan.prompt)?,
+                    candidate_ids: vec![candidate.clone()],
+                    selected_candidate_id: candidate,
+                    selected_model: plan.effective_model.clone(),
+                    selected_effort: plan.prompt.params.reasoning_effort,
+                    reason_codes: vec![
+                        "continue_current_work".into(),
+                        "token_capacity_unknown".into(),
+                    ],
+                };
+                let application = DecisionApplied {
+                    decision_id: step.decision_id.clone(),
+                    agent_turn_id: step.context.agent_turn_id.clone(),
+                    step_id: step.step_id.clone(),
+                    state_revision: head.state_revision + 1,
+                    disposition: match rejection.as_ref().map(|error| error.code) {
+                        None => ApplicationDisposition::Applied,
+                        Some(ErrorCode::StaleRevision) => ApplicationDisposition::Stale,
+                        Some(_) => ApplicationDisposition::Rejected,
+                    },
+                    reason: rejection.clone(),
+                };
+                step.decision = Some(decision.clone());
+                step.application = Some(application.clone());
                 step.plan = Some(plan.clone());
-                encode(&plan)
+                Ok(json!({"plan":plan,"decision":decision,"application":application}))
             })
             .await
-            .map_err(sdk_error)
+            .map_err(sdk_error)?;
+        rejection.map_or(Ok(()), |error| Err(sdk_error(error)))
     }
 
     async fn before_attempt(
@@ -2613,13 +2694,16 @@ impl NativeExecutionControl for StepControl {
             let turn = agent_turn(state, &self.agent_id)?;
             if turn.status != AgentStatus::ModelRunning { return Err(reject(ErrorCode::Busy, "agent is no longer running this model step")); }
             let step = turn.steps.last_mut().filter(|step| step.step_id == self.step_id).ok_or_else(|| reject(ErrorCode::StaleRevision, "attempt step changed"))?;
+            if !step.application.as_ref().is_some_and(|application| matches!(application.disposition, ApplicationDisposition::Applied)) {
+                return Err(reject(ErrorCode::NoFeasibleRoute,"routing decision was not applied"));
+            }
             let plan = step.plan.as_ref().ok_or_else(|| reject(ErrorCode::CheckpointUnavailable, "model plan is not committed"))?;
             if plan.request_id != request_id || attempt_index as usize != step.attempts.len() || plan.routes.get(attempt_index as usize).is_none()
-                || step.attempts.last().is_some_and(|attempt| attempt.report.is_none()) {
+                || step.attempts.last().is_some_and(|attempt| attempt.receipt.is_none()) {
                 return Err(reject(ErrorCode::OperationConflict, "attempt does not follow its immutable model plan"));
             }
             let attempt_id = id("attempt");
-            step.attempts.push(AttemptRecord { attempt_id: attempt_id.clone(), index: attempt_index, report: None });
+            step.attempts.push(AttemptRecord { attempt_id: attempt_id.clone(), index: attempt_index, receipt: None });
             active_run(state)?.model_attempts += 1;
             Ok(json!({"attempt_id":attempt_id,"request_id":request_id,"attempt_index":attempt_index}))
         }).await.map_err(sdk_error)?;
@@ -2671,16 +2755,22 @@ impl NativeExecutionControl for StepControl {
                             "outcome has no committed attempt intent",
                         )
                     })?;
-                if attempt.report.is_some() {
+                if attempt.receipt.is_some() {
                     return Err(reject(
                         ErrorCode::OperationConflict,
                         "attempt already has an outcome",
                     ));
                 }
-                attempt.report = Some(report.clone());
+                let receipt = ExecutionReceipt::capture(
+                    &step.decision_id,
+                    &attempt.attempt_id,
+                    plan,
+                    report.clone(),
+                );
+                attempt.receipt = Some(receipt.clone());
                 let run = active_run(state)?;
                 run.active_ms = run.active_ms.max(active_ms);
-                encode(&report)
+                encode(&receipt)
             })
             .await;
         if recorded.is_err() {
@@ -2865,8 +2955,9 @@ fn build_prompt(state: &SessionSnapshot, agent_id: &str) -> Result<Prompt, CoreE
     Ok(Prompt {
         model: turn.input.model.clone(),
         system: Some(format!(
-            "You are agent {} for this task. Use only declared tools. Preserve user constraints and report observed results.\nAcceptance criteria:\n{}",
+            "You are agent {} for this task. Use only declared tools. Preserve user constraints and report observed results.\nRequired user instructions:\n{}\nAcceptance criteria:\n{}",
             agent_id,
+            agent.required_instructions.join("\n"),
             turn.input.acceptance_criteria.join("\n")
         )),
         system_provider_metadata: Default::default(),

@@ -2271,11 +2271,17 @@ impl RouteHook for ContinuationRuntime {
                 })?;
                 chain.clear();
                 chain.push(selected.clone());
-                ctx.insert_extension(Arc::new(ProviderContinuation::new(
+                let continuation = ProviderContinuation::new(
                     active.provider_response_id,
                     &selected,
                     credential_authority,
-                )));
+                );
+                let continuation = if active.effort_authoritative {
+                    continuation.with_effort_constraint(active.effective_effort)
+                } else {
+                    continuation
+                };
+                ctx.insert_extension(Arc::new(continuation));
                 Ok(())
             }
             ContinuationResolution::Expired => Err(BitrouterError::bad_request(

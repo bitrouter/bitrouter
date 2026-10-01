@@ -1345,10 +1345,8 @@ impl AgentDeckState {
                 self.show_stopped = !self.show_stopped;
                 self.ensure_selection();
             }
-            KeyCode::Char(' ') => {
-                if self.selected_run().is_some() {
-                    self.surface = AgentSurface::Peek;
-                }
+            KeyCode::Char(' ') if self.selected_run().is_some() => {
+                self.surface = AgentSurface::Peek;
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 return self.begin_reply(foreground_permission_pending);

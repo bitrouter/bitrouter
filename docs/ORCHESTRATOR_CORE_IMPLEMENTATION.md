@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: reviewed signal/material groundwork below; joint routing pending |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: reviewed signals and prepared-plan records below; joint feasibility and allocation pending |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -203,3 +203,54 @@ materials, so later permission changes cannot reinterpret emitted calls.
 - Follow-up review confirmed the repairs. This is groundwork, not completion
   of C3: joint context/model decisions, reuse feasibility and execution receipts
   still require implementation and review. C4–C6 and full acceptance remain open.
+
+## C3 prepared-plan records and manual constraints
+
+Each model step now commits an ordered source context manifest and paired input
+history. The prepared provider plan must retain required system instructions and
+the ordered committed messages, with structurally valid call/result pairs. Its
+`RoutingDecision`, `DecisionApplied`, and per-attempt `ExecutionReceipt` share a
+decision identity. A rejected or stale prepared context is durably recorded
+before the SDK returns the admission failure. Model preparation failures before
+a candidate plan exists still take the earlier failed-step path.
+
+Fixed model mode resolves the requested alias and provider chain but skips the
+named model selector. Policy mode selects once. Both preserve explicit caller
+effort and its provenance. A controlled continuation requires a known matching
+authoritative effort, including an explicit provider default; a conflicting or
+unknown constraint cannot dispatch. Ordinary uncontrolled HTTP/native selection
+retains its existing behavior. The host continuation adapter propagates this
+authoritative fact from its sealed continuation record.
+
+Fresh children preserve applicable user instructions. Inherited children copy
+paired source history without old injected material bodies, so they resolve the
+current material inventory. Assignments freeze the assigning agent's required
+instructions, including new root constraints for workers receiving later FIFO
+follow-ups. An explicit child model overrides policy selection.
+
+- SDK/orchestrator all-feature nextest: 1153 passed, 2 skipped, including
+  51 core execution tests.
+- App all-feature continuation regression: 122 passed (122 selected by
+  `test(continuation)`). SDK/orchestrator doctests: 5 passed, 1 ignored.
+- Strict all-target/all-feature clippy for the app, SDK and orchestrator,
+  formatting, and diff checks passed. Rust 1.95 exposed four inherited match
+  and Boolean-expression lints in app/TUI dependencies; equivalent expression
+  simplifications also passed 253 TUI tests and 11 selected app session/wire
+  tests, and received an independent read-only review.
+- Regressions cover preparation deleting instructions/history, inherited
+  material replacement, fresh-context instruction retention, cross-run
+  instruction propagation, decision/application/attempt joins, unknown usage,
+  raw totals without cache evidence, fixed/policy selector call counts,
+  policy-effort provenance, and fixed continuation effort compatibility.
+- Independent SDK review found and repaired false caller ownership of policy
+  effort, route-hook model attribution changes, and a fixed-mode continuation
+  constraint bypass. Independent context review found and repaired missing
+  follow-up instructions and raw totals being misclassified as cache evidence.
+  Follow-up reviews found no remaining blocker within this groundwork scope.
+
+This is still not full C3 acceptance. Current records describe continuation of
+the selected agent; worker candidate enumeration, strict reuse feasibility,
+capacity/output-allowance checks, reconstruction, priced cost receipts and
+protocol-specific cache observations remain pending. Token estimates/capacity,
+cost and cache observations are explicitly unknown in these records. The full
+C4–C6 delivery, A01–A23 audit, final workspace checks, PR and CI remain required.

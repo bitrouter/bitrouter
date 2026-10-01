@@ -1134,7 +1134,8 @@ pub enum ReasoningEffort {
 /// Caller-authored effort keeps the historical pass-through behavior. A
 /// policy-owned effort is a router treatment and must be positively supported
 /// by the exact provider/model route before dispatch.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReasoningEffortSource {
     /// The inbound request supplied the effort value.
     #[default]

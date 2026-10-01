@@ -97,6 +97,7 @@ pub struct Assignment {
     pub run_id: String,
     pub sender_id: String,
     pub input: TaskInput,
+    pub required_instructions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -345,16 +346,16 @@ fn spawn(state: &mut SessionSnapshot, actor_id: &str, task: &Work) -> Result<Val
     let mut history = if task.fresh_context || task.independent_review {
         Vec::new()
     } else {
-        // Inherit the model's frozen input, never its unresolved collaboration
-        // calls. Thus every inherited tool result still has its paired call.
+        // Inherit paired history, excluding injected materials: each child
+        // resolves the current inventory instead of carrying stale versions.
         parent
             .turn
             .as_ref()
             .and_then(|turn| turn.steps.last())
-            .and_then(|step| step.plan.as_ref())
-            .map(|plan| plan.prompt.messages.clone())
+            .map(|step| step.input_history.clone())
             .unwrap_or_default()
     };
+    let required_instructions = work.required_instructions.clone();
     history.push(Message::text(Role::User, &work.input.text));
     let turn_id = work.assignment_id.clone();
     state.agents.insert(
@@ -366,6 +367,7 @@ fn spawn(state: &mut SessionSnapshot, actor_id: &str, task: &Work) -> Result<Val
             depth: parent.depth + 1,
             context_revision: 1,
             history,
+            required_instructions,
             turn: Some(new_turn(work)),
             queue: VecDeque::new(),
             mailbox: Vec::new(),
@@ -425,11 +427,14 @@ fn assignment(
     actor_id: &str,
     task: &Work,
 ) -> Result<Assignment, CoreError> {
-    let parent = state
+    let assigning_agent = state
         .agents
         .get(actor_id)
-        .and_then(|agent| agent.turn.as_ref())
         .ok_or_else(|| reject(ErrorCode::UnauthorizedScope, "unknown assigning agent"))?;
+    let parent = assigning_agent
+        .turn
+        .as_ref()
+        .ok_or_else(|| reject(ErrorCode::UnauthorizedScope, "assigning agent has no turn"))?;
     let run = state
         .run
         .as_ref()
@@ -437,6 +442,9 @@ fn assignment(
     let mut input = parent.input.clone();
     input.text = task.text.clone();
     input.model = task.model.clone().unwrap_or(input.model);
+    if task.model.is_some() {
+        input.routing.model = super::protocol::ModelMode::Fixed;
+    }
     if task.effort.is_some() {
         input.effort = task.effort.clone();
     }
@@ -453,11 +461,16 @@ fn assignment(
     }
     super::session::validate_input(&input, &run.limits)?;
     super::session::pin_required_materials(state, &mut input)?;
+    let mut required_instructions = assigning_agent.required_instructions.clone();
+    if !required_instructions.contains(&task.text) {
+        required_instructions.push(task.text.clone());
+    }
     Ok(Assignment {
         assignment_id: id("turn"),
         run_id: run.run_id.clone(),
         sender_id: actor_id.into(),
         input,
+        required_instructions,
     })
 }
 
