@@ -1,13 +1,14 @@
 mod support;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bitrouter_orchestrator::core::checkpoint::{
     CheckpointAck, CheckpointBatch, DurableHead, sha256,
 };
+use bitrouter_orchestrator::core::collaboration::{Action, Work};
 use bitrouter_orchestrator::core::protocol::{
     ArtifactRef, Bind, Capabilities, CommitStatus, CoreError, ErrorCode, HarnessManifest,
     HarnessTool, Limits, OwnershipGrant, RoutingSettings, ServerMessage, TaskInput, ToolEffect,
@@ -36,8 +37,11 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 struct Harness {
     store: Mutex<DurableHarness>,
     sent: Mutex<Vec<ToolExecute>>,
+    cancelled: Mutex<Vec<(String, String, u64)>>,
+    cancel_seen: Semaphore,
     fail_kind: Option<&'static str>,
     hold_kind: Option<&'static str>,
+    hold_enabled: AtomicBool,
     wrong_ack: Option<bool>,
     hold_send: bool,
     hold_after_send: bool,
@@ -51,8 +55,11 @@ impl Harness {
         Self {
             store: Mutex::new(DurableHarness::new(grant())),
             sent: Mutex::new(Vec::new()),
+            cancelled: Mutex::new(Vec::new()),
+            cancel_seen: Semaphore::new(0),
             fail_kind,
             hold_kind,
+            hold_enabled: AtomicBool::new(true),
             wrong_ack: None,
             hold_send: false,
             hold_after_send: false,
@@ -88,6 +95,7 @@ impl HarnessPort for Harness {
         if self
             .hold_kind
             .is_some_and(|kind| payload.events.iter().any(|event| event.kind == kind))
+            && self.hold_enabled.load(Ordering::SeqCst)
         {
             self.seen.add_permits(1);
             self.resume
@@ -136,6 +144,20 @@ impl HarnessPort for Harness {
     }
 
     async fn send(&self, message: ServerMessage) -> Result<(), CoreError> {
+        if let ServerMessage::ToolCancel {
+            invocation_id,
+            attempt_id,
+            execution_epoch,
+        } = &message
+        {
+            self.cancelled.lock().await.push((
+                invocation_id.clone(),
+                attempt_id.clone(),
+                *execution_epoch,
+            ));
+            self.cancel_seen.add_permits(1);
+            return Ok(());
+        }
         if let ServerMessage::ToolExecute(command) = message {
             if self.hold_send {
                 self.seen.add_permits(1);
@@ -198,6 +220,193 @@ struct RecordingExecutor {
     mock: MockExecutor,
     prompts: Mutex<Vec<Prompt>>,
     calls: AtomicUsize,
+}
+
+struct ConcurrentExecutor {
+    seen: Semaphore,
+    release: Semaphore,
+    active: AtomicUsize,
+    peak: AtomicUsize,
+    root_calls: AtomicUsize,
+}
+
+struct CollaborationExecutor {
+    root_calls: AtomicUsize,
+}
+
+struct WakeExecutor {
+    child_seen: Semaphore,
+    child_release: Semaphore,
+    root_resumed: Semaphore,
+    root_calls: AtomicUsize,
+    child_id: Mutex<Option<String>>,
+    wait: bool,
+}
+
+#[async_trait]
+impl Executor for WakeExecutor {
+    async fn execute(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> bitrouter_sdk::Result<ExecutionResult> {
+        let child = prompt
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|part| matches!(part,Content::Text{text,..} if text=="held-child"));
+        let content = if child {
+            self.child_seen.add_permits(2);
+            self.child_release
+                .acquire()
+                .await
+                .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                .forget();
+            vec![text("held child finished")]
+        } else if self.root_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            if self.wait {
+                self.child_seen
+                    .acquire()
+                    .await
+                    .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                    .forget();
+                let child = self
+                    .child_id
+                    .lock()
+                    .await
+                    .clone()
+                    .ok_or_else(|| bitrouter_sdk::BitrouterError::internal("missing child"))?;
+                vec![core_call(
+                    "wait_agent",
+                    json!({"agent_ids":[child],"timeout_ms":50}),
+                    "wait",
+                )]
+            } else {
+                vec![call("root-read")]
+            }
+        } else {
+            self.root_resumed.add_permits(1);
+            vec![text("root resumed")]
+        };
+        MockExecutor::new(vec![output(content)])
+            .execute(target, prompt, ctx)
+            .await
+    }
+    async fn execute_stream(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> bitrouter_sdk::Result<StreamPartStream> {
+        Err(bitrouter_sdk::BitrouterError::internal(
+            "unexpected streaming",
+        ))
+    }
+}
+
+#[async_trait]
+impl Executor for CollaborationExecutor {
+    async fn execute(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> bitrouter_sdk::Result<ExecutionResult> {
+        let child = prompt.messages.iter().any(|message| message.content.iter().any(|content| matches!(content, Content::Text { text, .. } if text == "child-a" || text == "child-b")));
+        let content = if child {
+            if prompt
+                .messages
+                .iter()
+                .any(|message| message.role == bitrouter_sdk::language_model::types::Role::Tool)
+            {
+                vec![text("child tool completed")]
+            } else {
+                vec![call("same-provider-id")]
+            }
+        } else {
+            match self.root_calls.fetch_add(1, Ordering::SeqCst) {
+                0 => vec![
+                    core_call("spawn_agent", json!({"task":work("child-a")}), "spawn-a"),
+                    core_call("delegate_task", json!({"task":work("child-b")}), "spawn-b"),
+                ],
+                1 => {
+                    let mut ids = Vec::new();
+                    for part in prompt.messages.iter().flat_map(|message| &message.content) {
+                        if let Content::ToolResult {
+                            output:
+                                bitrouter_sdk::language_model::types::ToolResultOutput::Text { value },
+                            ..
+                        } = part
+                            && let Ok(value) = serde_json::from_str::<serde_json::Value>(value)
+                            && let Some(id) = value["value"]["agent_id"].as_str()
+                        {
+                            ids.push(id.to_owned());
+                        }
+                    }
+                    vec![core_call(
+                        "wait_agent",
+                        json!({"agent_ids":ids,"timeout_ms":60000}),
+                        "wait-all",
+                    )]
+                }
+                _ => vec![text("parent joined tool evidence")],
+            }
+        };
+        MockExecutor::new(vec![output(content)])
+            .execute(target, prompt, ctx)
+            .await
+    }
+    async fn execute_stream(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> bitrouter_sdk::Result<StreamPartStream> {
+        Err(bitrouter_sdk::BitrouterError::internal(
+            "unexpected streaming",
+        ))
+    }
+}
+
+#[async_trait]
+impl Executor for ConcurrentExecutor {
+    async fn execute(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> bitrouter_sdk::Result<ExecutionResult> {
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(active, Ordering::SeqCst);
+        let child = prompt.messages.iter().any(|message| message.content.iter().any(|content| matches!(content, Content::Text { text, .. } if text == "child-a" || text == "child-b")));
+        let answer = if child {
+            self.seen.add_permits(1);
+            self.release
+                .acquire()
+                .await
+                .map_err(|error| bitrouter_sdk::BitrouterError::internal(error.to_string()))?
+                .forget();
+            "child completed"
+        } else if self.root_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            "provisional root answer"
+        } else {
+            "joined child evidence"
+        };
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        let mock = MockExecutor::always_text(answer);
+        mock.execute(target, prompt, ctx).await
+    }
+    async fn execute_stream(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> bitrouter_sdk::Result<StreamPartStream> {
+        Err(bitrouter_sdk::BitrouterError::internal(
+            "unexpected streaming",
+        ))
+    }
 }
 
 #[async_trait]
@@ -304,6 +513,19 @@ fn input() -> TaskInput {
     }
 }
 
+fn work(text: &str) -> Work {
+    Work {
+        text: text.into(),
+        model: None,
+        effort: None,
+        acceptance_criteria: Vec::new(),
+        required_materials: Vec::new(),
+        task_scope: Some("fixture-scope".into()),
+        fresh_context: true,
+        independent_review: false,
+    }
+}
+
 fn text(value: &str) -> Content {
     Content::Text {
         text: value.into(),
@@ -315,6 +537,17 @@ fn call(call_id: &str) -> Content {
         id: call_id.into(),
         name: "read".into(),
         arguments: "{\"path\":\"file.txt\"}".into(),
+        provider_executed: false,
+        dynamic: false,
+        provider_metadata: Default::default(),
+    }
+}
+
+fn core_call(name: &str, arguments: serde_json::Value, call_id: &str) -> Content {
+    Content::ToolCall {
+        id: call_id.into(),
+        name: name.into(),
+        arguments: arguments.to_string(),
         provider_executed: false,
         dynamic: false,
         provider_metadata: Default::default(),
@@ -429,6 +662,1122 @@ fn result(command: &ToolExecute) -> ToolResult {
         evidence: Vec::new(),
         workspace_revision: Some("workspace-v2".into()),
     }
+}
+
+#[tokio::test]
+async fn tool_result_and_wait_deadline_wake_root_while_a_child_is_running() -> TestResult {
+    for wait in [false, true] {
+        let harness = Arc::new(Harness::new(None, None));
+        let table = StaticRoutingTable::new();
+        table.insert("fixture-model", vec![target("first")]);
+        let executor = Arc::new(WakeExecutor {
+            child_seen: Semaphore::new(0),
+            child_release: Semaphore::new(0),
+            root_resumed: Semaphore::new(0),
+            root_calls: AtomicUsize::new(0),
+            child_id: Mutex::new(None),
+            wait,
+        });
+        let app = App::builder()
+            .language_model(|builder| {
+                builder
+                    .routing_table(Arc::new(table))
+                    .executor(executor.clone());
+            })
+            .build()?;
+        let session = bind_app(Arc::new(app), harness.clone()).await?;
+        let mut task = input();
+        task.limits = Some(Limits {
+            active_models: 2,
+            ..Limits::default()
+        });
+        let root = session.start("input", 1, task).await?.assigned_ids["agent_id"].clone();
+        let child = session
+            .collaborate(
+                "spawn",
+                session.head().await.state_revision,
+                &root,
+                Action::Spawn {
+                    task: work("held-child"),
+                },
+            )
+            .await?
+            .assigned_ids["agent_id"]
+            .clone();
+        *executor.child_id.lock().await = Some(child);
+        let driving = tokio::spawn({
+            let session = session.clone();
+            async move { session.drive().await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), executor.child_seen.acquire())
+            .await??
+            .forget();
+        if !wait {
+            tokio::time::timeout(Duration::from_secs(5), harness.delivered.acquire())
+                .await??
+                .forget();
+            let command = harness.sent.lock().await[0].clone();
+            session.tool_result("root-result", result(&command)).await?;
+        }
+        tokio::time::timeout(Duration::from_secs(5), executor.root_resumed.acquire())
+            .await??
+            .forget();
+        assert_eq!(executor.child_release.available_permits(), 0);
+        if wait {
+            let snapshot = session.snapshot().await;
+            assert!(
+                snapshot
+                    .root_turn()
+                    .is_some_and(|turn| turn.core_calls.iter().any(|call| call
+                        .result
+                        .as_ref()
+                        .is_some_and(|result| result["value"]["timed_out"] == true)))
+            );
+        }
+        executor.child_release.add_permits(1);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), driving)
+                .await???
+                .run
+                .map(|run| run.status),
+            Some(RunStatus::Completed)
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_run_followups_reuse_old_agent_context_in_fifo_order() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(
+        (0..12).map(|_| output(vec![text("task done")])).collect(),
+        harness,
+        false,
+    )
+    .await?;
+    let root = session.start("first", 1, input()).await?.assigned_ids["agent_id"].clone();
+    let child = session
+        .collaborate(
+            "spawn",
+            session.head().await.state_revision,
+            &root,
+            Action::Spawn {
+                task: work("initial-child-task"),
+            },
+        )
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    assert_eq!(
+        session.drive().await?.run.map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    let second = session
+        .start("second", session.head().await.state_revision, input())
+        .await?;
+    let turn_before = session.snapshot().await.agents[&child]
+        .turn
+        .as_ref()
+        .ok_or("missing child")?
+        .agent_turn_id
+        .clone();
+    let revision = session.head().await.state_revision;
+    let message = Action::Message {
+        agent_id: child.clone(),
+        text: "additional guidance".into(),
+    };
+    let receipt = session
+        .collaborate("message", revision, &root, message.clone())
+        .await?;
+    assert_eq!(
+        session
+            .collaborate("message", revision, &root, message)
+            .await?,
+        receipt
+    );
+    assert_eq!(
+        session.snapshot().await.agents[&child]
+            .turn
+            .as_ref()
+            .map(|turn| &turn.agent_turn_id),
+        Some(&turn_before)
+    );
+    for (index, text) in ["followup-one", "followup-two"].iter().enumerate() {
+        let mut task = work(text);
+        task.fresh_context = false;
+        session
+            .collaborate(
+                &format!("followup_{index}"),
+                session.head().await.state_revision,
+                &root,
+                Action::Followup {
+                    agent_id: child.clone(),
+                    task,
+                },
+            )
+            .await?;
+    }
+    let assigned = session.snapshot().await.agents[&child]
+        .queue
+        .back()
+        .ok_or("missing queued work")?
+        .assignment_id
+        .clone();
+    let wait_revision = session.head().await.state_revision;
+    let action = Action::Wait {
+        agent_ids: vec![child.clone()],
+        timeout_ms: 30_000,
+    };
+    let receipt = session
+        .collaborate("wait-for-followup", wait_revision, &root, action.clone())
+        .await?;
+    assert_eq!(
+        receipt.disposition,
+        bitrouter_orchestrator::core::protocol::OperationDisposition::Accepted
+    );
+    assert_eq!(
+        session
+            .collaborate("wait-for-followup", wait_revision, &root, action)
+            .await?,
+        receipt
+    );
+    let snapshot = session.snapshot().await;
+    let wait = &snapshot.waits["wait-for-followup"];
+    assert!(wait.result.is_none());
+    assert_eq!(wait.state.targets[&child].agent_turn_id, assigned);
+    assert!(wait.state.targets[&child].status.is_none());
+    let done = tokio::time::timeout(Duration::from_secs(5), session.drive()).await??;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    let agent = &done.agents[&child];
+    assert!(agent.queue.is_empty());
+    assert_eq!(
+        agent.turn.as_ref().map(|turn| &turn.run_id),
+        second.assigned_ids.get("run_id")
+    );
+    assert_eq!(
+        agent.turn.as_ref().map(|turn| turn.input.text.as_str()),
+        Some("followup-two")
+    );
+    assert_eq!(agent.mailbox.len(), 1);
+    assert!(agent.mailbox[0].consumed);
+    let observed = done.waits["wait-for-followup"]
+        .result
+        .as_ref()
+        .ok_or("wait did not complete")?;
+    assert_eq!(observed["agents"][0]["agent_turn_id"], assigned);
+    assert_ne!(observed["agents"][0]["agent_turn_id"], turn_before);
+    let prompts = executor.prompts.lock().await;
+    let child_prompts = prompts
+        .iter()
+        .filter(|prompt| {
+            prompt
+                .system
+                .as_ref()
+                .is_some_and(|system| system.contains(&child))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(child_prompts.len(), 3);
+    assert!(
+        child_prompts[1]
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|part| matches!(part,Content::Text{text,..} if text=="followup-one"))
+    );
+    assert!(
+        !child_prompts[1]
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|part| matches!(part,Content::Text{text,..} if text=="followup-two"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn assignment_cycles_include_idle_intermediate_ancestors() -> TestResult {
+    let harness = Arc::new(Harness::new(None, Some("model.step.preparing")));
+    harness.hold_enabled.store(false, Ordering::SeqCst);
+    let (session, _, _) = setup(
+        (0..20).map(|_| output(vec![text("done")])).collect(),
+        harness.clone(),
+        false,
+    )
+    .await?;
+    let root = session.start("first", 1, input()).await?.assigned_ids["agent_id"].clone();
+    let mut parent = root.clone();
+    let mut children = Vec::new();
+    for index in 0..3 {
+        let receipt = session
+            .collaborate(
+                &format!("spawn_{index}"),
+                session.head().await.state_revision,
+                &parent,
+                Action::Spawn {
+                    task: work("child"),
+                },
+            )
+            .await?;
+        parent = receipt.assigned_ids["agent_id"].clone();
+        children.push(parent.clone());
+    }
+    assert_eq!(
+        session.drive().await?.run.map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    session
+        .start("second", session.head().await.state_revision, input())
+        .await?;
+    let mut task = work("followup deep child");
+    task.fresh_context = false;
+    session
+        .collaborate(
+            "resume-deep-child",
+            session.head().await.state_revision,
+            &root,
+            Action::Followup {
+                agent_id: children[2].clone(),
+                task: task.clone(),
+            },
+        )
+        .await?;
+    harness.hold_enabled.store(true, Ordering::SeqCst);
+    let running = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
+        .await??
+        .forget();
+    // Capture the actual committed boundary after the queued deep turn starts,
+    // before any new provider work. Its intermediate ancestors remain idle.
+    let mut snapshot = session.snapshot().await;
+    let run_id = &snapshot.run.as_ref().ok_or("missing run")?.run_id;
+    assert_eq!(
+        snapshot.agents[&children[2]]
+            .turn
+            .as_ref()
+            .map(|turn| &turn.run_id),
+        Some(run_id)
+    );
+    assert_ne!(
+        snapshot.agents[&children[1]]
+            .turn
+            .as_ref()
+            .map(|turn| &turn.run_id),
+        Some(run_id)
+    );
+    let rejected = bitrouter_orchestrator::core::collaboration::apply(
+        &mut snapshot,
+        &children[2],
+        &Action::Followup {
+            agent_id: children[0].clone(),
+            task,
+        },
+        0,
+    );
+    assert_eq!(
+        rejected.err().map(|error| error.code),
+        Some(ErrorCode::OperationConflict)
+    );
+    running.abort();
+    assert!(running.await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn implicit_assignment_cycles_reject_before_acceptance() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, _, _) = setup(
+        (0..16).map(|_| output(vec![text("done")])).collect(),
+        harness,
+        false,
+    )
+    .await?;
+    let accepted = session.start("input", 1, input()).await?;
+    let root = &accepted.assigned_ids["agent_id"];
+    let mut children = Vec::new();
+    for index in 0..2 {
+        let receipt = session
+            .collaborate(
+                &format!("spawn_{index}"),
+                session.head().await.state_revision,
+                root,
+                Action::Spawn {
+                    task: work("child"),
+                },
+            )
+            .await?;
+        children.push(receipt.assigned_ids["agent_id"].clone());
+    }
+    let grandchild = session
+        .collaborate(
+            "grandchild",
+            session.head().await.state_revision,
+            &children[0],
+            Action::Spawn {
+                task: work("grandchild"),
+            },
+        )
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    let mut task = work("follow up");
+    task.fresh_context = false;
+    let before = session.head().await;
+    let rejected = session
+        .collaborate(
+            "ancestor-cycle",
+            before.state_revision,
+            &grandchild,
+            Action::Followup {
+                agent_id: children[0].clone(),
+                task: task.clone(),
+            },
+        )
+        .await;
+    assert_eq!(
+        rejected.err().map(|error| error.code),
+        Some(ErrorCode::OperationConflict)
+    );
+    assert_eq!(session.head().await, before);
+    session
+        .collaborate(
+            "assign-sibling",
+            before.state_revision,
+            &children[0],
+            Action::Followup {
+                agent_id: children[1].clone(),
+                task: task.clone(),
+            },
+        )
+        .await?;
+    let before = session.head().await;
+    let rejected = session
+        .collaborate(
+            "sibling-cycle",
+            before.state_revision,
+            &children[1],
+            Action::Followup {
+                agent_id: children[0].clone(),
+                task,
+            },
+        )
+        .await;
+    assert_eq!(
+        rejected.err().map(|error| error.code),
+        Some(ErrorCode::OperationConflict)
+    );
+    assert_eq!(session.head().await, before);
+    let done = tokio::time::timeout(Duration::from_secs(5), session.drive()).await??;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancellation_cleanup_waits_for_another_agents_outcome_ack() -> TestResult {
+    let mut harness = Harness::new(None, Some("model.attempt.outcome"));
+    harness.hold_enabled.store(false, Ordering::SeqCst);
+    harness.hold_after_send = true;
+    let harness = Arc::new(harness);
+    let executor = Arc::new(WakeExecutor {
+        child_seen: Semaphore::new(0),
+        child_release: Semaphore::new(0),
+        root_resumed: Semaphore::new(0),
+        root_calls: AtomicUsize::new(0),
+        child_id: Mutex::new(None),
+        wait: false,
+    });
+    let table = StaticRoutingTable::new();
+    table.insert("fixture-model", vec![target("first")]);
+    let app = App::builder()
+        .language_model(|builder| {
+            builder
+                .routing_table(Arc::new(table))
+                .executor(executor.clone());
+        })
+        .build()?;
+    let session = bind_app(Arc::new(app), harness.clone()).await?;
+    let accepted = session.start("input", 1, input()).await?;
+    session
+        .collaborate(
+            "spawn",
+            session.head().await.state_revision,
+            &accepted.assigned_ids["agent_id"],
+            Action::Spawn {
+                task: work("held-child"),
+            },
+        )
+        .await?;
+    let running = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), harness.delivered.acquire())
+        .await??
+        .forget();
+    tokio::time::timeout(Duration::from_secs(5), executor.child_seen.acquire())
+        .await??
+        .forget();
+    session
+        .cancel_run(
+            "cancel",
+            session.head().await.state_revision,
+            &accepted.assigned_ids["run_id"],
+        )
+        .await?;
+    harness.hold_enabled.store(true, Ordering::SeqCst);
+    executor.child_release.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
+        .await??
+        .forget();
+    // The earlier send waiter resumes first; the outcome ACK stays held.
+    harness.resume.add_permits(1);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(!running.is_finished());
+    assert_eq!(harness.cancel_seen.available_permits(), 0);
+    harness.resume.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(5), harness.cancel_seen.acquire())
+        .await??
+        .forget();
+    let waiting = tokio::time::timeout(Duration::from_secs(5), running).await???;
+    assert_eq!(
+        waiting.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Cancelling)
+    );
+    let command = harness.sent.lock().await[0].clone();
+    let mut report = result(&command);
+    report.status = ToolOutcome::NotExecuted;
+    session.tool_result("cancelled", report).await?;
+    assert_eq!(
+        session.drive().await?.run.map(|run| run.status),
+        Some(RunStatus::Cancelled)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn newly_accepted_child_work_invalidates_previous_final_verification() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(
+        vec![
+            output(vec![text("old final")]),
+            output(vec![call("child-read")]),
+            output(vec![text("child changed the evidence")]),
+            output(vec![text("new final")]),
+        ],
+        harness.clone(),
+        false,
+    )
+    .await?;
+    let mut task = input();
+    task.limits = Some(Limits {
+        active_models: 1,
+        ..Limits::default()
+    });
+    task.verification = Some(Verification {
+        tool: "read".into(),
+        arguments: json!({"path":"file.txt"}),
+    });
+    let accepted = session.start("input", 1, task).await?;
+    session.drive().await?;
+    let old_verification = harness.sent.lock().await[0].clone();
+    assert!(old_verification.verification);
+    session
+        .collaborate(
+            "spawn",
+            session.head().await.state_revision,
+            &accepted.assigned_ids["agent_id"],
+            Action::Spawn {
+                task: work("additional child task"),
+            },
+        )
+        .await?;
+    session.drive().await?;
+    let child_read = harness.sent.lock().await[1].clone();
+    assert!(!child_read.verification);
+    session
+        .tool_result("old-verification", result(&old_verification))
+        .await?;
+    session
+        .tool_result("child-result", result(&child_read))
+        .await?;
+    let waiting = session.drive().await?;
+    assert_eq!(
+        waiting.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Waiting)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 4);
+    let new_verification = harness.sent.lock().await[2].clone();
+    assert!(new_verification.verification);
+    assert_ne!(new_verification.step_id, old_verification.step_id);
+    session
+        .tool_result("new-verification", result(&new_verification))
+        .await?;
+    let done = session.drive().await?;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    assert_eq!(
+        done.run
+            .as_ref()
+            .and_then(|run| run.final_answer.as_deref()),
+        Some("new final")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancellation_waits_for_dispatched_tool_cleanup_and_preserves_pairing() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(
+        vec![output(vec![call("read-before-cancel")])],
+        harness.clone(),
+        false,
+    )
+    .await?;
+    let accepted = session.start("input", 1, input()).await?;
+    session.drive().await?;
+    let command = harness.sent.lock().await[0].clone();
+    session
+        .cancel_run(
+            "cancel",
+            session.head().await.state_revision,
+            &accepted.assigned_ids["run_id"],
+        )
+        .await?;
+    let waiting = session.drive().await?;
+    assert_eq!(
+        waiting.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Cancelling)
+    );
+    tokio::time::timeout(Duration::from_secs(5), harness.cancel_seen.acquire())
+        .await??
+        .forget();
+    assert_eq!(
+        *harness.cancelled.lock().await,
+        vec![(
+            command.invocation_id.clone(),
+            command.attempt_id.clone(),
+            command.execution_epoch
+        )]
+    );
+    session.drive().await?;
+    assert_eq!(harness.cancelled.lock().await.len(), 1);
+    let mut report = result(&command);
+    report.status = ToolOutcome::NotExecuted;
+    report.output = "harness cancelled before actual execution".into();
+    session.tool_result("cancelled-result", report).await?;
+    let done = session.drive().await?;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Cancelled)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    assert!(
+        done.root_turn()
+            .ok_or("missing turn")?
+            .invocations
+            .iter()
+            .all(|call| call.consumed)
+    );
+    let root = &done.agents[&done.agent_id];
+    assert!(root.history.iter().flat_map(|message| &message.content).any(|part| matches!(part, Content::ToolResult { call_id, .. } if call_id == "read-before-cancel")));
+    let kinds = harness.committed_kinds().await?;
+    let consumed = kinds
+        .iter()
+        .position(|kind| kind == "tool.results.consumed")
+        .ok_or("missing consumption")?;
+    let terminal = kinds
+        .iter()
+        .position(|kind| kind == "agent.interrupted")
+        .ok_or("missing interruption")?;
+    assert!(consumed < terminal);
+    Ok(())
+}
+
+#[tokio::test]
+async fn verification_waits_for_children_and_respects_shared_tool_capacity() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let table = StaticRoutingTable::new();
+    table.insert("fixture-model", vec![target("first")]);
+    let executor = Arc::new(CollaborationExecutor {
+        root_calls: AtomicUsize::new(0),
+    });
+    let app = App::builder()
+        .language_model(|builder| {
+            builder.routing_table(Arc::new(table)).executor(executor);
+        })
+        .build()?;
+    let session = bind_app(Arc::new(app), harness.clone()).await?;
+    let mut task = input();
+    task.limits = Some(Limits {
+        active_models: 1,
+        outstanding_tools: 2,
+        ..Limits::default()
+    });
+    task.verification = Some(Verification {
+        tool: "read".into(),
+        arguments: json!({"path":"file.txt"}),
+    });
+    session.start("input", 1, task).await?;
+    session.drive().await?;
+    let commands = harness.sent.lock().await.clone();
+    assert_eq!(commands.len(), 2);
+    assert!(commands.iter().all(|command| !command.verification));
+    session
+        .tool_result("child-first", result(&commands[0]))
+        .await?;
+    session.drive().await?;
+    assert_eq!(harness.sent.lock().await.len(), 2);
+    session
+        .tool_result("child-second", result(&commands[1]))
+        .await?;
+    let waiting = session.drive().await?;
+    assert_eq!(
+        waiting.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Waiting)
+    );
+    let verification = harness.sent.lock().await[2].clone();
+    assert!(verification.verification);
+    assert_eq!(verification.agent_id, waiting.agent_id);
+    session
+        .tool_result("verified", result(&verification))
+        .await?;
+    let done = session.drive().await?;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    let store = harness.store.lock().await;
+    for batch in &store.batches {
+        let payload = batch.decode(&store.limits)?;
+        let state: SessionSnapshot = serde_json::from_value(payload.checkpoint.state)?;
+        let outstanding = state
+            .agents
+            .values()
+            .filter_map(|agent| agent.turn.as_ref())
+            .flat_map(|turn| &turn.invocations)
+            .filter(|call| call.result.is_none())
+            .count();
+        assert!(outstanding <= 2);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_cancel_archives_child_results_when_parent_mailbox_is_full() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(Vec::new(), harness, false).await?;
+    let mut task = input();
+    task.limits = Some(Limits {
+        mailbox_messages: 1,
+        ..Limits::default()
+    });
+    let accepted = session.start("input", 1, task).await?;
+    let root = &accepted.assigned_ids["agent_id"];
+    for (index, text) in ["child-a", "child-b"].iter().enumerate() {
+        session
+            .collaborate(
+                &format!("spawn_{index}"),
+                session.head().await.state_revision,
+                root,
+                Action::Spawn { task: work(text) },
+            )
+            .await?;
+    }
+    let revision = session.head().await.state_revision;
+    let cancelled = session
+        .cancel_run("cancel", revision, &accepted.assigned_ids["run_id"])
+        .await?;
+    assert_eq!(
+        session
+            .cancel_run("cancel", revision, &accepted.assigned_ids["run_id"])
+            .await?,
+        cancelled
+    );
+    let done = tokio::time::timeout(Duration::from_secs(5), session.drive()).await??;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Cancelled)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(done.agents[root].mailbox.len(), 2);
+    assert!(done.agents[root].mailbox.iter().all(|mail| mail.consumed));
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_collaboration_waits_release_slots_and_tools_keep_agent_attribution() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let table = StaticRoutingTable::new();
+    table.insert("fixture-model", vec![target("first")]);
+    let executor = Arc::new(CollaborationExecutor {
+        root_calls: AtomicUsize::new(0),
+    });
+    let app = App::builder()
+        .language_model(|builder| {
+            builder
+                .routing_table(Arc::new(table))
+                .executor(executor.clone());
+        })
+        .build()?;
+    let session = bind_app(Arc::new(app), harness.clone()).await?;
+    let mut task = input();
+    task.limits = Some(Limits {
+        active_models: 1,
+        ..Limits::default()
+    });
+    session.start("input", 1, task).await?;
+    let waiting = tokio::time::timeout(Duration::from_secs(5), session.drive()).await??;
+    assert_ne!(
+        waiting.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    assert_eq!(waiting.agents.len(), 3);
+    let commands = harness.sent.lock().await.clone();
+    assert_eq!(commands.len(), 2);
+    assert_ne!(commands[0].agent_id, commands[1].agent_id);
+    assert_ne!(commands[0].invocation_id, commands[1].invocation_id);
+    assert!(commands.iter().all(|command| command.tool == "read"));
+    for (index, command) in commands.iter().enumerate() {
+        session
+            .tool_result(&format!("result_{index}"), result(command))
+            .await?;
+    }
+    let done = tokio::time::timeout(Duration::from_secs(5), session.drive()).await??;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    for agent in done.agents.values() {
+        let mut pairs = std::collections::BTreeMap::<String, i32>::new();
+        for part in agent.history.iter().flat_map(|message| &message.content) {
+            match part {
+                Content::ToolCall { id, .. } => *pairs.entry(id.clone()).or_default() += 1,
+                Content::ToolResult { call_id, .. } => {
+                    *pairs.entry(call_id.clone()).or_default() -= 1
+                }
+                _ => {}
+            }
+        }
+        assert!(pairs.values().all(|count| *count == 0));
+    }
+
+    let root = done.root_turn().ok_or("missing root")?;
+    assert_eq!(root.core_calls.len(), 3);
+    assert!(root.core_calls.iter().all(|call| {
+        call.consumed
+            && call
+                .result
+                .as_ref()
+                .is_some_and(|result| result["ok"] == true)
+    }));
+    let store = harness.store.lock().await;
+    let attributed_results = store
+        .batches
+        .iter()
+        .filter_map(|batch| batch.decode(&store.limits).ok())
+        .flat_map(|payload| payload.events)
+        .filter(|event| event.kind == "tool.result")
+        .filter_map(|event| event.agent_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        attributed_results,
+        commands
+            .iter()
+            .map(|command| command.agent_id.clone())
+            .collect()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn interruption_keeps_billed_child_output_but_discards_new_effects() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let table = StaticRoutingTable::new();
+    table.insert("fixture-model", vec![target("first")]);
+    let executor = Arc::new(ConcurrentExecutor {
+        seen: Semaphore::new(0),
+        release: Semaphore::new(0),
+        active: AtomicUsize::new(0),
+        peak: AtomicUsize::new(0),
+        root_calls: AtomicUsize::new(0),
+    });
+    let app = App::builder()
+        .language_model(|builder| {
+            builder
+                .routing_table(Arc::new(table))
+                .executor(executor.clone());
+        })
+        .build()?;
+    let session = bind_app(Arc::new(app), harness.clone()).await?;
+    let root = session
+        .start("input", 1, input())
+        .await?
+        .assigned_ids
+        .get("agent_id")
+        .cloned()
+        .ok_or("root missing")?;
+    let child = session
+        .collaborate(
+            "spawn",
+            session.head().await.state_revision,
+            &root,
+            Action::Spawn {
+                task: work("child-a"),
+            },
+        )
+        .await?
+        .assigned_ids
+        .get("agent_id")
+        .cloned()
+        .ok_or("child missing")?;
+    let running = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), executor.seen.acquire())
+        .await??
+        .forget();
+    session
+        .collaborate(
+            "interrupt",
+            session.head().await.state_revision,
+            &root,
+            Action::Interrupt {
+                agent_id: child.clone(),
+            },
+        )
+        .await?;
+    assert_eq!(
+        session
+            .snapshot()
+            .await
+            .agents
+            .get(&child)
+            .and_then(|agent| agent.turn.as_ref())
+            .map(|turn| turn.status),
+        Some(bitrouter_orchestrator::core::session::AgentStatus::Cancelling)
+    );
+    executor.release.add_permits(1);
+    let done = tokio::time::timeout(Duration::from_secs(5), running).await???;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    let child = done
+        .agents
+        .get(&child)
+        .and_then(|agent| agent.turn.as_ref())
+        .ok_or("child disappeared")?;
+    assert_eq!(
+        child.status,
+        bitrouter_orchestrator::core::session::AgentStatus::Interrupted
+    );
+    assert!(child.final_answer.is_none());
+    assert!(
+        child.steps[0].attempts[0]
+            .report
+            .as_ref()
+            .is_some_and(|report| report.result.is_some())
+    );
+    assert!(harness.sent.lock().await.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn graph_capacity_and_ancestor_wait_reject_without_partial_acceptance() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(Vec::new(), harness, false).await?;
+    let mut task = input();
+    task.limits = Some(Limits {
+        agents: 2,
+        ..Limits::default()
+    });
+    let root = session
+        .start("input", 1, task)
+        .await?
+        .assigned_ids
+        .get("agent_id")
+        .cloned()
+        .ok_or("root missing")?;
+    let revision = session.head().await.state_revision;
+    let action = Action::Spawn {
+        task: work("child-a"),
+    };
+    let accepted = session
+        .collaborate("spawn", revision, &root, action.clone())
+        .await?;
+    assert_eq!(
+        session
+            .collaborate("spawn", revision, &root, action)
+            .await?,
+        accepted
+    );
+    let child = accepted
+        .assigned_ids
+        .get("agent_id")
+        .ok_or("child missing")?;
+    let before = session.head().await;
+    assert_eq!(
+        session
+            .collaborate(
+                "overflow",
+                before.state_revision,
+                &root,
+                Action::Spawn {
+                    task: work("child-b")
+                }
+            )
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::LimitExceeded)
+    );
+    assert_eq!(
+        session
+            .collaborate(
+                "cycle",
+                before.state_revision,
+                child,
+                Action::Wait {
+                    agent_ids: vec![root.clone()],
+                    timeout_ms: 1000
+                }
+            )
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::OperationConflict)
+    );
+    assert_eq!(session.head().await, before);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn children_overlap_with_bounded_slots_and_root_joins_their_results() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let table = StaticRoutingTable::new();
+    table.insert("fixture-model", vec![target("first")]);
+    let executor = Arc::new(ConcurrentExecutor {
+        seen: Semaphore::new(0),
+        release: Semaphore::new(0),
+        active: AtomicUsize::new(0),
+        peak: AtomicUsize::new(0),
+        root_calls: AtomicUsize::new(0),
+    });
+    let app = App::builder()
+        .language_model(|builder| {
+            builder
+                .routing_table(Arc::new(table))
+                .executor(executor.clone());
+        })
+        .build()?;
+    let session = bind_app(Arc::new(app), harness.clone()).await?;
+    let mut task = input();
+    task.limits = Some(Limits {
+        active_models: 2,
+        ..Limits::default()
+    });
+    let accepted = session.start("input", 1, task).await?;
+    let root = accepted
+        .assigned_ids
+        .get("agent_id")
+        .ok_or("root missing")?;
+    for (index, text) in ["child-a", "child-b"].iter().enumerate() {
+        session
+            .collaborate(
+                &format!("spawn_{index}"),
+                session.head().await.state_revision,
+                root,
+                Action::Spawn { task: work(text) },
+            )
+            .await?;
+    }
+    let running = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), executor.seen.acquire_many(2))
+        .await??
+        .forget();
+    let waiting = session.snapshot().await;
+    assert_ne!(
+        waiting.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    assert_eq!(executor.active.load(Ordering::SeqCst), 2);
+    assert_eq!(executor.peak.load(Ordering::SeqCst), 2);
+    assert_eq!(executor.root_calls.load(Ordering::SeqCst), 1);
+    // Both providers are held together, establishing a known overlapping
+    // interval. The run counts its union; individual receipts keep each cost.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    executor.release.add_permits(2);
+    let done = tokio::time::timeout(Duration::from_secs(5), running).await???;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    assert_eq!(
+        done.run
+            .as_ref()
+            .and_then(|run| run.final_answer.as_deref()),
+        Some("joined child evidence")
+    );
+    assert_eq!(done.agents.len(), 3);
+    let attempt_ms = done
+        .agents
+        .values()
+        .filter_map(|agent| agent.turn.as_ref())
+        .flat_map(|turn| &turn.steps)
+        .flat_map(|step| &step.attempts)
+        .filter_map(|attempt| attempt.report.as_ref())
+        .map(|report| report.elapsed_ms)
+        .sum::<u64>();
+    let active_ms = done.run.as_ref().ok_or("missing run")?.active_ms;
+    assert!(
+        active_ms >= 100,
+        "provider work must count toward active time"
+    );
+    assert!(
+        attempt_ms >= active_ms + 100,
+        "overlap must not be charged twice: attempts={attempt_ms}, run={active_ms}"
+    );
+    assert!(
+        done.agents
+            .values()
+            .all(|agent| agent
+                .turn
+                .as_ref()
+                .is_some_and(|turn| turn.status
+                    == bitrouter_orchestrator::core::session::AgentStatus::Completed))
+    );
+    assert!(harness.sent.lock().await.is_empty());
+    let store = harness.store.lock().await;
+    for batch in &store.batches {
+        let payload = batch.decode(&store.limits)?;
+        for event in payload
+            .events
+            .iter()
+            .filter(|event| event.kind == "model.attempt.intent")
+        {
+            let agent_id = event
+                .agent_id
+                .as_deref()
+                .ok_or("attempt missing agent attribution")?;
+            assert!(done.agents.contains_key(agent_id));
+        }
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -848,6 +2197,37 @@ async fn disconnect_during_attempt_ack_blocks_provider_dispatch() -> TestResult 
     harness.resume.add_permits(1);
     assert!(running.await?.is_err());
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn abandoned_preparation_returns_without_repeated_admission() -> TestResult {
+    let harness = Arc::new(Harness::new(None, Some("model.step.preparing")));
+    let (session, executor, _) =
+        setup(vec![output(vec![text("unused")])], harness.clone(), false).await?;
+    session.start("input", 1, input()).await?;
+    let running = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
+        .await??
+        .forget();
+    running.abort();
+    assert!(running.await.is_err());
+    let resumed = tokio::time::timeout(Duration::from_secs(5), session.drive()).await?;
+    assert!(resumed.is_err());
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.seen.available_permits(), 0);
+    assert!(
+        session
+            .snapshot()
+            .await
+            .root_turn()
+            .ok_or("missing root")?
+            .steps
+            .is_empty()
+    );
     Ok(())
 }
 
