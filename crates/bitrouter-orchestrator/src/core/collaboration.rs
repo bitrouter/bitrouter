@@ -401,7 +401,7 @@ fn spawn(
             context_revision: 1,
             history,
             required_instructions,
-            turn: Some(new_turn(work)),
+            turn: Some(new_turn(work, Some(0))),
             queue: VecDeque::new(),
             mailbox: Vec::new(),
             task_scope: task.task_scope.clone(),
@@ -430,6 +430,7 @@ fn assignment(
         .as_ref()
         .ok_or_else(|| reject(ErrorCode::Busy, "no active run"))?;
     let mut input = parent.input.clone();
+    input.discardable_history = None;
     input.text = task.text.clone();
     input.model = task.model.clone().unwrap_or(input.model);
     if task.model.is_some() {
@@ -465,13 +466,14 @@ fn assignment(
     })
 }
 
-pub fn new_turn(work: Assignment) -> AgentTurn {
+pub fn new_turn(work: Assignment, history_start: Option<usize>) -> AgentTurn {
     AgentTurn {
         run_id: work.run_id,
         agent_turn_id: work.assignment_id,
         assigned_by: work.sender_id,
         input: work.input,
         allocation_id: work.allocation_id,
+        history_start,
         status: AgentStatus::Runnable,
         steps: Vec::new(),
         invocations: Vec::new(),

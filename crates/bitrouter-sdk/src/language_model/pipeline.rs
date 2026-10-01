@@ -56,6 +56,9 @@ struct ResolvedRequestBinding {
     resolved_selector: String,
 }
 
+/// Immutable ingress checks also apply to a managed context reconstruction.
+struct FrozenRequestChecks(Vec<RequestCheckBinding>);
+
 struct PreparedEntry {
     ctx: PipelineContext,
     chain: Vec<RoutingTarget>,
@@ -779,62 +782,117 @@ impl Pipeline {
         use crate::language_model::native::{
             NativeCountedRequests, NativeInputCount, NativeInputCountReport,
         };
-        let mut plan = NativePlan {
-            request_id: ctx.request_id().to_owned(),
-            original_model: ctx.original_model().to_owned(),
-            effective_model: ctx.model().to_owned(),
-            effort_source: ctx.prompt().params.reasoning_effort_source,
-            prompt: ctx.prompt().clone(),
-            routes: routes.to_vec(),
-            router: ctx.router_identity().cloned(),
-        };
-        for (index, target) in chain.iter().enumerate() {
-            if target.model_constraints.input_token_counting.is_none() {
-                continue;
+        // Mutable hooks have no read-only revalidation contract. Their Allow
+        // cannot authorize a different prompt, nor may they be rerun after
+        // model/effort/route selection. Retain the original rejection instead.
+        let can_rebuild = self.pre_resolution_hooks.is_empty()
+            && self.router_preparation_hooks.is_empty()
+            && self.pre_request_hooks.is_empty()
+            && self.route_hooks.is_empty()
+            && ctx
+                .extension::<crate::language_model::context::ProviderContinuation>()
+                .is_none()
+            && ctx
+                .extension::<crate::language_model::context::SuppressProviderContinuation>()
+                .is_none()
+            && ["previous_response_id", "conversation"].iter().all(|key| {
+                ctx.prompt()
+                    .params
+                    .extra
+                    .get(*key)
+                    .is_none_or(serde_json::Value::is_null)
+                    && ctx
+                        .prompt()
+                        .params
+                        .supplemental_extra
+                        .get(*key)
+                        .is_none_or(serde_json::Value::is_null)
+            });
+        for rebuild_round in 0..=1 {
+            for route in routes.iter_mut() {
+                route.input_count = None;
             }
-            let route_index = u32::try_from(index)
-                .map_err(|_| BitrouterError::bad_request("route index exhausted"))?;
-            control.before_input_count(&plan, route_index).await?;
-            let started = Instant::now();
-            let outcome = match self
-                .executor
-                .count_input_tokens(target, ctx.prompt(), ctx)
-                .await
-            {
-                Ok(outcome) => outcome,
-                // Errors can contain parser body previews, native continuation
-                // IDs or credentials from extensions. Persist categories only.
-                Err(error) => NativeInputCount::Unavailable {
-                    reason: format!(
-                        "input_count_failed:{}:{}",
-                        error.error_code(),
-                        error.status()
-                    ),
-                },
+            let mut plan = NativePlan {
+                request_id: ctx.request_id().to_owned(),
+                original_model: ctx.original_model().to_owned(),
+                effective_model: ctx.model().to_owned(),
+                effort_source: ctx.prompt().params.reasoning_effort_source,
+                prompt: ctx.prompt().clone(),
+                routes: routes.to_vec(),
+                router: ctx.router_identity().cloned(),
             };
-            let report = NativeInputCountReport {
-                request_id: plan.request_id.clone(),
-                route_index,
-                outcome: outcome.clone(),
-                elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+            for (index, target) in chain.iter().enumerate() {
+                if target.model_constraints.input_token_counting.is_none() {
+                    continue;
+                }
+                let route_index = u32::try_from(index)
+                    .map_err(|_| BitrouterError::bad_request("route index exhausted"))?;
+                control.before_input_count(&plan, route_index).await?;
+                let started = Instant::now();
+                let outcome = match self
+                    .executor
+                    .count_input_tokens(target, ctx.prompt(), ctx)
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    // Errors can contain parser body previews, native continuation
+                    // IDs or credentials from extensions. Persist categories only.
+                    Err(error) => NativeInputCount::Unavailable {
+                        reason: format!(
+                            "input_count_failed:{}:{}",
+                            error.error_code(),
+                            error.status()
+                        ),
+                    },
+                };
+                let report = NativeInputCountReport {
+                    request_id: plan.request_id.clone(),
+                    route_index,
+                    outcome: outcome.clone(),
+                    elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                };
+                control.after_input_count(report).await?;
+                routes[index].input_count = Some(outcome);
+            }
+            plan.routes = routes.to_vec();
+            let admission = match control.plan(plan.clone()).await {
+                Ok(admission) => admission,
+                Err(error) => {
+                    if rebuild_round == 0
+                        && can_rebuild
+                        && let Some(messages) = control.rebuild_context(&plan).await?
+                    {
+                        ctx.replace_managed_messages(messages)?;
+                        let checks = ctx
+                            .extension::<FrozenRequestChecks>()
+                            .map(|checks| checks.0.clone())
+                            .ok_or_else(|| {
+                                BitrouterError::internal(
+                                    "managed rebuild lost its request-check bindings",
+                                )
+                            })?;
+                        self.run_request_checks(ctx, &checks).await?;
+                        continue;
+                    }
+                    return Err(error);
+                }
             };
-            control.after_input_count(report).await?;
-            routes[index].input_count = Some(outcome);
+            admission.validate(routes.len())?;
+            if admission.route_indices.iter().any(|index| {
+                let route = &routes[*index as usize];
+                route.constraints.input_token_counting.is_some()
+                    && !matches!(route.input_count, Some(NativeInputCount::Counted { .. }))
+            }) {
+                return Err(BitrouterError::bad_request(
+                    "admitted route has no successful configured input count",
+                ));
+            }
+            ctx.insert_extension(Arc::new(NativeCountedRequests::default()));
+            return Ok(admission);
         }
-        ctx.insert_extension(Arc::new(NativeCountedRequests::default()));
-        plan.routes = routes.to_vec();
-        let admission = control.plan(plan).await?;
-        admission.validate(routes.len())?;
-        if admission.route_indices.iter().any(|index| {
-            let route = &routes[*index as usize];
-            route.constraints.input_token_counting.is_some()
-                && !matches!(route.input_count, Some(NativeInputCount::Counted { .. }))
-        }) {
-            return Err(BitrouterError::bad_request(
-                "admitted route has no successful configured input count",
-            ));
-        }
-        Ok(admission)
+        Err(BitrouterError::bad_request(
+            "managed context rebuild exhausted",
+        ))
     }
 
     /// Execute a streaming request: Stages 1–3 run eagerly (so pre-stream
@@ -1166,6 +1224,9 @@ impl Pipeline {
         self.run_request_checks(ctx, &binding.request_checks)
             .await
             .map_err(EntryPreparationFailure::request_check)?;
+        ctx.insert_extension(Arc::new(FrozenRequestChecks(
+            binding.request_checks.clone(),
+        )));
         self.observe_after(Phase::PreRequest, ctx).await;
 
         self.resolve_route(ctx, binding, selection, manual_effort)

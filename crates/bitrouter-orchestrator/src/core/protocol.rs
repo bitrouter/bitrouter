@@ -395,6 +395,17 @@ pub struct SignalUpdate {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct DiscardableHistory {
+    /// SHA-256 of the serialized canonical history before this task was added.
+    /// The caller asserts this task does not depend on the listed messages.
+    pub history_sha256: String,
+    /// Strictly increasing indices in that history. Only complete, settled
+    /// assistant/tool messages may be omitted; instructions always survive.
+    pub message_indices: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskInput {
     pub text: String,
     pub model: String,
@@ -405,6 +416,10 @@ pub struct TaskInput {
     pub max_output_tokens: Option<u32>,
     #[serde(default)]
     pub routing: RoutingSettings,
+    /// Explicit task-scoped context requirements from the authenticated caller.
+    /// Absence retains all history. Child assignments never inherit this claim.
+    #[serde(default)]
+    pub discardable_history: Option<DiscardableHistory>,
     pub acceptance_criteria: Vec<String>,
     pub required_materials: Vec<String>,
     pub verification: Option<Verification>,

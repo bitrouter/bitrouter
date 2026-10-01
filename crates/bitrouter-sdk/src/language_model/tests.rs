@@ -1,5 +1,8 @@
 //! Pipeline integration tests for the `language_model` pipeline.
 
+#[path = "tests_reconstruction.rs"]
+mod reconstruction;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

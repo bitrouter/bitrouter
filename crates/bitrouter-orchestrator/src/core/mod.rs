@@ -7,6 +7,7 @@ pub mod allocation;
 pub mod checkpoint;
 pub mod collaboration;
 pub mod protocol;
+pub mod reconstruction;
 pub mod routing;
 pub mod session;
 pub mod signals;

@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use bitrouter_sdk::App;
@@ -96,6 +96,10 @@ pub struct ModelStep {
     pub count_plan: Option<NativePlan>,
     #[serde(default)]
     pub input_counts: Vec<InputCountRecord>,
+    #[serde(default)]
+    pub rebuild: Option<super::reconstruction::RebuildRecord>,
+    #[serde(default)]
+    pub reconstructed_from: Option<String>,
     pub attempts: Vec<AttemptRecord>,
     pub settled: bool,
 }
@@ -158,6 +162,10 @@ pub struct AgentTurn {
     pub assigned_by: String,
     pub input: TaskInput,
     pub allocation_id: Option<String>,
+    /// Start of this work unit's mandatory history. Unknown legacy boundaries
+    /// cannot authorize removal. Inherited contexts start at zero.
+    #[serde(default)]
+    pub history_start: Option<usize>,
     pub status: AgentStatus,
     pub steps: Vec<ModelStep>,
     pub invocations: Vec<Invocation>,
@@ -375,6 +383,7 @@ impl CoreSession {
                 .agents
                 .get_mut(&state.agent_id)
                 .ok_or_else(|| reject(ErrorCode::CheckpointConflict, "root agent is absent"))?;
+            let history_start = agent.history.len();
             agent.history.push(Message::text(Role::User, &input.text));
             if !agent.required_instructions.contains(&input.text) {
                 agent.required_instructions.push(input.text.clone());
@@ -386,6 +395,7 @@ impl CoreSession {
                 assigned_by: agent.agent_id.clone(),
                 input: input.clone(),
                 allocation_id: None,
+                history_start: Some(history_start),
                 status: AgentStatus::Runnable,
                 steps: Vec::new(),
                 invocations: Vec::new(),
@@ -912,12 +922,13 @@ impl CoreSession {
                         .pop_front()
                         .ok_or_else(|| reject(ErrorCode::Busy, "follow-up queue is empty"))?;
                     if let Some(error) = rejection {
-                        let mut turn = collaboration::new_turn(work);
+                        let mut turn = collaboration::new_turn(work, None);
                         turn.status = AgentStatus::Failed;
                         turn.terminal_reason = Some(error.to_string());
                         agent.turn = Some(turn);
                         return Ok(json!({"allocation_id":allocation_id,"error":error}));
                     }
+                    let history_start = agent.history.len();
                     agent
                         .history
                         .push(Message::text(Role::User, &work.input.text));
@@ -927,7 +938,7 @@ impl CoreSession {
                         }
                     }
                     agent.context_revision += 1;
-                    agent.turn = Some(collaboration::new_turn(work));
+                    agent.turn = Some(collaboration::new_turn(work, Some(history_start)));
                     Ok(json!({}))
                 })
                 .await?;
@@ -1815,6 +1826,8 @@ impl CoreSession {
                 plan: None,
                 count_plan: None,
                 input_counts: Vec::new(),
+                rebuild: None,
+                reconstructed_from: None,
                 attempts: Vec::new(),
                 settled: false,
             });
@@ -1824,7 +1837,7 @@ impl CoreSession {
         let control = Arc::new(StepControl {
             session: self.clone(),
             agent_id: agent_id.to_owned(),
-            step_id: step_id.clone(),
+            step_id: Mutex::new(step_id.clone()),
             model_selection: match turn.input.routing.model {
                 super::protocol::ModelMode::Fixed => NativeModelSelection::Fixed,
                 super::protocol::ModelMode::Policy => NativeModelSelection::Policy,
@@ -1833,8 +1846,9 @@ impl CoreSession {
         let response = self
             .shared
             .app
-            .execute_native_controlled(prompt, self.shared.caller.clone(), control)
+            .execute_native_controlled(prompt, self.shared.caller.clone(), control.clone())
             .await;
+        let step_id = control.step_id.lock().await.clone();
         match response {
             Ok(response) => {
                 if self
@@ -2699,7 +2713,7 @@ impl CoreSession {
 struct StepControl {
     session: CoreSession,
     agent_id: String,
-    step_id: String,
+    step_id: Mutex<String>,
     model_selection: NativeModelSelection,
 }
 
@@ -2714,13 +2728,14 @@ impl NativeExecutionControl for StepControl {
         plan: &NativePlan,
         route_index: u32,
     ) -> bitrouter_sdk::Result<()> {
+        let step_id = self.step_id.lock().await.clone();
         self.session
             .transition_for(
                 Some(&self.agent_id),
                 "model.input_count.intent",
                 |state, _| {
-                    validate_step_source(state, &self.agent_id, &self.step_id)?;
-                    let step = current_step(state, &self.agent_id, &self.step_id)?;
+                    validate_step_source(state, &self.agent_id, &step_id)?;
+                    let step = current_step(state, &self.agent_id, &step_id)?;
                     step.context.validate_prepared(&plan.prompt)?;
                     if step.plan.is_some()
                         || step.count_plan.as_ref().is_some_and(|prior| prior != plan)
@@ -2751,7 +2766,7 @@ impl NativeExecutionControl for StepControl {
         self.session
             .ensure_dispatch(
                 &self.agent_id,
-                &self.step_id,
+                &step_id,
                 format!("{}/count/{route_index}", plan.request_id),
             )
             .await
@@ -2759,6 +2774,7 @@ impl NativeExecutionControl for StepControl {
     }
 
     async fn after_input_count(&self, report: NativeInputCountReport) -> bitrouter_sdk::Result<()> {
+        let step_id = self.step_id.lock().await.clone();
         let active_ms = self
             .session
             .shared
@@ -2776,7 +2792,7 @@ impl NativeExecutionControl for StepControl {
                 Some(&self.agent_id),
                 "model.input_count.outcome",
                 |state, _| {
-                    let step = current_step(state, &self.agent_id, &self.step_id)?;
+                    let step = current_step(state, &self.agent_id, &step_id)?;
                     if step
                         .count_plan
                         .as_ref()
@@ -2813,6 +2829,7 @@ impl NativeExecutionControl for StepControl {
     }
 
     async fn plan(&self, plan: NativePlan) -> bitrouter_sdk::Result<NativePlanAdmission> {
+        let step_id = self.step_id.lock().await.clone();
         let mut rejection = None;
         let routes = super::routing::assess_routes(&plan).map_err(sdk_error)?;
         let route_indices = routes
@@ -2822,10 +2839,18 @@ impl NativeExecutionControl for StepControl {
             .collect::<Vec<_>>();
         self.session
             .transition_for(Some(&self.agent_id), "model.plan", |state, head| {
-                rejection = validate_step_source(state, &self.agent_id, &self.step_id).err();
+                rejection = validate_step_source(state, &self.agent_id, &step_id).err();
                 let turn = agent_turn(state, &self.agent_id)?;
                 let modes = turn.input.routing.clone();
                 let allocation_id = turn.allocation_id.clone();
+                let prior_candidate = turn
+                    .steps
+                    .last()
+                    .and_then(|step| step.reconstructed_from.as_ref())
+                    .and_then(|source| turn.steps.iter().find(|step| &step.step_id == source))
+                    .map(|source| {
+                        format!("{}:{}", source.context.context_id, source.context.revision)
+                    });
                 if let Some(effort) = parse_effort(turn.input.effort.as_deref())?
                     && plan.prompt.params.reasoning_effort != Some(effort)
                 {
@@ -2834,7 +2859,7 @@ impl NativeExecutionControl for StepControl {
                         "prepared plan changed manual effort",
                     ));
                 }
-                let step = current_step(state, &self.agent_id, &self.step_id)?;
+                let step = current_step(state, &self.agent_id, &step_id)?;
                 if rejection.is_none() {
                     rejection = step.context.validate_prepared(&plan.prompt).err();
                 }
@@ -2854,11 +2879,15 @@ impl NativeExecutionControl for StepControl {
                     ));
                 }
                 let candidate = format!("{}:{}", step.context.context_id, step.context.revision);
+                let mut candidate_ids = prior_candidate.into_iter().collect::<Vec<_>>();
+                candidate_ids.push(candidate.clone());
                 let decision = RoutingDecision {
                     decision_id: step.decision_id.clone(),
                     allocation_id,
                     policy_id: "core_rules_v1".into(),
-                    source: if modes.model == super::protocol::ModelMode::Fixed {
+                    source: if step.reconstructed_from.is_some() {
+                        "frozen_model_after_context_rebuild".into()
+                    } else if modes.model == super::protocol::ModelMode::Fixed {
                         "fixed_override".into()
                     } else {
                         "named_model_policy".into()
@@ -2866,11 +2895,19 @@ impl NativeExecutionControl for StepControl {
                     input_state_revision: step.input_state_revision,
                     modes,
                     context: step.context.prepared_manifest(&plan.prompt)?,
-                    candidate_ids: vec![candidate.clone()],
+                    candidate_ids,
                     selected_candidate_id: candidate,
                     selected_model: plan.effective_model.clone(),
                     selected_effort: plan.prompt.params.reasoning_effort,
-                    reason_codes: vec!["continue_current_work".into()],
+                    reason_codes: if step.reconstructed_from.is_some() {
+                        vec![
+                            "rebuild_from_required_materials".into(),
+                            "remove_explicitly_optional_history".into(),
+                            "retain_current_work_history".into(),
+                        ]
+                    } else {
+                        vec!["continue_current_work".into()]
+                    },
                     routes: routes.clone(),
                 };
                 let application = DecisionApplied {
@@ -2897,18 +2934,192 @@ impl NativeExecutionControl for StepControl {
         })
     }
 
+    async fn rebuild_context(
+        &self,
+        plan: &NativePlan,
+    ) -> bitrouter_sdk::Result<Option<Vec<Message>>> {
+        use super::reconstruction::{RebuildRecord, candidate, digest};
+        let step_id = self.step_id.lock().await.clone();
+        let snapshot = self.session.snapshot().await;
+        let step = snapshot
+            .agents
+            .get(&self.agent_id)
+            .and_then(|agent| agent.turn.as_ref())
+            .and_then(|turn| turn.steps.last())
+            .filter(|step| step.step_id == step_id)
+            .ok_or_else(|| sdk_error(reject(ErrorCode::StaleRevision, "rebuild step changed")))?;
+        let eligible = step.plan.as_ref() == Some(plan)
+            && step.attempts.is_empty()
+            && step.rebuild.is_none()
+            && step.reconstructed_from.is_none()
+            && step.application.as_ref().is_some_and(|applied| {
+                matches!(applied.disposition, ApplicationDisposition::Rejected)
+                    && applied
+                        .reason
+                        .as_ref()
+                        .is_some_and(|error| error.code == ErrorCode::NoFeasibleRoute)
+            })
+            && step.decision.as_ref().is_some_and(|decision| {
+                decision
+                    .routes
+                    .iter()
+                    .all(|route| !route.rejection_reasons.is_empty())
+                    && decision.routes.iter().any(|route| {
+                        route.rejection_reasons.iter().all(|reason| {
+                            matches!(
+                                reason.as_str(),
+                                "input_limit_exceeded"
+                                    | "context_window_exceeded"
+                                    | "required_capability_unsupported"
+                            )
+                        })
+                    })
+            });
+        if !eligible {
+            return Ok(None);
+        }
+        let activity_id = format!("{}/rebuild", plan.request_id);
+        self.session
+            .ensure_dispatch(&self.agent_id, &step_id, activity_id.clone())
+            .await
+            .map_err(sdk_error)?;
+        let started = Instant::now();
+        // App-level transforms run before SDK hooks and can add dependencies
+        // absent from the caller's task-scoped history declaration.
+        let candidate = if self.session.shared.app.prompt_transforms().is_empty() {
+            candidate(&snapshot, &self.agent_id, step, plan)
+        } else {
+            Err(reject(
+                ErrorCode::NoFeasibleRoute,
+                "app prompt transforms do not support context reconstruction revalidation",
+            ))
+        };
+        let source_history_sha256 = digest(&step.input_history);
+        let elapsed_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        let active_ms = self
+            .session
+            .shared
+            .live
+            .lock()
+            .await
+            .activity
+            .finish(&activity_id);
+        let source_history_sha256 = source_history_sha256.map_err(sdk_error)?;
+        let rebuilt_step_id = id("step");
+        let mut messages = None;
+        self.session
+            .transition_for(Some(&self.agent_id), "context.rebuild", |state, head| {
+                validate_step_source(state, &self.agent_id, &step_id)?;
+                let run = active_run(state)?;
+                run.active_ms = run.active_ms.max(active_ms);
+                let budget_exhausted = run.model_attempts >= run.limits.model_attempts
+                    || run.active_ms >= run.limits.active_seconds.saturating_mul(1000);
+                let turn = agent_turn(state, &self.agent_id)?;
+                if turn.status != AgentStatus::ModelRunning {
+                    return Err(reject(ErrorCode::Busy, "context rebuild boundary changed"));
+                }
+                let current = current_step(state, &self.agent_id, &step_id)?;
+                if current.plan.as_ref() != Some(plan)
+                    || current.rebuild.is_some()
+                    || !current.attempts.is_empty()
+                {
+                    return Err(reject(
+                        ErrorCode::OperationConflict,
+                        "context rebuild source is not an unexecuted rejected plan",
+                    ));
+                }
+                let candidate = if budget_exhausted {
+                    Err(reject(
+                        ErrorCode::LimitExceeded,
+                        "context rebuild budget exhausted",
+                    ))
+                } else {
+                    candidate
+                };
+                let record = RebuildRecord {
+                    strategy: "explicitly_optional_history_v1".into(),
+                    source_context_revision: current.context_revision,
+                    source_history_sha256,
+                    rebuilt_step_id: candidate.as_ref().ok().map(|_| rebuilt_step_id.clone()),
+                    removed_history_messages: candidate
+                        .as_ref()
+                        .map_or(0, |candidate| candidate.removed_messages),
+                    elapsed_ms,
+                    error: candidate.as_ref().err().cloned(),
+                };
+                current.rebuild = Some(record.clone());
+                let Ok(candidate) = candidate else {
+                    return encode(&record);
+                };
+                current.settled = true;
+                let manifest = current.manifest.clone();
+                let materials = current.materials.clone();
+                let agent = agent_mut(state, &self.agent_id)?;
+                if agent.history != step.input_history
+                    || agent.context_revision != step.context_revision
+                {
+                    return Err(reject(
+                        ErrorCode::StaleRevision,
+                        "context changed during reconstruction",
+                    ));
+                }
+                agent.history = candidate.history.clone();
+                agent.context_revision =
+                    agent.context_revision.checked_add(1).ok_or_else(|| {
+                        reject(ErrorCode::LimitExceeded, "context revision exhausted")
+                    })?;
+                let context_revision = agent.context_revision;
+                agent
+                    .turn
+                    .as_mut()
+                    .ok_or_else(|| reject(ErrorCode::Busy, "rebuild turn disappeared"))?
+                    .history_start = Some(candidate.history_start);
+                let context = ContextManifest::capture(state, &self.agent_id, &candidate.prompt)?;
+                let signal_revision = state.signals.revision;
+                agent_turn(state, &self.agent_id)?.steps.push(ModelStep {
+                    step_id: rebuilt_step_id.clone(),
+                    decision_id: id("decision"),
+                    context_revision,
+                    signal_revision,
+                    manifest,
+                    materials,
+                    context,
+                    input_state_revision: head.state_revision,
+                    input_history: candidate.history,
+                    decision: None,
+                    application: None,
+                    plan: None,
+                    count_plan: None,
+                    input_counts: Vec::new(),
+                    rebuild: None,
+                    reconstructed_from: Some(step_id.clone()),
+                    attempts: Vec::new(),
+                    settled: false,
+                });
+                messages = Some(candidate.prompt.messages);
+                encode(&record)
+            })
+            .await
+            .map_err(sdk_error)?;
+        if messages.is_some() {
+            *self.step_id.lock().await = rebuilt_step_id;
+        }
+        Ok(messages)
+    }
+
     async fn before_attempt(
         &self,
         request_id: &str,
         attempt_index: u32,
     ) -> bitrouter_sdk::Result<()> {
+        let step_id = self.step_id.lock().await.clone();
         self.session.transition_for(Some(&self.agent_id), "model.attempt.intent", |state, _| {
-            validate_step_source(state,&self.agent_id,&self.step_id)?;
+            validate_step_source(state,&self.agent_id,&step_id)?;
             let run = active_run(state)?;
             if !matches!(run.status, RunStatus::Running | RunStatus::Waiting) || run.model_attempts >= run.limits.model_attempts || run.active_ms >= run.limits.active_seconds.saturating_mul(1000) { return Err(reject(ErrorCode::LimitExceeded, "model attempt is no longer admitted")); }
             let turn = agent_turn(state, &self.agent_id)?;
             if turn.status != AgentStatus::ModelRunning { return Err(reject(ErrorCode::Busy, "agent is no longer running this model step")); }
-            let step = turn.steps.last_mut().filter(|step| step.step_id == self.step_id).ok_or_else(|| reject(ErrorCode::StaleRevision, "attempt step changed"))?;
+            let step = turn.steps.last_mut().filter(|step| step.step_id == step_id).ok_or_else(|| reject(ErrorCode::StaleRevision, "attempt step changed"))?;
             if !step.application.as_ref().is_some_and(|application| matches!(application.disposition, ApplicationDisposition::Applied)) {
                 return Err(reject(ErrorCode::NoFeasibleRoute,"routing decision was not applied"));
             }
@@ -2926,7 +3137,7 @@ impl NativeExecutionControl for StepControl {
         self.session
             .ensure_dispatch(
                 &self.agent_id,
-                &self.step_id,
+                &step_id,
                 format!("{request_id}/{attempt_index}"),
             )
             .await
@@ -2934,6 +3145,7 @@ impl NativeExecutionControl for StepControl {
     }
 
     async fn after_attempt(&self, report: NativeAttemptReport) {
+        let step_id = self.step_id.lock().await.clone();
         let active_ms = self
             .session
             .shared
@@ -2949,7 +3161,7 @@ impl NativeExecutionControl for StepControl {
                 let step = turn
                     .steps
                     .last_mut()
-                    .filter(|step| step.step_id == self.step_id)
+                    .filter(|step| step.step_id == step_id)
                     .ok_or_else(|| reject(ErrorCode::StaleRevision, "outcome step changed"))?;
                 let plan = step.plan.as_ref().ok_or_else(|| {
                     reject(ErrorCode::CheckpointUnavailable, "outcome has no plan")

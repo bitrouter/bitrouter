@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::language_model::routing::RouterRequestIdentity;
 use crate::language_model::types::{
-    ApiProtocol, Capability, GenerateResult, Prompt, ReasoningEffortSource, RoutingTarget,
+    ApiProtocol, Capability, GenerateResult, Message, Prompt, ReasoningEffortSource, RoutingTarget,
 };
 
 /// Independently declared token limits. An input limit is not a combined
@@ -238,6 +238,18 @@ pub trait NativeExecutionControl: Send + Sync {
     /// Commit candidate assessments and return an ordered nonempty subset of
     /// the frozen routes, or reject the plan before any provider attempt.
     async fn plan(&self, plan: NativePlan) -> Result<NativePlanAdmission>;
+
+    /// After rejecting a plan with no provider attempt, optionally commit one
+    /// rebuilt context. Only complete messages may be removed; input additions,
+    /// model/effort changes and generation-parameter changes are not permitted.
+    /// The pipeline re-counts and re-admits the frozen provider chain without
+    /// rerunning authentication, preparation, model selection or route hooks.
+    /// Frozen request checks run again before any new count or generation.
+    /// Provider continuation and mutable preparation/route hooks disable this
+    /// callback because they do not provide a safe revalidation contract.
+    async fn rebuild_context(&self, _rejected: &NativePlan) -> Result<Option<Vec<Message>>> {
+        Ok(None)
+    }
 
     /// Authorize every actual attempt, including fallbacks, after persisting
     /// its identity and budget reservation. A previous uncommitted outcome

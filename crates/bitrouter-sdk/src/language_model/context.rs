@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::caller::CallerContext;
+use crate::error::{BitrouterError, Result};
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::auth::ContinuationAuthority;
 use crate::language_model::protocol::responses::{
@@ -24,8 +25,8 @@ use crate::language_model::timing::{
     FirstTokenKind, FirstTokenTiming, duration_millis, elapsed_millis,
 };
 use crate::language_model::types::{
-    ApiProtocol, ChatStreamOptions, Content, ExecutionResult, FinishReason, PipelineRequest,
-    PipelineResponse, Prompt, RoutingTarget, StreamPart, Usage,
+    ApiProtocol, ChatStreamOptions, Content, ExecutionResult, FinishReason, Message,
+    PipelineRequest, PipelineResponse, Prompt, RoutingTarget, StreamPart, Usage,
 };
 use crate::plugin::PluginId;
 
@@ -479,6 +480,30 @@ impl PipelineContext {
     /// The canonical request body.
     pub fn prompt(&self) -> &Prompt {
         &self.prompt
+    }
+
+    /// A managed runtime may explicitly rebuild visible context before any
+    /// attempt. Every other prepared request field and hook binding stays fixed.
+    pub(crate) fn replace_managed_messages(&mut self, messages: Vec<Message>) -> Result<()> {
+        if messages.len() >= self.prompt.messages.len() {
+            return Err(BitrouterError::bad_request(
+                "managed context rebuild must reduce history",
+            ));
+        }
+        let mut retained = messages.iter();
+        let mut next = retained.next();
+        for original in &self.prompt.messages {
+            if next == Some(original) {
+                next = retained.next();
+            }
+        }
+        if next.is_some() {
+            return Err(BitrouterError::bad_request(
+                "managed context rebuild rewrote or reordered prepared messages",
+            ));
+        }
+        self.prompt.messages = messages;
+        Ok(())
     }
 
     /// The inbound wire protocol the request arrived on, if known. Route
