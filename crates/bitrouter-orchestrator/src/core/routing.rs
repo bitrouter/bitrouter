@@ -181,9 +181,12 @@ pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, 
                 .iter()
                 .any(|capability| !route.constraints.capabilities.contains(capability))
             {
+                // The shared catalog records positive observations, not an
+                // exhaustive denylist. Known serving-protocol incompatibilities
+                // are rejected separately by the shared adapter assessment.
                 assessment
-                    .rejection_reasons
-                    .push("required_capability_unsupported".into());
+                    .unverified_constraints
+                    .push("required_capability_unknown".into());
             }
             let limits = &route.constraints.token_limits;
             if let (Some(input), Some(limit)) = (input_tokens, limits.max_input_tokens)

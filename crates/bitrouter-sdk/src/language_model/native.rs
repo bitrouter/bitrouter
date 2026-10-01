@@ -106,7 +106,8 @@ impl NativeCountedRequests {
 /// Credential-free facts about one concrete provider/model candidate.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NativeRouteConstraints {
-    /// Empty means unknown; a nonempty list is a positive capability inventory.
+    /// Positive capability observations, not an exhaustive denylist. Omitted
+    /// capabilities remain unknown even when this list is nonempty.
     pub capabilities: Vec<Capability>,
     /// Known limits for this exact route.
     pub token_limits: ModelTokenLimits,

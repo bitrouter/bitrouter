@@ -1514,9 +1514,10 @@ pub struct Prompt {
 
 impl Prompt {
     /// The [`Capability`]s this request requires, derived from which optional
-    /// features it actually uses. A capability-aware routing table can use this
-    /// to restrict the fallback chain to providers that advertise all of these,
-    /// instead of silently degrading the request.
+    /// features it actually uses. A routing table can evaluate these against
+    /// authoritative support constraints. The configured catalog supplies only
+    /// positive observations; missing declarations remain unknown. Protocol
+    /// feasibility is checked separately against the serving adapter.
     ///
     /// Detected from the canonical [`Prompt`]: `structured_outputs` (a
     /// `response_format`), `tools` (a non-empty tool list), `reasoning` (a

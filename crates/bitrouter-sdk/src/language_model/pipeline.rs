@@ -1554,9 +1554,9 @@ impl Pipeline {
             ctx.preserve_caller_effort(effort);
         }
 
-        // Restrict the chain to providers that advertise every capability this
-        // request actually uses (e.g. structured outputs). Empty for plain
-        // requests, so those route unchanged.
+        // Supply actual prompt requirements to the shared routing table. The
+        // configured catalog carries positive observations; omitted declarations
+        // alone do not establish incompatibility or remove a provider.
         let mut prefs = resolution.prefs;
         prefs.require_capabilities = ctx.prompt().required_capabilities();
         // Carry the inbound protocol so the table can prefer a native,
