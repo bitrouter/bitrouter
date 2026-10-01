@@ -57,10 +57,8 @@ pub(crate) fn validate_history(messages: &[Message]) -> Result<(), String> {
                     id,
                     provider_executed: false,
                     ..
-                } => {
-                    if id.is_empty() || !pending.insert(id.clone()) {
-                        return Err("missing or duplicate tool call identity".into());
-                    }
+                } if id.is_empty() || !pending.insert(id.clone()) => {
+                    return Err("missing or duplicate tool call identity".into());
                 }
                 Content::ToolResult { call_id, .. } if !pending.remove(call_id) => {
                     return Err("orphaned or duplicate tool result".into());
