@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::auth::{
     AppliedAuth, AuthAppliers, AuthExtensionOperation, ContinuationAuthority, CredentialAuthority,
-    normalize_auth_extension_error,
+    is_continuation_scope_header, normalize_auth_extension_error, request_scope_headers,
 };
 use crate::language_model::context::PipelineContext;
 use crate::language_model::context::ProviderContinuation;
@@ -992,6 +992,7 @@ impl HttpExecutor {
         &self,
         input: &RequestBuildInput<'_>,
     ) -> Result<reqwest::Request> {
+        input.ctx.record_credential_authority(None);
         let mut builder = input.client.post(input.url).json(input.body);
         if let Some(total) = input.timeouts.total {
             builder = builder.timeout(total);
@@ -1000,17 +1001,30 @@ impl HttpExecutor {
             .build()
             .map_err(|e| BitrouterError::internal(format!("building request: {e}")))?;
         forward_inbound_anthropic_beta(&mut request, input.target, input.ctx);
-        let applied = self
+        apply_provider_headers(&mut request, input.target, input.ctx, true);
+        let scope = request_scope_headers(input.target, Some(input.ctx.headers()))
+            .ok_or_else(|| BitrouterError::internal("request account scope unavailable"))?;
+        let mut applied = self
             .apply_auth(request, input.target, input.transport)
             .await?;
-        let (mut request, mut credential_authority) = applied.into_parts();
-        apply_provider_headers(&mut request, input.target, input.ctx);
-        merge_outbound_trace_headers(&mut request, input.trace_headers);
-        inject_outbound_request_id(&mut request, input.ctx)?;
-        credential_authority =
-            credential_authority.filter(|authority| authority.validates_final_request(&request));
+        apply_provider_headers(&mut applied, input.target, input.ctx, false);
+        merge_outbound_trace_headers(&mut applied, input.trace_headers);
+        inject_outbound_request_id(&mut applied, input.ctx)?;
+        let (request, credential_authority) = applied.into_parts();
+        if input.target.headers.iter().any(|rule| {
+            is_continuation_scope_header(rule.name().as_str())
+                && !scope
+                    .get_all(rule.name())
+                    .iter()
+                    .eq(request.headers().get_all(rule.name()).iter())
+        }) {
+            return Err(BitrouterError::bad_request(
+                "provider authentication changed configured account scope",
+            ));
+        }
+        let credential_authority =
+            credential_authority.map(|authority| authority.with_request_scope(&scope));
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
-        input.ctx.record_credential_authority(credential_authority);
         if input
             .ctx
             .extension::<crate::language_model::native::NativeManagedRequest>()
@@ -1079,6 +1093,7 @@ impl HttpExecutor {
                 "managed request changed after provider input token counting",
             ));
         }
+        input.ctx.record_credential_authority(credential_authority);
         Ok(request)
     }
 
@@ -1302,15 +1317,21 @@ impl HttpExecutor {
 /// reserved authentication, framing, tracing, and request-id fields remain
 /// outside this mechanism. The rules themselves were validated when the route
 /// was built.
+/// Account selectors run before authentication and participate in its stable
+/// scope. Other compatibility headers run after authentication as overrides.
 ///
 /// HTTP field semantics: <https://www.rfc-editor.org/rfc/rfc9110.html#section-5>
 fn apply_provider_headers(
     request: &mut reqwest::Request,
     target: &RoutingTarget,
     ctx: &PipelineContext,
+    account_scope: bool,
 ) {
     for rule in &target.headers {
         let name = rule.name();
+        if is_continuation_scope_header(name.as_str()) != account_scope {
+            continue;
+        }
         request.headers_mut().remove(name);
         if rule.passthrough() {
             let inbound = ctx
@@ -2241,7 +2262,7 @@ mod beta_forward_tests {
             .headers_mut()
             .insert("x-rejected", http::HeaderValue::from_static("transport"));
 
-        apply_provider_headers(&mut request, &target, &ctx);
+        apply_provider_headers(&mut request, &target, &ctx, false);
 
         let sessions = request
             .headers()
@@ -2618,6 +2639,141 @@ mod provider_continuation_tests {
         ProviderContinuation, RequireContinuationAuthority, SuppressProviderContinuation,
     };
     use crate::language_model::{GenerationParams, Message, PipelineRequest, Role};
+
+    struct RewriteAfterProof;
+
+    struct UnprovenScopeRewrite;
+
+    #[async_trait]
+    impl crate::language_model::auth::AuthApplier for UnprovenScopeRewrite {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> Result<reqwest::Request> {
+            request.headers_mut().insert(
+                "authorization",
+                reqwest::header::HeaderValue::from_static("Bearer fixture-key"),
+            );
+            request.headers_mut().insert(
+                "openai-project",
+                reqwest::header::HeaderValue::from_static("unrequested-project"),
+            );
+            Ok(request)
+        }
+    }
+
+    #[tokio::test]
+    async fn unproven_auth_cannot_rewrite_scope_on_an_ordinary_request() -> Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|_| BitrouterError::internal("fixture bind failed"))?;
+        let mut target = responses_target("scope-rewrite");
+        target.api_base = format!(
+            "http://{}/v1",
+            listener
+                .local_addr()
+                .map_err(|_| BitrouterError::internal("fixture address unavailable"))?
+        );
+        target
+            .headers
+            .push(crate::language_model::types::OutboundHeaderRule::new(
+                "openai-project",
+                Some("requested-project"),
+                false,
+            )?);
+        let ctx = plain_context();
+        assert!(ctx.extension::<RequireContinuationAuthority>().is_none());
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            Default::default(),
+            OutboundDispatch::builtin(),
+            AuthAppliers::new().with("scope-rewrite", Arc::new(UnprovenScopeRewrite)),
+        )?;
+        let error = tokio::select! {
+            outcome = executor.execute(&target, ctx.prompt(), &ctx) => outcome.err()
+                .ok_or_else(|| BitrouterError::internal("changed scope was dispatched"))?,
+            _ = listener.accept() => return Err(BitrouterError::internal("unexpected upstream connection")),
+            _ = tokio::time::sleep(Duration::from_secs(2)) => return Err(BitrouterError::internal("fixture timed out")),
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("changed configured account scope")
+        );
+        assert!(!error.to_string().contains("unrequested-project"));
+        Ok(())
+    }
+
+    #[async_trait]
+    impl crate::language_model::auth::AuthApplier for RewriteAfterProof {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _target: &RoutingTarget,
+        ) -> Result<reqwest::Request> {
+            request.headers_mut().insert(
+                "authorization",
+                reqwest::header::HeaderValue::from_static("Bearer original-private-key"),
+            );
+            Ok(request)
+        }
+
+        async fn apply_with_authority(
+            &self,
+            request: reqwest::Request,
+            target: &RoutingTarget,
+        ) -> Result<AppliedAuth> {
+            let request = self.apply(request, target).await?;
+            let mut applied = AppliedAuth::proven(
+                request,
+                CredentialAuthority::derive("test", "original-principal"),
+            );
+            applied.headers_mut().insert(
+                "authorization",
+                reqwest::header::HeaderValue::from_static("Bearer replaced-private-key"),
+            );
+            Ok(applied)
+        }
+    }
+
+    #[tokio::test]
+    async fn changed_credential_proof_blocks_dispatch_and_clears_stale_authority() -> Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|_| BitrouterError::internal("fixture bind failed"))?;
+        let mut target = responses_target("mutating-auth");
+        target.api_base = format!(
+            "http://{}/v1",
+            listener
+                .local_addr()
+                .map_err(|_| BitrouterError::internal("fixture address unavailable"))?
+        );
+        let mut ctx = plain_context();
+        ctx.insert_extension(Arc::new(RequireContinuationAuthority));
+        ctx.record_credential_authority(Some(ContinuationAuthority::new(
+            CredentialAuthority::derive("test", "stale-count-principal"),
+            crate::language_model::types::AuthScheme::Bearer,
+        )));
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            Default::default(),
+            OutboundDispatch::builtin(),
+            AuthAppliers::new().with("mutating-auth", Arc::new(RewriteAfterProof)),
+        )?;
+        let error = tokio::select! {
+            outcome = executor.execute(&target, ctx.prompt(), &ctx) => outcome.err()
+                .ok_or_else(|| BitrouterError::internal("changed credentials were dispatched"))?,
+            _ = listener.accept() => return Err(BitrouterError::internal("unexpected upstream connection")),
+            _ = tokio::time::sleep(Duration::from_secs(2)) => return Err(BitrouterError::internal("fixture timed out")),
+        };
+        assert!(error.to_string().contains("authority unavailable"));
+        assert!(!error.to_string().contains("private-key"));
+        assert!(
+            ctx.required_finalization_context(false)
+                .credential_authority
+                .is_none()
+        );
+        Ok(())
+    }
 
     fn responses_target(provider: &str) -> RoutingTarget {
         RoutingTarget {

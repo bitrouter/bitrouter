@@ -2274,7 +2274,7 @@ impl RouteHook for ContinuationRuntime {
                     }
                     let credential_authority = self
                         .auth_appliers
-                        .continuation_authority_proof(target)
+                        .continuation_authority_proof_for_request(target, ctx.headers())
                         .await
                         .map_err(|error| {
                             BitrouterError::internal(format!(

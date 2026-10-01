@@ -21,11 +21,17 @@
 
 pub mod headers;
 
+#[cfg(test)]
+mod authority_tests;
+
 use async_trait::async_trait;
 use reqwest::header::HeaderValue;
 
 use bitrouter_sdk::language_model::AuthApplier;
-use bitrouter_sdk::language_model::types::RoutingTarget;
+use bitrouter_sdk::language_model::auth::{
+    AppliedAuth, ContinuationAuthority, CredentialAuthority,
+};
+use bitrouter_sdk::language_model::types::{AuthScheme, RoutingTarget};
 use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::oauth::credential_store::{Credential, CredentialStore, DEFAULT_LABEL};
@@ -71,16 +77,56 @@ impl AnthropicApiKeyApplier {
             _ => Ok(None),
         }
     }
+
+    fn resolve_api_key(&self, target: &RoutingTarget) -> Result<String> {
+        if let Some(stored) = self.stored_api_key(self.label_for(target))? {
+            return Ok(stored);
+        }
+        let inline = target.effective_api_key();
+        if inline.is_empty() {
+            return Err(BitrouterError::Upstream {
+                status: 401,
+                message: format!(
+                    "no anthropic credential — set ANTHROPIC_API_KEY or store an \
+                     Anthropic API key with `{} providers login anthropic`",
+                    bitrouter_sdk::invocation::name()
+                ),
+            });
+        }
+        Ok(inline.to_string())
+    }
+
+    fn key_authority(key: &str, target: &RoutingTarget) -> Option<CredentialAuthority> {
+        // Explicit workspace selection can change the credential's scope.
+        // Until that scope is resolved atomically, do not attest its identity.
+        // https://platform.claude.com/docs/en/api/overview#authentication
+        (!key.trim().is_empty()
+            && !target
+                .headers
+                .iter()
+                .any(|rule| rule.name().as_str() == "anthropic-workspace-id"))
+        .then(|| CredentialAuthority::derive("anthropic/api-key", key))
+    }
 }
 
 #[async_trait]
 impl AuthApplier for AnthropicApiKeyApplier {
     async fn apply(
         &self,
-        mut request: reqwest::Request,
+        request: reqwest::Request,
         target: &RoutingTarget,
     ) -> Result<reqwest::Request> {
-        let label = self.label_for(target);
+        Ok(self
+            .apply_with_authority(request, target)
+            .await?
+            .into_request())
+    }
+
+    async fn apply_with_authority(
+        &self,
+        mut request: reqwest::Request,
+        target: &RoutingTarget,
+    ) -> Result<AppliedAuth> {
         // `anthropic-version` is mandatory.
         request.headers_mut().insert(
             "anthropic-version",
@@ -88,25 +134,31 @@ impl AuthApplier for AnthropicApiKeyApplier {
         );
         // Prefer a key stored under "anthropic"; otherwise fall through to the
         // routing target's inline key (the env-var path).
-        let key = match self.stored_api_key(label)? {
-            Some(stored) => stored,
-            None => {
-                let inline = target.effective_api_key();
-                if inline.is_empty() {
-                    return Err(BitrouterError::Upstream {
-                        status: 401,
-                        message: format!(
-                            "no anthropic credential — set ANTHROPIC_API_KEY or store an \
-                             Anthropic API key with `{} providers login anthropic`",
-                            bitrouter_sdk::invocation::name()
-                        ),
-                    });
-                }
-                inline.to_string()
-            }
-        };
+        let key = self.resolve_api_key(target)?;
         apply_api_key_header(&mut request, &key)?;
-        Ok(request)
+        let authority = Self::key_authority(&key, target)
+            .filter(|_| !request.headers().contains_key("anthropic-workspace-id"));
+        Ok(match authority {
+            Some(authority) => AppliedAuth::proven(request, authority),
+            None => AppliedAuth::unproven(request),
+        })
+    }
+
+    async fn continuation_authority(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<Option<CredentialAuthority>> {
+        Ok(Self::key_authority(&self.resolve_api_key(target)?, target))
+    }
+
+    async fn continuation_authority_proof(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<Option<ContinuationAuthority>> {
+        Ok(self
+            .continuation_authority(target)
+            .await?
+            .map(|authority| ContinuationAuthority::new(authority, AuthScheme::XApiKey)))
     }
 
     async fn prepare_body(

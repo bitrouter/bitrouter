@@ -180,7 +180,7 @@ impl HttpExecutor {
         )
         .map_err(|_| invalid("input count body is not JSON"))?;
         let payload = count_payload(&finalized)?;
-        let request = client
+        let mut request = client
             .post(&count_url)
             .json(&payload)
             .timeout(
@@ -191,8 +191,9 @@ impl HttpExecutor {
             )
             .build()
             .map_err(|_| invalid("cannot construct input counting request"))?;
+        super::apply_provider_headers(&mut request, target, ctx, true);
         let mut request = transport.authorise(request, target).await?;
-        super::apply_provider_headers(&mut request, target, ctx);
+        super::apply_provider_headers(&mut request, target, ctx, false);
         super::inject_outbound_request_id(&mut request, ctx)?;
         if semantic_headers(&generation) != semantic_headers(&request) {
             return Err(invalid(

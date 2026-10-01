@@ -23,6 +23,9 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 #[path = "orchestrator_core/native_http.rs"]
 mod native_http;
 
+#[path = "orchestrator_core/auth_scope.rs"]
+mod auth_scope;
+
 #[derive(Default)]
 struct Store {
     head: DurableHead,
