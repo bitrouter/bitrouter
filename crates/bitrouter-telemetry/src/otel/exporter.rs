@@ -1392,6 +1392,7 @@ mod hop_tests {
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: Some("primary".to_string()),
             api_key_override: None,
             api_base_override: None,

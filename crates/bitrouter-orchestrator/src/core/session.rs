@@ -10,6 +10,7 @@ use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::native::{
     NativeAttemptReport, NativeExecutionControl, NativeModelSelection, NativePlan,
+    NativePlanAdmission,
 };
 use bitrouter_sdk::language_model::types::{
     Content, FinishReason, GenerationParams, Message, Prompt, ReasoningEffort, Role, Tool,
@@ -2696,8 +2697,14 @@ impl NativeExecutionControl for StepControl {
         self.model_selection
     }
 
-    async fn plan(&self, plan: NativePlan) -> bitrouter_sdk::Result<()> {
+    async fn plan(&self, plan: NativePlan) -> bitrouter_sdk::Result<NativePlanAdmission> {
         let mut rejection = None;
+        let routes = super::routing::assess_routes(&plan).map_err(sdk_error)?;
+        let route_indices = routes
+            .iter()
+            .filter(|route| route.rejection_reasons.is_empty())
+            .map(|route| route.route_index)
+            .collect::<Vec<_>>();
         self.session
             .transition_for(Some(&self.agent_id), "model.plan", |state, head| {
                 rejection = validate_step_source(state, &self.agent_id, &self.step_id).err();
@@ -2715,6 +2722,12 @@ impl NativeExecutionControl for StepControl {
                 let step = current_step(state, &self.agent_id, &self.step_id)?;
                 if rejection.is_none() {
                     rejection = step.context.validate_prepared(&plan.prompt).err();
+                }
+                if rejection.is_none() && route_indices.is_empty() {
+                    rejection = Some(reject(
+                        ErrorCode::NoFeasibleRoute,
+                        "no provider candidate satisfies the prepared request",
+                    ));
                 }
                 if step.plan.is_some() {
                     return Err(reject(
@@ -2743,6 +2756,7 @@ impl NativeExecutionControl for StepControl {
                         "continue_current_work".into(),
                         "token_capacity_unknown".into(),
                     ],
+                    routes: routes.clone(),
                 };
                 let application = DecisionApplied {
                     decision_id: step.decision_id.clone(),
@@ -2763,7 +2777,9 @@ impl NativeExecutionControl for StepControl {
             })
             .await
             .map_err(sdk_error)?;
-        rejection.map_or(Ok(()), |error| Err(sdk_error(error)))
+        rejection.map_or(Ok(NativePlanAdmission { route_indices }), |error| {
+            Err(sdk_error(error))
+        })
     }
 
     async fn before_attempt(
@@ -2782,7 +2798,8 @@ impl NativeExecutionControl for StepControl {
                 return Err(reject(ErrorCode::NoFeasibleRoute,"routing decision was not applied"));
             }
             let plan = step.plan.as_ref().ok_or_else(|| reject(ErrorCode::CheckpointUnavailable, "model plan is not committed"))?;
-            if plan.request_id != request_id || attempt_index as usize != step.attempts.len() || plan.routes.get(attempt_index as usize).is_none()
+            let expected_index = step.decision.as_ref().and_then(|decision| decision.routes.iter().filter(|route| route.rejection_reasons.is_empty()).nth(step.attempts.len())).map(|route| route.route_index);
+            if plan.request_id != request_id || Some(attempt_index) != expected_index || plan.routes.get(attempt_index as usize).is_none()
                 || step.attempts.last().is_some_and(|attempt| attempt.receipt.is_none()) {
                 return Err(reject(ErrorCode::OperationConflict, "attempt does not follow its immutable model plan"));
             }
@@ -2832,7 +2849,8 @@ impl NativeExecutionControl for StepControl {
                 }
                 let attempt = step
                     .attempts
-                    .get_mut(report.attempt_index as usize)
+                    .iter_mut()
+                    .find(|attempt| attempt.index == report.attempt_index)
                     .ok_or_else(|| {
                         reject(
                             ErrorCode::OperationConflict,
@@ -2981,6 +2999,12 @@ pub(super) fn validate_input(input: &TaskInput, limits: &Limits) -> Result<(), C
         }
     }
     parse_effort(input.effort.as_deref())?;
+    if input.max_output_tokens == Some(0) {
+        return Err(reject(
+            ErrorCode::NoFeasibleRoute,
+            "output reservation must be positive",
+        ));
+    }
     for material in &input.required_materials {
         validate_id(material)?;
     }
@@ -3070,6 +3094,7 @@ fn build_prompt(state: &SessionSnapshot, agent_id: &str) -> Result<Prompt, CoreE
             .chain(collaboration::declarations())
             .collect(),
         params: GenerationParams {
+            max_tokens: Some(turn.input.max_output_tokens.unwrap_or(4096)),
             reasoning_effort: parse_effort(turn.input.effort.as_deref())?,
             ..Default::default()
         },

@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: reviewed signals, prepared-plan records and worker allocation below; model capacity and reconstruction pending |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: reviewed signals, prepared-plan records, worker allocation and output reservations below; input-token feasibility and reconstruction pending |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -313,3 +313,60 @@ C3 remains open: provider capability/capacity and output-reservation checks,
 infeasible continuation reconstruction, priced cost receipts and protocol-aware
 cache/continuation observations still require implementation and review. C4–C6,
 the full A01–A23 audit, final workspace validation, PR and CI remain required.
+
+## C3 provider constraints and output reservations
+
+Managed TaskInput accepts a positive `max_output_tokens`; omission reserves
+4096 tokens per model step. Child tasks inherit that bound. Shared preparation
+cannot remove or rewrite it. Each concrete provider model may declare independent
+`token_limits.max_input_tokens`, `max_output_tokens`, and `context_window`
+values in configuration. Input-only limits do not imply a combined window.
+Registry entries without these facts remain unknown.
+
+The route and its capability/limit facts are captured from the same configuration
+snapshot. Core records each candidate's rejection and unverified constraints,
+then admits an ordered subset of the shared pipeline's frozen chain. No model
+reselection occurs. Rejected candidates do not consume provider attempts; actual
+fallbacks retain their original route indices in intents and receipts. Known
+unsupported capabilities, insufficient output limits, empty input capacity, and
+an output reservation exhausting the entire combined window reject a candidate.
+An empty admitted set produces a durable rejected decision before execution.
+
+Executor/provider declarations identify routes that cannot preserve output
+limits. The Codex subscription shaper removes this parameter, so managed core
+rejects that route before authentication or a model attempt. HTTP execution also
+checks the final request body after provider shaping and authentication, including
+authentication retries. The actual outbound adapter validates the limit; built-in
+wires reuse their parsers and Antigravity checks its nested request envelope.
+Custom adapters without validation support are rejected during admission.
+Ordinary, uncontrolled API calls retain their existing behavior.
+
+- SDK/orchestrator/providers all-feature nextest: 1425 passed, 2 skipped,
+  including 67 core execution tests.
+- Workspace all-feature doctests: 5 passed, 1 ignored. Strict workspace
+  all-target/all-feature clippy, formatting, diff and generated-distribution
+  checks passed.
+- Regressions exercise non-contiguous fallback indices, no dispatch for rejected
+  candidates, zero/default/explicit reservations, child inheritance, preparation
+  mutation, config reload between route resolution and plan admission, all four
+  built-in wire renderers, authentication body mutation, actual Codex shaping and
+  Antigravity's final envelope.
+- Independent reviews found and repaired config-snapshot mixing and Codex output
+  limit removal. Follow-up SDK review found a custom-protocol compatibility gap;
+  adapter-owned validation and an Antigravity regression repaired it. Final
+  read-only reviews found no remaining concrete blocker within this segment.
+
+Input token counts still have no tokenizer and remain explicitly unknown,
+including when provider limits are known. A route admitted with unknown input
+size is not a verified fit. Complete input/capability/protocol feasibility,
+infeasible-context reconstruction, priced cost and protocol-aware cache receipts
+remain C3 work. C4–C6, A01–A23, the final independent audit, PR and CI remain open.
+
+The preceding full-workspace reruns were not clean: a two-thread run passed
+3683/3686 selected tests with three CLI/PTY timeouts; two serial runs each passed
+3685/3686, with a background lifecycle timeout in the first and a SIGINT fixture
+connection timeout in the second. The background fixture now includes daemon
+log tails and last observed run state on timeouts without changing its deadline
+or success assertions; this diagnostic change also passed independent review.
+These intermittent failures have not been explained or fixed. A new full run
+after the output-reservation changes remains required for final delivery.

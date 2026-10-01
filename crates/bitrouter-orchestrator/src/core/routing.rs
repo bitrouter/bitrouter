@@ -75,6 +75,9 @@ impl ContextManifest {
     /// reorder committed instructions and history. Validate the whole result
     /// too, so an added unmatched call/result cannot cross the model boundary.
     pub fn validate_prepared(&self, prompt: &Prompt) -> Result<(), CoreError> {
+        if self.output_allowance != prompt.params.max_tokens {
+            return Err(invalid("model preparation changed the output reservation"));
+        }
         if commitment(&prompt.system)? != self.system_sha256 {
             return Err(invalid("model preparation changed required instructions"));
         }
@@ -119,6 +122,99 @@ pub struct RoutingDecision {
     pub selected_model: String,
     pub selected_effort: Option<ReasoningEffort>,
     pub reason_codes: Vec<String>,
+    /// Per-provider assessment after shared model selection. Unknown facts
+    /// permit an attempt but never establish a verified capacity fit.
+    pub routes: Vec<RouteFeasibility>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteFeasibility {
+    pub route_index: u32,
+    pub rejection_reasons: Vec<String>,
+    pub unverified_constraints: Vec<String>,
+}
+
+pub(super) fn assess_routes(plan: &NativePlan) -> Result<Vec<RouteFeasibility>, CoreError> {
+    let required = plan.prompt.required_capabilities();
+    plan.routes
+        .iter()
+        .enumerate()
+        .map(|(index, route)| {
+            let mut assessment = RouteFeasibility {
+                route_index: u32::try_from(index).map_err(|_| invalid("route index exhausted"))?,
+                rejection_reasons: Vec::new(),
+                unverified_constraints: vec!["input_token_count_unknown".into()],
+            };
+            if route.constraints.capabilities.is_empty() {
+                assessment
+                    .unverified_constraints
+                    .push("capabilities_unknown".into());
+            } else if required
+                .iter()
+                .any(|capability| !route.constraints.capabilities.contains(capability))
+            {
+                assessment
+                    .rejection_reasons
+                    .push("required_capability_unsupported".into());
+            }
+            let limits = &route.constraints.token_limits;
+            match route.output_token_limit_supported {
+                Some(false) => assessment
+                    .rejection_reasons
+                    .push("output_reservation_unsupported".into()),
+                None => assessment
+                    .unverified_constraints
+                    .push("output_reservation_support_unknown".into()),
+                Some(true) => {}
+            }
+            if limits.max_input_tokens == Some(0) {
+                assessment
+                    .rejection_reasons
+                    .push("input_capacity_exhausted".into());
+            } else if limits.max_input_tokens.is_none() {
+                assessment
+                    .unverified_constraints
+                    .push("input_limit_unknown".into());
+            }
+            match plan.prompt.params.max_tokens {
+                None | Some(0) => assessment
+                    .rejection_reasons
+                    .push("output_reservation_missing".into()),
+                Some(output) => {
+                    if limits
+                        .max_output_tokens
+                        .is_some_and(|limit| u64::from(output) > limit)
+                    {
+                        assessment
+                            .rejection_reasons
+                            .push("output_limit_exceeded".into());
+                    }
+                    // A nonempty managed request consumes input capacity too.
+                    // Even without a tokenizer, output alone cannot fill or
+                    // exceed the entire combined window.
+                    if limits
+                        .context_window
+                        .is_some_and(|limit| u64::from(output) >= limit)
+                    {
+                        assessment
+                            .rejection_reasons
+                            .push("context_window_exhausted_by_output".into());
+                    }
+                }
+            }
+            if limits.max_output_tokens.is_none() {
+                assessment
+                    .unverified_constraints
+                    .push("output_limit_unknown".into());
+            }
+            if limits.context_window.is_none() {
+                assessment
+                    .unverified_constraints
+                    .push("context_window_unknown".into());
+            }
+            Ok(assessment)
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

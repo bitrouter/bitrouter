@@ -30,6 +30,7 @@ fn target(provider: &str) -> RoutingTarget {
         chat_supports_store: None,
         chat_supports_stream_options: None,
         reasoning_effort: None,
+        model_constraints: Default::default(),
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -780,6 +781,45 @@ impl ModelSelector for CountingModelSelector {
 
 struct FailingModelSelector;
 
+struct AdmittedRoutes(Vec<u32>);
+
+#[async_trait]
+impl native::NativeExecutionControl for AdmittedRoutes {
+    async fn plan(&self, _: native::NativePlan) -> Result<native::NativePlanAdmission> {
+        Ok(native::NativePlanAdmission {
+            route_indices: self.0.clone(),
+        })
+    }
+
+    async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
+        Ok(())
+    }
+
+    async fn after_attempt(&self, _: native::NativeAttemptReport) {}
+}
+
+#[tokio::test]
+async fn managed_admission_cannot_add_duplicate_or_reorder_frozen_routes() -> Result<()> {
+    for indices in [vec![], vec![2], vec![0, 0], vec![1, 0]] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routing_table(&["first", "second"]))
+            .executor(Arc::new(NeverCalledExecutor(calls.clone())));
+        let result = Arc::new(builder.build()?)
+            .execute_native_controlled(request(), Arc::new(AdmittedRoutes(indices.clone())))
+            .await;
+        assert!(
+            result
+                .err()
+                .is_some_and(|error| error.to_string().contains("ordered nonempty route subset")),
+            "indices={indices:?}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+    Ok(())
+}
+
 struct ManagedSelectionControl {
     selection: native::NativeModelSelection,
     plans: tokio::sync::Mutex<Vec<native::NativePlan>>,
@@ -792,9 +832,10 @@ impl native::NativeExecutionControl for ManagedSelectionControl {
         self.selection
     }
 
-    async fn plan(&self, plan: native::NativePlan) -> Result<()> {
+    async fn plan(&self, plan: native::NativePlan) -> Result<native::NativePlanAdmission> {
+        let route_indices = (0..plan.routes.len()).map(|index| index as u32).collect();
         self.plans.lock().await.push(plan);
-        Ok(())
+        Ok(native::NativePlanAdmission { route_indices })
     }
 
     async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
@@ -807,6 +848,95 @@ impl native::NativeExecutionControl for ManagedSelectionControl {
 }
 
 struct ModelAndEffortSelector(Arc<AtomicUsize>);
+
+#[cfg(feature = "config_file")]
+struct ReloadAfterRoute {
+    table: Arc<crate::config::ConfigRoutingTable>,
+    replacement: crate::config::Config,
+}
+
+#[cfg(feature = "config_file")]
+#[async_trait]
+impl ObserveHook for ReloadAfterRoute {
+    async fn after_phase(&self, phase: Phase, _: &PipelineContext) {
+        if phase == Phase::Route {
+            let result = self.table.replace_config(self.replacement.clone()).await;
+            assert!(result.is_ok());
+        }
+    }
+    async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
+    async fn on_request_end(&self, _: &PipelineContext, _: &RequestOutcome) {}
+}
+
+#[cfg(feature = "config_file")]
+#[tokio::test]
+async fn managed_route_facts_share_the_resolved_targets_config_snapshot() -> Result<()> {
+    let config = |base: &str, output: u64| -> Result<crate::config::Config> {
+        serde_json::from_value(serde_json::json!({"providers":{"fixture":{
+            "api_base":base,"api_key":"fixture-secret","models":[{
+                "id":"test-model","token_limits":{"max_output_tokens":output}
+            }]
+        }}}))
+        .map_err(|error| BitrouterError::internal(error.to_string()))
+    };
+    let table = Arc::new(crate::config::ConfigRoutingTable::from_config(config(
+        "https://old.invalid",
+        128,
+    )?));
+    let mut builder = PipelineBuilder::new();
+    let answer = GenerateResult {
+        content: Vec::new(),
+        usage: None,
+        finish_reason: Some(FinishReason::Stop),
+        response_id: None,
+        stop_details: None,
+        provider_metadata: Default::default(),
+    };
+    builder
+        .routing_table(table.clone())
+        .executor(Arc::new(MockExecutor::new(vec![
+            MockResponse::Generate(answer.clone()),
+            MockResponse::Generate(answer),
+        ])))
+        .observe_hook(ReloadAfterRoute {
+            table,
+            replacement: config("https://new.invalid", 8192)?,
+        });
+    let pipeline = Arc::new(builder.build()?);
+    let control = Arc::new(ManagedSelectionControl {
+        selection: native::NativeModelSelection::Fixed,
+        plans: Default::default(),
+        reports: Default::default(),
+    });
+    pipeline
+        .clone()
+        .execute_native_controlled(request(), control.clone())
+        .await?;
+    pipeline
+        .clone()
+        .execute_native_controlled(request(), control.clone())
+        .await?;
+    let plans = control.plans.lock().await;
+    let reports = control.reports.lock().await;
+    assert_eq!(
+        plans[0].routes[0]
+            .constraints
+            .token_limits
+            .max_output_tokens,
+        Some(128)
+    );
+    assert_eq!(
+        plans[1].routes[0]
+            .constraints
+            .token_limits
+            .max_output_tokens,
+        Some(8192)
+    );
+    for (plan, report) in plans.iter().zip(reports.iter()) {
+        assert_eq!(plan.routes[0], report.route);
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn managed_fixed_continuation_requires_a_known_matching_effort() -> Result<()> {
@@ -3663,6 +3793,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
         chat_supports_store: None,
         chat_supports_stream_options: None,
         reasoning_effort: None,
+        model_constraints: Default::default(),
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -4043,6 +4174,7 @@ fn auth_retry_target(api_base: String) -> RoutingTarget {
         chat_supports_store: None,
         chat_supports_stream_options: None,
         reasoning_effort: None,
+        model_constraints: Default::default(),
         account_label: None,
         api_key_override: None,
         api_base_override: None,

@@ -535,6 +535,308 @@ impl ObserveHook for DisconnectOnHop {
 struct RemoveTools;
 struct RemoveRequiredContext(bool);
 
+struct ChangeOutputReservation(Option<u32>);
+impl bitrouter_sdk::app::PromptTransform for ChangeOutputReservation {
+    fn apply(&self, prompt: &mut Prompt) {
+        prompt.params.max_tokens = self.0;
+    }
+}
+
+struct NoOutputLimitAuth(Arc<AtomicUsize>);
+
+#[async_trait]
+impl bitrouter_sdk::language_model::auth::AuthApplier for NoOutputLimitAuth {
+    fn output_token_limit_support(&self, _: &RoutingTarget) -> Option<bool> {
+        Some(false)
+    }
+    async fn apply(
+        &self,
+        _: reqwest::Request,
+        _: &RoutingTarget,
+    ) -> bitrouter_sdk::Result<reqwest::Request> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(bitrouter_sdk::BitrouterError::internal(
+            "infeasible route must not authenticate",
+        ))
+    }
+}
+
+#[tokio::test]
+async fn unsupported_output_reservation_rejects_before_authentication_or_attempt() -> TestResult {
+    use bitrouter_sdk::language_model::auth::AuthAppliers;
+    use bitrouter_sdk::language_model::executor::HttpExecutor;
+    use bitrouter_sdk::language_model::protocol::OutboundDispatch;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let executor = HttpExecutor::with_dispatch_and_auth(
+        Default::default(),
+        OutboundDispatch::builtin(),
+        AuthAppliers::new().with("first", Arc::new(NoOutputLimitAuth(calls.clone()))),
+    )?;
+    let table = StaticRoutingTable::new();
+    table.insert("fixture-model", vec![target("first")]);
+    let app = App::builder()
+        .language_model(|builder| {
+            builder
+                .routing_table(Arc::new(table))
+                .executor(Arc::new(executor));
+        })
+        .build()?;
+    let session = bind_app(Arc::new(app), Arc::new(Harness::new(None, None))).await?;
+    session
+        .start("input", session.head().await.state_revision, input())
+        .await?;
+    let state = session.drive().await?;
+    assert_eq!(
+        state.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Failed)
+    );
+    let step = &state.root_turn().ok_or("missing turn")?.steps[0];
+    assert!(step.attempts.is_empty());
+    assert_eq!(
+        step.decision.as_ref().ok_or("missing decision")?.routes[0].rejection_reasons,
+        ["output_reservation_unsupported"]
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+async fn setup_capacity_routes(
+    limits: &[serde_json::Value],
+    responses: Vec<MockResponse>,
+) -> Result<(CoreSession, Arc<RecordingExecutor>, Arc<Harness>), Box<dyn std::error::Error>> {
+    let mut providers = serde_json::Map::new();
+    let mut endpoints = Vec::new();
+    for (index, limits) in limits.iter().enumerate() {
+        let provider = format!("candidate-{index}");
+        providers.insert(
+            provider.clone(),
+            json!({
+                "api_base":"https://example.invalid", "api_key":"fixture-secret",
+                "models":[{"id":"fixture-model", "capabilities":["tools"], "token_limits":limits}]
+            }),
+        );
+        endpoints.push(json!({"provider":provider,"service_id":"fixture-model"}));
+    }
+    let config = serde_json::from_value(json!({
+        "providers":providers, "models":{"fixture-model":{"endpoints":endpoints}}
+    }))?;
+    let table = bitrouter_sdk::config::ConfigRoutingTable::from_config(config);
+    let executor = Arc::new(RecordingExecutor {
+        mock: MockExecutor::new(responses),
+        agent_once: Mutex::new(Default::default()),
+        prompts: Mutex::new(Vec::new()),
+        calls: AtomicUsize::new(0),
+    });
+    let app = App::builder()
+        .language_model(|builder| {
+            builder
+                .routing_table(Arc::new(table))
+                .executor(executor.clone());
+        })
+        .build()?;
+    let harness = Arc::new(Harness::new(None, None));
+    let session = bind_app(Arc::new(app), harness.clone()).await?;
+    Ok((session, executor, harness))
+}
+
+#[tokio::test]
+async fn capacity_admission_skips_infeasible_routes_and_keeps_fallback_identity() -> TestResult {
+    let (session, executor, harness) = setup_capacity_routes(
+        &[
+            json!({"max_output_tokens":127}),
+            json!({"max_output_tokens":128,"max_input_tokens":2048,"context_window":4096}),
+            json!({"max_output_tokens":1000,"context_window":128}),
+            json!({"max_output_tokens":256,"max_input_tokens":1}),
+        ],
+        vec![
+            MockResponse::Error(bitrouter_sdk::BitrouterError::Upstream {
+                status: 503,
+                message: "retry fixture".into(),
+            }),
+            output(vec![text("admitted fallback")]),
+        ],
+    )
+    .await?;
+    let mut task = input();
+    task.max_output_tokens = Some(128);
+    session
+        .start("input", session.head().await.state_revision, task)
+        .await?;
+    let state = session.drive().await?;
+    assert_eq!(
+        state.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    let step = &state.root_turn().ok_or("missing turn")?.steps[0];
+    let plan = step.plan.as_ref().ok_or("missing plan")?;
+    let decision = step.decision.as_ref().ok_or("missing decision")?;
+    assert_eq!(plan.routes.len(), 4);
+    assert_eq!(
+        decision.routes[0].rejection_reasons,
+        ["output_limit_exceeded"]
+    );
+    assert_eq!(
+        decision.routes[2].rejection_reasons,
+        ["context_window_exhausted_by_output"]
+    );
+    assert_eq!(
+        step.attempts
+            .iter()
+            .map(|attempt| attempt.index)
+            .collect::<Vec<_>>(),
+        [1, 3]
+    );
+    assert_eq!(decision.context.output_allowance, Some(128));
+    assert_eq!(decision.context.estimated_input_tokens, None);
+    for attempt in &step.attempts {
+        let receipt = attempt.receipt.as_ref().ok_or("missing attempt receipt")?;
+        assert_eq!(receipt.report.route, plan.routes[attempt.index as usize]);
+        assert_eq!(
+            receipt.report.route.constraints.source.as_deref(),
+            Some("provider_model_config")
+        );
+        assert!(
+            decision.routes[attempt.index as usize]
+                .unverified_constraints
+                .contains(&"input_token_count_unknown".into())
+        );
+    }
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+    assert!(
+        executor
+            .prompts
+            .lock()
+            .await
+            .iter()
+            .all(|prompt| prompt.params.max_tokens == Some(128))
+    );
+    let kinds = harness.committed_kinds().await?;
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| kind.as_str() == "model.attempt.intent")
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn all_infeasible_capacity_candidates_are_durably_rejected() -> TestResult {
+    let (session, executor, _) = setup_capacity_routes(
+        &[
+            json!({"max_output_tokens":4095}),
+            json!({"max_input_tokens":0}),
+        ],
+        vec![output(vec![text("must not run")])],
+    )
+    .await?;
+    session
+        .start("input", session.head().await.state_revision, input())
+        .await?;
+    let state = session.drive().await?;
+    assert_eq!(
+        state.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Failed)
+    );
+    let step = &state.root_turn().ok_or("missing turn")?.steps[0];
+    assert!(step.attempts.is_empty());
+    let application = step.application.as_ref().ok_or("missing application")?;
+    assert!(matches!(
+        application.disposition,
+        bitrouter_orchestrator::core::routing::ApplicationDisposition::Rejected
+    ));
+    assert_eq!(
+        application.reason.as_ref().map(|reason| reason.code),
+        Some(ErrorCode::NoFeasibleRoute)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn output_reservation_cannot_be_removed_or_rewritten_by_preparation() -> TestResult {
+    for override_tokens in [None, Some(1), Some(8192)] {
+        let table = StaticRoutingTable::new();
+        table.insert("fixture-model", vec![target("first")]);
+        let executor = Arc::new(RecordingExecutor {
+            mock: MockExecutor::always_text("must not run"),
+            agent_once: Mutex::new(Default::default()),
+            prompts: Mutex::new(Vec::new()),
+            calls: AtomicUsize::new(0),
+        });
+        let app = App::builder()
+            .language_model(|builder| {
+                builder
+                    .routing_table(Arc::new(table))
+                    .executor(executor.clone());
+            })
+            .prompt_transform(Arc::new(ChangeOutputReservation(override_tokens)))
+            .build()?;
+        let session = bind_app(Arc::new(app), Arc::new(Harness::new(None, None))).await?;
+        let mut task = input();
+        task.max_output_tokens = Some(128);
+        session
+            .start("input", session.head().await.state_revision, task)
+            .await?;
+        let state = session.drive().await?;
+        assert_eq!(
+            state.run.as_ref().map(|run| run.status),
+            Some(RunStatus::Failed)
+        );
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+        let step = &state.root_turn().ok_or("missing turn")?.steps[0];
+        assert!(
+            step.application
+                .as_ref()
+                .and_then(|application| application.reason.as_ref())
+                .is_some_and(|reason| reason.message.contains("output reservation"))
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn zero_output_is_rejected_and_omission_reserves_an_explicit_default() -> TestResult {
+    let (session, executor, _) = setup(
+        vec![output(vec![text("done")])],
+        Arc::new(Harness::new(None, None)),
+        false,
+    )
+    .await?;
+    let before = session.head().await;
+    let mut task = input();
+    task.max_output_tokens = Some(0);
+    assert_eq!(
+        session
+            .start("zero", before.state_revision, task)
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::NoFeasibleRoute)
+    );
+    assert_eq!(session.head().await, before);
+    session
+        .start("default", before.state_revision, input())
+        .await?;
+    let state = session.drive().await?;
+    assert_eq!(
+        executor.prompts.lock().await[0].params.max_tokens,
+        Some(4096)
+    );
+    let decision = state.root_turn().ok_or("missing turn")?.steps[0]
+        .decision
+        .as_ref()
+        .ok_or("missing decision")?;
+    assert_eq!(decision.context.output_allowance, Some(4096));
+    assert!(
+        decision.routes[0]
+            .unverified_constraints
+            .contains(&"output_limit_unknown".into())
+    );
+    Ok(())
+}
+
 impl bitrouter_sdk::app::PromptTransform for RemoveRequiredContext {
     fn apply(&self, prompt: &mut Prompt) {
         if self.0 {
@@ -616,6 +918,7 @@ async fn fresh_child_keeps_user_constraints_and_inherited_child_refreshes_materi
             .await?;
         let mut task = input();
         task.text = "Root instruction sentinel: never change workspace files".into();
+        task.max_output_tokens = Some(128);
         let root = session
             .start("input", session.head().await.state_revision, task.clone())
             .await?
@@ -648,6 +951,7 @@ async fn fresh_child_keeps_user_constraints_and_inherited_child_refreshes_materi
         let prompts = executor.prompts.lock().await;
         assert_eq!(prompts.len(), 2);
         let child_prompt = &prompts[1];
+        assert_eq!(child_prompt.params.max_tokens, Some(128));
         assert!(
             child_prompt
                 .system
@@ -709,6 +1013,7 @@ fn target(provider: &str) -> RoutingTarget {
         chat_supports_store: None,
         chat_supports_stream_options: None,
         reasoning_effort: None,
+        model_constraints: Default::default(),
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -722,6 +1027,7 @@ fn input() -> TaskInput {
         text: "Inspect the file and report the result".into(),
         model: "fixture-model".into(),
         effort: None,
+        max_output_tokens: None,
         routing: RoutingSettings::default(),
         acceptance_criteria: vec!["Use the actual tool result".into()],
         required_materials: Vec::new(),

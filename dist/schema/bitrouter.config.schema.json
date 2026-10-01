@@ -821,6 +821,43 @@
       },
       "type": "object"
     },
+    "ModelTokenLimits": {
+      "additionalProperties": false,
+      "description": "Independently declared token limits. An input limit is not a combined\ncontext window, and an absent limit is unknown rather than unbounded.",
+      "properties": {
+        "context_window": {
+          "default": null,
+          "description": "Combined input and output capacity, only when explicitly known.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_input_tokens": {
+          "default": null,
+          "description": "Maximum input tokens, independently of the output allowance.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_output_tokens": {
+          "default": null,
+          "description": "Maximum generated tokens for one request.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "NativeCheckerConfig": {
       "additionalProperties": false,
       "description": "Startup identity for trusted, compiled-in request-check code.",
@@ -1433,6 +1470,15 @@
           ],
           "default": null,
           "description": "Positively verified qualitative effort levels for this exact route.\nAbsence means unknown, not unsupported."
+        },
+        "token_limits": {
+          "$ref": "#/$defs/ModelTokenLimits",
+          "default": {
+            "context_window": null,
+            "max_input_tokens": null,
+            "max_output_tokens": null
+          },
+          "description": "Concrete route token limits. Missing fields remain unknown. In\nparticular, an input limit does not imply a combined context window."
         }
       },
       "required": [
