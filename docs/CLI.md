@@ -48,24 +48,36 @@ without it verification is `not_requested`. `--effort`, `--workspace`, and
 requests. `--read-only` restricts the entire task to inspection tools and
 cannot be combined with `--check`. Explicit remote contexts fail without local fallback.
 
-BRO coding tasks expose `read(path, offset?, limit?)`, `ls(path?, limit?)`,
-`find(pattern, path?, limit?)`, `grep(pattern, path?, glob?, ignoreCase?, literal?, limit?)`,
-`write(path, content)`, `edit(path, edits[{oldText, newText}])`, and a shell
-tool: `bash(command, timeout?)` on Unix or `powershell(command, timeout?)` on Windows. Read-only
-tasks expose only `read`, `ls`, `find`, and `grep`. The server rejects other
-tool calls in that mode even if a model supplies one. File paths are relative
-to the selected workspace.
-`read` accepts UTF-8 files up to 2 MiB and returns at most 2,000 lines or
-50 KiB per call. `ls` includes dotfiles. `find` matches globs and `grep`
-searches regexes (or literal text); both respect `.gitignore`, skip symlinks,
-and return workspace-relative paths. Search results are bounded to 50 KiB;
-defaults are 500 directory entries, 1,000 paths, and 100 matches. `write`
+BRO coding tasks expose `read(path, offset?, limit?)`,
+`glob(pattern, path?, limit?)`, `grep(pattern, path?, glob?, ignoreCase?, literal?, limit?)`,
+`write(path, content)`, `edit(path, edits[{oldText, newText}])`, and
+`shell(command, timeout?)` on Unix and Windows. Read-only tasks expose only
+`read`, `glob`, and `grep`; the server rejects other tool calls in that mode.
+Paths are relative to the selected workspace; `read` accepts `"."` for its root.
+
+`read` accepts UTF-8 files up to 2 MiB or lists one directory, including hidden
+and ignored entries. `offset` is one-based and counts lines or directory entries.
+File pages default to 2,000 lines; directory pages default to 500 entries;
+`limit` accepts 1 through 2,000. Results include type headers, indexed content,
+and an explicit continuation offset, within 50 KiB including metadata.
+Directory names are quoted/escaped, sorted deterministically, and directories
+end with `/`; child symlinks are listed without following them. Pages across
+calls are not a filesystem snapshot.
+`glob` searches file/directory paths and `grep` searches regexes (or literal
+text); both preserve project ignore filtering and skip child symlinks. Default
+search limits are 1,000 paths and 100 matches, with bounded output. `write`
 creates parent directories and overwrites files.
 Every `edit` replacement must identify one unique, nonoverlapping span in the
 original file; the whole edit fails if any span is invalid. It preserves
 untouched text, a UTF-8 BOM, and the file's line-ending style. Shell commands start
 in the workspace, default to a 30-second timeout, and accept at most 120
-seconds. The workspace path check is not an OS sandbox for shell commands.
+seconds. The server selects Bash (or `sh` if unavailable) on Unix, and `pwsh`
+(or `powershell.exe`) on Windows before model sampling. The tool description
+identifies the selected executable/dialect; all calls and `--check` use it.
+Launch failures never retry a command under another interpreter. Coding tasks
+require an available interpreter; read-only tasks do not. Legacy `ls`, `find`,
+`bash`, and `powershell` tool calls are rejected; historical records retain their
+original names. The workspace path check is not an OS sandbox for shell commands.
 
 `bro run <agent>` remains the separate ACP harness path. The native task
 service never imports a harness-native transcript as a BRO task.
@@ -861,7 +873,7 @@ bro --context <name> code
 Bare local `code` opens BRO's native task view. It chooses a model from
 `--model` or `chat.model`, or asks for one in the editor. Enter submits a new
 task to the server; `--task-id` reattaches to a saved task without replaying
-effects. The view shows assistant text and `bash` output as they arrive, then
+effects. The view shows assistant text and `shell` output as they arrive, then
 projects complete assistant and tool events. It answers a pending tool
 request with `y` or `n`, requests cancellation with Ctrl-C, and detaches with
 Ctrl-D. `--check` supplies a bounded project verification command for newly

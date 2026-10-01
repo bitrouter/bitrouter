@@ -18,8 +18,8 @@ use crate::context;
 use crate::store::{CallRecord, CommitRequest, EffectStatus, ExecutionRecord};
 use crate::tools::WorkspaceTools;
 
-const DEFAULT_INSTRUCTIONS: &str = "You are BRO, a coding agent. Work in the selected server workspace. Use read, ls, find, and grep to inspect code; use write and edit to change it, and the available shell tool to run commands and checks. For edit, supply unique oldText values from the original file. Report what actually happened; do not claim a check passed unless its tool result shows it.";
-const READ_ONLY_INSTRUCTIONS: &str = "You are BRO, a read-only coding agent. Inspect the selected server workspace using read, ls, find, and grep. Do not change files or run commands. Report what you actually observed.";
+const DEFAULT_INSTRUCTIONS: &str = "You are BRO, a coding agent. Work in the selected server workspace. Use read, glob, and grep to inspect code; use write and edit to change it, and the shell tool to run commands and checks. For edit, supply unique oldText values from the original file. Report what actually happened; do not claim a check passed unless its tool result shows it.";
+const READ_ONLY_INSTRUCTIONS: &str = "You are BRO, a read-only coding agent. Inspect the selected server workspace using read, glob, and grep. Do not change files or run commands. Report what you actually observed.";
 const MAX_MODEL_CONTENT_BYTES: usize = 512 * 1024;
 const MAX_LIVE_DELTAS: usize = 8_192;
 
@@ -367,6 +367,10 @@ impl Agent {
         &self.config.model
     }
 
+    pub(crate) fn workspace_tools(&self) -> WorkspaceTools {
+        self.tools.clone()
+    }
+
     pub fn new(
         app: Arc<App>,
         caller: CallerContext,
@@ -384,7 +388,8 @@ impl Agent {
         if config.max_spend_microusd.is_some() && config.estimate_rates.is_none() {
             return Err("a spend bound requires explicit estimate rates".into());
         }
-        let tools = WorkspaceTools::new(workspace).map_err(|error| error.to_string())?;
+        let tools =
+            WorkspaceTools::new(workspace, config.tool_mode).map_err(|error| error.to_string())?;
         Ok(Self {
             app,
             caller,
@@ -438,7 +443,7 @@ impl Agent {
                 self.config.effort,
                 &self.config.instructions,
                 &report.messages,
-                WorkspaceTools::declarations(self.config.tool_mode),
+                self.tools.declarations(),
                 self.config.max_context_bytes,
             ) {
                 Ok(prompt) => prompt,
@@ -1069,7 +1074,11 @@ mod tests {
             .collect();
         assert_eq!(
             outputs,
-            ["L1: first.txt\n", "L1: second.txt\n", "L1: third.txt\n"]
+            [
+                "File \"first.txt\"\nL1: first.txt\n",
+                "File \"second.txt\"\nL1: second.txt\n",
+                "File \"third.txt\"\nL1: third.txt\n"
+            ]
         );
         assert!(ids.contains("provider-3"));
         let prompt = context::build(
@@ -1077,7 +1086,7 @@ mod tests {
             None,
             "inspect",
             &report.messages,
-            WorkspaceTools::declarations(ToolMode::ReadOnly),
+            agent.tools.declarations(),
             512 * 1024,
         )?;
         let replay = adapter.render_request(&prompt)?;
@@ -1101,7 +1110,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ordered_read_edit_bash_then_final_answer() -> Result<(), Box<dyn std::error::Error>> {
+    async fn ordered_read_edit_shell_then_final_answer() -> Result<(), Box<dyn std::error::Error>> {
         let workspace = TempDir::new()?;
         std::fs::write(workspace.path().join("note.txt"), "old\n")?;
         let agent = agent(
@@ -1119,7 +1128,7 @@ mod tests {
                 ]),
                 turn(vec![call(
                     "check-1",
-                    "bash",
+                    "shell",
                     serde_json::json!({"command":"echo checked"}),
                 )]),
                 turn(vec![text("Changed the note and ran a check.")]),
@@ -1146,19 +1155,19 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(names, ["read", "edit", "bash"]);
+        assert_eq!(names, ["read", "edit", "shell"]);
         assert_eq!(report.messages.len(), 7);
         assert!(matches!(
             &report.messages[2].content[0],
             Content::ToolResult { call_id, output: ToolResultOutput::Text { value }, .. }
-                if call_id == "read-1" && value == "L1: old\n"
+                if call_id == "read-1" && value == "File \"note.txt\"\nL1: old\n"
         ));
         let rebuilt = context::build(
             "fixture-model",
             None,
             "fixture instructions",
             &report.messages,
-            WorkspaceTools::declarations(ToolMode::Coding),
+            agent.tools.declarations(),
             512 * 1024,
         )
         .map_err(std::io::Error::other)?;
@@ -1238,7 +1247,7 @@ mod tests {
                     ),
                     call(
                         "shell",
-                        if cfg!(windows) { "powershell" } else { "bash" },
+                        "shell",
                         serde_json::json!({"command":"touch created.txt"}),
                     ),
                 ]),
@@ -1246,7 +1255,7 @@ mod tests {
             ],
             |config| *config = AgentConfig::fixed("fixture-model", None).read_only(),
         )?;
-        let tools = WorkspaceTools::declarations(agent.config.tool_mode());
+        let tools = agent.tools.declarations();
         let names = tools
             .iter()
             .filter_map(|tool| match tool {
@@ -1254,7 +1263,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(names, ["read", "ls", "find", "grep"]);
+        assert_eq!(names, ["read", "glob", "grep"]);
         let (approvals, mut approval_requests) = mpsc::channel(64);
         let report = agent
             .run_with_approvals(

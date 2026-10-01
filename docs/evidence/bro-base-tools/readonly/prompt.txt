@@ -1,0 +1,1 @@
+Inspect this Python project in read-only mode. Start with a paginated read of the root directory using limit=2 and follow the next offset; use glob to discover Python files and grep to locate total(). Read the implementation and tests and report the bug and their expectations. Do not modify files or run commands.

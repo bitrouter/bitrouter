@@ -4,7 +4,7 @@
 
 | Command | Behavior |
 | --- | --- |
-| `bro task run <prompt> --model ID [--effort EFFORT] [--check COMMAND\|--read-only] [--workspace PATH] [-c PATH]` | Connect to or start the local BRO task server, stream accepted/snapshot/event/terminal NDJSON, and exit nonzero for failed, cancelled, or interrupted tasks. The local headless client approves its own tool requests. `--read-only` permits only `read`, `ls`, `find`, and `grep`, with no verification command. Without `--check`, verification is `not_requested`. Explicit remote contexts are rejected without local fallback. This is distinct from ACP `bro run <agent>`. |
+| `bro task run <prompt> --model ID [--effort EFFORT] [--check COMMAND\|--read-only] [--workspace PATH] [-c PATH]` | Connect to or start the local BRO task server, stream accepted/snapshot/event/terminal NDJSON, and exit nonzero for failed, cancelled, or interrupted tasks. The local headless client approves its own tool requests. `--read-only` permits only `read`, `glob`, and `grep`, with no verification command. Without `--check`, verification is `not_requested`. Explicit remote contexts are rejected without local fallback. This is distinct from ACP `bro run <agent>`. |
 
 The local task socket is a sibling of the daemon control socket with a
 version 5 capabilities handshake bound to a server instance. Local requests
@@ -270,14 +270,20 @@ See `references/sessions.md` for the controller/native-session boundary and what
 
 Bare `bro code` is BRO's native task view. It streams assistant text and live
 shell output through transient task snapshots; complete turns and tool results
-remain in the durable event journal. Coding tools are `read` (UTF-8 text),
-`ls` (directory entries), `find` (glob paths), `grep` (regex or literal text),
-`write` (create/overwrite), `edit` (unique `oldText`/`newText` replacements),
-and `bash` on Unix or `powershell` on Windows (`command`, optional timeout in
-seconds). Search tools respect `.gitignore` and output limits. New tasks started
-with `--read-only` expose only `read`, `ls`, `find`, and `grep`; the server also
-rejects an unadvertised effectful call. The local task socket contract is
-version 3; restart an older daemon before connecting.
+remain in the durable event journal. Coding tools are `read` (UTF-8 file text or one directory), `glob` (file/directory
+paths), `grep` (regex or literal text), `write` (create/overwrite),
+`edit` (unique `oldText`/`newText` replacements), and `shell` (`command`, optional
+`timeout` in seconds) on Unix and Windows. `read` requires `path`; use `"."` for
+the workspace root. Optional one-based `offset` and `limit` count file lines or
+directory entries; default limits are 2000 lines/500 entries, maximum 2000.
+Directory listings include hidden/ignored children and quote names. Bounded
+results return an explicit continuation offset. `glob`/`grep` retain ignore
+filtering and symlink exclusions. Shell selection occurs on the server before
+sampling (Bash then sh; pwsh then powershell.exe), is declared to the model, and
+is shared by commands and verification. Launch failures never change dialects.
+New tasks with `--read-only` expose only `read`, `glob`, and `grep`; the server
+rejects effectful and legacy names. Historical calls are preserved. The local
+task socket contract is version 5; restart an older daemon before connecting.
 
 Explicit local `bro code <agent>` opens an ACP conversation.
 `bro code <agent>` asks the daemon supervisor to own the ACP controller from

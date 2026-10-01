@@ -56,6 +56,8 @@ pub enum VerificationStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationEvidence {
     pub command: String,
+    #[serde(default)]
+    pub interpreter: Option<serde_json::Value>,
     pub exit_status: Option<i32>,
     pub stdout: String,
     pub stderr: String,
@@ -261,7 +263,7 @@ pub enum Observation {
         catchup: Vec<TaskEvent>,
     },
     Event {
-        event: TaskEvent,
+        event: Box<TaskEvent>,
     },
 }
 
@@ -789,18 +791,10 @@ impl TaskService {
         let service = self.clone();
         let prompt = request.prompt;
         let verification_command = request.verification_command;
-        let workspace_for_worker = accepted.workspace.clone();
         let worker_id = task_id.clone();
         self.inner.workers.spawn(async move {
             service
-                .run_task(
-                    worker_id,
-                    agent,
-                    prompt,
-                    verification_command,
-                    workspace_for_worker,
-                    cancel,
-                )
+                .run_task(worker_id, agent, prompt, verification_command, cancel)
                 .await;
         });
         Ok(accepted)
@@ -931,7 +925,6 @@ impl TaskService {
         agent: Agent,
         prompt: String,
         verification_command: Option<String>,
-        workspace: PathBuf,
         cancel: CancellationToken,
     ) {
         if self
@@ -945,6 +938,7 @@ impl TaskService {
         let (event_tx, mut event_rx) = mpsc::channel(64);
         let (approval_tx, mut approval_rx) = mpsc::channel(1);
         let (commit_tx, mut commit_rx) = mpsc::channel::<CommitRequest>(1);
+        let verification_tools = agent.workspace_tools();
         let run_cancel = cancel.clone();
         let mut run = tokio::spawn(async move {
             agent
@@ -1042,7 +1036,7 @@ impl TaskService {
             let (verification, evidence) = if status == TaskStatus::Completed {
                 match verification_command {
                     Some(command) => {
-                        let evidence = verify(&workspace, command, &cancel).await;
+                        let evidence = verify(&verification_tools, command, &cancel).await;
                         let verification = if evidence.exit_status == Some(0)
                             && !evidence.timed_out
                             && evidence.error.is_none()
@@ -1341,7 +1335,9 @@ impl TaskService {
                 break;
             }
         }
-        let _ = record.publisher.send(Observation::Event { event });
+        let _ = record.publisher.send(Observation::Event {
+            event: Box::new(event),
+        });
         self.prune(state);
         Ok(())
     }
@@ -1446,12 +1442,13 @@ fn now_ms() -> u64 {
 }
 
 async fn verify(
-    workspace: &Path,
+    tools: &WorkspaceTools,
     command: String,
     cancel: &CancellationToken,
 ) -> VerificationEvidence {
     let mut evidence = VerificationEvidence {
         command: command.clone(),
+        interpreter: None,
         exit_status: None,
         stdout: String::new(),
         stderr: String::new(),
@@ -1460,20 +1457,13 @@ async fn verify(
         timed_out: false,
         error: None,
     };
-    let tools = match WorkspaceTools::new(workspace) {
-        Ok(tools) => tools,
-        Err(error) => {
-            evidence.error = Some(error.to_string());
-            return evidence;
-        }
-    };
     let arguments = serde_json::json!({"command": command, "timeout": 120}).to_string();
-    let shell = if cfg!(windows) { "powershell" } else { "bash" };
     match tools
-        .execute(shell, &arguments, cancel, "verification", None)
+        .execute("shell", &arguments, cancel, "verification", None)
         .await
     {
         ToolResultOutput::Json { value } => {
+            evidence.interpreter = value.get("interpreter").cloned();
             evidence.exit_status = value
                 .get("exit_status")
                 .and_then(serde_json::Value::as_i64)

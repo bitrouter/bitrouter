@@ -2,7 +2,7 @@
   "name": "bitrouter",
   "displayName": "BitRouter",
   "version": "0.1.0",
-  "description": "Route model calls and run BRO native coding tasks with transactional execution records on a background server. Bundles the BitRouter setup and operations skill, including ACP harnesses, request checks, and custom-host setup.",
+  "description": "Route model calls and run BRO native coding tasks with six base tools and transactional execution records on a background server. Bundles the BitRouter setup and operations skill, including ACP harnesses, request checks, and custom-host setup.",
   "author": { "name": "BitRouterAI" },
   "homepage": "https://bitrouter.ai",
   "repository": "https://github.com/bitrouter/bitrouter",

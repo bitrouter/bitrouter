@@ -54,3 +54,12 @@ This record does not authorize automatic replay. R1 records are recovery inputs;
 R4 must first establish old execution termination and effect status. Storage
 failure may leave uncommitted cleanup information; last durable facts remain
 the authority and the task stays blocked rather than claiming terminal success.
+
+## Six base tools follow-up
+
+The approved [six-tool contract](BRO_BASE_TOOLS_SPEC.md) is implemented locally.
+Its [acceptance record](BRO_BASE_TOOLS_ACCEPTANCE.md) covers full source checks,
+macOS real-model coding/read-only runs, and a controlled comparison with the
+preceding seven-tool Unix interface. Windows execution remains unverified.
+This tool slice does not complete R0–R6, continuous Threads, or restart recovery;
+the phase ledger and earlier pending gates above retain their scope.
