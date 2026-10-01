@@ -9,6 +9,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   and locally verified.** Safe local daemon handoff after a CLI upgrade: version and
   capability detection, idle-only restart, migration preflight, and truthful
   recovery states.
+- [`ORCHESTRATOR_CORE_SPEC.md`](ORCHESTRATOR_CORE_SPEC.md) — **v1.0, frozen
+  implementation contract; not implemented.** Core-owned model/context routing
+  and agent scheduling, harness-owned tools and durable state, managed
+  multi-agent API, recovery protocol, stages and acceptance criteria.
 - [`GUARDRAILS_EXTENSION.md`](GUARDRAILS_EXTENSION.md) — Independent input checker
   setup, migration boundaries, distribution and process-level validation.
 - [`GUARDRAILS_EXTENSION_ACCEPTANCE.md`](GUARDRAILS_EXTENSION_ACCEPTANCE.md) —
