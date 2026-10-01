@@ -2,7 +2,6 @@ use super::tests::{app, final_turn, tool_call, turn, wait_for};
 use super::*;
 use crate::thread::{
     ApprovalAnswer, CancelTurnRequest, ThreadRequest, ThreadSnapshot, ThreadTarget, TurnRequest,
-    WorkspaceGrant,
 };
 use crate::thread::{SteeringRequest, SteeringStatus};
 use bitrouter_sdk::language_model::Prompt;
@@ -945,7 +944,7 @@ async fn trusted_allow_effects_profile_runs_tools_and_verification_without_appro
             )]),
             final_turn(),
         ])?,
-        &[WorkspaceGrant {
+        &[crate::thread::WorkspaceGrant {
             workspace: workspace.path().to_path_buf(),
             permission_profiles: vec![PermissionProfile::AllowEffects],
         }],
