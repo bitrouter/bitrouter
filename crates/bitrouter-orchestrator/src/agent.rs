@@ -1187,10 +1187,19 @@ impl Agent {
             let run = tokio::spawn(async move {
                 let _permit = permit;
                 if ready.await.is_err() {
-                    return not_executed("tool dispatch was withdrawn");
+                    return (
+                        not_executed("tool dispatch was withdrawn"),
+                        EffectStatus::NotExecuted,
+                    );
                 }
                 tools
-                    .execute(&name, &arguments, &worker_cancel, &item_id, events.as_ref())
+                    .execute_with_effect(
+                        &name,
+                        &arguments,
+                        &worker_cancel,
+                        &item_id,
+                        events.as_ref(),
+                    )
                     .await
             });
             (start, run)
@@ -1223,17 +1232,17 @@ impl Agent {
             result = &mut run => (result, false),
             _ = tokio::time::sleep(remaining) => { cancel.cancel(); (run.await, true) },
         };
-        let output = output.unwrap_or_else(|error| ToolResultOutput::ErrorJson {
-            value: serde_json::json!({"error":format!("tool worker lost: {error}"),"worker_lost":true}),
-        });
-        let effect = if control.cancel.is_cancelled()
-            || expired
-            || matches!(output, ToolResultOutput::ErrorJson { .. })
-        {
-            EffectStatus::Unknown
-        } else {
-            EffectStatus::Completed
-        };
+        let (output, effect) = output.unwrap_or_else(|error| (
+            ToolResultOutput::ErrorJson {
+                value: serde_json::json!({"error":format!("tool worker lost: {error}"),"worker_lost":true}),
+            }, EffectStatus::Unknown,
+        ));
+        let effect =
+            if effect != EffectStatus::NotExecuted && (control.cancel.is_cancelled() || expired) {
+                EffectStatus::Unknown
+            } else {
+                effect
+            };
         Ok((output, effect))
     }
 

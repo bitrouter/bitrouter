@@ -1244,6 +1244,7 @@ struct ReaderGateStore {
     entered: tokio::sync::Notify,
     release: tokio::sync::Semaphore,
     blocked: std::sync::atomic::AtomicBool,
+    page_bounds: Option<(usize, usize)>,
 }
 
 #[async_trait::async_trait]
@@ -1304,6 +1305,14 @@ impl ExecutionStore for ReaderGateStore {
         limit: usize,
         bytes: usize,
     ) -> Result<Option<ExecutionPage>, String> {
+        if let Some((records, max_bytes)) = self.page_bounds {
+            if limit > records || bytes > max_bytes {
+                return Err("receipt read exceeded page bounds".into());
+            }
+            if after > 0 && cutoff.is_none() {
+                return Err("receipt read lost fixed cutoff".into());
+            }
+        }
         if after > 0 && !self.blocked.swap(true, Ordering::SeqCst) {
             self.entered.notify_one();
             self.release
@@ -1357,6 +1366,7 @@ async fn recovery_reader_limit_does_not_hold_admission_and_releases_after_loadin
         entered: tokio::sync::Notify::new(),
         release: tokio::sync::Semaphore::new(0),
         blocked: std::sync::atomic::AtomicBool::new(false),
+        page_bounds: None,
     });
     let service = TaskService::with_limits_and_store(
         app(vec![])?,
@@ -2590,6 +2600,192 @@ async fn recovered_verification_result_must_match_the_exact_committed_invocation
             .and_then(|task| task.settled.as_ref())
             .is_none()
     );
+    service.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn acceptance_retry_pages_share_reader_limits_without_holding_admission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let workspace = TempDir::new()?;
+    let memory = Arc::new(MemoryExecutionStore::default());
+    let store = Arc::new(ReaderGateStore {
+        memory: memory.clone(),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+        blocked: std::sync::atomic::AtomicBool::new(false),
+        page_bounds: Some((2, 64 * 1024)),
+    });
+    let service = TaskService::with_limits_and_store(
+        app(vec![final_turn()])?,
+        &[workspace.path().into()],
+        RuntimeLimits {
+            recovery_readers: 1,
+            recovery_page_records: 2,
+            recovery_page_bytes: 64 * 1024,
+            ..RuntimeLimits::default()
+        },
+        store.clone(),
+    )?;
+    let created = service
+        .create_thread(
+            &service.inner.instance_id,
+            thread_request(&workspace, "retry-thread"),
+        )
+        .await?;
+    let target = target(&created);
+    let first = service
+        .start_turn(
+            &target,
+            &CallerContext::local(),
+            input("first", "retry-turn"),
+        )
+        .await?;
+    wait_for(&service, &first.turn_id, TaskStatus::Completed).await?;
+    let cloned = service.clone();
+    let retry_target = target.clone();
+    let retry = tokio::spawn(async move {
+        cloned
+            .start_turn(
+                &retry_target,
+                &CallerContext::local(),
+                input("first", "retry-turn"),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), store.entered.notified()).await?;
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        service.start_turn(
+            &target,
+            &CallerContext::local(),
+            input("first", "retry-turn"),
+        ),
+    )
+    .await?
+    .err()
+    .ok_or("retry exceeded reader capacity")?;
+    assert_eq!(error.code, ErrorCode::Overloaded);
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        service.create_thread(
+            &service.inner.instance_id,
+            thread_request(&workspace, "unrelated-thread"),
+        ),
+    )
+    .await??;
+    store.release.add_permits(1);
+    let receipt = tokio::time::timeout(Duration::from_secs(2), retry).await???;
+    assert_eq!(receipt.turn_id, first.turn_id);
+    assert_eq!(receipt.queue_order, first.queue_order);
+    assert_eq!(receipt.status, TaskStatus::Completed);
+    let reader = service.inner.recovery_readers.try_acquire()?;
+    drop(reader);
+    service.shutdown().await;
+    // A cold create retry uses the same bounded scan rather than load().
+    let cold = TaskService::with_limits_and_store(
+        app(vec![])?,
+        &[workspace.path().into()],
+        RuntimeLimits {
+            recovery_page_records: 2,
+            recovery_page_bytes: 64 * 1024,
+            ..RuntimeLimits::default()
+        },
+        store.clone(),
+    )?;
+    let snapshot = cold
+        .create_thread(
+            &cold.inner.instance_id,
+            thread_request(&workspace, "retry-thread"),
+        )
+        .await?;
+    assert_eq!(snapshot.thread_id, created.thread_id);
+    assert_eq!(snapshot.status, ThreadStatus::RecoveryRequired);
+    let bounded = TaskService::with_limits_and_store(
+        app(vec![])?,
+        &[workspace.path().into()],
+        RuntimeLimits {
+            recovery_records_per_thread: 1,
+            ..RuntimeLimits::default()
+        },
+        memory,
+    )?;
+    assert_eq!(
+        bounded
+            .start_turn(
+                &crate::thread::ThreadTarget {
+                    thread_id: created.thread_id,
+                    server_instance_id: bounded.inner.instance_id.clone()
+                },
+                &CallerContext::local(),
+                input("first", "retry-turn")
+            )
+            .await
+            .err()
+            .ok_or("retry exceeded scan bound")?
+            .code,
+        ErrorCode::Overloaded
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn steering_retries_use_bounded_receipt_pages() -> Result<(), Box<dyn std::error::Error>> {
+    let workspace = TempDir::new()?;
+    let store = Arc::new(ReaderGateStore {
+        memory: Arc::new(MemoryExecutionStore::default()),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+        blocked: std::sync::atomic::AtomicBool::new(true),
+        page_bounds: Some((2, 64 * 1024)),
+    });
+    let service = TaskService::with_limits_and_store(
+        app(vec![
+            turn(vec![tool_call(
+                "approval",
+                "write",
+                serde_json::json!({"path":"note.txt","content":"must not write"}),
+            )]),
+            final_turn(),
+        ])?,
+        &[workspace.path().into()],
+        RuntimeLimits {
+            recovery_page_records: 2,
+            recovery_page_bytes: 64 * 1024,
+            ..RuntimeLimits::default()
+        },
+        store,
+    )?;
+    let created = service
+        .create_thread(
+            &service.inner.instance_id,
+            thread_request(&workspace, "steer-thread"),
+        )
+        .await?;
+    let target = target(&created);
+    let accepted = service
+        .start_turn(
+            &target,
+            &CallerContext::local(),
+            input("work", "steer-turn"),
+        )
+        .await?;
+    wait_for(&service, &accepted.turn_id, TaskStatus::WaitingForInput).await?;
+    let request = || SteeringRequest {
+        expected_turn_id: accepted.turn_id.clone(),
+        text: "inspect instead".into(),
+        idempotency_key: "correction".into(),
+    };
+    let first = service
+        .steer(&target, &CallerContext::local(), request())
+        .await?;
+    let repeated = service
+        .steer(&target, &CallerContext::local(), request())
+        .await?;
+    assert_eq!(first.input_id, repeated.input_id);
+    assert_eq!(first.order, repeated.order);
+    assert_eq!(service.read(&accepted.turn_id)?.steering.len(), 1);
+    assert!(!workspace.path().join("note.txt").exists());
     service.shutdown().await;
     Ok(())
 }

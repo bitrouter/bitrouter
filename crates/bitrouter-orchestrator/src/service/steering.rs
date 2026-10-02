@@ -14,44 +14,25 @@ impl TaskService {
         &self,
         key: &crate::store::AcceptedKey,
     ) -> Result<SteeringReceipt, ServiceError> {
-        let saved = self
-            .inner
-            .store
-            .load(&key.thread_id)
-            .await
-            .map_err(|error| ServiceError::new(ErrorCode::StorageUnavailable, error))?
-            .ok_or_else(super::threads::unknown_thread)?;
-        let snapshot = saved
-            .records
-            .iter()
-            .rev()
-            .find_map(|fact| match fact {
-                ExecutionRecord::ThreadCreated { snapshot, .. }
-                | ExecutionRecord::ThreadCheckpoint { snapshot, .. } => Some(snapshot),
-                _ => None,
-            })
-            .ok_or_else(super::threads::unknown_thread)?;
-        self.check_snapshot_grant(snapshot)?;
         let mut receipt = None;
-        for fact in saved.records {
-            match fact {
-                ExecutionRecord::SteeringReceived {
-                    receipt: current,
-                    key: current_key,
-                    ..
-                } if current_key == key.key && Some(&current.turn_id) == key.turn_id.as_ref() => {
-                    receipt = Some(current)
-                }
-                ExecutionRecord::SteeringResolved { receipt: current }
-                    if receipt.as_ref().is_some_and(|previous: &SteeringReceipt| {
-                        previous.input_id == current.input_id
-                    }) =>
-                {
-                    receipt = Some(current)
-                }
-                _ => {}
+        self.scan_receipt(&key.thread_id, |fact| match fact {
+            ExecutionRecord::SteeringReceived {
+                receipt: current,
+                key: current_key,
+                ..
+            } if current_key == key.key && Some(&current.turn_id) == key.turn_id.as_ref() => {
+                receipt = Some(current)
             }
-        }
+            ExecutionRecord::SteeringResolved { receipt: current }
+                if receipt.as_ref().is_some_and(|previous: &SteeringReceipt| {
+                    previous.input_id == current.input_id
+                }) =>
+            {
+                receipt = Some(current)
+            }
+            _ => {}
+        })
+        .await?;
         receipt.ok_or_else(|| "accepted steering identity is missing".into())
     }
 
@@ -62,7 +43,7 @@ impl TaskService {
         request: SteeringRequest,
     ) -> Result<SteeringReceipt, ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
-        let _admission = self.inner.admission.lock().await;
+        let admission = self.inner.admission.lock().await;
         let scope = key_scope(
             caller,
             Some(&target.thread_id),
@@ -74,6 +55,7 @@ impl TaskService {
             .accepted_key(&scope, &request.idempotency_key, &hash)
             .await?
         {
+            drop(admission);
             return self.existing_steering(&key).await;
         }
         self.read_thread(target, caller)?;

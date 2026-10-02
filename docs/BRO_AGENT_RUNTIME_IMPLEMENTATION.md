@@ -72,7 +72,11 @@ the new C0–C6 core stages or infer approval to build a second scheduling autho
 - The state owner commits each result as it arrives. The model receives settled
   tool messages in original call order, including explicit unstarted results.
   Ordinary read errors stop further launches, collect in-flight work, then may
-  be fed back in the next model step.
+  be fed back in the next model step. Exclusive tools also return typed effect
+  evidence: argument/path/edit-match rejections before mutation are NotExecuted
+  and can be corrected in the next step. Temporary writes, directory creation,
+  spawned-command failures, interrupted commands and lost workers remain Unknown
+  until the operation returns a confirmed completed outcome.
 - Cancellation, duration and store failures seal launches. Started futures are
   awaited rather than dropped, including their blocking workers and shell
   cleanup. Permits are released only after the worker returns.
@@ -225,6 +229,11 @@ the new C0–C6 core stages or infer approval to build a second scheduling autho
   without allowing stale answers. Cancelled and shutdown-paused FIFO stays paused.
   The recovered view participates in existing history/observation; public events
   retain their original epoch while the snapshot uses the current envelope.
+- Accepted Thread, Turn and steering retries resolve receipts from authoritative
+  fixed-cutoff record pages without retaining model contexts or checkpoints.
+  These scans share recovery reader, page count/byte and per-Thread record bounds.
+  Admission and Thread commit locks are released before retry scans, so a slow
+  receipt reader cannot block unrelated admissions or controls.
 - Loading remains an inspection gate. Explicit recovery, store fencing, shared
   workspace exclusion and startup discovery are separate operations below.
   Lost-owner investigation and operator resolution remain deferred; local
@@ -477,6 +486,21 @@ in the development worktree. The validation-ledger follow-up changes docs only.
   no replay. Their source service was actually joined; a copied prefix is not a
   process-crash proof. Unknown owner/effect/usage records remain blocked as the
   user requested, pending host investigation/proof.
+
+### Private-review follow-up validation (2026-10-02)
+
+- Five regressions cover pre-mutation tool rejection, conservative persistence
+  failure evidence, corrected edits with stopped-owner transfer, bounded receipt
+  paging/reader admission (including cold receipts and record limits), and
+  once-only steering retries. Existing process-loss and interrupted-effect tests
+  continue to pass.
+- From the isolated follow-up checkout on macOS/Rust 1.97.0:
+  `cargo nextest run --workspace --all-features --no-fail-fast` passed **3,682
+  tests**, with **22 skipped**; workspace doc tests passed **5**, with **1
+  ignored**; strict workspace/all-targets Clippy, formatting and diff checks passed.
+- Builds used dev/test debug=0 and incremental=0. This is local evidence;
+  credentialed-provider, Windows execution and production durability gates remain
+  separate. Hosted CI for this follow-up is not included in these results.
 
 ### Earlier implementation evidence
 

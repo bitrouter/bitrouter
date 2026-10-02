@@ -144,6 +144,87 @@ impl TaskService {
         Ok(entry)
     }
 
+    /// Resolve only receipt metadata; never materialize the full journal or
+    /// hold the admission mutex while paging historical execution facts.
+    pub(super) async fn scan_receipt(
+        &self,
+        thread_id: &str,
+        mut consume: impl FnMut(ExecutionRecord),
+    ) -> Result<(ThreadSnapshot, u64), ServiceError> {
+        let _reader = self.inner.recovery_readers.try_acquire().map_err(|_| {
+            ServiceError::new(ErrorCode::Overloaded, "recovery reader capacity is full")
+        })?;
+        let mut after = 0_u64;
+        let mut cutoff = None;
+        let mut snapshot = None;
+        loop {
+            let limit = if after == 0 {
+                1
+            } else {
+                self.inner.limits.recovery_page_records
+            };
+            let page = self
+                .inner
+                .store
+                .read_records(
+                    thread_id,
+                    after,
+                    cutoff,
+                    limit,
+                    self.inner.limits.recovery_page_bytes,
+                )
+                .await
+                .map_err(|error| ServiceError::new(ErrorCode::StorageUnavailable, error))?
+                .ok_or_else(unknown_thread)?;
+            if page.cutoff == 0 || page.cutoff > self.inner.limits.recovery_records_per_thread {
+                return Err(ServiceError::new(
+                    ErrorCode::Overloaded,
+                    "receipt record scan bound exceeded",
+                ));
+            }
+            if cutoff.is_some_and(|cutoff| cutoff != page.cutoff)
+                || page.records.is_empty()
+                || page.records.len() > limit
+            {
+                return Err(ServiceError::new(
+                    ErrorCode::StorageUnavailable,
+                    "invalid receipt record page",
+                ));
+            }
+            cutoff = Some(page.cutoff);
+            after = after
+                .checked_add(page.records.len() as u64)
+                .ok_or("receipt cursor exhausted")?;
+            if after > page.cutoff || page.next_after != (after < page.cutoff).then_some(after) {
+                return Err(ServiceError::new(
+                    ErrorCode::StorageUnavailable,
+                    "invalid receipt page cursor",
+                ));
+            }
+            for record in page.records {
+                if let ExecutionRecord::ThreadCreated {
+                    snapshot: current, ..
+                }
+                | ExecutionRecord::ThreadCheckpoint {
+                    snapshot: current, ..
+                } = &record
+                {
+                    if current.thread_id != thread_id {
+                        return Err("receipt Thread identity mismatch".into());
+                    }
+                    self.check_snapshot_grant(current)?;
+                    snapshot = Some(current.clone());
+                }
+                consume(record);
+            }
+            if after == page.cutoff {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        Ok((snapshot.ok_or_else(unknown_thread)?, after))
+    }
+
     async fn existing_thread_receipt(
         &self,
         entry: &AcceptedKey,
@@ -155,29 +236,9 @@ impl TaskService {
                 return Ok(thread.snapshot.clone());
             }
         }
-        let stored = self
-            .inner
-            .store
-            .load(&entry.thread_id)
-            .await
-            .map_err(|error| ServiceError::new(ErrorCode::StorageUnavailable, error))?
-            .ok_or_else(unknown_thread)?;
-        let mut snapshot = None;
-        for record in &stored.records {
-            match record {
-                ExecutionRecord::ThreadCreated {
-                    snapshot: current, ..
-                }
-                | ExecutionRecord::ThreadCheckpoint {
-                    snapshot: current, ..
-                } => snapshot = Some(current.clone()),
-                _ => {}
-            }
-        }
-        let mut snapshot = snapshot.ok_or_else(unknown_thread)?;
-        self.check_snapshot_grant(&snapshot)?;
+        let (mut snapshot, version) = self.scan_receipt(&entry.thread_id, |_| {}).await?;
         snapshot.server_instance_id = self.inner.instance_id.clone();
-        snapshot.cursor = stored.version;
+        snapshot.cursor = version;
         snapshot.status = ThreadStatus::RecoveryRequired;
         snapshot.pause_reason =
             Some("stored Thread awaits execution ownership and effect recovery".into());
@@ -192,55 +253,36 @@ impl TaskService {
             .turn_id
             .as_ref()
             .ok_or("accepted turn identity missing")?;
-        let stored = self
-            .inner
-            .store
-            .load(&entry.thread_id)
-            .await
-            .map_err(|error| ServiceError::new(ErrorCode::StorageUnavailable, error))?
-            .ok_or_else(unknown_thread)?;
         let mut receipt = None;
-        let snapshot = stored
-            .records
-            .iter()
-            .rev()
-            .find_map(|record| match record {
-                ExecutionRecord::ThreadCreated { snapshot, .. }
-                | ExecutionRecord::ThreadCheckpoint { snapshot, .. } => Some(snapshot),
-                _ => None,
-            })
-            .ok_or_else(unknown_thread)?;
-        self.check_snapshot_grant(snapshot)?;
-        for record in stored.records {
-            match record {
-                ExecutionRecord::TurnQueued {
+        self.scan_receipt(&entry.thread_id, |record| match record {
+            ExecutionRecord::TurnQueued {
+                turn_id: id,
+                queue_order,
+                ..
+            } if &id == turn_id => {
+                receipt = Some(TurnReceipt {
+                    thread_id: entry.thread_id.clone(),
                     turn_id: id,
                     queue_order,
-                    ..
-                } if &id == turn_id => {
-                    receipt = Some(TurnReceipt {
-                        thread_id: entry.thread_id.clone(),
-                        turn_id: id,
-                        queue_order,
-                        status: TaskStatus::Queued,
-                    })
-                }
-                ExecutionRecord::TurnActivated { turn_id: id, .. } if &id == turn_id => {
-                    if let Some(receipt) = &mut receipt {
-                        receipt.status = TaskStatus::RecoveryRequired;
-                    }
-                }
-                ExecutionRecord::TurnRecord { turn_id: id, fact } if &id == turn_id => {
-                    if let ExecutionRecord::Event { event } = *fact
-                        && let TaskEventPayload::TaskFinished { status, .. } = event.payload
-                        && let Some(receipt) = &mut receipt
-                    {
-                        receipt.status = status;
-                    }
-                }
-                _ => {}
+                    status: TaskStatus::Queued,
+                })
             }
-        }
+            ExecutionRecord::TurnActivated { turn_id: id, .. } if &id == turn_id => {
+                if let Some(receipt) = &mut receipt {
+                    receipt.status = TaskStatus::RecoveryRequired;
+                }
+            }
+            ExecutionRecord::TurnRecord { turn_id: id, fact } if &id == turn_id => {
+                if let ExecutionRecord::Event { event } = *fact
+                    && let TaskEventPayload::TaskFinished { status, .. } = event.payload
+                    && let Some(receipt) = &mut receipt
+                {
+                    receipt.status = status;
+                }
+            }
+            _ => {}
+        })
+        .await?;
         let mut receipt = receipt.ok_or("accepted Turn admission missing")?;
         if let Some(task) = self.lock_state().tasks.get(turn_id) {
             receipt.status = task.snapshot.status;
@@ -254,7 +296,7 @@ impl TaskService {
         request: ThreadRequest,
     ) -> Result<ThreadSnapshot, ServiceError> {
         self.ensure_instance(Some(server_instance_id))?;
-        let _admission = self.inner.admission.lock().await;
+        let admission = self.inner.admission.lock().await;
         let scope = key_scope(
             &request.caller,
             None,
@@ -271,6 +313,7 @@ impl TaskService {
             .accepted_key(&scope, &request.idempotency_key, &hash)
             .await?
         {
+            drop(admission);
             return self.existing_thread_receipt(&entry).await;
         }
         let workspace = request
@@ -372,6 +415,7 @@ impl TaskService {
                     .accepted_key(&key.scope, &key.key, &key.fingerprint)
                     .await?
                 {
+                    drop(admission);
                     return self.existing_thread_receipt(&entry).await;
                 }
                 return Err(ServiceError::new(ErrorCode::StorageUnavailable, error));
@@ -448,7 +492,7 @@ impl TaskService {
         request: CancelTurnRequest,
     ) -> Result<TurnReceipt, ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
-        let _admission = self.inner.admission.lock().await;
+        let admission = self.inner.admission.lock().await;
         let scope = key_scope(
             caller,
             Some(&target.thread_id),
@@ -460,6 +504,7 @@ impl TaskService {
             .accepted_key(&scope, &request.idempotency_key, &hash)
             .await?
         {
+            drop(admission);
             return self.existing_turn_receipt(&key).await;
         }
         let gate = self.thread_gate(&target.thread_id)?;
@@ -481,6 +526,8 @@ impl TaskService {
         if let Some(task) = self.lock_state().tasks.get(&request.turn_id) {
             task.cancel.cancel();
         }
+        drop(_guard);
+        drop(admission);
         self.existing_turn_receipt(&key).await
     }
 
@@ -491,7 +538,7 @@ impl TaskService {
         answer: ApprovalAnswer,
     ) -> Result<TurnReceipt, ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
-        let _admission = self.inner.admission.lock().await;
+        let admission = self.inner.admission.lock().await;
         let scope = key_scope(
             caller,
             Some(&target.thread_id),
@@ -503,6 +550,7 @@ impl TaskService {
             .accepted_key(&scope, &answer.idempotency_key, &hash)
             .await?
         {
+            drop(admission);
             return self.existing_turn_receipt(&key).await;
         }
         let gate = self.thread_gate(&target.thread_id)?;
@@ -530,6 +578,8 @@ impl TaskService {
             &[ExecutionRecord::AcceptedKey { entry: key.clone() }],
         )
         .await?;
+        drop(_guard);
+        drop(admission);
         self.existing_turn_receipt(&key).await
     }
 
@@ -574,7 +624,7 @@ impl TaskService {
         idempotency_key: String,
     ) -> Result<TurnReceipt, ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
-        let _admission = self.inner.admission.lock().await;
+        let admission = self.inner.admission.lock().await;
         let scope = key_scope(
             caller,
             Some(&target.thread_id),
@@ -583,6 +633,7 @@ impl TaskService {
         )?;
         let hash = fingerprint(&turn_id)?;
         if let Some(entry) = self.accepted_key(&scope, &idempotency_key, &hash).await? {
+            drop(admission);
             return self.existing_turn_receipt(&entry).await;
         }
         let gate = self.thread_gate(&target.thread_id)?;
@@ -696,6 +747,7 @@ impl TaskService {
         let scope = key_scope(caller, Some(&target.thread_id), "resume", &idempotency_key)?;
         let hash = fingerprint(&target.thread_id)?;
         if let Some(entry) = self.accepted_key(&scope, &idempotency_key, &hash).await? {
+            drop(admission);
             return self.existing_thread_receipt(&entry).await;
         }
         let gate = self.thread_gate(&target.thread_id)?;
@@ -802,6 +854,7 @@ impl TaskService {
             .accepted_key(&scope, &request.idempotency_key, &hash)
             .await?
         {
+            drop(admission);
             return self.existing_turn_receipt(&entry).await;
         }
         if request.prompt.trim().is_empty()
@@ -965,6 +1018,8 @@ impl TaskService {
                 .accepted_key(&key.scope, &key.key, &key.fingerprint)
                 .await?
             {
+                drop(guard);
+                drop(admission);
                 return self.existing_turn_receipt(&entry).await;
             }
             return Err(error);

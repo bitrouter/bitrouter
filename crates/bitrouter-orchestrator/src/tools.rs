@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::{RunEvent, ToolMode};
+use crate::store::EffectStatus;
 
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_READ_BYTES: usize = 50 * 1024;
@@ -410,6 +411,20 @@ impl WorkspaceTools {
         tool_id: &str,
         live: Option<&mpsc::Sender<RunEvent>>,
     ) -> ToolResultOutput {
+        self.execute_with_effect(name, arguments, cancel, tool_id, live)
+            .await
+            .0
+    }
+
+    pub(crate) async fn execute_with_effect(
+        &self,
+        name: &str,
+        arguments: &str,
+        cancel: &CancellationToken,
+        tool_id: &str,
+        live: Option<&mpsc::Sender<RunEvent>>,
+    ) -> (ToolResultOutput, EffectStatus) {
+        let mut effect = EffectStatus::NotExecuted;
         let result = match ToolKind::named(name) {
             Some(kind @ (ToolKind::Read | ToolKind::Ls)) => {
                 let tools = self.clone();
@@ -462,18 +477,22 @@ impl WorkspaceTools {
             },
             Some(ToolKind::Write) => serde_json::from_str::<WriteArgs>(arguments)
                 .map_err(|error| format!("invalid write arguments: {error}"))
-                .and_then(|args| self.write(args)),
+                .and_then(|args| self.write(args, &mut effect)),
             Some(ToolKind::Edit) => serde_json::from_str::<EditArgs>(arguments)
                 .map_err(|error| format!("invalid edit arguments: {error}"))
-                .and_then(|args| self.edit(args)),
+                .and_then(|args| self.edit(args, &mut effect)),
             Some(ToolKind::Bash) => match serde_json::from_str::<BashArgs>(arguments) {
-                Ok(args) if !cfg!(windows) => self.shell(args, "bash", cancel, tool_id, live).await,
+                Ok(args) if !cfg!(windows) => {
+                    self.shell(args, "bash", cancel, tool_id, live, &mut effect)
+                        .await
+                }
                 Ok(_) => Err("bash requires a Bash shell; use powershell on Windows".into()),
                 Err(error) => Err(format!("invalid bash arguments: {error}")),
             },
             Some(ToolKind::Powershell) => match serde_json::from_str::<BashArgs>(arguments) {
                 Ok(args) if cfg!(windows) => {
-                    self.shell(args, "powershell", cancel, tool_id, live).await
+                    self.shell(args, "powershell", cancel, tool_id, live, &mut effect)
+                        .await
                 }
                 Ok(_) => Err("powershell is available only on Windows".into()),
                 Err(error) => Err(format!("invalid powershell arguments: {error}")),
@@ -481,10 +500,20 @@ impl WorkspaceTools {
             None => Err(format!("unknown tool: {name}")),
         };
         match result {
-            Ok(value) => value,
-            Err(error) => ToolResultOutput::ErrorJson {
-                value: serde_json::json!({"error": error}),
-            },
+            Ok(value) => (
+                value,
+                if effect == EffectStatus::NotExecuted {
+                    EffectStatus::Completed
+                } else {
+                    effect
+                },
+            ),
+            Err(error) => (
+                ToolResultOutput::ErrorJson {
+                    value: serde_json::json!({"error": error}),
+                },
+                effect,
+            ),
         }
     }
 
@@ -731,11 +760,15 @@ impl WorkspaceTools {
         Ok(ToolResultOutput::Text { value: output })
     }
 
-    fn write(&self, args: WriteArgs) -> Result<ToolResultOutput, String> {
+    fn write(
+        &self,
+        args: WriteArgs,
+        effect: &mut EffectStatus,
+    ) -> Result<ToolResultOutput, String> {
         if args.content.len() as u64 > MAX_FILE_BYTES {
             return Err("file exceeds the 2 MiB write limit".into());
         }
-        let path = self.writable_path(&args.path, true)?;
+        let path = self.writable_path(&args.path, true, effect)?;
         let original = if path.exists() {
             if fs::metadata(&path)
                 .map_err(|error| error.to_string())?
@@ -748,17 +781,18 @@ impl WorkspaceTools {
         } else {
             None
         };
-        persist_text(&path, args.content.as_bytes(), original.as_deref())?;
+        persist_text(&path, args.content.as_bytes(), original.as_deref(), effect)?;
+        *effect = EffectStatus::Completed;
         Ok(ToolResultOutput::Json {
             value: serde_json::json!({"path": args.path, "bytes": args.content.len()}),
         })
     }
 
-    fn edit(&self, args: EditArgs) -> Result<ToolResultOutput, String> {
+    fn edit(&self, args: EditArgs, effect: &mut EffectStatus) -> Result<ToolResultOutput, String> {
         if args.edits.is_empty() {
             return Err("edits must contain at least one replacement".into());
         }
-        let path = self.writable_path(&args.path, false)?;
+        let path = self.writable_path(&args.path, false, effect)?;
         let original_bytes = fs::read(&path).map_err(|error| error.to_string())?;
         if original_bytes.len() as u64 > MAX_FILE_BYTES {
             return Err("file exceeds the 2 MiB edit limit".into());
@@ -813,7 +847,8 @@ impl WorkspaceTools {
         if updated.len() as u64 > MAX_FILE_BYTES {
             return Err("edited file exceeds the 2 MiB limit".into());
         }
-        persist_text(&path, updated.as_bytes(), Some(&original_bytes))?;
+        persist_text(&path, updated.as_bytes(), Some(&original_bytes), effect)?;
+        *effect = EffectStatus::Completed;
         let diff = similar::TextDiff::from_lines(original, &updated)
             .unified_diff()
             .header(&format!("a/{}", args.path), &format!("b/{}", args.path))
@@ -834,6 +869,7 @@ impl WorkspaceTools {
         cancel: &CancellationToken,
         tool_id: &str,
         live: Option<&mpsc::Sender<RunEvent>>,
+        effect: &mut EffectStatus,
     ) -> Result<ToolResultOutput, String> {
         if args.command.trim().is_empty() {
             return Err("command must not be empty".into());
@@ -910,6 +946,8 @@ impl WorkspaceTools {
             }
             Err(error) => return Err(error.to_string()),
         };
+        // After spawn a command may mutate external state before any error.
+        *effect = EffectStatus::Unknown;
         let child_id = child.id();
         #[cfg(not(windows))]
         let stdout = child.stdout.take().ok_or("stdout pipe unavailable")?;
@@ -959,6 +997,9 @@ impl WorkspaceTools {
             .await
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string())?;
+        if !timed_out {
+            *effect = EffectStatus::Completed;
+        }
         Ok(ToolResultOutput::Json {
             value: serde_json::json!({
                 "exit_status": status.code(), "stdout": stdout, "stderr": stderr,
@@ -981,7 +1022,12 @@ impl WorkspaceTools {
         Ok(path)
     }
 
-    fn writable_path(&self, path: &str, create_parents: bool) -> Result<PathBuf, String> {
+    fn writable_path(
+        &self,
+        path: &str,
+        create_parents: bool,
+        effect: &mut EffectStatus,
+    ) -> Result<PathBuf, String> {
         let relative = validate_relative(path)?;
         let candidate = self.root.join(relative);
         if let Ok(metadata) = fs::symlink_metadata(&candidate)
@@ -1002,7 +1048,10 @@ impl WorkspaceTools {
             {
                 return Err("path escapes the workspace".into());
             }
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            if !parent.exists() {
+                *effect = EffectStatus::Unknown;
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
         }
         let parent = parent.canonicalize().map_err(|error| error.to_string())?;
         if !parent.starts_with(&self.root) {
@@ -1053,8 +1102,14 @@ fn normalize_line_endings(text: &str, crlf: bool) -> String {
     if crlf { lf.replace('\n', "\r\n") } else { lf }
 }
 
-fn persist_text(path: &Path, updated: &[u8], original: Option<&[u8]>) -> Result<(), String> {
+fn persist_text(
+    path: &Path,
+    updated: &[u8],
+    original: Option<&[u8]>,
+    effect: &mut EffectStatus,
+) -> Result<(), String> {
     let parent = path.parent().ok_or("path has no parent")?;
+    *effect = EffectStatus::Unknown;
     let mut temporary =
         tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
     temporary
@@ -1606,5 +1661,69 @@ mod tests {
     async fn dropped_powershell_future_stops_descendants() -> Result<(), Box<dyn std::error::Error>>
     {
         assert_windows_descendant_cleanup("drop").await
+    }
+
+    #[tokio::test]
+    async fn rejected_effectful_tools_report_no_mutation() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let workspace = TempDir::new()?;
+        let tools = WorkspaceTools::new(workspace.path())?;
+        fs::write(workspace.path().join("note.txt"), "original original")?;
+        let cancel = CancellationToken::new();
+        let cases = [
+            (
+                "edit",
+                serde_json::json!({"path":"note.txt","edits":[{"oldText":"absent","newText":"changed"}]}),
+            ),
+            (
+                "edit",
+                serde_json::json!({"path":"note.txt","edits":[{"oldText":"original","newText":"changed"}]}),
+            ),
+            (
+                "edit",
+                serde_json::json!({"path":"missing.txt","edits":[{"oldText":"old","newText":"new"}]}),
+            ),
+            (
+                "write",
+                serde_json::json!({"path":"../escape.txt","content":"new"}),
+            ),
+            ("bash", serde_json::json!({"command":""})),
+        ];
+        for (name, arguments) in cases {
+            let (output, effect) = tools
+                .execute_with_effect(name, &arguments.to_string(), &cancel, "rejected", None)
+                .await;
+            assert!(output.is_error());
+            assert_eq!(effect, EffectStatus::NotExecuted);
+        }
+        assert_eq!(
+            fs::read_to_string(workspace.path().join("note.txt"))?,
+            "original original"
+        );
+        assert_eq!(fs::read_dir(workspace.path())?.count(), 1);
+        let (_, effect) = tools
+            .execute_with_effect(
+                "write",
+                r#"{"path":"new/note.txt","content":"written"}"#,
+                &cancel,
+                "written",
+                None,
+            )
+            .await;
+        assert_eq!(effect, EffectStatus::Completed);
+        Ok(())
+    }
+
+    #[test]
+    fn persistence_failure_after_temporary_write_retains_uncertainty()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = TempDir::new()?;
+        let path = workspace.path().join("note.txt");
+        fs::write(&path, "newer content")?;
+        let mut effect = EffectStatus::NotExecuted;
+        assert!(persist_text(&path, b"replacement", Some(b"stale content"), &mut effect).is_err());
+        assert_eq!(effect, EffectStatus::Unknown);
+        assert_eq!(fs::read_to_string(&path)?, "newer content");
+        Ok(())
     }
 }

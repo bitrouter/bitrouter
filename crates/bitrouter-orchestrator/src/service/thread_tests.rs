@@ -1328,3 +1328,92 @@ async fn shutdown_preserves_unstarted_queue_and_records_a_durable_pause()
     assert!(!workspace.path().join("cancelled.txt").exists());
     Ok(())
 }
+
+#[tokio::test]
+async fn no_effect_edit_error_can_be_corrected_and_owner_transferred()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::thread::{PermissionProfile, WorkspaceGrant};
+    let workspace = TempDir::new()?;
+    std::fs::write(workspace.path().join("note.txt"), "original")?;
+    let memory = Arc::new(MemoryExecutionStore::default());
+    let grants = [WorkspaceGrant {
+        workspace: workspace.path().into(),
+        permission_profiles: vec![PermissionProfile::AllowEffects],
+    }];
+    let source = TaskService::with_workspace_grants(
+        app(vec![
+            turn(vec![tool_call(
+                "rejected-edit",
+                "edit",
+                serde_json::json!({"path":"note.txt","edits":[{"oldText":"absent","newText":"changed"}]}),
+            )]),
+            turn(vec![tool_call(
+                "corrected-edit",
+                "edit",
+                serde_json::json!({"path":"note.txt","edits":[{"oldText":"original","newText":"corrected"}]}),
+            )]),
+            final_turn(),
+        ])?,
+        &grants,
+        memory.clone(),
+    )?;
+    let mut request = thread_request(&workspace, "edit-thread");
+    request.permission_profile = PermissionProfile::AllowEffects;
+    let created = source
+        .create_thread(&source.inner.instance_id, request)
+        .await?;
+    let accepted = source
+        .start_turn(
+            &target(&created),
+            &CallerContext::local(),
+            input("correct the edit", "edit-turn"),
+        )
+        .await?;
+    let done = wait_for(&source, &accepted.turn_id, TaskStatus::Completed).await?;
+    assert!(!done.unknown_effect);
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("note.txt"))?,
+        "corrected"
+    );
+    let journal = memory
+        .load(&created.thread_id)
+        .await?
+        .ok_or("missing journal")?;
+    let effects = journal
+        .records
+        .iter()
+        .filter_map(|record| {
+            let record = match record {
+                ExecutionRecord::TurnRecord { fact, .. } => fact.as_ref(),
+                record => record,
+            };
+            match record {
+                ExecutionRecord::ToolResult { effect, .. } => Some(*effect),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        effects,
+        [EffectStatus::NotExecuted, EffectStatus::Completed]
+    );
+    assert!(
+        !source
+            .lock_state()
+            .active_workspaces
+            .contains_key(&created.workspace)
+    );
+    source.shutdown().await;
+    assert!(
+        memory
+            .read_owner(&source.inner.instance_id)
+            .await?
+            .ok_or("missing owner")?
+            .stopped_at_ms
+            .is_some()
+    );
+    let successor = TaskService::with_workspace_grants(app(vec![])?, &grants, memory)?;
+    successor.initialize_execution().await?;
+    successor.shutdown().await;
+    Ok(())
+}
