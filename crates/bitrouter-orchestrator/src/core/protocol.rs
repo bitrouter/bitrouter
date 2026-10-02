@@ -496,6 +496,25 @@ pub struct Restore {
     /// Replacing a crashed process under the same instance/epoch also requires
     /// this attestation. A live transport reconnect is a separate operation.
     pub previous_owner_stopped: bool,
+    /// Required for a nonterminal run. The authenticated host attests the
+    /// complete union of activity through entry to CoreSession::restore.
+    /// Missing evidence is not equivalent to zero process downtime.
+    #[serde(default)]
+    pub active_time: Option<RunActivityReconciliation>,
+}
+
+/// A cumulative run clock, including activity not in the last checkpoint.
+/// The host must reconcile all model/preparation and harness tool intervals,
+/// count overlapping work once, and exclude idle approval/commit waits. It must
+/// establish a measured handoff to the restoring core's local clock; a remote
+/// sample without an accounted delivery interval is insufficient. Unknown
+/// intervals require recovery, not a sum of per-attempt durations or downtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunActivityReconciliation {
+    pub run_id: String,
+    pub durable_head: DurableHead,
+    pub active_ms: u64,
 }
 
 /// Authenticated evidence for an already admitted attempt. Importing it cannot

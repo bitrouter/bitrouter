@@ -58,7 +58,7 @@ pub(super) fn start_fences(state: &SessionSnapshot, kind: &str) -> Vec<ToolStart
 /// reference; a dropped host/session is not kept alive until its deadline.
 pub(super) fn watch(session: &CoreSession, live: &mut LiveSession) {
     session.shared.budget_changed.notify_one();
-    if live.budget_watching || !eligible(live) {
+    if live.budget_watching || live.restoration_started.is_some() || !eligible(live) {
         return;
     }
     live.budget_watching = true;

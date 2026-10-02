@@ -43,7 +43,9 @@ mod preparation_work;
 mod provider_work;
 mod reconnect;
 mod recovery;
+mod recovery_time;
 pub mod release;
+pub mod restoration_activity;
 pub mod root_queue;
 pub mod steering;
 mod tool_status;
@@ -57,6 +59,25 @@ mod tool_status;
 pub trait HarnessPort: Send + Sync {
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError>;
     async fn send(&self, message: ServerMessage) -> Result<(), CoreError>;
+    /// Install concurrent stop reporting before the restore checkpoint is
+    /// proposed. Keep reporting until the observer closes, then use the live
+    /// session's status/result API. An implementation without this bridge may
+    /// restore only when no tools are running at the handoff boundary.
+    async fn observe_restoration(
+        &self,
+        observer: restoration_activity::RestorationActivity,
+    ) -> Result<(), CoreError> {
+        observer.require_quiescent().await
+    }
+    /// Drain lifecycle observations already captured by the host before the
+    /// observer closes. No checkpoint wait follows a successful empty drain.
+    /// Hosts with an asynchronous lifecycle bridge must override this barrier.
+    async fn synchronize_restoration(
+        &self,
+        observer: restoration_activity::RestorationActivity,
+    ) -> Result<(), CoreError> {
+        observer.require_quiescent().await
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,6 +221,10 @@ pub struct RootRun {
     #[serde(default)]
     pub token_accounting: Option<super::accounting::RunTokenAccounting>,
     pub active_ms: u64,
+    /// Immutable authenticated clock handoffs for this run. Each source head
+    /// precedes the session.restored checkpoint that accepted the measurement.
+    #[serde(default)]
+    pub activity_reconciliations: Vec<super::protocol::RunActivityReconciliation>,
     /// A committed resource failure stops new work while outcomes and cleanup
     /// remain admissible. It does not turn unknown effects into known results.
     #[serde(default)]
@@ -327,6 +352,8 @@ struct LiveSession {
     provider_evidence: super::protocol::PendingProviderEvidence,
     reconnecting: bool,
     budget_watching: bool,
+    restoration_started: Option<Instant>,
+    restoration_stops: BTreeMap<String, (String, super::protocol::ToolObservation)>,
 }
 
 struct Shared {
@@ -426,6 +453,8 @@ impl CoreSession {
                     provider_evidence: Default::default(),
                     reconnecting: false,
                     budget_watching: false,
+                    restoration_started: None,
+                    restoration_stops: BTreeMap::new(),
                 }),
                 commits: Mutex::new(()),
                 driver: Mutex::new(()),
@@ -3179,7 +3208,12 @@ impl CoreSession {
                 let mut live = self.shared.live.lock().await;
                 let mut next = live.state.clone();
                 let head = live.gate.head().clone();
-                if let Some(run) = &mut next.run {
+                // During restoration, delayed stop reports can still correct
+                // the open interval. Seal only the authenticated entry baseline
+                // until output replay and the lifecycle drain have finished.
+                if let Some(run) = &mut next.run
+                    && live.restoration_started.is_none()
+                {
                     run.active_ms = run.active_ms.max(live.activity.elapsed_ms());
                 }
                 let payload = change(&mut next, &head, live.gate.can_dispatch())?;
@@ -3238,8 +3272,15 @@ impl CoreSession {
                 // Status/result receipt establishes a local observation time,
                 // independent of the later durable ACK. Keep confirmed running
                 // tools in the same union clock as concurrent model work.
-                live.activity
-                    .synchronize_tools(&tool_status::activity_ids(&next));
+                let tools = tool_status::activity_ids(&next)
+                    .into_iter()
+                    .filter(|id| {
+                        !live
+                            .restoration_stops
+                            .contains_key(id.strip_prefix("tool/").unwrap_or(id))
+                    })
+                    .collect();
+                live.activity.synchronize_tools(&tools);
                 live.pending = Some(next);
                 (batch, live.disconnected.clone())
             };
