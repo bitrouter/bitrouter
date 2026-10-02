@@ -1417,6 +1417,15 @@ impl Pipeline {
         if bindings.is_empty() {
             return Ok(());
         }
+        for content in ctx
+            .prompt()
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+        {
+            super::protocol::responses::validate_reasoning_projection(content)
+                .map_err(BitrouterError::bad_request)?;
+        }
         let runner = self.request_checker_runner.as_ref();
         ctx.router_identity().ok_or_else(|| {
             BitrouterError::internal("request checks lost their named-router binding")

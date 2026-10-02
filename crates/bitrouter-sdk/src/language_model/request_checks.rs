@@ -257,7 +257,7 @@ pub(crate) fn content_fragments(
         .messages
         .iter()
         .flat_map(|message| &message.content)
-        .filter(|content| super::native_context::is_opaque_reasoning(content))
+        .filter(|content| super::native_context::has_opaque_payload(content))
         .count() as u64;
     let mut projection = ContentProjection::new(
         excluded_media_fragments,

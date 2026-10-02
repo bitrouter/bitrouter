@@ -167,7 +167,10 @@ pub(super) fn validate_prompt(protocol: &ApiProtocol, prompt: &Prompt) -> Result
                     }
                 }
                 Content::Reasoning { .. } if *protocol == ApiProtocol::Responses => {
-                    return Err("reasoning_history_would_be_dropped");
+                    if message.role != Role::Assistant {
+                        return Err("responses_reasoning_role_invalid");
+                    }
+                    super::responses::validate_reasoning_history(content)?;
                 }
                 Content::ToolApprovalRequest { .. } | Content::ToolApprovalResponse { .. } => {
                     return Err("provider_approval_requires_native_replay");

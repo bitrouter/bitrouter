@@ -935,3 +935,58 @@ still requires authorized settled messages and versioned required material.
 - The initial broad build lost its output directory before tests could start;
   a missing coverage field in the regex-checker test fixture was also corrected.
   Neither earlier failed check is included as passing evidence.
+
+## C3 Responses reasoning replay prerequisite
+
+The shared non-streaming Responses adapter now retains every reasoning item in
+`provider_metadata.openai.reasoningItem`, including its original item ID, ordered
+summary parts, empty summary, encrypted content and status. Canonical reasoning
+text contains only the readable summary. The request renderer replays the item
+without flattening it or moving message text across reasoning/tool boundaries.
+Response rendering preserves reasoning items as ordered boundaries; the legacy
+conversion within intervening non-reasoning segments is unchanged.
+
+Managed replay requires an assistant role, a nonempty item ID, the supported
+reasoning schema and a summary matching canonical text. Both encrypted items and
+stored item references use the existing owner/target/actual-authority origin
+proof. Raw provider output with unsupported fields remains available in the
+result, but cannot silently enter the next managed request. This proves source
+identity, not that a provider will retain or accept an item indefinitely.
+
+Readable summaries enter request checkers while encrypted payloads remain
+excluded and counted in coverage. Unknown readable metadata, inconsistent text,
+and contradictory foreign opaque markers are rejected. Validation also runs on
+ordinary HTTP input, before named-router checkers for direct native calls, and
+at Responses rendering, so this protection does not depend on managed origin
+validation. Independent review found the ordinary-input and mixed-metadata
+checker bypasses; both received production App regressions.
+
+Opaque reasoning is ineligible for the existing protocol-neutral visible-history
+commitment. Ordinary HTTP continuation still publishes the gateway handle and
+substitutes the actual provider response ID for a matching suffix follow-up;
+it cannot detach merely because summary text matches. The production fixture
+verifies that behavior and the exact tool-result-only upstream input.
+
+SDK fixtures cover encrypted/empty/stored reasoning items, replay order,
+malformed fields and summary mismatch. Production App fixtures cover real wire
+replay, checker coverage, tampering, owner/model/key/installation changes and
+installation restart across the three supported private-history protocols.
+The CoreSession fixture now also exercises Responses history and receipts,
+rejecting a model change unless complete old messages are explicitly discardable
+and required versioned material is available for reconstruction.
+
+This is a prerequisite for native Responses continuation, not its completion.
+Native response-handle selection and adjustment receipts, complete output-item
+fidelity, stream-bridge private state, child/reuse/fallback conformance, complete
+accounting, C4–C6, A01–A23, final audit and PR/CI remain open.
+
+Final independent read-only review found no remaining blocker in this segment.
+Validation is separate from that review:
+
+- Workspace nextest: 3776 passed, 22 skipped, in 220.600 seconds.
+- A final test-helper-only removal of a redundant `Ok(...?)` wrapper addressed
+  strict clippy; all 11 focused SDK/App/core regressions passed after that cleanup.
+  The broad run above used the equivalent helper before the cleanup.
+- Strict all-target/all-feature workspace clippy, workspace doctests (5 passed,
+  1 ignored), formatting and diff checks passed. The initial clippy result failed
+  on the redundant wrapper and is not counted as passing evidence.
