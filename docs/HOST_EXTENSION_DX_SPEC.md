@@ -1,6 +1,7 @@
 # Host-oriented Extension 开发体验 Spec
 
-状态：**v0.3 — S1–S4 已实现；本地验证范围见验收记录，尚未发布。** 2026-09-19。
+状态：**v0.3 — request-check 的 S1–S4 已实现；后续 evaluation-format
+facet 沿用同一共享入口，见 [evaluation spec](EVALUATION_MODELS_SPEC.md)。** 2026-09-23。
 
 目标：扩展作者实现具体能力，自定义宿主复用 BitRouter 的完整服务生命周期。
 普通用户选择 router 后，仍主要将模型选择交给 router。
@@ -162,7 +163,8 @@ tracing 所有权。需要自定义 listener 或嵌入其他运行时的调用�
 业务模块不依赖完整 `PipelineContext` 或模型 Prompt；投影层消费业务类型。
 作者参考文档以注册、Input、Decision、失败与限制为主，宿主装配和执行接口单独说明。
 本轮不增加通用 `Capability` trait、字符串事件总线、JSON callback、反射 registry，
-也不预留尚无实现的 selection/eval 方法。
+也不预留当时尚无实现的 selection/eval 方法。后续 evaluation-format facet 已按
+独立的类型化契约加入同一个 `ExtensionApi`，不改变本节 request-check 输入类型的归属。
 
 ## 6. 注册与激活分离
 

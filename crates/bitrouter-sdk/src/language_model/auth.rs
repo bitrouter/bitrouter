@@ -67,6 +67,9 @@ pub(super) fn normalize_auth_extension_error(
         }
         BitrouterError::Forbidden(_) => BitrouterError::Forbidden(diagnostic.into()),
         BitrouterError::NotFound(_) => BitrouterError::NotFound(diagnostic.into()),
+        BitrouterError::ModelOperationMismatch(_) => {
+            BitrouterError::ModelOperationMismatch(diagnostic.into())
+        }
         BitrouterError::RateLimited { retry_after } => BitrouterError::RateLimited { retry_after },
         BitrouterError::UpstreamRateLimited { retry_after, .. } => {
             BitrouterError::UpstreamRateLimited {

@@ -528,6 +528,26 @@
       },
       "type": "object"
     },
+    "EvaluationQuestionType": {
+      "description": "Question kinds advertised by an evaluation-capable model route.",
+      "oneOf": [
+        {
+          "const": "noul",
+          "description": "A probability for a binary yes/no question.",
+          "type": "string"
+        },
+        {
+          "const": "choice",
+          "description": "A probability distribution over named choices.",
+          "type": "string"
+        },
+        {
+          "const": "score",
+          "description": "A probability distribution over ordered levels.",
+          "type": "string"
+        }
+      ]
+    },
     "FusionSettings": {
       "description": "The `server_tools.fusion` config section. Its presence enables the Fusion\nserver tool and the `bitrouter/fusion` model alias; its fields supply the\nalias defaults (the panel/judge a bare `bitrouter/fusion` request expands\nto). An explicit `bitrouter:fusion` declaration on a request overrides these.",
       "properties": {
@@ -787,6 +807,41 @@
             "token_limit_field": null
           },
           "description": "Chat Completions-specific request settings."
+        }
+      },
+      "type": "object"
+    },
+    "ModelOperationConfig": {
+      "additionalProperties": false,
+      "description": "Constraints declared by one concrete model operation.",
+      "properties": {
+        "max_choice_options": {
+          "default": null,
+          "description": "Optional provider limit on Choice option count.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_score_levels": {
+          "default": null,
+          "description": "Optional provider limit on Score level count.",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "question_types": {
+          "default": [],
+          "description": "Positively supported typed question kinds for `evaluate`.",
+          "items": {
+            "$ref": "#/$defs/EvaluationQuestionType"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -1255,6 +1310,14 @@
           },
           "type": "array"
         },
+        "operations": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ProviderOperationConfig"
+          },
+          "default": {},
+          "description": "Non-generation operation endpoints supplied by provider extensions.\nGeneration continues to use `api_protocol` unchanged.",
+          "type": "object"
+        },
         "priority": {
           "default": null,
           "description": "Explicit routing priority (lower = preferred). When set it overrides the\nclass-derived rank, so an operator can pin one provider ahead of others\nregardless of class. `None` ⇒ derive the rank from [`class`](Self::class).",
@@ -1362,6 +1425,17 @@
           "description": "The id this model is addressed by — a canonical `<org>/<model>` id when\nthe entry comes from the provider registry, or the upstream id for a\nhand-written config. This is the **match key** the auto-cascade compares\nthe requested model against.",
           "type": "string"
         },
+        "operations": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ModelOperationConfig"
+          },
+          "default": null,
+          "description": "Explicit supported operations. Absence retains legacy generation-only\nbehavior; an explicit map supports only its declared keys.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "pricing": {
           "anyOf": [
             {
@@ -1407,6 +1481,20 @@
       },
       "required": [
         "id"
+      ],
+      "type": "object"
+    },
+    "ProviderOperationConfig": {
+      "additionalProperties": false,
+      "description": "A non-generation provider operation's extension-owned endpoint.",
+      "properties": {
+        "endpoint": {
+          "description": "A relative path joined to the validated provider API base by the host.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "endpoint"
       ],
       "type": "object"
     },

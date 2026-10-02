@@ -28,7 +28,7 @@ use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::cloud::settlement::{SettlementReceipt, SettlementState};
 use crate::metering::db::{ReconciliationStatus, RequestMetric};
-use crate::metering::entities::requests;
+use crate::metering::entities::{evaluation_attempts, requests};
 use crate::metering::pricing::{
     ChargeEvidence, ChargeStatus, ModelPricing, PricingSource, calculate_charge_evidence,
     unavailable_charge_evidence,
@@ -442,7 +442,8 @@ impl MeteringStore {
     /// Analytical callers may still use [`get_spend`](Self::get_spend), where
     /// the legacy non-null charge column represents unknown evidence as zero.
     /// Enforcement must instead fail closed whenever any row in the window has
-    /// unknown or legacy charge evidence.
+    /// unknown or legacy charge evidence. Includes every evaluation attempt
+    /// billed to the same key, including retries.
     pub async fn get_enforceable_spend(
         &self,
         api_key_id: &str,
@@ -454,7 +455,7 @@ impl MeteringStore {
             .column(requests::Column::EstimatedChargeMicroUsd)
             .column(requests::Column::ChargeStatus)
             .filter(requests::Column::ApiKeyId.eq(api_key_id))
-            .filter(requests::Column::CreatedAt.gte(start))
+            .filter(requests::Column::CreatedAt.gte(start.clone()))
             .into_tuple()
             .all(&self.db)
             .await
@@ -466,6 +467,28 @@ impl MeteringStore {
                     total = total.saturating_add(charge.max(0) as u64);
                 }
                 ChargeStatus::Unknown | ChargeStatus::LegacyUnknown => return Ok(None),
+            }
+        }
+        let evaluation_charges: Vec<(Option<i64>, String)> = evaluation_attempts::Entity::find()
+            .select_only()
+            .column(evaluation_attempts::Column::ChargeMicroUsd)
+            .column(evaluation_attempts::Column::ChargeStatus)
+            .filter(evaluation_attempts::Column::CallerApiKeyId.eq(api_key_id))
+            .filter(evaluation_attempts::Column::CreatedAt.gte(start))
+            .into_tuple()
+            .all(&self.db)
+            .await
+            .map_err(|error| {
+                BitrouterError::internal(format!("evaluation policy spend: {error}"))
+            })?;
+        for (charge, status) in evaluation_charges {
+            match (ChargeStatus::from_persisted(&status), charge) {
+                (ChargeStatus::Computed | ChargeStatus::NotCharged, Some(charge))
+                    if charge >= 0 =>
+                {
+                    total = total.saturating_add(charge as u64);
+                }
+                _ => return Ok(None),
             }
         }
         Ok(Some(total))
@@ -542,7 +565,7 @@ impl MeteringStore {
         })
     }
 
-    /// Current request/token rate for `api_key_id`.
+    /// Current generation and evaluation request/token rate for `api_key_id`.
     pub async fn get_rate(&self, api_key_id: &str) -> Result<RateMetrics> {
         let start = window_start(TimeWindow::LastMinute).to_rfc3339();
         let rows: Vec<(i64, i64)> = requests::Entity::find()
@@ -550,7 +573,7 @@ impl MeteringStore {
             .column(requests::Column::PromptTokens)
             .column(requests::Column::CompletionTokens)
             .filter(requests::Column::ApiKeyId.eq(api_key_id))
-            .filter(requests::Column::CreatedAt.gte(start))
+            .filter(requests::Column::CreatedAt.gte(start.clone()))
             .into_tuple()
             .all(&self.db)
             .await
@@ -559,9 +582,37 @@ impl MeteringStore {
             .iter()
             .map(|(p, c)| (*p).max(0) as u64 + (*c).max(0) as u64)
             .sum();
+        let evaluations: Vec<(i64, Option<String>, Option<String>)> =
+            evaluation_attempts::Entity::find()
+                .select_only()
+                .column(evaluation_attempts::Column::AttemptIndex)
+                .column(evaluation_attempts::Column::InputTokens)
+                .column(evaluation_attempts::Column::OutputTokens)
+                .filter(evaluation_attempts::Column::CallerApiKeyId.eq(api_key_id))
+                .filter(evaluation_attempts::Column::CreatedAt.gte(start))
+                .into_tuple()
+                .all(&self.db)
+                .await
+                .map_err(|error| {
+                    BitrouterError::internal(format!("evaluation policy rate: {error}"))
+                })?;
+        // Count each invocation once, including when callers reuse a request ID.
+        let evaluation_requests = evaluations
+            .iter()
+            .filter(|(attempt, _, _)| *attempt == 1)
+            .count();
+        let evaluation_tokens = evaluations
+            .iter()
+            .flat_map(|(_, input, output)| [input, output])
+            .filter_map(|tokens| {
+                tokens
+                    .as_deref()
+                    .and_then(|value| value.parse::<u64>().ok())
+            })
+            .fold(0_u64, u64::saturating_add);
         Ok(RateMetrics {
-            requests_per_minute: rows.len() as f64,
-            tokens_per_minute: tokens as f64,
+            requests_per_minute: (rows.len() + evaluation_requests) as f64,
+            tokens_per_minute: tokens.saturating_add(evaluation_tokens) as f64,
         })
     }
 

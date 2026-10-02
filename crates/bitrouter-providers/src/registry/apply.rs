@@ -15,6 +15,8 @@
 //! 4. Providers carry a [`ProviderClass`]; the auto-cascade orders by it.
 //! 5. A provider is activated **only if its credentials are present**, except
 //!    BitRouter Cloud which may authenticate through the local OAuth flow.
+//! 6. Registry-only evaluation providers are not executable by themselves.
+//!    The host's provider extension must first contribute their route.
 //!
 //! Precedence is conservative: the merge never overwrites a field the user set
 //! in `bitrouter.yaml`. The providers it configures are no longer compiled-in
@@ -24,15 +26,17 @@
 //! the fetched-or-cached registry data.
 
 use bitrouter_sdk::config::{
-    Config, Pattern, PatternMap, PricingConfig, PricingTierConfig, ProviderClass, ProviderConfig,
-    ProviderModel, RateLimit, RegistryConfig, env_lookup, substitute_with,
+    Config, ModelPricingOrigin, Pattern, PatternMap, PricingConfig, PricingTierConfig,
+    ProviderClass, ProviderConfig, ProviderModel, RateLimit, RegistryConfig, env_lookup,
+    substitute_with,
 };
 use bitrouter_sdk::language_model::types::ProtocolList;
 
 use crate::registry::cache::DiskCache;
 use crate::registry::fetch::fetch_registry;
 use crate::registry::types::{
-    Billing, RegistryData, RegistryKind, RegistryPricing, RegistryProvider, RegistryRateLimits,
+    Billing, ProtocolSet, RegistryData, RegistryKind, RegistryPricing, RegistryProvider,
+    RegistryRateLimits,
 };
 
 /// The provider id of the hosted BitRouter Cloud gateway.
@@ -102,6 +106,13 @@ pub fn apply_registry(config: &mut Config, data: &RegistryData) {
         if !provider.is_active() || !provider.is_mergeable() {
             continue;
         }
+        if !config.providers.contains_key(&provider.name)
+            && provider
+                .operations
+                .contains_key(&bitrouter_sdk::inference::InferenceOperation::Evaluate)
+        {
+            continue;
+        }
         merge_provider(config, provider);
     }
 }
@@ -154,6 +165,24 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         }
         if existing.models.is_empty() {
             existing.models = build_models(provider);
+        } else {
+            for model in &mut existing.models {
+                let Some(catalog) = provider.models.iter().find(|item| item.id == model.id) else {
+                    continue;
+                };
+                if model.pricing.is_none() {
+                    model.pricing = catalog.pricing.as_ref().and_then(map_pricing);
+                    if model.pricing.is_some() {
+                        model.pricing_origin = ModelPricingOrigin::Registry;
+                    }
+                }
+                if model.rate_limits.is_none() {
+                    model.rate_limits = catalog.rate_limits.as_ref().map(map_rate_limits);
+                }
+            }
+        }
+        if existing.operations.is_empty() {
+            existing.operations = provider.operations.clone();
         }
         if existing.api_base.is_empty()
             && let Some(api_base) = &provider.api_base
@@ -216,6 +245,7 @@ fn merge_provider(config: &mut Config, provider: &RegistryProvider) {
         api_key,
         api_base,
         api_protocol: protocol_map.unwrap_or_default(),
+        operations: provider.operations.clone(),
         protocol_endpoints: protocol_endpoints(provider),
         models,
         class: Some(class),
@@ -281,9 +311,11 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
         .map(|m| ProviderModel {
             id: m.id.clone(),
             provider_model_id: Some(m.provider_model_id.clone()),
-            api_protocol: Some(m.api_protocol.to_protocol_list()),
+            api_protocol: m.api_protocol.as_ref().map(ProtocolSet::to_protocol_list),
+            operations: m.operations.clone(),
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
             pricing: m.pricing.as_ref().and_then(map_pricing),
+            pricing_origin: ModelPricingOrigin::Registry,
             capabilities: m.capabilities.clone(),
             reasoning_effort: m.reasoning_effort.clone(),
             compatibility: m.compatibility.clone(),
@@ -345,6 +377,7 @@ mod tests {
     fn provider(name: &str) -> RegistryProvider {
         RegistryProvider {
             name: name.to_string(),
+            operations: Default::default(),
             display_name: None,
             api_base: Some(format!("https://{name}.example/v1")),
             api_protocol: Vec::new(),
@@ -352,7 +385,8 @@ mod tests {
             models: vec![RegistryModel {
                 id: "deepseek/deepseek-v3.2".to_string(),
                 provider_model_id: "deepseek-v3.2".to_string(),
-                api_protocol: ProtocolSet::One(RegistryProtocol::Openai),
+                operations: None,
+                api_protocol: Some(ProtocolSet::One(RegistryProtocol::Openai)),
                 pricing: Some(RegistryPricing {
                     input_tokens: Some(InputTokenPricing {
                         no_cache: Some(0.27),
@@ -377,6 +411,144 @@ mod tests {
             byok: Some(true),
             billing: Billing::UsageToken,
         }
+    }
+
+    #[test]
+    fn registry_pricing_provenance_does_not_erase_an_operator_override() {
+        let registry_provider = provider("regtestprov");
+        let data = data_with(vec![registry_provider.clone()], vec![]);
+        let mut catalog_config = Config::default();
+        catalog_config.providers.insert(
+            "regtestprov".to_string(),
+            ProviderConfig {
+                api_key: "fixture-key".to_string(),
+                ..ProviderConfig::default()
+            },
+        );
+        apply_registry(&mut catalog_config, &data);
+        let catalog_model = &catalog_config.providers["regtestprov"].models[0];
+        assert_eq!(catalog_model.pricing_origin, ModelPricingOrigin::Registry);
+        assert_eq!(
+            catalog_model
+                .pricing
+                .as_ref()
+                .and_then(|price| price.input_micro_usd_per_token),
+            Some(0.27)
+        );
+
+        let mut override_config = Config::default();
+        let mut override_model = build_models(&registry_provider)[0].clone();
+        override_model.pricing = Some(PricingConfig {
+            input_micro_usd_per_token: Some(9.0),
+            ..PricingConfig::default()
+        });
+        override_model.pricing_origin = ModelPricingOrigin::Configured;
+        override_config.providers.insert(
+            "regtestprov".to_string(),
+            ProviderConfig {
+                api_key: "fixture-key".to_string(),
+                models: vec![override_model],
+                ..ProviderConfig::default()
+            },
+        );
+        apply_registry(&mut override_config, &data);
+        let override_model = &override_config.providers["regtestprov"].models[0];
+        assert_eq!(
+            override_model.pricing_origin,
+            ModelPricingOrigin::Configured
+        );
+        assert_eq!(
+            override_model
+                .pricing
+                .as_ref()
+                .and_then(|price| price.input_micro_usd_per_token),
+            Some(9.0)
+        );
+    }
+
+    #[test]
+    fn evaluation_operation_metadata_survives_registry_merge_without_generation_protocol()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_sdk::config::{ModelOperationConfig, ProviderOperationConfig};
+        use bitrouter_sdk::evaluation::EvaluationQuestionType;
+        use bitrouter_sdk::inference::InferenceOperation;
+
+        let mut registry_provider = provider("regtestprov");
+        registry_provider.operations.insert(
+            InferenceOperation::Evaluate,
+            ProviderOperationConfig {
+                endpoint: "/v1/evaluate".to_string(),
+            },
+        );
+        registry_provider.models[0].api_protocol = None;
+        registry_provider.models[0].operations = Some(std::collections::BTreeMap::from([(
+            InferenceOperation::Evaluate,
+            ModelOperationConfig {
+                question_types: vec![EvaluationQuestionType::Noul],
+                max_choice_options: None,
+                max_score_levels: None,
+            },
+        )]));
+        let mut config = Config::default();
+        config.providers.insert(
+            "regtestprov".to_string(),
+            ProviderConfig {
+                api_key: "test-key".to_string(),
+                active: true,
+                ..ProviderConfig::default()
+            },
+        );
+        merge_provider(&mut config, &registry_provider);
+        config.validate_operations()?;
+        let merged = &config.providers["regtestprov"];
+        assert!(merged.models[0].api_protocol.is_none());
+        assert!(merged.models[0].supports_operation(InferenceOperation::Evaluate));
+        assert!(!merged.models[0].supports_operation(InferenceOperation::Generate));
+        assert!(bitrouter_sdk::config::routing_table::list_models_for(&config).is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn registry_only_evaluation_provider_requires_host_contribution()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_sdk::config::{ModelOperationConfig, ProviderOperationConfig};
+        use bitrouter_sdk::evaluation::EvaluationQuestionType;
+        use bitrouter_sdk::inference::InferenceOperation;
+
+        let mut registry_provider = provider("regtestprov");
+        registry_provider.operations.insert(
+            InferenceOperation::Evaluate,
+            ProviderOperationConfig {
+                endpoint: "/v1/decide".into(),
+            },
+        );
+        registry_provider.models[0].api_protocol = None;
+        registry_provider.models[0].operations = Some(std::collections::BTreeMap::from([(
+            InferenceOperation::Evaluate,
+            ModelOperationConfig {
+                question_types: vec![EvaluationQuestionType::Noul],
+                ..ModelOperationConfig::default()
+            },
+        )]));
+        with_env("REGTESTPROV_API_KEY", Some("sk-test"), || {
+            let data = data_with(vec![registry_provider], vec![]);
+            let mut stock = Config::default();
+            apply_registry(&mut stock, &data);
+            assert!(!stock.providers.contains_key("regtestprov"));
+
+            let mut contributed = Config::default();
+            contributed.providers.insert(
+                "regtestprov".into(),
+                ProviderConfig {
+                    api_key: "sk-test".into(),
+                    ..ProviderConfig::default()
+                },
+            );
+            apply_registry(&mut contributed, &data);
+            assert!(contributed.providers.contains_key("regtestprov"));
+            assert!(contributed.validate_operations().is_ok());
+        });
+        Ok(())
     }
 
     #[test]
@@ -795,9 +967,11 @@ mod tests {
         user.models = vec![ProviderModel {
             id: "custom/model".to_string(),
             provider_model_id: None,
+            operations: None,
             api_protocol: None,
             rate_limits: None,
             pricing: None,
+            pricing_origin: ModelPricingOrigin::Configured,
             capabilities: Vec::new(),
             reasoning_effort: None,
             compatibility: Default::default(),

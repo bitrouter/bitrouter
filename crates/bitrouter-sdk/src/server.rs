@@ -103,6 +103,22 @@ impl App {
             .await
     }
 
+    /// Serve with host-selected route options, preserving the SDK's graceful
+    /// generation drain. A custom host may omit a built-in route and provide
+    /// its own variant through `options.router_wrapper`.
+    pub async fn serve_with_router_options_and_shutdown<S>(
+        &self,
+        listen: &str,
+        options: RouterOptions,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        S: Future<Output = ()> + Send + 'static,
+    {
+        self.serve_inner_with_options(listen, options, shutdown)
+            .await
+    }
+
     /// Serve an already-bound listener with the normal router and shutdown drain.
     ///
     /// Hosts with multiple listeners can bind every required endpoint before
@@ -117,8 +133,28 @@ impl App {
         F: Fn(Router) -> Router + Send + Sync + 'static,
         S: Future<Output = ()> + Send + 'static,
     {
-        self.serve_listener_inner(listener, Some(Arc::new(wrapper)), shutdown)
-            .await
+        self.serve_listener_inner(
+            listener,
+            RouterOptions {
+                router_wrapper: Some(Arc::new(wrapper)),
+                ..RouterOptions::default()
+            },
+            shutdown,
+        )
+        .await
+    }
+
+    /// Serve an already-bound listener with host-selected route options.
+    pub async fn serve_listener_with_router_options_and_shutdown<S>(
+        &self,
+        listener: tokio::net::TcpListener,
+        options: RouterOptions,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        S: Future<Output = ()> + Send + 'static,
+    {
+        self.serve_listener_inner(listener, options, shutdown).await
     }
 
     async fn serve_inner<S>(
@@ -130,16 +166,36 @@ impl App {
     where
         S: Future<Output = ()> + Send + 'static,
     {
+        self.serve_inner_with_options(
+            listen,
+            RouterOptions {
+                router_wrapper: wrapper,
+                ..RouterOptions::default()
+            },
+            shutdown,
+        )
+        .await
+    }
+
+    async fn serve_inner_with_options<S>(
+        &self,
+        listen: &str,
+        options: RouterOptions,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        S: Future<Output = ()> + Send + 'static,
+    {
         let listener = tokio::net::TcpListener::bind(listen)
             .await
             .map_err(|e| BitrouterError::internal(format!("bind {listen}: {e}")))?;
-        self.serve_listener_inner(listener, wrapper, shutdown).await
+        self.serve_listener_inner(listener, options, shutdown).await
     }
 
     async fn serve_listener_inner<S>(
         &self,
         listener: tokio::net::TcpListener,
-        wrapper: Option<RouterWrapper>,
+        mut options: RouterOptions,
         shutdown: S,
     ) -> Result<()>
     where
@@ -158,11 +214,9 @@ impl App {
             metrics_renderer: self.metrics_renderer().cloned(),
             prompt_transforms: self.prompt_transforms().to_vec(),
         };
-        let options = RouterOptions {
-            omit_v1_models: false,
-            mcp_aggregate_route: self.mcp_aggregate_route().map(String::from),
-            router_wrapper: wrapper,
-        };
+        if options.mcp_aggregate_route.is_none() {
+            options.mcp_aggregate_route = self.mcp_aggregate_route().map(String::from);
+        }
         let router = build_router_with_options(state, options);
         tracing::info!(listen = ?listener.local_addr(), "bitrouter listening");
         // Graceful shutdown: on SIGINT/SIGTERM
@@ -1257,7 +1311,14 @@ async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> impl 
     let models = state.language_model.routing_table().list_models();
     let data: Vec<_> = models
         .into_iter()
-        .map(|m| serde_json::json!({ "id": m.id, "object": "model", "providers": m.providers }))
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
+                "object": "model",
+                "providers": m.providers,
+                "operations": m.operations,
+            })
+        })
         .collect();
     let mut body = serde_json::json!({ "object": "list", "data": data });
     if is_codex_user_agent(&headers)

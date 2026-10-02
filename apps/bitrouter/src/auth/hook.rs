@@ -71,6 +71,29 @@ impl AuthHook {
         Self { db }
     }
 
+    /// Authenticate an app-owned evaluation endpoint with the same virtual-key
+    /// and `skip_auth` rules as generation and MCP, without invoking either
+    /// protocol pipeline. Return the policy binding alongside the caller so
+    /// evaluation can enforce the same host constraints before dispatch.
+    pub(crate) async fn authenticate_evaluation(
+        &self,
+        headers: &HeaderMap,
+        skip_auth: bool,
+    ) -> Result<(CallerContext, Option<String>)> {
+        let initial = if skip_auth {
+            CallerContext::local()
+        } else {
+            CallerContext::anonymous()
+        };
+        match self.authenticate(headers, &initial).await? {
+            Authentication::Local => Ok((initial, None)),
+            Authentication::Authenticated { caller, record, .. } => Ok((caller, record.policy_id)),
+            Authentication::Denied(message) => {
+                Err(bitrouter_sdk::error::BitrouterError::Unauthorized(message))
+            }
+        }
+    }
+
     /// Turn a validated key record into a `CallerContext`.
     fn caller_from_record(record: &ApiKeyRecord) -> CallerContext {
         CallerContext::new(&record.id, &record.user_id)

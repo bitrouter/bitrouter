@@ -1,0 +1,28 @@
+{
+  "model": "typesafe/jev-1.13",
+  "state": {
+    "ticket": "Payment posted twice",
+    "account": {"tier": "pro", "attempts": [1, 2]}
+  },
+  "questions": {
+    "department": {
+      "type": "choice",
+      "instructions": {"question": "Which team?", "context": ["billing", "technical"]},
+      "criteria": {
+        "billing": "Charges or refunds",
+        "sales": null,
+        "technical": ["bugs", "integrations"]
+      }
+    },
+    "urgency": {
+      "type": "noul",
+      "instructions": "Does this need urgent handling?",
+      "criteria": {"true": "Handle now", "false": "Normal queue"}
+    },
+    "severity": {
+      "type": "score",
+      "instructions": "Rate severity",
+      "criteria": ["low", {"label": "medium"}, ["high", "critical"]]
+    }
+  }
+}

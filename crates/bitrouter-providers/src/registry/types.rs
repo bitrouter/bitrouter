@@ -20,6 +20,8 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use bitrouter_sdk::config::{ModelOperationConfig, ProviderOperationConfig};
+use bitrouter_sdk::inference::InferenceOperation;
 use bitrouter_sdk::language_model::types::ModelCompatibility;
 use bitrouter_sdk::language_model::types::{ApiProtocol, Capability, ProtocolList};
 
@@ -218,6 +220,10 @@ pub enum Billing {
 pub struct RegistryProvider {
     /// Provider id (equals the registry filename stem and the `name` field).
     pub name: String,
+    /// Non-generation operation endpoints, executable only with a matching
+    /// compiled provider extension.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub operations: BTreeMap<InferenceOperation, ProviderOperationConfig>,
     /// Human-readable display name (UI only), if declared.
     #[serde(default)]
     pub display_name: Option<String>,
@@ -332,10 +338,14 @@ pub struct RegistryModel {
     pub id: String,
     /// The provider's own upstream model id (what is sent on the wire).
     pub provider_model_id: String,
+    /// Explicit supported operations; absent retains generation-only behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operations: Option<BTreeMap<InferenceOperation, ModelOperationConfig>>,
     /// Resolved wire protocol(s) for this (provider, model) pair — the dist
     /// expanded the provider's glob patterns, so this is concrete (a single
     /// protocol or an ordered set, e.g. `[openai, responses]`).
-    pub api_protocol: ProtocolSet,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_protocol: Option<ProtocolSet>,
     /// Per-model pricing.
     #[serde(default)]
     pub pricing: Option<RegistryPricing>,
@@ -428,6 +438,41 @@ pub struct CanonicalModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evaluation_only_dist_model_needs_no_generation_protocol()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let provider: RegistryProvider = serde_json::from_value(serde_json::json!({
+            "name": "decision-provider",
+            "status": "active",
+            "operations": {
+                "evaluate": {
+                    "endpoint": "/v1/decisions"
+                }
+            },
+            "models": [{
+                "id": "decision-provider/model-1",
+                "provider_model_id": "model-1",
+                "operations": {"evaluate": {"question_types": ["noul"]}}
+            }]
+        }))?;
+        assert_eq!(provider.models.len(), 1);
+        assert!(provider.models[0].api_protocol.is_none());
+        assert!(
+            provider
+                .operations
+                .contains_key(&InferenceOperation::Evaluate)
+        );
+        assert!(
+            provider.models[0]
+                .operations
+                .as_ref()
+                .is_some_and(|operations| {
+                    operations.contains_key(&InferenceOperation::Evaluate)
+                })
+        );
+        Ok(())
+    }
 
     /// A trimmed real-shape sample of the resolved `dist/providers.json`: no
     /// provider-level glob arrays; each model carries a concrete `api_protocol`.
@@ -528,7 +573,7 @@ mod tests {
         // Resolved per-model protocol + rate limits (no glob to resolve here).
         assert_eq!(
             m.api_protocol,
-            ProtocolSet::One(RegistryProtocol::Anthropic)
+            Some(ProtocolSet::One(RegistryProtocol::Anthropic))
         );
         assert_eq!(
             m.rate_limits.as_ref().and_then(|r| r.requests_per_minute),

@@ -59,6 +59,10 @@ pub enum BitrouterError {
     #[error("not found: {0}")]
     NotFound(String),
 
+    /// 409 — a known model route does not support this inference operation.
+    #[error("model operation mismatch: {0}")]
+    ModelOperationMismatch(String),
+
     /// 429 — rate limited.
     #[error("rate limited")]
     RateLimited {
@@ -155,6 +159,7 @@ impl BitrouterError {
             Self::UpstreamPaymentRequired { .. } => 402,
             Self::Forbidden(_) => 403,
             Self::NotFound(_) => 404,
+            Self::ModelOperationMismatch(_) => 409,
             Self::RateLimited { .. } => 429,
             Self::UpstreamRateLimited { .. } => 429,
             Self::UpstreamBadRequest { .. } => 400,
@@ -177,6 +182,7 @@ impl BitrouterError {
             Self::UpstreamPaymentRequired { .. } => "payment_required",
             Self::Forbidden(_) => "permission_error",
             Self::NotFound(_) => "not_found_error",
+            Self::ModelOperationMismatch(_) => "invalid_request_error",
             Self::RateLimited { .. } => "rate_limit_error",
             Self::UpstreamRateLimited { .. } => "rate_limit_error",
             Self::UpstreamBadRequest { .. } => "invalid_request_error",
@@ -200,6 +206,7 @@ impl BitrouterError {
             Self::UpstreamPaymentRequired { .. } => "upstream_payment_required",
             Self::Forbidden(_) => "permission_denied",
             Self::NotFound(_) => "not_found",
+            Self::ModelOperationMismatch(_) => "model_operation_mismatch",
             Self::RateLimited { .. } => "rate_limit_exceeded",
             Self::UpstreamRateLimited { .. } => "upstream_rate_limited",
             Self::UpstreamBadRequest { .. } => "invalid_request",
@@ -248,6 +255,7 @@ impl BitrouterError {
             Self::UpstreamPaymentRequired { .. } => ErrorKind::UpstreamPaymentRequired,
             Self::Forbidden(_) => ErrorKind::Forbidden,
             Self::NotFound(_) => ErrorKind::NotFound,
+            Self::ModelOperationMismatch(_) => ErrorKind::ModelOperationMismatch,
             Self::RateLimited { .. } => ErrorKind::RateLimited,
             Self::UpstreamRateLimited { .. } => ErrorKind::UpstreamRateLimited,
             Self::UpstreamBadRequest { .. } => ErrorKind::BadRequest,
@@ -272,6 +280,7 @@ impl BitrouterError {
             | Self::PaymentRequired(m)
             | Self::Forbidden(m)
             | Self::NotFound(m)
+            | Self::ModelOperationMismatch(m)
             | Self::Internal(m) => m.clone(),
             Self::RateLimited { .. } => "rate limited".to_string(),
             Self::UpstreamPaymentRequired { .. } => "upstream payment required".to_string(),
@@ -338,6 +347,8 @@ pub enum ErrorKind {
     Forbidden,
     /// 404 — no route / resource not found.
     NotFound,
+    /// 409 — known model does not support the requested inference operation.
+    ModelOperationMismatch,
     /// 429 — rate limited.
     RateLimited,
     /// 429 — all usable upstream routes are rate limited.

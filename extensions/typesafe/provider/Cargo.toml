@@ -1,0 +1,18 @@
+[package]
+name = "bitrouter-typesafe-provider"
+description = "Native TypeSafe evaluation provider extension for BitRouter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bitrouter-sdk = { workspace = true }
+http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -167,6 +167,7 @@ mod tests {
         RegistryData {
             providers: vec![RegistryProvider {
                 name: "deepseek".into(),
+                operations: Default::default(),
                 display_name: None,
                 api_base: Some("https://api.deepseek.com/v1".into()),
                 api_protocol: Vec::new(),

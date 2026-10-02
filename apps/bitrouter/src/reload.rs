@@ -1095,6 +1095,7 @@ fn activate_stored_credential_providers(config: &mut bitrouter_sdk::config::Conf
 /// Apply the same non-mutating configuration enrichment used when the daemon
 /// constructs a replacement routing snapshot. Keeping this in one helper makes
 /// the current and candidate shapes comparable before remote classification.
+#[cfg(test)]
 async fn resolve_reloadable_config(config: &mut bitrouter_sdk::config::Config) {
     bitrouter_providers::apply_builtin_defaults(config);
     crate::claude_code::enable_if_logged_in(config);
@@ -1102,6 +1103,18 @@ async fn resolve_reloadable_config(config: &mut bitrouter_sdk::config::Config) {
     activate_stored_credential_providers(config);
     // Discovery is bounded by the SDK and completes before any live swap.
     bitrouter_sdk::config::discover_models(config).await;
+}
+
+async fn resolve_reloadable_config_with_extensions(
+    config: &mut bitrouter_sdk::config::Config,
+    extensions: &bitrouter_sdk::extension::ExtensionApi,
+) -> anyhow::Result<()> {
+    bitrouter_providers::apply_builtin_defaults(config);
+    crate::claude_code::enable_if_logged_in(config);
+    crate::assemble::merge_registry_into_with_extensions(config, extensions).await?;
+    activate_stored_credential_providers(config);
+    bitrouter_sdk::config::discover_models(config).await;
+    Ok(())
 }
 
 /// Whether the daemon is running against a `bitrouter.yaml` on disk
@@ -1463,6 +1476,9 @@ pub struct AppReloader {
     /// Concrete upstream HTTP executor. Timeout knobs are client-level, so a
     /// config reload must rebuild the live executor's client set too.
     upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
+    /// Compiled native facets available to this host. Every candidate is
+    /// checked before any live reload participant changes.
+    extensions: bitrouter_sdk::extension::ExtensionApi,
     policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>>,
     /// The live `policy_table:` transform, when one was wired at assembly.
     /// Reload rebuilds its spec from the fresh config and swaps it in —
@@ -1569,6 +1585,7 @@ impl AppReloader {
             running_baseline: Mutex::new(None),
             environment_revision: AtomicU64::new(0),
             upstream_executor,
+            extensions: bitrouter_sdk::extension::ExtensionApi::new(),
             policy_runtime: None,
             policy_table_router: None,
             coordinator: ReloadCoordinator::new(),
@@ -1592,6 +1609,13 @@ impl AppReloader {
         self.startup_configuration_source = Some(baseline.source.clone());
         self.startup_unclassified_values = baseline.unclassified_values.clone();
         self.running_baseline = Mutex::new(Some(baseline));
+        self
+    }
+
+    /// Keep evaluation format bindings valid across hot reloads in a custom
+    /// host. The stock host leaves this registry empty.
+    pub fn with_extensions(mut self, extensions: bitrouter_sdk::extension::ExtensionApi) -> Self {
+        self.extensions = extensions;
         self
     }
 
@@ -1730,7 +1754,15 @@ impl AppReloader {
         // Discovery is bounded by the SDK and runs here rather than during the
         // live routing-table swap. Every later participant consumes this exact
         // prepared candidate.
-        resolve_reloadable_config(&mut baseline.config).await;
+        resolve_reloadable_config_with_extensions(&mut baseline.config, &self.extensions)
+            .await
+            .map_err(|error| {
+                PreparationError::failed(
+                    ReloadParticipant::RoutingTable,
+                    "evaluation_provider_invalid",
+                    &error.to_string(),
+                )
+            })?;
         Ok(baseline)
     }
 
@@ -1741,6 +1773,16 @@ impl AppReloader {
         self.wait_during_prepare().await;
         let baseline = self.prepare_resolved_candidate().await?;
         let config = baseline.config.clone();
+        self.extensions
+            .validate_evaluation_bindings(&config)
+            .map_err(|error| {
+                tracing::warn!(error = %error, "reload evaluation provider binding invalid");
+                PreparationError::failed(
+                    ReloadParticipant::RoutingTable,
+                    "evaluation_provider_invalid",
+                    "evaluation provider is unavailable or incompatible",
+                )
+            })?;
         let changed_unclassified = changed_unclassified_config_paths(
             self.startup_unclassified_values.as_ref(),
             baseline.unclassified_values.as_ref(),

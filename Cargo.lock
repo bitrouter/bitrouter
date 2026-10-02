@@ -669,6 +669,7 @@ dependencies = [
  "bitrouter-sdk",
  "bitrouter-telemetry",
  "bitrouter-tui",
+ "bitrouter-typesafe-provider",
  "chrono",
  "clap",
  "crossterm",
@@ -828,6 +829,16 @@ dependencies = [
  "similar",
  "unicode-segmentation",
  "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "bitrouter-typesafe-provider"
+version = "1.0.0-alpha.33"
+dependencies = [
+ "bitrouter-sdk",
+ "http",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@ use async_trait::async_trait;
 
 use bitrouter_sdk::PluginId;
 use bitrouter_sdk::Result;
+use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{DenyReason, HookDecision, PipelineContext, PreRequestHook};
 
 use crate::metering::{MeteringStore, TimeWindow};
@@ -41,18 +42,20 @@ impl PolicyHook {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
     }
-}
-
-#[async_trait]
-impl PreRequestHook for PolicyHook {
-    async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
-        let policy_id = Self::policy_id(ctx);
+    /// Apply host policy to either generation or typed evaluation.
+    pub(crate) async fn check_inference<'a>(
+        &self,
+        policy_id: Option<&str>,
+        caller: &CallerContext,
+        model: &str,
+        tools: impl Iterator<Item = &'a str>,
+    ) -> Result<HookDecision> {
         // No policy bound → no constraints (the combination is permissive).
-        let ids: Vec<&str> = policy_id.as_deref().into_iter().collect();
+        let ids: Vec<&str> = policy_id.into_iter().collect();
         let effective = self.store.effective_for(&ids);
 
         // 1. model allow / deny
-        if let Err(violation) = effective.check_model(ctx.model()) {
+        if let Err(violation) = effective.check_model(model) {
             return Ok(HookDecision::Deny(DenyReason::Forbidden(
                 violation.to_string(),
             )));
@@ -66,13 +69,12 @@ impl PreRequestHook for PolicyHook {
         }
 
         // 3. tool-access rules — checked against the request's declared tools
-        if effective.has_tool_restriction() {
-            let tools = ctx.prompt().tools.iter().map(|t| t.name());
-            if let Err(violation) = effective.check_tools(tools) {
-                return Ok(HookDecision::Deny(DenyReason::Forbidden(
-                    violation.to_string(),
-                )));
-            }
+        if effective.has_tool_restriction()
+            && let Err(violation) = effective.check_tools(tools)
+        {
+            return Ok(HookDecision::Deny(DenyReason::Forbidden(
+                violation.to_string(),
+            )));
         }
 
         // 4. spend ceiling — only enforceable with a MeteringStore
@@ -80,7 +82,7 @@ impl PreRequestHook for PolicyHook {
             && let Some(metering) = &self.metering
         {
             let Some(spent) = metering
-                .get_enforceable_spend(ctx.caller().api_key_id(), TimeWindow::ThisMonth)
+                .get_enforceable_spend(caller.api_key_id(), TimeWindow::ThisMonth)
                 .await?
             else {
                 return Ok(HookDecision::Deny(DenyReason::Forbidden(
@@ -101,7 +103,7 @@ impl PreRequestHook for PolicyHook {
         if effective.max_requests_per_minute.is_some()
             && let Some(metering) = &self.metering
         {
-            let rate = metering.get_rate(ctx.caller().api_key_id()).await?;
+            let rate = metering.get_rate(caller.api_key_id()).await?;
             let observed = rate.requests_per_minute.round().max(0.0) as u32;
             if let Err(violation) = effective.check_rate(observed) {
                 tracing::debug!(%violation, "policy rate limit hit");
@@ -112,5 +114,19 @@ impl PreRequestHook for PolicyHook {
         }
 
         Ok(HookDecision::Allow)
+    }
+}
+
+#[async_trait]
+impl PreRequestHook for PolicyHook {
+    async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+        let policy_id = Self::policy_id(ctx);
+        self.check_inference(
+            policy_id.as_deref(),
+            ctx.caller(),
+            ctx.model(),
+            ctx.prompt().tools.iter().map(|tool| tool.name()),
+        )
+        .await
     }
 }

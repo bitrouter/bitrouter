@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result, bail};
+use bitrouter_sdk::config::{ModelOperationConfig, ProviderOperationConfig};
+use bitrouter_sdk::inference::InferenceOperation;
 use bitrouter_sdk::language_model::types::ReasoningEffortConfig;
 use chrono::{Days, NaiveDate, Utc};
 use regex::Regex;
@@ -602,6 +604,7 @@ fn canonical_model_from_openrouter(model: OpenRouterModel) -> Result<CanonicalMo
 
     let canonical = CanonicalModel {
         id: model.id,
+        operations: Vec::new(),
         name: Some(model.name),
         description: None,
         input_modalities,
@@ -1142,6 +1145,7 @@ fn models_dev_plan_for_provider(
         adds.push(ProviderModel {
             id: canonical_id,
             provider_model_id: model_id.clone(),
+            operations: None,
             api_protocol: None,
             pricing,
             rate_limits: None,
@@ -1196,6 +1200,7 @@ fn v1_models_plan_for_provider(
         adds.push(ProviderModel {
             id: canonical_id,
             provider_model_id: model.id,
+            operations: None,
             api_protocol: None,
             pricing,
             rate_limits: None,
@@ -1758,11 +1763,17 @@ fn resolved_models(provider: &ProviderFile) -> Result<Vec<Value>> {
         .models
         .iter()
         .map(|model| {
-            let api_protocol = model
-                .api_protocol
-                .clone()
-                .or_else(|| resolve_pattern(&provider.api_protocol, &model.id))
-                .unwrap_or(ProtocolList::One(ApiProtocol::Openai));
+            let supports_generate = model
+                .operations
+                .as_ref()
+                .is_none_or(|operations| operations.contains_key(&InferenceOperation::Generate));
+            let api_protocol = supports_generate.then(|| {
+                model
+                    .api_protocol
+                    .clone()
+                    .or_else(|| resolve_pattern(&provider.api_protocol, &model.id))
+                    .unwrap_or(ProtocolList::One(ApiProtocol::Openai))
+            });
             let rate_limits = model
                 .rate_limits
                 .clone()
@@ -1773,10 +1784,18 @@ fn resolved_models(provider: &ProviderFile) -> Result<Vec<Value>> {
                 "provider_model_id".to_string(),
                 Value::String(model.provider_model_id.clone()),
             );
-            obj.insert(
-                "api_protocol".to_string(),
-                serde_json::to_value(api_protocol).context("serializing api_protocol")?,
-            );
+            if let Some(api_protocol) = api_protocol {
+                obj.insert(
+                    "api_protocol".to_string(),
+                    serde_json::to_value(api_protocol).context("serializing api_protocol")?,
+                );
+            }
+            if let Some(operations) = &model.operations {
+                obj.insert(
+                    "operations".to_string(),
+                    serde_json::to_value(operations).context("serializing operations")?,
+                );
+            }
             if let Some(pricing) = &model.pricing {
                 obj.insert(
                     "pricing".to_string(),
@@ -2084,6 +2103,19 @@ fn reject_reserved_namespace(model_id: &str, context: &str, issues: &mut Vec<Str
 }
 
 fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
+    if model
+        .operations
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>()
+        .len()
+        != model.operations.len()
+    {
+        issues.push(format!(
+            "registry/models: model '{}' declares an operation more than once",
+            model.id
+        ));
+    }
     for modality in &model.input_modalities {
         if !matches!(
             modality.as_str(),
@@ -3706,6 +3738,8 @@ enum AgentTransport {
 #[serde(deny_unknown_fields)]
 struct CanonicalModel {
     id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    operations: Vec<InferenceOperation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3787,6 +3821,8 @@ struct TerminalBench21 {
 #[serde(deny_unknown_fields)]
 struct ProviderFile {
     name: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    operations: BTreeMap<InferenceOperation, ProviderOperationConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3852,6 +3888,8 @@ struct ProviderMetadata {
 struct ProviderModel {
     id: String,
     provider_model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    operations: Option<BTreeMap<InferenceOperation, ModelOperationConfig>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     api_protocol: Option<ProtocolList>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -4724,6 +4762,7 @@ auto_sync:
         let add = ProviderModel {
             id: "acme/two".to_string(),
             provider_model_id: "two".to_string(),
+            operations: None,
             api_protocol: None,
             pricing: None,
             rate_limits: None,

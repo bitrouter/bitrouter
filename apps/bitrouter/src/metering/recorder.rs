@@ -25,8 +25,7 @@ use serde::Serialize;
 use crate::auth::events::ApiPrincipalEstablished;
 use crate::metering::db::{MeteringSessionIdentity, ReconciliationStatus, RequestMetric};
 use crate::metering::pricing::{
-    ChargeEvidence, PricingSource, PricingTable, calculate_charge_evidence,
-    unavailable_charge_evidence,
+    ChargeEvidence, PricingTable, calculate_charge_evidence, unavailable_charge_evidence,
 };
 use crate::metering::store::MeteringStore;
 use crate::session_identity::SessionIdentityObserved;
@@ -96,9 +95,12 @@ impl MeteringRecorder {
         if ctx.usage_origin == UsageOrigin::Unknown {
             return unavailable_charge_evidence(&usage, "usage_unavailable");
         }
-        match self.pricing.resolve(&ctx.provider_id, &ctx.model_id) {
-            Some(pricing) if !pricing.is_unconfigured() => {
-                calculate_charge_evidence(&usage, &pricing, PricingSource::Configured)
+        match self
+            .pricing
+            .resolve_with_source(&ctx.provider_id, &ctx.model_id)
+        {
+            Some((pricing, source)) if !pricing.is_unconfigured() => {
+                calculate_charge_evidence(&usage, &pricing, source)
             }
             _ => unavailable_charge_evidence(&usage, "pricing_not_found"),
         }

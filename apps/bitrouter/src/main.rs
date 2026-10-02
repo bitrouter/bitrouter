@@ -1931,7 +1931,11 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     match command {
         Command::Serve { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
-            bitrouter::host::serve_with_extensions(&source, |_| Ok(())).await
+            bitrouter::host::serve_with_extensions(&source, |api| {
+                bitrouter_typesafe_provider::register(api)?;
+                Ok(())
+            })
+            .await
         }
         Command::Start { config, log } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;

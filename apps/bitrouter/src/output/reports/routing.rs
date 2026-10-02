@@ -97,6 +97,7 @@ mod tests {
         bitrouter_sdk::language_model::routing::ModelInfo {
             id: id.into(),
             providers: providers.iter().map(|p| (*p).into()).collect(),
+            operations: vec![bitrouter_sdk::inference::InferenceOperation::Generate],
         }
     }
 
@@ -121,7 +122,7 @@ mod tests {
         assert_eq!(
             v,
             serde_json::json!({
-                "models": [{ "id": "gpt-5", "providers": ["openai", "azure"] }],
+                "models": [{ "id": "gpt-5", "providers": ["openai", "azure"], "operations": ["generate"] }],
                 "resolved_via": "live"
             })
         );
