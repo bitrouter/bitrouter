@@ -462,9 +462,12 @@ async fn assemble_app(
         Some(home) => home.to_path_buf(),
         None => std::env::current_dir().context("resolve continuation key home")?,
     };
+    let continuation_keys = ContinuationKeySource::lazy(runtime_home);
+    let private_context =
+        crate::continuation::native_context::PrivateContextPolicy::new(continuation_keys.clone());
     let continuation_registry = ContinuationRegistry::new(
         db.clone(),
-        ContinuationKeySource::lazy(runtime_home),
+        continuation_keys,
         config.continuation.retention_days,
         config.continuation.prune_batch_size,
     )?;
@@ -854,6 +857,7 @@ async fn assemble_app(
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
             lm.native_cost_estimator(pricing_for_native);
+            lm.native_private_context(Arc::new(private_context.clone()));
             lm.request_checker_runner(request_checks_for_pipeline);
             lm.fallback_backoff(
                 config
@@ -885,6 +889,7 @@ async fn assemble_app(
             // explicit routes and provider continuations retain precedence.
             // The pipeline runs bound external checks after these local hooks.
             lm.pre_resolution_hook(AuthHook::new(db_for_hooks.clone()));
+            lm.pre_resolution_hook(private_context);
             lm.pre_resolution_hook(SessionContextHook::new(acp_runtime_for_session));
             lm.pre_resolution_hook(continuation_for_pre_request);
             // Candidate recipe selection may replace defaults and the policy,

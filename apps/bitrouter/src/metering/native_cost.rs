@@ -109,6 +109,7 @@ mod tests {
 
     fn report() -> NativeAttemptReport {
         NativeAttemptReport {
+            private_context: Default::default(),
             request_id: "request".into(),
             attempt_index: 0,
             route: NativeRoute {

@@ -724,6 +724,8 @@ struct HttpClientSet {
     /// timeouts (for the per-request `total` cap, which is not a client
     /// setting).
     default_client: reqwest::Client,
+    managed_default_client: reqwest::Client,
+    managed_provider_clients: HashMap<String, reqwest::Client>,
     default_timeouts: HttpTimeouts,
     /// Per-provider clients keyed by `provider_name`, each paired with the
     /// resolved timeouts it was built from. Built once at construction; empty
@@ -757,8 +759,17 @@ struct RequestBuildInput<'a> {
 /// Build a reqwest client from the connection-level timeout knobs. `total` is
 /// deliberately not applied here — it is a per-request deadline set via
 /// [`reqwest::RequestBuilder::timeout`], not a client-builder setting.
-fn build_http_client(timeouts: &HttpTimeouts) -> Result<reqwest::Client> {
-    reqwest::Client::builder()
+fn build_http_client(timeouts: &HttpTimeouts, managed: bool) -> Result<reqwest::Client> {
+    // A redirect would disclose private history before the next origin could be
+    // authenticated. Managed calls therefore require an explicit final endpoint.
+    // https://docs.rs/reqwest/latest/reqwest/redirect/struct.Policy.html
+    let builder = reqwest::Client::builder();
+    let builder = if managed {
+        builder.redirect(reqwest::redirect::Policy::none())
+    } else {
+        builder
+    };
+    builder
         .connect_timeout(timeouts.connect)
         .read_timeout(timeouts.read)
         .pool_idle_timeout(timeouts.pool_idle)
@@ -771,17 +782,22 @@ fn build_http_client_set(
     default_timeouts: HttpTimeouts,
     per_provider: HashMap<String, HttpTimeouts>,
 ) -> Result<HttpClientSet> {
-    let default_client = build_http_client(&default_timeouts)?;
+    let default_client = build_http_client(&default_timeouts, false)?;
+    let managed_default_client = build_http_client(&default_timeouts, true)?;
+    let mut managed_provider_clients = HashMap::new();
     let mut provider_clients = HashMap::new();
     for (name, timeouts) in per_provider {
         if timeouts == default_timeouts {
             continue;
         }
-        let client = build_http_client(&timeouts)?;
+        let client = build_http_client(&timeouts, false)?;
+        managed_provider_clients.insert(name.clone(), build_http_client(&timeouts, true)?);
         provider_clients.insert(name, (timeouts, client));
     }
     Ok(HttpClientSet {
         default_client,
+        managed_default_client,
+        managed_provider_clients,
         default_timeouts,
         provider_clients,
     })
@@ -874,11 +890,25 @@ impl HttpExecutor {
 
     /// Pick the client + timeouts for `target`: a per-provider override when one
     /// is registered for its `provider_name`, else the default pair.
-    fn client_for(&self, target: &RoutingTarget) -> (reqwest::Client, HttpTimeouts) {
+    fn client_for(&self, target: &RoutingTarget, managed: bool) -> (reqwest::Client, HttpTimeouts) {
         let guard = match self.clients.read() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
+        if managed {
+            let client = guard
+                .managed_provider_clients
+                .get(&target.provider_name)
+                .unwrap_or(&guard.managed_default_client)
+                .clone();
+            let timeouts = guard
+                .provider_clients
+                .get(&target.provider_name)
+                .map(|(timeouts, _)| timeouts)
+                .unwrap_or(&guard.default_timeouts)
+                .clone();
+            return (client, timeouts);
+        }
         match guard.provider_clients.get(&target.provider_name) {
             Some((timeouts, client)) => (client.clone(), timeouts.clone()),
             None => (guard.default_client.clone(), guard.default_timeouts.clone()),
@@ -991,7 +1021,7 @@ impl HttpExecutor {
     async fn build_authenticated_request(
         &self,
         input: &RequestBuildInput<'_>,
-    ) -> Result<reqwest::Request> {
+    ) -> Result<crate::language_model::auth::AppliedAuth> {
         input.ctx.record_credential_authority(None);
         let mut builder = input.client.post(input.url).json(input.body);
         if let Some(total) = input.timeouts.total {
@@ -1030,6 +1060,21 @@ impl HttpExecutor {
             .extension::<crate::language_model::native::NativeManagedRequest>()
             .is_some()
         {
+            let expected_url = reqwest::Url::parse(input.url)
+                .map_err(|_| BitrouterError::bad_request("managed endpoint unavailable"))?;
+            if request.url() != &expected_url {
+                return Err(BitrouterError::bad_request(
+                    "managed authentication changed endpoint",
+                ));
+            }
+            if let Some(runtime) = input
+                .ctx
+                .extension::<super::native_context::NativePrivateContextRuntime>()
+            {
+                runtime
+                    .validate_authority(input.ctx, input.target, credential_authority.as_ref())
+                    .map_err(super::native_context::PrivateContextFailure::error)?;
+            }
             let expected = input.managed_expected.ok_or_else(|| {
                 BitrouterError::bad_request("managed request baseline unavailable")
             })?;
@@ -1093,8 +1138,17 @@ impl HttpExecutor {
                 "managed request changed after provider input token counting",
             ));
         }
-        input.ctx.record_credential_authority(credential_authority);
-        Ok(request)
+        input
+            .ctx
+            .record_credential_authority(credential_authority.clone());
+        Ok(match credential_authority {
+            Some(authority) => crate::language_model::auth::AppliedAuth::proven_with_scheme(
+                request,
+                authority.credential().clone(),
+                authority.effective_scheme(),
+            ),
+            None => crate::language_model::auth::AppliedAuth::unproven(request),
+        })
     }
 
     async fn refresh_auth_after_unauthorized(
@@ -1425,6 +1479,13 @@ impl Executor for HttpExecutor {
         ctx: &PipelineContext,
     ) -> crate::language_model::native::NativeProtocolValidation {
         let validate = || -> std::result::Result<(), &'static str> {
+            if let Some(runtime) =
+                ctx.extension::<super::native_context::NativePrivateContextRuntime>()
+            {
+                runtime
+                    .validate_target(prompt, ctx, target)
+                    .map_err(super::native_context::PrivateContextFailure::reason)?;
+            }
             let (adapter, _) = self
                 .dispatch
                 .lookup(&target.api_protocol)
@@ -1500,7 +1561,11 @@ impl Executor for HttpExecutor {
         let url = transport.endpoint_url(target, false);
         let trace_headers = ctx.take_outbound_trace_headers();
 
-        let (client, timeouts) = self.client_for(target);
+        let (client, timeouts) = self.client_for(
+            target,
+            ctx.extension::<super::native::NativeManagedRequest>()
+                .is_some(),
+        );
         let request_input = RequestBuildInput {
             client: &client,
             timeouts: &timeouts,
@@ -1514,16 +1579,22 @@ impl Executor for HttpExecutor {
         };
         let started = Instant::now();
         let mut attempted_auth_refresh = false;
-        let text = loop {
-            let request = self
+        let (text, successful_authority) = loop {
+            let applied = self
                 .build_authenticated_request(&request_input)
                 .await
                 .map_err(|error| error_scrubber.scrub_error(error))?;
+            let (request, authority) = applied.into_parts();
             error_scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
+            if let Some(runtime) =
+                ctx.extension::<super::native_context::NativePrivateContextRuntime>()
+            {
+                runtime.dispatched(prompt);
+            }
             let response = client.execute(request).await.map_err(|error| {
                 let error = if error.is_timeout() {
                     BitrouterError::UpstreamTimeout
@@ -1544,7 +1615,7 @@ impl Executor for HttpExecutor {
             })?;
 
             if status.is_success() {
-                break text;
+                break (text, authority);
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !attempted_auth_refresh
@@ -1577,6 +1648,10 @@ impl Executor for HttpExecutor {
         let result = parse_upstream_success(adapter.as_ref(), json)
             .map_err(|error| error_scrubber.scrub_error(error))?;
         let elapsed = started.elapsed().as_millis() as u64;
+        if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>()
+        {
+            runtime.succeeded(target, successful_authority, &result);
+        }
 
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
@@ -1614,7 +1689,11 @@ impl Executor for HttpExecutor {
         let url = transport.endpoint_url(target, true);
         let trace_headers = ctx.take_outbound_trace_headers();
 
-        let (client, timeouts) = self.client_for(target);
+        let (client, timeouts) = self.client_for(
+            target,
+            ctx.extension::<super::native::NativeManagedRequest>()
+                .is_some(),
+        );
         let request_input = RequestBuildInput {
             client: &client,
             timeouts: &timeouts,
@@ -1628,10 +1707,11 @@ impl Executor for HttpExecutor {
         };
         let mut attempted_auth_refresh = false;
         let response = loop {
-            let request = self
+            let applied = self
                 .build_authenticated_request(&request_input)
                 .await
                 .map_err(|error| error_scrubber.scrub_error(error))?;
+            let (request, _) = applied.into_parts();
             error_scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
                 .headers()
@@ -2297,7 +2377,7 @@ mod beta_forward_tests {
             .dispatch
             .lookup(&target.api_protocol)
             .ok_or_else(|| BitrouterError::internal("chat transport was not registered"))?;
-        let (client, timeouts) = executor.client_for(&target);
+        let (client, timeouts) = executor.client_for(&target, false);
         let body = serde_json::json!({"model": "claude-haiku"});
         let request = executor
             .build_authenticated_request(&RequestBuildInput {
@@ -2337,7 +2417,7 @@ mod beta_forward_tests {
             .dispatch
             .lookup(&target.api_protocol)
             .ok_or_else(|| BitrouterError::internal("missing Responses transport"))?;
-        let (client, timeouts) = executor.client_for(&target);
+        let (client, timeouts) = executor.client_for(&target, false);
         let body = serde_json::json!({"model":"fixture","input":"required text","tools":[]});
         let initial = executor
             .build_authenticated_request(&RequestBuildInput {
@@ -2452,7 +2532,7 @@ mod beta_forward_tests {
             .dispatch
             .lookup(&target.api_protocol)
             .ok_or_else(|| BitrouterError::internal("missing fixture transport"))?;
-        let (client, timeouts) = executor.client_for(&target);
+        let (client, timeouts) = executor.client_for(&target, false);
         let body = serde_json::json!({"model":"m","messages":[{"role":"user","content":"hello"}],"max_tokens":128});
         for managed in [false, true] {
             let mut ctx = ctx_with_beta(None);
@@ -2508,7 +2588,7 @@ mod beta_forward_tests {
                 .lookup(&target.api_protocol)
                 .ok_or_else(|| BitrouterError::internal("missing fixture adapter"))?;
             let body = adapter.render_request_for_target(&prompt, &target)?;
-            let (client, timeouts) = executor.client_for(&target);
+            let (client, timeouts) = executor.client_for(&target, false);
             executor
                 .build_authenticated_request(&RequestBuildInput {
                     client: &client,
@@ -2523,6 +2603,74 @@ mod beta_forward_tests {
                 })
                 .await?;
         }
+        Ok(())
+    }
+
+    struct RewriteEndpoint;
+    #[async_trait]
+    impl crate::language_model::auth::AuthApplier for RewriteEndpoint {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _: &RoutingTarget,
+        ) -> Result<reqwest::Request> {
+            *request.url_mut() = reqwest::Url::parse("https://other.invalid/messages")
+                .map_err(|e| BitrouterError::internal(e.to_string()))?;
+            request
+                .headers_mut()
+                .insert("x-api-key", http::HeaderValue::from_static("fixture-key"));
+            Ok(request)
+        }
+        async fn apply_with_authority(
+            &self,
+            request: reqwest::Request,
+            target: &RoutingTarget,
+        ) -> Result<AppliedAuth> {
+            Ok(AppliedAuth::proven(
+                self.apply(request, target).await?,
+                CredentialAuthority::derive("fixture", "principal"),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_auth_cannot_change_endpoint_even_before_proving_request() -> Result<()> {
+        let target = target(ApiProtocol::Messages);
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            Default::default(),
+            OutboundDispatch::builtin(),
+            AuthAppliers::new().with(&target.provider_name, Arc::new(RewriteEndpoint)),
+        )?;
+        let mut ctx = ctx_with_beta(None);
+        ctx.insert_extension(Arc::new(
+            crate::language_model::native::NativeManagedRequest,
+        ));
+        let (adapter, transport) = executor
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| BitrouterError::internal("fixture dispatch"))?;
+        let body = adapter.render_request_for_target(ctx.prompt(), &target)?;
+        let (client, timeouts) = executor.client_for(&target, true);
+        let error = executor
+            .build_authenticated_request(&RequestBuildInput {
+                client: &client,
+                timeouts: &timeouts,
+                url: "https://example.invalid/messages",
+                body: &body,
+                managed_expected: Some(&body),
+                target: &target,
+                transport,
+                ctx: &ctx,
+                trace_headers: None,
+            })
+            .await
+            .err()
+            .ok_or_else(|| BitrouterError::internal("changed endpoint accepted"))?;
+        assert!(
+            error
+                .to_string()
+                .contains("managed authentication changed endpoint")
+        );
         Ok(())
     }
 
@@ -2578,7 +2726,7 @@ mod beta_forward_tests {
                 .dispatch
                 .lookup(&target.api_protocol)
                 .ok_or_else(|| BitrouterError::internal("fixture transport"))?;
-            let (client, timeouts) = executor.client_for(&target);
+            let (client, timeouts) = executor.client_for(&target, false);
             for managed in [false, true] {
                 let mut ctx = ctx_with_beta(None);
                 if managed {
@@ -3071,10 +3219,10 @@ mod client_selection_tests {
         .expect("build executor");
 
         // A provider with an override resolves to its own timeouts…
-        let (_, slow) = exec.client_for(&target("slow"));
+        let (_, slow) = exec.client_for(&target("slow"), false);
         assert_eq!(slow.read, Duration::from_secs(300));
         // …and one absent from the map falls back to the default.
-        let (_, other) = exec.client_for(&target("openai"));
+        let (_, other) = exec.client_for(&target("openai"), false);
         assert_eq!(other.read, default.read);
     }
 
@@ -3110,7 +3258,7 @@ mod client_selection_tests {
         )
         .expect("build executor");
 
-        let (_, before) = exec.client_for(&target("slow"));
+        let (_, before) = exec.client_for(&target("slow"), false);
         assert_eq!(before.read, default.read);
 
         let mut overrides = HashMap::new();
@@ -3124,7 +3272,7 @@ mod client_selection_tests {
         exec.reload_provider_timeouts(default, overrides)
             .expect("reload timeout clients");
 
-        let (_, after) = exec.client_for(&target("slow"));
+        let (_, after) = exec.client_for(&target("slow"), false);
         assert_eq!(after.read, Duration::from_secs(450));
     }
 

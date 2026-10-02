@@ -324,6 +324,8 @@ pub struct Pipeline {
     /// billing us for.
     pub(crate) detached_executions: tokio_util::task::TaskTracker,
     pub(crate) request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
+    pub(crate) native_private_context:
+        Option<Arc<dyn super::native_context::NativePrivateContextPolicy>>,
     pub(crate) native_cost_estimator:
         Option<Arc<dyn super::native_accounting::NativeCostEstimator>>,
 }
@@ -612,11 +614,6 @@ impl Pipeline {
             )
             .await?;
 
-        if control.is_some() {
-            ctx.insert_extension(Arc::new(
-                crate::language_model::native::NativeManagedRequest,
-            ));
-        }
         if control.is_some()
             && let Some(tokens) = ctx.prompt().params.max_tokens
         {
@@ -1204,6 +1201,14 @@ impl Pipeline {
         selection: Option<NativeModelSelection>,
     ) -> Result<PreparedEntry> {
         let mut ctx = PipelineContext::new(req);
+        if selection.is_some() {
+            ctx.insert_extension(Arc::new(super::native::NativeManagedRequest));
+            ctx.insert_extension(Arc::new(
+                super::native_context::NativePrivateContextRuntime::new(
+                    self.native_private_context.clone(),
+                ),
+            ));
+        }
         self.observe_start(&ctx).await;
 
         match self.prepare_entry_stages(&mut ctx, selection).await {
@@ -1242,6 +1247,9 @@ impl Pipeline {
         // configured checker can cause external egress.
         self.run_pre_resolution(ctx)
             .await
+            .map_err(EntryPreparationFailure::pre_request)?;
+
+        super::native_context::validate_managed_history(ctx)
             .map_err(EntryPreparationFailure::pre_request)?;
 
         // Freeze the ingress router identity and checker bindings before an
@@ -1405,6 +1413,7 @@ impl Pipeline {
         bindings: &[RequestCheckBinding],
         validation: Option<&dyn NativeExecutionControl>,
     ) -> Result<()> {
+        super::native_context::validate_managed_history(ctx)?;
         if bindings.is_empty() {
             return Ok(());
         }
@@ -1671,8 +1680,16 @@ impl Pipeline {
                     .await;
                 return Err(error);
             }
+            let private_context =
+                ctx.extension::<super::native_context::NativePrivateContextRuntime>();
+            if let Some(runtime) = &private_context {
+                runtime.begin_attempt();
+            }
             let started = Instant::now();
-            let outcome = self.executor.execute(target, prompt, ctx).await;
+            let mut outcome = self.executor.execute(target, prompt, ctx).await;
+            if let (Some(runtime), Ok(result)) = (&private_context, &mut outcome) {
+                runtime.seal_output(ctx, &mut result.result);
+            }
             if let Some((control, route)) = attempt_control {
                 let mut report = NativeAttemptReport {
                     request_id: ctx.request_id().to_owned(),
@@ -1687,6 +1704,10 @@ impl Pipeline {
                     error: outcome.as_ref().err().map(ToString::to_string),
                     elapsed_ms: crate::language_model::timing::elapsed_millis(started),
                     token_cost: Default::default(),
+                    private_context: private_context
+                        .as_ref()
+                        .map(|runtime| runtime.observation())
+                        .unwrap_or_default(),
                     cache: super::native_accounting::NativeCacheObservation::capture(
                         &route.protocol,
                         outcome

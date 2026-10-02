@@ -3142,7 +3142,9 @@ impl NativeExecutionControl for StepControl {
                         route.rejection_reasons.iter().all(|reason| {
                             matches!(
                                 reason.as_str(),
-                                "input_limit_exceeded" | "context_window_exceeded"
+                                "input_limit_exceeded"
+                                    | "context_window_exceeded"
+                                    | "protocol_incompatible:private_context_target_mismatch"
                             )
                         })
                     })
