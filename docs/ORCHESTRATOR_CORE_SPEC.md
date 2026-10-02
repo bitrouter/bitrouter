@@ -407,6 +407,13 @@ Recovery rules:
   unknown spend retained, not a replay of a known successful execution.
 - Cancellation, queue pause, budgets and pending approval survive restart.
   Old approval identities do not authorize new execution attempts.
+- A nonterminal run requires an authenticated cumulative active-time handoff
+  bound to its run identity and exact restored durable head. The measurement
+  includes the union of work through entry to the replacement core, including
+  uncheckpointed work and process downtime, and excludes idle intervals. Unknown
+  coverage blocks restoration. Per-attempt durations and disconnect duration
+  cannot substitute for this measurement. Running tools then continue on the
+  replacement's monotonic clock, including restore validation and ACK waits.
 - Process-crash recovery is required. Cross-system exactly-once side effects,
   arbitrary power-loss durability and replayable private provider reasoning
   are not promised.

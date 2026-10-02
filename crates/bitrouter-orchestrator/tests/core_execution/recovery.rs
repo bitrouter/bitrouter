@@ -1,5 +1,7 @@
 use super::*;
-use bitrouter_orchestrator::core::protocol::{Restore, ToolObservation, ToolStatus};
+use bitrouter_orchestrator::core::protocol::{
+    Restore, RunActivityReconciliation, ToolObservation, ToolStatus,
+};
 use bitrouter_orchestrator::core::session::AgentStatus;
 
 fn capabilities(owner: &str) -> Capabilities {
@@ -119,6 +121,13 @@ pub(super) fn request(
         results: Vec::new(),
         available_artifacts: store.artifacts.values().cloned().collect(),
         previous_owner_stopped: true,
+        // This deterministic fixture certifies no additional unrecorded work.
+        // Clock-reconciliation tests supply their explicit cumulative intervals.
+        active_time: state.run.map(|run| RunActivityReconciliation {
+            run_id: run.run_id,
+            durable_head: store.head.clone(),
+            active_ms: run.active_ms,
+        }),
     })
 }
 

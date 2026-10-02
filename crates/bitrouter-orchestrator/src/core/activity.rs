@@ -55,6 +55,7 @@ pub(crate) struct Activity {
     running: BTreeSet<String>,
     since: Option<Instant>,
     accumulated_ms: u64,
+    last_finished: Option<Instant>,
 }
 
 impl Activity {
@@ -68,6 +69,17 @@ impl Activity {
         Self {
             accumulated_ms,
             ..Self::default()
+        }
+    }
+
+    /// Continue tools that were running at the authenticated handoff boundary,
+    /// including time spent validating restoration before the first commit.
+    pub fn handoff(accumulated_ms: u64, tools: BTreeSet<String>, at: Instant) -> Self {
+        Self {
+            since: (!tools.is_empty()).then_some(at),
+            running: tools,
+            accumulated_ms,
+            last_finished: None,
         }
     }
 
@@ -98,9 +110,25 @@ impl Activity {
     }
 
     pub fn finish(&mut self, id: &str) -> u64 {
-        if self.running.remove(id) && self.running.is_empty() {
-            self.accumulated_ms = self.elapsed_ms();
-            self.since = None;
+        self.finish_at(id, Instant::now())
+    }
+
+    pub fn finish_at(&mut self, id: &str, at: Instant) -> u64 {
+        if self.running.remove(id) {
+            self.last_finished = Some(self.last_finished.map_or(at, |last| last.max(at)));
+            if self.running.is_empty() {
+                self.accumulated_ms =
+                    self.accumulated_ms
+                        .saturating_add(self.since.map_or(0, |since| {
+                            self.last_finished
+                                .unwrap_or(at)
+                                .saturating_duration_since(since)
+                                .as_millis()
+                                .min(u128::from(u64::MAX)) as u64
+                        }));
+                self.since = None;
+                self.last_finished = None;
+            }
         }
         self.elapsed_ms()
     }

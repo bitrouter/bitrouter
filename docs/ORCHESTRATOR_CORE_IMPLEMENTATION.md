@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue, targeted steering, live tool observations, active-time admission/cleanup and settled ownership release implemented; downtime reconciliation, cleanup capacity reservations and remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue, targeted steering, live tool observations, active-time admission/cleanup, settled ownership release and authenticated cumulative activity handoff implemented; cleanup capacity reservations and remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -2009,3 +2009,97 @@ Validation with Rust 1.99:
 Remote CI remains a separate gate. The preceding budget commit's macOS job
 reported an external-editor PTY submission timeout; its failed job was rerun.
 Neither that pending rerun nor the new increment's CI is counted as a pass here.
+
+Subsequent remote verification confirmed the budget commit's second CI attempt
+completed successfully. The ownership-release commit `789ce9aa` also completed
+its CI workflow successfully across Linux, macOS and Windows.
+
+## C4 cumulative activity handoff on process restoration
+
+`Restore.active_time` accepts a `RunActivityReconciliation` containing the exact
+`run_id`, source `durable_head` and cumulative `active_ms`. Every nonterminal
+run requires this authenticated evidence before the replacement can commit or
+dispatch. A missing measurement returns `recovery_required`; a different run,
+stale head or regressing counter is rejected. Settled terminal runs may omit
+the measurement, and supplied evidence cannot change their final counter.
+
+The harness/host must attest the union of model, preparation and tool intervals
+through entry to `CoreSession::restore`. Concurrent intervals count once; pure
+approval or idle commit waits contribute nothing. This contract includes the
+uncheckpointed tail before a crash and the measured handoff delivery interval.
+An old timestamp, per-attempt sum, or entire disconnect duration is insufficient.
+If the host cannot establish this boundary, it must leave restoration blocked.
+Core does not infer clock synchronization between separate machines. C5 must
+establish the remote measured handoff or quiescent boundary before invoking this
+in-process entry; C6 must verify production harness measurement.
+
+The supplied value replaces the cumulative baseline, rather than being added
+to the last checkpoint. `RootRun.activity_reconciliations` retains each accepted
+measurement. The `session.restored` event contains the same evidence, and every
+supplied journal batch is checked for retained prefixes, monotonic counters,
+head identity and event/snapshot agreement. ACK loss is reconciled through the
+durable head and a fresh handoff; reusing a stale source head does not apply the
+measurement again. A new root run starts an independent counter and inventory.
+
+Still-running tools enter the local union clock at restoration entry, including
+snapshot validation and the restoration ACK wait. Pure approval remains idle.
+`HarnessPort::observe_restoration` installs a weak `RestorationActivity` observer
+before the first restore proposal. Running-tool restoration is rejected by the
+default implementation. Supporting hosts report actual stop times concurrently
+with commit waits; earlier stops can be delivered out of order without moving
+the union's end backwards. Pending approvals cannot start during restoration.
+Stop observations close the local interval immediately, remain bounded by the
+known running invocations, and commit as ordinary `tool.status` receipts before
+admission and its budget watchdog open. They do not synthesize tool results.
+After the observer closes, the host uses the live session's status/result API.
+The observer remains open through all restored model-output checkpoints.
+Restoration checkpoints retain the authenticated entry counter while the local
+open interval is provisional: a delayed stop can correct that interval without
+leaving an inflated durable `active_ms`. Before closure, the host's
+`synchronize_restoration` barrier drains earlier lifecycle observations; their
+status checkpoints are acknowledged before another drain. No checkpoint wait
+follows the final empty drain. Normal admission consults the corrected live
+clock immediately, and the next normal checkpoint captures its cumulative value.
+Exhausted evidence reaches the existing admission and cleanup path before any
+replacement model, tool or verification work can start. Missing activity
+evidence remains distinct from an uncertain tool effect and unknown monetary
+cost; none can be silently synthesized from the others.
+
+Independent review identified idle time incorrectly charged when a tool stopped
+during the restoration ACK wait, before the caller could access the new session.
+The observer bridge repairs this blind interval; a regression reports two stops
+out of order near the budget boundary and holds the restore ACK for a further
+1.1 seconds. It confirms no false limit failure, durable stop facts, exact
+duplicate handling and subsequent restoration without duplicate charges.
+Follow-up review found delayed stops could arrive after an overestimated counter
+was already proposed, and the observer initially closed before recovered model
+output replay. Freezing the provisional counter, draining the lifecycle bridge,
+and moving closure to the final return boundary repair those cases. Additional
+regressions hold the first stop's checkpoint while delivering a delayed second
+stop, and stop a root tool during a child's restored output checkpoint.
+Failure after the restore ACK now preserves the whole operation's durable
+status: later replay/stop proposal rejection or a failed lifecycle drain returns
+`committed`, while an unconfirmed submitted batch remains `unknown`. A regression
+verifies drain failure retains the restored head and starts no execution. The
+final independent read-only review found no remaining P1/P2 in this increment.
+
+Initial focused validation: all 203 `core_execution` integrations passed in
+29.757 seconds; the initial full workspace passed 3917 tests with 22 skipped in
+89.129 seconds. Those runs preceded the review repair. Nine final focused
+handoff tests passed in 1.579 seconds. Final workspace validation and independent
+review are recorded below when complete. Remaining
+C4 capacity/fault work, C5/C6 and the complete A01–A23 audit remain open.
+
+Final validation with Rust 1.99.0:
+
+- Workspace all-feature nextest: 3922 passed, 22 skipped, in 100.214 seconds,
+  with four test threads. This includes all twelve activity-handoff integrations.
+- Strict workspace/all-target/all-feature clippy and strict workspace rustdoc
+  (`-D warnings`) passed. Workspace doctests: 5 passed, 1 ignored.
+- Rust 1.93.0 workspace/all-feature check, formatting and diff checks passed.
+- Earlier intermediate validation caught a collapsible-if lint and a test
+  calling a crate-private helper; both were corrected. Those interrupted runs
+  are not included in the final passing evidence.
+
+The next commit's remote CI is a separate verification gate. The remaining C4
+capacity/fault work and C5/C6 production integration remain required.

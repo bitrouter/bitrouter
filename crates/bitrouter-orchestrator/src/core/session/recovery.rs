@@ -16,6 +16,7 @@ impl CoreSession {
         caller: CallerContext,
         harness: Arc<dyn HarnessPort>,
     ) -> Result<Self, CoreError> {
+        let handoff = Instant::now();
         let mut state = restore_snapshot(&request, capabilities)?;
         if !request.previous_owner_stopped {
             return Err(reject(
@@ -27,11 +28,11 @@ impl CoreSession {
             state.manifest.workspace_revision != request.binding.manifest.workspace_revision;
         state.manifest = request.binding.manifest.clone();
         let sent_tools = reconcile_tools(&mut state, &request, workspace_changed)?;
+        recovery_time::reconcile(&mut state, &request)?;
         let outputs = resume_model_steps(&mut state);
         let binding = request.binding;
         let active_ms = state.run.as_ref().map_or(0, |run| run.active_ms);
-        let mut activity = Activity::restored(active_ms);
-        activity.synchronize_tools(&tool_status::activity_ids(&state));
+        let activity = Activity::handoff(active_ms, tool_status::activity_ids(&state), handoff);
         let session = Self {
             shared: Arc::new(Shared {
                 live: Mutex::new(LiveSession {
@@ -55,6 +56,8 @@ impl CoreSession {
                     provider_evidence: Default::default(),
                     reconnecting: false,
                     budget_watching: false,
+                    restoration_started: Some(handoff),
+                    restoration_stops: BTreeMap::new(),
                 }),
                 commits: Mutex::new(()),
                 driver: Mutex::new(()),
@@ -70,9 +73,15 @@ impl CoreSession {
             }),
         };
         session
+            .shared
+            .harness
+            .observe_restoration(restoration_activity::RestorationActivity::new(&session))
+            .await?;
+        session
             .transition("session.restored", |state, _| {
                 Ok(
                     json!({"previous_owner_stopped":true,"tool_observations":request.tools,
+                "active_time":request.active_time,
                 "interrupted_steps":state.agents.values().filter_map(|agent| agent.turn.as_ref())
                     .flat_map(|turn| &turn.steps).filter(|step| step.interrupted)
                     .map(|step| &step.step_id).collect::<Vec<_>>()}),
@@ -95,14 +104,30 @@ impl CoreSession {
             {
                 if error.commit_status == CommitStatus::NotCommitted && session.can_progress().await
                 {
-                    session.fail(&agent_id, &error.message).await?;
+                    session
+                        .fail(&agent_id, &error.message)
+                        .await
+                        .map_err(committed_restore_error)?;
                 } else {
-                    return Err(error);
+                    return Err(committed_restore_error(error));
                 }
             }
         }
+        restoration_activity::finish(&session)
+            .await
+            .map_err(committed_restore_error)?;
         Ok(session)
     }
+}
+
+fn committed_restore_error(mut error: CoreError) -> CoreError {
+    // The restore checkpoint is already acknowledged. A rejected replay/stop
+    // proposal or failed drain cannot undo it. Preserve uncertainty if a later
+    // batch was submitted without confirmation.
+    if error.commit_status == CommitStatus::NotCommitted {
+        error.commit_status = CommitStatus::Committed;
+    }
+    error
 }
 
 fn restore_snapshot(
@@ -146,9 +171,15 @@ fn restore_snapshot(
     let mut identities = BTreeSet::new();
     let mut final_payload = None;
     let mut releases = BTreeMap::new();
+    let mut activity_history = None;
     for batch in std::iter::once(checkpoint).chain(&request.journal_tail) {
         let payload = batch.decode(&binding.limits)?;
         release::validate_history(&payload, &mut releases)?;
+        recovery_time::validate_history(
+            &payload,
+            CheckpointAck::for_batch(batch, &payload).head(),
+            &mut activity_history,
+        )?;
         if batch.identity.session_id != binding.grant.session_id {
             return Err(reject(
                 ErrorCode::UnauthorizedScope,

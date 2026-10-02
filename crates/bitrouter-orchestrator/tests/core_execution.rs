@@ -16,6 +16,8 @@ mod reconnect;
 mod reconstruction;
 #[path = "core_execution/recovery.rs"]
 mod recovery;
+#[path = "core_execution/recovery_time.rs"]
+mod recovery_time;
 #[path = "core_execution/release.rs"]
 mod release;
 #[path = "core_execution/root_queue.rs"]
@@ -68,6 +70,7 @@ struct Harness {
     material_requests: Mutex<Vec<(String, String, String)>>,
     fail_kind: Option<&'static str>,
     hold_kind: Option<&'static str>,
+    hold_also_kind: Option<&'static str>,
     hold_enabled: AtomicBool,
     wrong_ack: Option<bool>,
     hold_send: bool,
@@ -77,6 +80,9 @@ struct Harness {
     seen: Semaphore,
     resume: Semaphore,
     delivered: Semaphore,
+    restoration_activity: Mutex<
+        Option<bitrouter_orchestrator::core::session::restoration_activity::RestorationActivity>,
+    >,
 }
 
 impl Harness {
@@ -89,6 +95,7 @@ impl Harness {
             material_requests: Mutex::new(Vec::new()),
             fail_kind,
             hold_kind,
+            hold_also_kind: None,
             hold_enabled: AtomicBool::new(true),
             wrong_ack: None,
             hold_send: false,
@@ -98,6 +105,7 @@ impl Harness {
             seen: Semaphore::new(0),
             resume: Semaphore::new(0),
             delivered: Semaphore::new(0),
+            restoration_activity: Mutex::new(None),
         }
     }
 
@@ -122,11 +130,29 @@ impl Harness {
 
 #[async_trait]
 impl HarnessPort for Harness {
+    async fn observe_restoration(
+        &self,
+        observer: bitrouter_orchestrator::core::session::restoration_activity::RestorationActivity,
+    ) -> Result<(), CoreError> {
+        // Fixture tools remain running until a test explicitly reports a stop.
+        *self.restoration_activity.lock().await = Some(observer);
+        Ok(())
+    }
+
+    async fn synchronize_restoration(
+        &self,
+        _observer: bitrouter_orchestrator::core::session::restoration_activity::RestorationActivity,
+    ) -> Result<(), CoreError> {
+        // Tests deliver stop observations directly; there is no transport queue.
+        Ok(())
+    }
+
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         let payload = batch.decode(&Limits::default())?;
-        if self
-            .hold_kind
-            .is_some_and(|kind| payload.events.iter().any(|event| event.kind == kind))
+        if [self.hold_kind, self.hold_also_kind]
+            .into_iter()
+            .flatten()
+            .any(|kind| payload.events.iter().any(|event| event.kind == kind))
             && self.hold_enabled.load(Ordering::SeqCst)
         {
             self.seen.add_permits(1);
