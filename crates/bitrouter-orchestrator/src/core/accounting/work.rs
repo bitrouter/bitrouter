@@ -53,6 +53,13 @@ pub struct CostWork {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RunCostWork {
     pub work: BTreeMap<String, CostWork>,
+    /// Separate bases for each source/bill identity. Never a sum of all bases.
+    #[serde(default)]
+    pub charges:
+        BTreeMap<String, bitrouter_sdk::language_model::native_accounting::NativeCostClaim>,
+    /// Latest read uncertainty for a request, independent of retained claims.
+    #[serde(default)]
+    pub charge_unknown: BTreeMap<String, String>,
 }
 
 impl RunCostWork {

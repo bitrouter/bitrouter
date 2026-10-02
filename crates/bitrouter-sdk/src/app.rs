@@ -216,6 +216,33 @@ impl App {
             .await
     }
 
+    /// Read already persisted, caller-scoped request costs without executing or
+    /// charging another request. An unconfigured source is explicitly unknown.
+    pub async fn native_cost_observations(
+        &self,
+        caller: &CallerContext,
+        request_ids: &[String],
+    ) -> Result<Vec<crate::language_model::native_accounting::NativeCostObservation>> {
+        if let Some(source) = self
+            .language_model
+            .as_ref()
+            .and_then(|pipeline| pipeline.native_cost_source.as_ref())
+        {
+            source.read(caller, request_ids).await
+        } else {
+            Ok(request_ids
+                .iter()
+                .map(
+                    |request_id| crate::language_model::native_accounting::NativeCostObservation {
+                        request_id: request_id.clone(),
+                        claims: Vec::new(),
+                        unknown_reason: Some("cost_source_unavailable".into()),
+                    },
+                )
+                .collect())
+        }
+    }
+
     /// Stream one native agent turn through the same routed and settled path.
     /// The embedding agent owns client tool calls, so SDK server tools are
     /// excluded just as they are for `execute_native`.

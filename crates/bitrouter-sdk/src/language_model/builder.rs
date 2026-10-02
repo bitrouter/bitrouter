@@ -39,6 +39,7 @@ pub struct PipelineBuilder {
     fallback_backoff: Vec<Duration>,
     request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
     native_cost_estimator: Option<Arc<dyn super::native_accounting::NativeCostEstimator>>,
+    native_cost_source: Option<Arc<dyn super::native_accounting::NativeCostSource>>,
     native_private_context: Option<Arc<dyn super::native_context::NativePrivateContextPolicy>>,
 }
 
@@ -64,6 +65,7 @@ impl PipelineBuilder {
             fallback_backoff: Vec::new(),
             request_checker_runner: None,
             native_cost_estimator: None,
+            native_cost_source: None,
             native_private_context: None,
         }
     }
@@ -87,6 +89,15 @@ impl PipelineBuilder {
         estimator: Arc<dyn super::native_accounting::NativeCostEstimator>,
     ) -> &mut Self {
         self.native_cost_estimator = Some(estimator);
+        self
+    }
+
+    /// Read owner-scoped monetary evidence from the host's settlement store.
+    pub fn native_cost_source(
+        &mut self,
+        source: Arc<dyn super::native_accounting::NativeCostSource>,
+    ) -> &mut Self {
+        self.native_cost_source = Some(source);
         self
     }
 
@@ -265,6 +276,7 @@ impl PipelineBuilder {
             detached_executions: tokio_util::task::TaskTracker::new(),
             request_checker_runner: self.request_checker_runner,
             native_cost_estimator: self.native_cost_estimator,
+            native_cost_source: self.native_cost_source,
             native_private_context: self.native_private_context,
         })
     }

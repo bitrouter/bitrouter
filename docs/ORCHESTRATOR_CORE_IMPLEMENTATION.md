@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared plans, worker allocation, capacity, reconstruction, hook revalidation, token/cache evidence, native continuation and durable cost work below; full protocol coverage and monetary accounting acceptance remain open |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared plans, worker allocation, capacity, reconstruction, hook revalidation, token/cache evidence, native continuation, durable cost work and settlement evidence below; full protocol coverage and monetary accounting acceptance remain open |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -1166,3 +1166,67 @@ fix. Validation on the final implementation:
 - An initial check used a nonexistent error constructor; it was corrected before
   executable validation. The first broad pass preceded the timing fix and is not
   used as evidence for that fix.
+
+## C3 retained settlement evidence
+
+The production App installs a read-only `NativeCostSource` backed by its existing
+metering store. Lookup uses exact SDK request IDs and the authenticated caller's
+user and API key. Missing and foreign records return the same unavailable result.
+Reads neither run generation nor recalculate prices, charge the caller or initiate
+reconciliation. Hosts without a source retain explicit unknown observations.
+
+`CoreSession::refresh_costs` imports evidence into the original run, including a
+retired root run. Each managed model step also attempts a refresh after settlement.
+All batches share a five-second read deadline and observe harness disconnect.
+Reads hold neither the input nor commit lock; controls can proceed while a source
+waits. After reading, the core rechecks operation replay and request ownership
+before proposing `cost.observed`. Source errors or timeouts leave existing work
+costs unknown and allow model output processing to continue. A failed durable ACK
+still blocks progress, as it does for other checkpoint transitions.
+
+`RunCostWork.charges` stores separate estimated, reported and reconciled claims,
+keyed by a digest of source, bill ID and basis. A bill belongs to one request and
+one run across all bases, including retained earlier runs. Identical evidence is
+idempotent; contradictory content or reassignment rejects the complete proposed
+transition. `charge_unknown` records the latest read's unresolved request state
+without erasing older claims. Neither map replaces the unknown full-work cost.
+
+Configured metering amounts cover model tokens only. The projection excludes
+legacy synthetic zero-usage rate-limit/policy rejections: those rows do not prove
+observed zero tokens. Stored authoritative receipts provide reported amounts;
+matching accepted settlement state additionally provides reconciled amounts.
+Explicit accepted no-charge receipts preserve known zero. Estimates, reports,
+reconciliation, attempt token evidence and existing request settlement are
+different views of a bill and must never be added together.
+
+Production App/CoreSession fixtures exercise fallback sharing one billing ID,
+caller isolation, late reconciliation into a replaced run, explicit no-charge,
+unknown usage, legacy rejection zeros, duplicate reads and conflicting receipts.
+Core fixtures cover monetary ACK visibility/failure, source failures and retry,
+cross-run bill identity conflicts, and pending reads during cancel/disconnect.
+These tests use loopback providers and SQLite with the real metering recorder and
+receipt application path. They do not establish live-provider reconciliation,
+full cost coverage, crash recovery or remote API conformance. Internal HTTP
+authentication subattempts and auxiliary/material/authentication expenses remain
+open C3 work; C4–C6, A01–A23 acceptance, final audit, PR and CI remain required.
+
+Independent review identified the input-lock/read barrier, synthesized zero
+estimates, bill reassignment across runs and a follow-up race between source
+failure and provisional signal/cancel blocks. Automatic read failures now abort
+only on lost authority or commit uncertainty; temporary dispatch blocks still
+permit recording already received model output. The deterministic regression
+holds a List ACK, polls a signal update into its provisional block, then releases
+the failed source and requires the model step to settle before the signal resumes.
+Final independent read-only review found no remaining blocker for this segment.
+
+Validation on the reviewed implementation:
+
+- All nine new monetary evidence integration tests passed in 5.724 seconds.
+- Workspace nextest: 3800 passed, 22 skipped, in 236.228 seconds.
+- Strict all-target/all-feature workspace clippy passed without warnings.
+- Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
+- An initial check exposed a missing tracing dependency, fixed before executable
+  validation. An early rejection test mixed 503 and 429 responses, exercising an
+  aggregated failure rather than the intended legacy zero normalization. The final
+  regression uses two 429 endpoints and verifies that the actual persisted row
+  has the synthetic zero while the core retains unknown monetary evidence.
