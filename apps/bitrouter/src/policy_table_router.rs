@@ -2800,6 +2800,7 @@ mod tests {
             reasoning_effort: None,
             provider_id: "openai-codex".into(),
             account_label: None,
+            chat_completion_response_id: None,
             prompt_tokens: 10,
             completion_tokens: 5,
             reasoning_tokens: 0,
