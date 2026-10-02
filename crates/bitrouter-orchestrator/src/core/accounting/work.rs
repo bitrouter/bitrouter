@@ -124,7 +124,7 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                 let mut entry = work(agent_id, turn, step, CostWorkKind::Preparation);
                 if step.plan.is_some()
                     || step.count_plan.is_some()
-                    || step.settled
+                    || (step.settled && !step.interrupted)
                     || turn.status == AgentStatus::Failed
                 {
                     entry.state = CostWorkState::OutcomeRecorded;

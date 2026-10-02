@@ -40,6 +40,7 @@ use super::signals::{self, MaterialRequest, SignalState};
 
 mod preparation_work;
 mod provider_work;
+mod recovery;
 
 /// Implemented by the authenticated durable harness connection, including an
 /// in-process harness. Returning an ACK means the atomic append is durable.
@@ -137,6 +138,10 @@ pub struct ModelStep {
     pub preparation_work: Vec<PreparationWorkRecord>,
     pub attempts: Vec<AttemptRecord>,
     pub settled: bool,
+    /// The driver was lost without applied output. Closing the step does not
+    /// establish an outcome for any of its outstanding cost records.
+    #[serde(default)]
+    pub interrupted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +154,18 @@ pub struct Invocation {
     pub result_limit_bytes: u64,
     pub effect: super::protocol::ToolEffect,
     pub signal_revision: u64,
+    /// Workspace version used to authorize this invocation, including explicit
+    /// unknown. Legacy snapshots are additionally fenced by restoration.
+    #[serde(default)]
+    pub workspace_revision: Option<String>,
+    /// An uncertain observation retained when authenticated restoration later
+    /// supplies a definite outcome. Confirmed results cannot be overwritten.
+    #[serde(default)]
+    pub prior_uncertain_result: Option<ToolResult>,
+    /// Fresh harness evidence retained by the latest restoration, not an
+    /// authorization to infer the outcome of a later crash.
+    #[serde(default)]
+    pub recovery_observation: Option<super::protocol::ToolObservation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -205,6 +222,10 @@ pub struct AgentTurn {
     #[serde(default)]
     pub history_start: Option<usize>,
     pub status: AgentStatus,
+    /// Cancellation survives a temporary RecoveryRequired status, including
+    /// subtree interruption without cancellation of the root run.
+    #[serde(default)]
+    pub cancellation_requested: bool,
     pub steps: Vec<ModelStep>,
     pub invocations: Vec<Invocation>,
     pub core_calls: Vec<Call>,
@@ -440,6 +461,7 @@ impl CoreSession {
                 allocation_id: None,
                 history_start: Some(history_start),
                 status: AgentStatus::Runnable,
+                cancellation_requested: false,
                 steps: Vec::new(),
                 invocations: Vec::new(),
                 core_calls: Vec::new(),
@@ -1412,7 +1434,8 @@ impl CoreSession {
                             != live.state.manifest.permission_revision
                             || call.dispatch.tool_manifest_digest
                                 != live.state.manifest.tool_manifest_digest
-                            || call.signal_revision != live.state.signals.revision)
+                            || call.signal_revision != live.state.signals.revision
+                            || call.workspace_revision != live.state.manifest.workspace_revision)
                 })
                 .map(|call| call.dispatch.invocation_id.clone())
                 .collect::<BTreeSet<_>>()
@@ -1742,6 +1765,7 @@ impl CoreSession {
                         && !turn.status.terminal()
                     {
                         turn.status = AgentStatus::Cancelling;
+                        turn.cancellation_requested = true;
                     }
                 }
                 state.operations.insert(
@@ -1855,7 +1879,7 @@ impl CoreSession {
                 let message = ServerMessage::ToolCancel {
                     invocation_id: call.dispatch.invocation_id.clone(),
                     attempt_id: call.dispatch.attempt_id.clone(),
-                    execution_epoch: call.dispatch.execution_epoch,
+                    execution_epoch: self.shared.live.lock().await.gate.grant().execution_epoch,
                 };
                 // Cleanup delivery has the same cancellation safety as execute.
                 tokio::spawn(async move {
@@ -1992,6 +2016,7 @@ impl CoreSession {
                 preparation_work: Vec::new(),
                 attempts: Vec::new(),
                 settled: false,
+                interrupted: false,
             });
             Ok(json!({"step_id":step_id}))
         })
@@ -2309,6 +2334,9 @@ impl CoreSession {
                         continue;
                     }
                     calls.push(Invocation {
+                        recovery_observation: None,
+                        workspace_revision: manifest.workspace_revision.clone(),
+                        prior_uncertain_result: None,
                         signal_revision:step.signal_revision,
                         result_limit_bytes:manifest.max_tool_output_bytes,
                         effect:manifest.tools.iter().find(|tool| tool.name == *name).ok_or_else(||reject(ErrorCode::UnsupportedCapability,"tool lacks frozen execution metadata"))?.effect,
@@ -2447,6 +2475,9 @@ impl CoreSession {
                 .last()
                 .ok_or_else(|| reject(ErrorCode::Busy, "no final model step"))?;
             turn.invocations.push(Invocation {
+                recovery_observation: None,
+                workspace_revision: manifest.workspace_revision.clone(),
+                prior_uncertain_result: None,
                 signal_revision,
                 result_limit_bytes: manifest.max_tool_output_bytes,
                 effect: tool.effect,
@@ -2624,7 +2655,10 @@ impl CoreSession {
                                 && !live.sent_tools.contains(&call.dispatch.invocation_id)
                         })
                     })
-                    .filter(|call| call.signal_revision == live.state.signals.revision)
+                    .filter(|call| {
+                        call.signal_revision == live.state.signals.revision
+                            && call.workspace_revision == live.state.manifest.workspace_revision
+                    })
                     .map(|call| call.dispatch.clone());
                 if let Some(command) = &command {
                     if command.permission_revision != live.state.manifest.permission_revision
@@ -2687,6 +2721,7 @@ impl CoreSession {
                         && !turn.status.terminal()
                     {
                         turn.status = AgentStatus::Cancelling;
+                        turn.cancellation_requested = true;
                     }
                     if target != agent_id {
                         agent.queue.clear();
@@ -2828,40 +2863,7 @@ impl CoreSession {
                 refresh_run(&mut next);
             }
             super::accounting::work::synchronize(&mut next)?;
-            let references = next
-                .agents
-                .values()
-                .filter_map(|agent| agent.turn.as_ref())
-                .flat_map(|turn| &turn.invocations)
-                .filter_map(|call| call.result.as_ref())
-                .flat_map(|result| result.evidence.iter().cloned())
-                .chain(
-                    next.signals
-                        .materials
-                        .values()
-                        .filter(|material| material.content.is_some())
-                        .filter_map(|material| material.artifact.clone()),
-                )
-                .chain(
-                    next.agents
-                        .values()
-                        .filter_map(|agent| agent.turn.as_ref())
-                        .flat_map(|turn| &turn.steps)
-                        .flat_map(|step| &step.materials)
-                        .filter_map(|material| material.artifact.clone()),
-                );
-            let mut artifacts = BTreeMap::new();
-            for reference in references {
-                if artifacts
-                    .insert(reference.artifact_id.clone(), reference.clone())
-                    .is_some_and(|previous| previous != reference)
-                {
-                    return Err(reject(
-                        ErrorCode::CheckpointConflict,
-                        "artifact identity has conflicting content references",
-                    ));
-                }
-            }
+            let artifacts = recovery::artifacts(&next)?;
             let proposed = CheckpointPayload {
                 identity: BatchIdentity {
                     batch_id: id("batch"),
@@ -3486,6 +3488,7 @@ impl NativeExecutionControl for StepControl {
                     preparation_work: Vec::new(),
                     attempts: Vec::new(),
                     settled: false,
+                    interrupted: false,
                 });
                 messages = Some(candidate.prompt.messages);
                 encode(&record)

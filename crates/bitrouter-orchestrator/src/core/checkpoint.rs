@@ -336,7 +336,7 @@ pub struct CheckpointAck {
 }
 
 impl CheckpointAck {
-    fn for_batch(batch: &CheckpointBatch, payload: &CheckpointPayload) -> Self {
+    pub(crate) fn for_batch(batch: &CheckpointBatch, payload: &CheckpointPayload) -> Self {
         Self {
             batch_id: batch.identity.batch_id.clone(),
             payload_sha256: batch.payload_sha256.clone(),
