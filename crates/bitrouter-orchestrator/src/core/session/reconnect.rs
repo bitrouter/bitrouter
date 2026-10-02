@@ -170,6 +170,7 @@ impl CoreSession {
             live.activity = Activity::restored(active_ms);
             let tools = tool_status::activity_ids(&live.state);
             live.activity.synchronize_tools(&tools);
+            budget::watch(self, &mut live);
         }
         let reports = self
             .shared
@@ -306,6 +307,7 @@ impl CoreSession {
                 .is_some_and(|run| run.run_id == evidence.run_id)
             {
                 live.activity.observe_elapsed(active_ms);
+                budget::watch(self, &mut live);
             }
         }
         self.operation(operation_id).await.ok_or_else(|| {

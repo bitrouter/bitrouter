@@ -78,6 +78,10 @@ impl Activity {
         self.running.insert(id);
     }
 
+    pub fn is_running(&self) -> bool {
+        !self.running.is_empty()
+    }
+
     pub fn synchronize_tools(&mut self, tools: &BTreeSet<String>) {
         let ended = self
             .running

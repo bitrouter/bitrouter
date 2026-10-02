@@ -1,5 +1,7 @@
 #[path = "core_execution/accounting.rs"]
 mod accounting;
+#[path = "core_execution/budget.rs"]
+mod budget;
 #[path = "core_execution/input_count.rs"]
 mod input_count;
 #[path = "core_execution/material_work.rs"]

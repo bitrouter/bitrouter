@@ -38,6 +38,7 @@ use super::routing::{
 };
 use super::signals::{self, MaterialRequest, SignalState};
 
+mod budget;
 mod preparation_work;
 mod provider_work;
 mod reconnect;
@@ -198,6 +199,10 @@ pub struct RootRun {
     #[serde(default)]
     pub token_accounting: Option<super::accounting::RunTokenAccounting>,
     pub active_ms: u64,
+    /// A committed resource failure stops new work while outcomes and cleanup
+    /// remain admissible. It does not turn unknown effects into known results.
+    #[serde(default)]
+    pub resource_error: Option<CoreError>,
     pub cancellation: Option<String>,
     pub final_answer: Option<String>,
     pub terminal_reason: Option<String>,
@@ -317,6 +322,7 @@ struct LiveSession {
     model_controls: Vec<std::sync::Weak<StepControl>>,
     provider_evidence: super::protocol::PendingProviderEvidence,
     reconnecting: bool,
+    budget_watching: bool,
 }
 
 struct Shared {
@@ -331,6 +337,7 @@ struct Shared {
     capabilities: Capabilities,
     changed: Notify,
     steering_changed: Notify,
+    budget_changed: Arc<Notify>,
 }
 
 #[derive(Clone)]
@@ -413,6 +420,7 @@ impl CoreSession {
                     model_controls: Vec::new(),
                     provider_evidence: Default::default(),
                     reconnecting: false,
+                    budget_watching: false,
                 }),
                 commits: Mutex::new(()),
                 driver: Mutex::new(()),
@@ -424,6 +432,7 @@ impl CoreSession {
                 capabilities: capabilities.clone(),
                 changed: Notify::new(),
                 steering_changed: Notify::new(),
+                budget_changed: Arc::new(Notify::new()),
             }),
         };
         session
@@ -841,6 +850,7 @@ impl CoreSession {
         let mut running = BTreeSet::new();
         let mut first_error = None;
         loop {
+            self.enforce_active_time(None).await?;
             if jobs.is_empty() && self.advance_root_queue().await? {
                 first_error = None;
                 continue;
@@ -875,10 +885,28 @@ impl CoreSession {
                     }
                     let revision = self.head().await.state_revision;
                     match self.advance_agent(&agent.agent_id).await {
-                        Ok(changed) => progressed |= changed,
+                        Ok(changed) => {
+                            // Tool delivery can await the harness while another
+                            // task commits cancellation or a resource boundary.
+                            // Revisit the agent before exposing it as blocked.
+                            progressed |= changed || self.head().await.state_revision != revision;
+                        }
                         Err(error)
                             if error.code == ErrorCode::Busy
                                 && self.head().await.state_revision != revision =>
+                        {
+                            progressed = true;
+                        }
+                        Err(error)
+                            if error.code == ErrorCode::LimitExceeded
+                                && (self.enforce_active_time(None).await?
+                                    || (run.resource_error.is_none()
+                                        && self.snapshot().await.run.as_ref().is_some_and(
+                                            |current| {
+                                                current.run_id == run.run_id
+                                                    && current.resource_error.is_some()
+                                            },
+                                        ))) =>
                         {
                             progressed = true;
                         }
@@ -985,13 +1013,23 @@ impl CoreSession {
                 }
                 if jobs.is_empty() {
                     // The SDK can deliver its result just before dropping its
-                    // finalization context. Steering must await that context's
+                    // finalization context. Interruption must await that context's
                     // release rather than strand an otherwise runnable turn.
                     let (settling, disconnected) = {
                         let live = self.shared.live.lock().await;
                         let settling = live.model_controls.iter().any(|control| {
                             control.upgrade().is_some_and(|control| {
                                 steering::has_pending(&live.state, &control.agent_id)
+                                    || live
+                                        .state
+                                        .agents
+                                        .get(&control.agent_id)
+                                        .and_then(|agent| agent.turn.as_ref())
+                                        .is_some_and(|turn| {
+                                            turn.status == AgentStatus::Cancelling
+                                                && turn.run_id == control.run_id
+                                                && turn.agent_turn_id == control.agent_turn_id
+                                        })
                             })
                         });
                         (settling, live.disconnected.clone())
@@ -1001,12 +1039,16 @@ impl CoreSession {
                             _ = self.shared.changed.notified() => continue,
                             _ = disconnected.cancelled() => return Err(reject(
                                 ErrorCode::CheckpointUnavailable,
-                                "steering settlement lost durable authority",
+                                "interruption settlement lost durable authority",
                             )),
                         }
                     }
                     if state.agents.values().any(|agent| {
-                        steering::has_pending(&state, &agent.agent_id)
+                        (steering::has_pending(&state, &agent.agent_id)
+                            || agent
+                                .turn
+                                .as_ref()
+                                .is_some_and(|turn| turn.status == AgentStatus::Cancelling))
                             && agent.turn.as_ref().is_some_and(|turn| {
                                 turn.invocations.iter().all(|call| {
                                     call.result.as_ref().is_some_and(|result| {
@@ -1438,6 +1480,7 @@ impl CoreSession {
         if needs_request || turn.status != AgentStatus::WaitingMaterial {
             let _input = self.shared.inputs.lock().await;
             self.transition_for(Some(agent_id), "material.requested", |state, _| {
+                budget::ensure(state)?;
                 steering::ensure_ready(state, agent_id)?;
                 let current = agent_turn(state, agent_id)?;
                 if current.agent_turn_id != turn.agent_turn_id
@@ -1492,6 +1535,7 @@ impl CoreSession {
                         "material delivery awaits committed state",
                     ));
                 }
+                budget::ensure_live(&live)?;
                 if live
                     .state
                     .agents
@@ -1605,6 +1649,9 @@ impl CoreSession {
             .run
             .as_ref()
             .ok_or_else(|| reject(ErrorCode::Busy, "no active run"))?;
+        if self.enforce_active_time(Some(&run.run_id)).await? {
+            return Ok(true);
+        }
         let Some(root) = state.root_turn() else {
             return Ok(false);
         };
@@ -1621,19 +1668,24 @@ impl CoreSession {
         {
             return Ok(false);
         }
-        let failed = root.status != AgentStatus::Completed;
-        let cancelled = run.cancellation.is_some();
+        let failed = root.status != AgentStatus::Completed || run.resource_error.is_some();
+        let cancelled = run.cancellation.is_some() && run.resource_error.is_none();
         self.transition(if cancelled { "run.cancelled" } else if failed { "run.failed" } else { "run.completed" }, |state, _| {
             let current=state.run.as_ref().ok_or_else(|| reject(ErrorCode::Busy,"no run"))?;
-            if current.run_id!=run.run_id || current.cancellation.is_some()!=cancelled || state.agents.values().any(|agent| !agent.queue.is_empty() || agent.turn.as_ref().is_some_and(|turn| turn.run_id==current.run_id && (!turn.status.terminal() || (agent.parent_id.is_some()&&!turn.notified) || turn.invocations.iter().any(|call|call.result.is_none())))) {return Err(reject(ErrorCode::Busy,"run terminal boundary changed"));}
+            // Late evidence can raise the counter while this transition waits
+            // for another commit. Re-enter enforcement before sealing success.
+            if current.resource_error.is_none() && matches!(current.status, RunStatus::Running | RunStatus::Waiting) && budget::ensure(state).is_err() {
+                return Err(reject(ErrorCode::Busy,"run terminal boundary awaits active-time enforcement"));
+            }
+            if current.run_id!=run.run_id || (current.cancellation.is_some() && current.resource_error.is_none())!=cancelled || state.agents.values().any(|agent| !agent.queue.is_empty() || agent.turn.as_ref().is_some_and(|turn| turn.run_id==current.run_id && (!turn.status.terminal() || (agent.parent_id.is_some()&&!turn.notified) || turn.invocations.iter().any(|call|call.result.is_none())))) {return Err(reject(ErrorCode::Busy,"run terminal boundary changed"));}
             let root = state.root_turn().ok_or_else(|| reject(ErrorCode::Busy, "no root turn"))?;
-            if (root.status!=AgentStatus::Completed)!=failed {return Err(reject(ErrorCode::Busy,"root terminal changed"));}
+            if (root.status!=AgentStatus::Completed || current.resource_error.is_some())!=failed {return Err(reject(ErrorCode::Busy,"root terminal changed"));}
             let answer = root.final_answer.clone();
             let run = active_run(state)?;
             run.status = if cancelled { RunStatus::Cancelled } else if failed { RunStatus::Failed } else { RunStatus::Completed };
             run.final_answer = answer;
-            run.terminal_reason = Some(if cancelled { "run cancellation and owned effects settled" } else if failed { "root failed after descendants and effects settled" } else { "root and all descendants and effects settled" }.into());
-            Ok(json!({"status":run.status,"answer":run.final_answer,"reason":run.terminal_reason}))
+            run.terminal_reason = Some(if run.resource_error.is_some() { "resource limit reached; descendants and effects settled" } else if cancelled { "run cancellation and owned effects settled" } else if failed { "root failed after descendants and effects settled" } else { "root and all descendants and effects settled" }.into());
+            Ok(json!({"status":run.status,"answer":run.final_answer,"reason":run.terminal_reason,"error":run.resource_error}))
         }).await?;
         Ok(true)
     }
@@ -1667,6 +1719,7 @@ impl CoreSession {
             self.block_dispatch(&call.invocation_id).await;
         }
         let committed = self.transition_for(Some(agent_id), "collaboration.applied", |state, head| {
+            budget::ensure(state)?;
             steering::ensure_ready(state, agent_id)?;
             let limit = active_run(state)?.limits.input_bytes;
             let applied = if let Some(wait) = &call.wait {
@@ -1760,6 +1813,12 @@ impl CoreSession {
                         ErrorCode::LimitExceeded,
                         "runtime action exceeds input bound",
                     ));
+                }
+                if matches!(
+                    action,
+                    Action::Spawn { .. } | Action::Delegate { .. } | Action::Followup { .. }
+                ) {
+                    budget::ensure(state)?;
                 }
                 let applied =
                     collaboration::apply(state, actor_id, &action, now_ms()?, head.state_revision)?;
@@ -1957,6 +2016,23 @@ impl CoreSession {
             .get(agent_id)
             .and_then(|agent| agent.turn.as_ref())
             .ok_or_else(|| reject(ErrorCode::Busy, "agent has no turn"))?;
+        if self
+            .shared
+            .live
+            .lock()
+            .await
+            .model_controls
+            .iter()
+            .any(|control| {
+                control.upgrade().is_some_and(|control| {
+                    control.agent_id == agent_id
+                        && control.run_id == turn.run_id
+                        && control.agent_turn_id == turn.agent_turn_id
+                })
+            })
+        {
+            return Ok(false);
+        }
         if turn.steps.last().is_some_and(|step| !step.settled) {
             self.transition_for(Some(agent_id), "run.recovery_required", |state, _| {
                 agent_turn(state, agent_id)?.status = AgentStatus::RecoveryRequired;
@@ -1989,13 +2065,13 @@ impl CoreSession {
                                 invocation_id: call.dispatch.invocation_id.clone(),
                                 attempt_id: call.dispatch.attempt_id.clone(),
                                 status: ToolOutcome::NotExecuted,
-                                output: "cancelled before dispatch".into(),
+                                output: String::new(),
                                 evidence: Vec::new(),
                                 workspace_revision: None,
                             });
                         }
                     }
-                    Ok(json!({"invocation_ids":unsent}))
+                    Ok(json!({"invocation_ids":unsent,"reason":"interrupted before dispatch"}))
                 },
             )
             .await?;
@@ -2115,9 +2191,16 @@ impl CoreSession {
                 "an interrupted model driver must be reconciled before retry",
             ));
         }
-        if run.model_attempts >= run.limits.model_attempts
-            || run.active_ms >= run.limits.active_seconds.saturating_mul(1000)
-        {
+        let exhausted = {
+            let live = self.shared.live.lock().await;
+            budget::ensure_live(&live).is_err()
+        };
+        if exhausted {
+            drop(preparing);
+            self.enforce_active_time(None).await?;
+            return Ok(());
+        }
+        if run.model_attempts >= run.limits.model_attempts {
             self.fail(agent_id, "run model or active-time limit reached")
                 .await?;
             return Ok(());
@@ -2138,6 +2221,7 @@ impl CoreSession {
             .get(agent_id)
             .map(|agent| agent.context_revision);
         self.transition_for(Some(agent_id), "model.step.preparing", |state, head| {
+            budget::ensure(state)?;
             steering::ensure_ready(state, agent_id)?;
             if state.signals.revision != source_signal_revision
                 || state.manifest != source_manifest
@@ -2602,6 +2686,7 @@ impl CoreSession {
     async fn schedule_verification(&self, agent_id: &str) -> Result<(), CoreError> {
         let _input = self.shared.inputs.lock().await;
         self.transition_for(Some(agent_id), "tool.verification.intent", |state, head| {
+            budget::ensure(state)?;
             steering::ensure_ready(state, agent_id)?;
             let signal_revision = state.signals.revision;
             if pending_dependencies(state, agent_id) {
@@ -2859,6 +2944,7 @@ impl CoreSession {
                     })
                     .map(|call| call.dispatch.clone());
                 if let Some(command) = &command {
+                    budget::ensure_live(&live)?;
                     if command.permission_revision != live.state.manifest.permission_revision
                         || command.tool_manifest_digest != live.state.manifest.tool_manifest_digest
                     {
@@ -2980,6 +3066,7 @@ impl CoreSession {
                     )),
                 }
             }
+            budget::ensure_live(&live)?;
             if !live.gate.can_dispatch()
                 || live.state.run.as_ref().is_none_or(|run| {
                     !matches!(run.status, RunStatus::Running | RunStatus::Waiting)
@@ -2997,9 +3084,7 @@ impl CoreSession {
                 ));
             }
             if live.state.run.as_ref().is_some_and(|run| {
-                live.activity.elapsed_ms() >= run.limits.active_seconds.saturating_mul(1000)
-                    || (requires_remaining_attempt
-                        && run.model_attempts >= run.limits.model_attempts)
+                requires_remaining_attempt && run.model_attempts >= run.limits.model_attempts
             }) {
                 return Err(reject(
                     ErrorCode::LimitExceeded,
@@ -3008,6 +3093,7 @@ impl CoreSession {
             }
             validate_step_source(&live.state, agent_id, step_id)?;
             live.activity.start(activity_id);
+            budget::watch(self, &mut live);
             return Ok(());
         }
     }
@@ -3033,6 +3119,7 @@ impl CoreSession {
             live.provisional_blocks.remove(operation_id);
             if live.provisional_blocks.is_empty() && !live.reconnecting {
                 live.gate.clear_dispatch_block();
+                budget::watch(self, &mut live);
             }
         }
     }
@@ -3087,16 +3174,10 @@ impl CoreSession {
                 let mut live = self.shared.live.lock().await;
                 let mut next = live.state.clone();
                 let head = live.gate.head().clone();
-                let payload = change(&mut next, &head, live.gate.can_dispatch())?;
-                if let Some(run) = &mut next.run
-                    && live
-                        .state
-                        .run
-                        .as_ref()
-                        .is_some_and(|previous| previous.run_id == run.run_id)
-                {
+                if let Some(run) = &mut next.run {
                     run.active_ms = run.active_ms.max(live.activity.elapsed_ms());
                 }
+                let payload = change(&mut next, &head, live.gate.can_dispatch())?;
                 if !matches!(kind, "run.completed" | "run.failed" | "run.cancelled") {
                     refresh_run(&mut next);
                 }
@@ -3130,6 +3211,7 @@ impl CoreSession {
                         .values()
                         .filter(|record| record.received_state_revision == head.state_revision + 1)
                         .flat_map(|record| record.tool_start_fences.iter().cloned())
+                        .chain(budget::start_fences(&next, kind))
                         .collect(),
                     events: vec![DurableEvent {
                         event_seq: head.event_seq + 1,
@@ -3171,6 +3253,7 @@ impl CoreSession {
                     if kind == "input.accepted" {
                         live.activity = Activity::default();
                     }
+                    budget::watch(self, &mut live);
                     self.shared.changed.notify_one();
                     Ok(())
                 }
@@ -3246,6 +3329,7 @@ impl NativeExecutionControl for StepControl {
                 Some(&self.agent_id),
                 "model.input_count.intent",
                 |state, _| {
+                    budget::ensure(state)?;
                     validate_step_source(state, &self.agent_id, &step_id)?;
                     let step = current_step(state, &self.agent_id, &step_id)?;
                     validate_context_validation(step)?;
@@ -3350,6 +3434,7 @@ impl NativeExecutionControl for StepControl {
                 Some(&self.agent_id),
                 "context.validation.intent",
                 |state, _| {
+                    budget::ensure(state)?;
                     validate_step_source(state, &self.agent_id, &step_id)?;
                     let turn = agent_turn(state, &self.agent_id)?;
                     let source = turn
@@ -3652,6 +3737,7 @@ impl NativeExecutionControl for StepControl {
                 Some(&self.agent_id),
                 "context.rebuild.intent",
                 |state, _| {
+                    budget::ensure(state)?;
                     validate_step_source(state, &self.agent_id, &step_id)?;
                     super::accounting::work::begin_rebuild(state, &self.agent_id, &step_id)?;
                     Ok(json!({"step_id":step_id,"request_id":plan.request_id}))
@@ -4353,7 +4439,7 @@ fn refresh_run(state: &mut SessionSnapshot) {
         .any(|turn| turn.status == AgentStatus::RecoveryRequired)
     {
         RunStatus::RecoveryRequired
-    } else if run.cancellation.is_some() {
+    } else if run.cancellation.is_some() || run.resource_error.is_some() {
         RunStatus::Cancelling
     } else if turns.iter().all(|turn| turn.status.terminal())
         || turns.iter().any(|turn| {

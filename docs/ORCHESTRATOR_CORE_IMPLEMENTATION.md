@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue, targeted steering and live tool observations implemented; release, complete active-time enforcement/reconciliation and remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue, targeted steering, live tool observations and active-time admission/cleanup implemented; release, downtime reconciliation, cleanup capacity reservations and remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -1869,5 +1869,81 @@ Validation with Rust 1.99:
   nested condition without changing its behavior. Strict workspace rustdoc,
   formatting and diff checks passed; workspace doctests: 5 passed, 1 ignored.
 - Rust 1.93.0 workspace/all-feature `cargo check` passed.
+
+The new increment's remote CI remains separate from these local checks.
+
+
+The pushed `79228b27` live-status increment passed every executed CI check,
+including Linux/macOS/Windows checks, MSRV, docs and feature isolation. Publishing
+jobs were skipped by workflow policy.
+
+## C4 active-time admission and cleanup
+
+The session now enforces the latest shared active-time counter before model,
+preparation/count/validation/reconstruction, workspace-tool, verification,
+material-request and new collaboration work. Admission uses the live union
+clock and refreshes the checkpoint counter before validating an intent. It also
+checks after an intent ACK, so a held commit cannot authorize execution after
+another agent or tool consumes the remaining budget. Pure approval and idle
+checkpoint waits remain excluded.
+
+An independent timer observes active work even after `drive()` returns to await
+harness tools. It retains only a weak session reference while sleeping and uses
+its own notification channel. Exhaustion after the last activity ends still
+counts, including restored exhausted counters and the final success boundary.
+A timer cannot transfer a previous root's elapsed time or failure to a new run.
+
+`run.limit_reached` atomically commits `RootRun.resource_error` with a typed,
+committed `limit_exceeded`, pauses the root queue, removes pending descendant
+follow-ups, marks current nonterminal turns for cancellation and fences every
+unresolved current-run tool start. The fence has the same harness transaction
+requirement as steering: an old pending approval cannot start after that batch
+commits. Unstarted local dispatches receive empty `not_executed` results, which
+also fit a harness advertising a one-byte output bound. Delivered commands use
+the existing cancel/result reconciliation path; a cancel request is not a tool
+outcome. Late status, definite results, cost reports and provider settlement
+remain admissible.
+
+Cleanup preserves paired history and waits for owned SDK execution/finalization.
+If a driver is abandoned, a still-live SDK control prevents premature recovery;
+after that control exits, an unapplied model step requires normal reconciliation.
+Unknown tool effects remain `recovery_required` with the resource failure and
+cancellation intent retained. After all effects settle, the run ends `failed`
+with its resource error, including when a later explicit cancel was accepted.
+Only explicit queue resume can activate the next root, with a fresh counter.
+
+The driver revisits agents when state changes during asynchronous tool delivery.
+It retries a limit rejection only when the same run gained a new committed
+resource failure; a cleanup event advancing revision is not sufficient. A cleanup checkpoint that itself exceeds a bound returns its
+typed error without a busy loop, retaining its required result and cleanup
+state. Reserving sufficient capacity for all cleanup/terminal records remains
+separate bounded-operation work; this increment does not claim that guarantee.
+
+Process-downtime interval reconciliation, session release, the remaining C4
+fault matrix and capacity work, C5 remote/auth integration, C6 production
+conformance and full A01–A23 acceptance remain open.
+
+
+Independent review identified two further boundary defects. Cleanup errors could
+loop after a no-op cleanup event advanced the revision, and late elapsed-time
+evidence could overtake the preliminary check before the terminal commit. The
+regression for a near-capacity snapshot reproduced the first failure. Both are
+fixed: cleanup limit errors propagate, and the terminal closure rechecks the
+fresh counter under the commit lock. Final independent read-only review found
+no remaining P1/P2 issue in this increment.
+
+
+Validation of the final source with Rust 1.99:
+
+- Ten focused budget integrations passed, covering pending approvals, held
+  dispatch and checkpoint ACKs, both ACK-loss outcomes, detached SDK settlement,
+  exhausted restoration before model/verification/terminal admission, unknown
+  effects, queued roots, invalid resource snapshots and bounded cleanup errors.
+- Workspace all-feature nextest: 3901 passed, 22 skipped, in 88.275 seconds,
+  using four test threads.
+- Strict workspace/all-target/all-feature clippy and strict workspace rustdoc
+  passed. Workspace doctests: 5 passed, 1 ignored.
+- Rust 1.93.0 workspace/all-feature `cargo check`, formatting and diff checks
+  passed.
 
 The new increment's remote CI remains separate from these local checks.

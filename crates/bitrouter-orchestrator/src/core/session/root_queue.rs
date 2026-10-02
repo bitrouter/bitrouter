@@ -337,6 +337,7 @@ pub(super) fn activate(
         model_attempts: 0,
         token_accounting: Some(Default::default()),
         active_ms: 0,
+        resource_error: None,
         cancellation: None,
         final_answer: None,
         terminal_reason: None,
