@@ -14,6 +14,8 @@ mod reconnect;
 mod reconstruction;
 #[path = "core_execution/recovery.rs"]
 mod recovery;
+#[path = "core_execution/root_queue.rs"]
+mod root_queue;
 mod support;
 
 use std::sync::Arc;

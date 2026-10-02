@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect and late provider evidence implemented; root queue/steering/release and remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence and durable root queue implemented; steering/release, live tool-status observations and remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -1623,3 +1623,65 @@ Validation with Rust 1.95.0:
 - Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
 - Independent follow-up review confirmed all three findings were fixed and
   found no remaining P1/P2 issue in this increment.
+
+## C4 durable root queue
+
+`CoreSession::enqueue(operation_id, expected_revision, input)` durably reserves
+the original operation, run and agent-turn identities in `input.enqueued`.
+Acceptance does not change active history, consume a model attempt, or start a
+second driver. Pending root inputs use the session binding's `queued_runs` cap;
+each input retains its own frozen execution limits. Direct `start` cannot bypass
+pending FIFO work. Duplicate operations retain their original acceptance receipt
+even after activation or cancellation; conflicting payloads are rejected.
+
+At a settled root boundary the existing driver takes the next eligible item and
+commits `input.accepted` with its reserved identities. Only that ACK exposes the
+new root context, resets its active-time budget and allows model preparation.
+The driver can continue through multiple queued runs until work is blocked,
+paused or exhausted. Terminal success is committed before the next activation;
+owned child work, dispatched tools and retained SDK finalization must settle.
+Run cost inventory remains attributed to its original identity across advances.
+
+Root failure, cancellation and recovery-required states persist a queue pause.
+`resume_queue(operation_id, expected_revision)` clears it only after execution
+and effects settle; it cannot bypass uncertain tools. Resume has its own ACK and
+does not create a driver. `cancel_run` also accepts a reserved queued run ID:
+`input.cancelled` removes that input, preserves the current run and tools, and
+pauses subsequent advancement. Cancellation and activation serialize on the same
+input gate, including cancellation waiting behind another checkpoint. An input
+that already became active follows ordinary active-run cancellation semantics.
+
+Queued inputs retain required material IDs from acceptance and later signals.
+Current material availability and verification permissions are checked again at
+activation; infeasibility preserves the head input and commits `queue.paused`
+instead of silently dropping it or skipping to a later task. Restoring the
+missing requirements and explicitly resuming retains the same input identity.
+
+Independent review found that appending harness requirements directly to a
+near-limit user input could create a committed snapshot that restore rejected
+under the ingress byte bound. The queue now retains the bounded original
+`input` separately from cumulative `required_materials`; the complete snapshot
+still obeys its checkpoint byte limit. Restore validates those distinct fields,
+reserved IDs, original receipts, queue capacity and frozen execution limits.
+Operation, run and turn identity namespaces remain separate. Follow-up review
+confirmed this repair with no remaining P1/P2 finding in the queue increment.
+
+This implements root queue control in process, not steering, session release,
+remote Responses/channel integration or complete C4–C6 acceptance. Those remain
+required, together with the final A01–A23 audit, PR and CI.
+
+Validation with Rust 1.95.0:
+
+- Thirteen new root-queue integration tests passed. They cover FIFO context and
+  identity, tool cleanup, persistent failure/cancellation pauses, queued cancel,
+  acceptance/activation/resume ACK loss, reconnect and replacement restoration,
+  input/count bounds, required-material changes, cancellation during a held
+  signal ACK and semantic conflicts in correctly encoded checkpoints.
+- Restore verifies the original enqueue fingerprint and explicit frozen limits
+  before appending any new batch. The near-limit signal regression verifies that
+  a legally accepted queued input remains restorable and cancellable.
+- Final workspace all-feature nextest: 3862 passed, 22 skipped, in 312.601 seconds.
+- Strict all-target/all-feature workspace clippy passed with `-D warnings`.
+- Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
+- The final independent review found no remaining P1/P2 issue in this queue
+  increment. Full-stage and end-to-end acceptance remain open.
