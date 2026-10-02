@@ -161,8 +161,15 @@ impl CoreSession {
         .await?;
         {
             let mut live = self.shared.live.lock().await;
-            live.activity =
-                Activity::restored(live.state.run.as_ref().map_or(0, |run| run.active_ms));
+            // Running workspace work continues while the reconnect checkpoint
+            // awaits ACK. Rebuilding the clock must not erase that interval.
+            let active_ms = live
+                .activity
+                .elapsed_ms()
+                .max(live.state.run.as_ref().map_or(0, |run| run.active_ms));
+            live.activity = Activity::restored(active_ms);
+            let tools = tool_status::activity_ids(&live.state);
+            live.activity.synchronize_tools(&tools);
         }
         let reports = self
             .shared

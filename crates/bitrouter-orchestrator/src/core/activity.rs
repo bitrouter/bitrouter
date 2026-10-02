@@ -78,6 +78,21 @@ impl Activity {
         self.running.insert(id);
     }
 
+    pub fn synchronize_tools(&mut self, tools: &BTreeSet<String>) {
+        let ended = self
+            .running
+            .iter()
+            .filter(|id| id.starts_with("tool/") && !tools.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in ended {
+            self.finish(&id);
+        }
+        for id in tools {
+            self.start(id.clone());
+        }
+    }
+
     pub fn finish(&mut self, id: &str) -> u64 {
         if self.running.remove(id) && self.running.is_empty() {
             self.accumulated_ms = self.elapsed_ms();

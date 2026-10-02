@@ -19,6 +19,8 @@ mod root_queue;
 #[path = "core_execution/steering.rs"]
 mod steering;
 mod support;
+#[path = "core_execution/tool_status.rs"]
+mod tool_status;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
