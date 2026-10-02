@@ -81,7 +81,7 @@ impl CoreSession {
             .transition("session.restored", |state, _| {
                 Ok(
                     json!({"previous_owner_stopped":true,"tool_observations":request.tools,
-                "active_time":request.active_time,
+                "active_time":request.active_time,"workspace_changed":workspace_changed,
                 "interrupted_steps":state.agents.values().filter_map(|agent| agent.turn.as_ref())
                     .flat_map(|turn| &turn.steps).filter(|step| step.interrupted)
                     .map(|step| &step.step_id).collect::<Vec<_>>()}),
@@ -357,6 +357,20 @@ fn validate_snapshot(
             }
         }
         for invocation in &turn.invocations {
+            let limits = tool_payloads::limits(
+                invocation,
+                &binding.limits,
+                state.run.as_ref(),
+                turn.input.limits.as_ref(),
+            )?;
+            for observation in invocation
+                .tool_observations
+                .values()
+                .chain(invocation.recovery_observation.iter())
+                .chain(&invocation.prior_recovery_observations)
+            {
+                limits.validate_observation(observation)?;
+            }
             tool_status::validate(
                 invocation,
                 &state.operations,
@@ -383,10 +397,10 @@ fn validate_snapshot(
                 ));
             }
             if let Some(result) = &invocation.result {
-                validate_result(invocation, result)?;
+                tool_payloads::validate_result(invocation, result, limits)?;
             }
             if let Some(previous) = &invocation.prior_uncertain_result {
-                validate_result(invocation, previous)?;
+                tool_payloads::validate_result(invocation, previous, limits)?;
                 if previous.status != ToolOutcome::EffectUnknown
                     || invocation
                         .result
@@ -420,24 +434,6 @@ fn unique(ids: &mut BTreeSet<String>, id: &str) -> Result<(), CoreError> {
         return Err(reject(
             ErrorCode::CheckpointConflict,
             "duplicate execution identity",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_result(call: &Invocation, result: &ToolResult) -> Result<(), CoreError> {
-    if call.dispatch.invocation_id != result.invocation_id
-        || call.dispatch.attempt_id != result.attempt_id
-    {
-        return Err(reject(
-            ErrorCode::InvalidToolResult,
-            "restored result does not match tool invocation and attempt",
-        ));
-    }
-    if result.output.len() as u64 > call.result_limit_bytes {
-        return Err(reject(
-            ErrorCode::LimitExceeded,
-            "restored tool output exceeds admitted bound",
         ));
     }
     Ok(())
@@ -483,10 +479,21 @@ fn reconcile_tools(
         let mut uncertain = false;
         let mut reconciled = false;
         for call in &mut turn.invocations {
+            let limits = tool_payloads::limits(
+                call,
+                &request.binding.limits,
+                state.run.as_ref(),
+                turn.input.limits.as_ref(),
+            )?;
+            // Upgrade legacy intents while their original run policy is still
+            // available. Later roots must not enlarge retained child replies,
+            // and any restored dispatch must advertise its effective bounds.
+            call.dispatch.result_limits = Some(limits);
             let invocation_id = call.dispatch.invocation_id.clone();
             let observation = observations.remove(&invocation_id);
             let result = results.remove(&invocation_id);
             if let Some(observation) = observation {
+                limits.validate_observation(observation)?;
                 tool_status::validate_restored_phase(call, observation, &state.operations)?;
                 if observation.attempt_id != call.dispatch.attempt_id {
                     return Err(reject(
@@ -520,7 +527,7 @@ fn reconcile_tools(
                     .ok_or_else(|| reject(ErrorCode::LimitExceeded, "state revision exhausted"))?;
             }
             if let Some(result) = result {
-                validate_result(call, result)?;
+                tool_payloads::validate_result(call, result, limits)?;
                 ensure_artifacts(&result.evidence, &available)?;
                 if let Some(previous) = &call.result
                     && previous != result
@@ -578,7 +585,7 @@ fn reconcile_tools(
                             invocation_id: invocation_id.clone(),
                             attempt_id: call.dispatch.attempt_id.clone(),
                             status: ToolOutcome::Denied,
-                            output: "workspace revision changed before restored dispatch".into(),
+                            output: String::new(),
                             evidence: Vec::new(),
                             workspace_revision: None,
                         });

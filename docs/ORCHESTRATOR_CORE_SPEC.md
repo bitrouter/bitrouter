@@ -360,6 +360,17 @@ committed authorizing sequence. The harness validates this command and its
 local policy before starting. Persisting or seeing a proposed call alone must
 not cause execution. Execution-command retries preserve invocation identity.
 
+Each new `tool.execute` includes frozen `result_limits`: `output_bytes` bounds
+the UTF-8 result body, and `payload_bytes` bounds the complete serialized JSON
+`ToolResult` or `ToolObservation`, including escaping, artifact metadata and
+workspace revision. The latter leaves room within the run's `input_bytes` for
+the largest control envelope. Both local and remote harnesses obey these
+limits, including verification and restore reconciliation. A host/manifest
+change cannot enlarge a previously admitted reply. Oversized evidence is
+rejected before a checkpoint; it is never truncated or treated as a tool
+outcome. These per-message limits are distinct from reserving space for all
+outstanding results and terminal records in a checkpoint.
+
 The checkpoint contains the agent tree, turns, runnable/waiting states,
 mailboxes, ordered context manifests and histories, pending calls, unconsumed
 results, queue/steering/cancel state, decisions, budget reservations/consumption,

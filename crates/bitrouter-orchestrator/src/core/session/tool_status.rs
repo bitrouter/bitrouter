@@ -1,7 +1,7 @@
 //! Authenticated harness lifecycle evidence, separate from tool outcomes.
 
 use super::*;
-use crate::core::protocol::{ToolObservation, ToolStatus};
+use crate::core::protocol::{ToolObservation, ToolResultLimits, ToolStatus};
 
 impl CoreSession {
     /// Record a harness observation for an already dispatched invocation. This
@@ -13,27 +13,16 @@ impl CoreSession {
     ) -> Result<OperationReceipt, CoreError> {
         let _input = self.shared.inputs.lock().await;
         validate_id(operation_id)?;
+        ToolResultLimits::for_input(self.shared.limits.input_bytes, u64::MAX)?
+            .validate_observation(&observation)?;
         let fingerprint = digest(&json!({"type":"tool.status","observation":observation}))?;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
             return Ok(receipt);
         }
         validate_id(&observation.invocation_id)?;
         validate_id(&observation.attempt_id)?;
-        let bytes = serde_json::to_vec(&observation).map_err(json_error)?.len() as u64;
         let (target, run_id) = {
             let live = self.shared.live.lock().await;
-            if bytes > self.shared.limits.input_bytes
-                || live
-                    .state
-                    .run
-                    .as_ref()
-                    .is_some_and(|run| bytes > run.limits.input_bytes)
-            {
-                return Err(reject(
-                    ErrorCode::LimitExceeded,
-                    "tool observation exceeds input bound",
-                ));
-            }
             if !live.sent_tools.contains(&observation.invocation_id) {
                 return Err(reject(
                     ErrorCode::InvalidToolResult,
@@ -58,19 +47,26 @@ impl CoreSession {
             Some(&run_id),
             "tool.status",
             |state, head, _| {
-                let call = state
+                let turn = state
                     .agents
                     .get(&target)
                     .and_then(|agent| agent.turn.as_ref())
-                    .and_then(|turn| {
-                        turn.invocations
-                            .iter()
-                            .find(|call| call.dispatch.invocation_id == observation.invocation_id)
-                    })
+                    .ok_or_else(|| reject(ErrorCode::InvalidToolResult, "unknown tool agent"))?;
+                let call = turn
+                    .invocations
+                    .iter()
+                    .find(|call| call.dispatch.invocation_id == observation.invocation_id)
                     .ok_or_else(|| {
                         reject(ErrorCode::InvalidToolResult, "unknown tool invocation")
                     })?;
                 validate_next(call, &observation, &state.operations)?;
+                tool_payloads::limits(
+                    call,
+                    &self.shared.limits,
+                    state.run.as_ref(),
+                    turn.input.limits.as_ref(),
+                )?
+                .validate_observation(&observation)?;
                 let turn = agent_turn(state, &target)?;
                 let call = turn
                     .invocations

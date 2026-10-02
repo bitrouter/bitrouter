@@ -48,6 +48,7 @@ pub mod release;
 pub mod restoration_activity;
 pub mod root_queue;
 pub mod steering;
+mod tool_payloads;
 mod tool_status;
 
 /// Implemented by the authenticated durable harness connection, including an
@@ -1666,13 +1667,13 @@ impl CoreSession {
                         invocation_id: call.dispatch.invocation_id.clone(),
                         attempt_id: call.dispatch.attempt_id.clone(),
                         status: ToolOutcome::Denied,
-                        output: "permission or tool manifest changed before dispatch".into(),
+                        output: String::new(),
                         evidence: Vec::new(),
                         workspace_revision: None,
                     });
                 }
             }
-            Ok(json!({"invocation_ids":revoked}))
+            Ok(json!({"invocation_ids":revoked,"reason":"tool environment changed before dispatch"}))
         })
         .await?;
         Ok(true)
@@ -2417,6 +2418,8 @@ impl CoreSession {
     ) -> Result<OperationReceipt, CoreError> {
         let _input = self.shared.inputs.lock().await;
         validate_id(operation_id)?;
+        super::protocol::ToolResultLimits::for_input(self.shared.limits.input_bytes, u64::MAX)?
+            .validate_result(&result)?;
         let fingerprint = digest(&result)?;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
             return Ok(receipt);
@@ -2449,6 +2452,7 @@ impl CoreSession {
             .map(|agent| agent.agent_id.clone())
             .ok_or_else(|| reject(ErrorCode::InvalidToolResult, "unknown tool invocation"))?;
         self.transition_for(Some(&target_agent), "tool.result", |state, head| {
+            let run = state.run.as_ref();
             let turn = state
                 .agents
                 .values_mut()
@@ -2464,18 +2468,9 @@ impl CoreSession {
                 .iter_mut()
                 .find(|call| call.dispatch.invocation_id == result.invocation_id)
                 .ok_or_else(|| reject(ErrorCode::InvalidToolResult, "unknown tool invocation"))?;
-            if call.dispatch.attempt_id != result.attempt_id {
-                return Err(reject(
-                    ErrorCode::InvalidToolResult,
-                    "tool attempt does not match invocation",
-                ));
-            }
-            if result.output.len() as u64 > call.result_limit_bytes {
-                return Err(reject(
-                    ErrorCode::LimitExceeded,
-                    "tool result exceeds its admitted output bound",
-                ));
-            }
+            let limits =
+                tool_payloads::limits(call, &self.shared.limits, run, turn.input.limits.as_ref())?;
+            tool_payloads::validate_result(call, &result, limits)?;
             let may_change_workspace = (call.effect != super::protocol::ToolEffect::Read
                 && !matches!(
                     result.status,
@@ -2536,6 +2531,7 @@ impl CoreSession {
         self.transition_for(Some(agent_id), "model.output.applied", |state, head| {
             let manifest = current_step(state,agent_id,step_id)?.manifest.clone();
             let limit = active_run(state)?.limits.outstanding_tools;
+            let input_bytes = active_run(state)?.limits.input_bytes.min(self.shared.limits.input_bytes);
             let outstanding = state.agents.values().filter_map(|agent| agent.turn.as_ref()).flat_map(|turn| &turn.invocations).filter(|call| call.result.is_none()).count();
             let agent = agent_mut(state, agent_id)?;
             let context_revision = agent.context_revision;
@@ -2663,6 +2659,7 @@ impl CoreSession {
                             execution_epoch: head.execution_epoch,
                             authorizing_event_seq: head.event_seq + 1,
                             verification: false,
+                            result_limits: Some(super::protocol::ToolResultLimits::for_input(input_bytes, manifest.max_tool_output_bytes)?),
                         },
                         public_call_id: id("call"),
                         provider_call_id: call_id.clone(),
@@ -2730,6 +2727,8 @@ impl CoreSession {
                 ));
             }
             let manifest = state.manifest.clone();
+            let result_limits =
+                tool_payloads::admit(state, &self.shared.limits, manifest.max_tool_output_bytes)?;
             let limit = active_run(state)?.limits.outstanding_tools as usize;
             let outstanding = state
                 .agents
@@ -2810,6 +2809,7 @@ impl CoreSession {
                     execution_epoch: head.execution_epoch,
                     authorizing_event_seq: head.event_seq + 1,
                     verification: true,
+                    result_limits: Some(result_limits),
                 },
                 public_call_id: id("verification"),
                 provider_call_id: String::new(),
