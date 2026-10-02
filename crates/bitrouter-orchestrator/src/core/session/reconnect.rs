@@ -90,6 +90,7 @@ impl CoreSession {
             if live.provisional_blocks.is_empty() {
                 live.gate.clear_dispatch_block();
             }
+            release::fence(&mut live);
             self.shared.changed.notify_one();
         }
         result.map(|()| live.gate.head().clone())
@@ -123,6 +124,11 @@ impl CoreSession {
                     })?;
                 adopt_pending(&mut live, &payload)?;
             }
+        }
+        if release::released(&*self.shared.live.lock().await) {
+            // Acknowledging release ends this grant. Do not append a reconnect
+            // record that could be mistaken for renewed scheduling authority.
+            return Ok(());
         }
         let active_ms = {
             let live = self.shared.live.lock().await;
@@ -333,6 +339,7 @@ fn adopt_pending(live: &mut LiveSession, payload: &CheckpointPayload) -> Result<
     {
         live.activity = Activity::restored(live.state.run.as_ref().map_or(0, |run| run.active_ms));
     }
+    release::fence(live);
     Ok(())
 }
 

@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue, targeted steering, live tool observations and active-time admission/cleanup implemented; release, downtime reconciliation, cleanup capacity reservations and remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue, targeted steering, live tool observations, active-time admission/cleanup and settled ownership release implemented; downtime reconciliation, cleanup capacity reservations and remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -1947,3 +1947,65 @@ Validation of the final source with Rust 1.99:
   passed.
 
 The new increment's remote CI remains separate from these local checks.
+
+
+## C4 settled ownership release
+
+`CoreSession::release(operation_id, expected_revision)` closes the current
+ownership grant behind a `session.released` checkpoint. It requires a settled
+root, terminal agent turns, paired tool/collaboration results, settled model
+steps and no remaining live SDK controls or volatile provider evidence. It does
+not cancel an active run or infer execution termination from a dropped driver.
+Already durable unknown monetary cost remains retained and does not itself
+prevent release. Pending root inputs preserve their accepted identities and
+become paused for the next owner.
+
+The immutable receipt identifies the released session, instance and epoch.
+Release records remain in the snapshot under operation identity across later
+grants. Ordinary ACK adoption and both reconnect reconciliation paths fence the
+old dispatch gate in the same live-state critical section. The old transport
+cancellation token is closed; a reconnect that adopts release returns that head
+without appending `session.reconnected` or renewing execution authority. Reads
+and exact operation replay remain available, while new mutations cannot append
+under the released grant.
+
+Replacement restoration requires an authenticated higher epoch, even if the
+instance identifier is reused; normal previous-owner quiescence requirements
+still apply. Restoring or replaying an old release receipt under a higher epoch
+does not release the new grant. The retained root queue remains paused until
+explicit resume. Restore checks record/receipt fingerprints, identities,
+dispositions, revisions and grant ordering, and checks every supplied journal
+batch for release after which the same epoch cannot append. Later snapshots
+cannot erase or rewrite a retained release record.
+
+Independent review identified a stale delivery marker that could prevent
+release after a definite tool result, disconnect, reconnect and successful run
+completion. The corrected guard relies on confirmed effect and completed pairing;
+an unacknowledged transport completion is not evidence that the tool is still
+running. A regression covers this path and confirms no redispatch. Final
+independent read-only review found no remaining P1/P2 in this increment.
+
+Session release is now available in process. C5 still supplies its authenticated
+wire operation and ownership host integration. Process-downtime accounting,
+cleanup/terminal capacity reservation, the remaining C4 fault matrix, C6
+production conformance and the complete A01–A23 audit remain required.
+
+
+Validation with Rust 1.99:
+
+- Nine focused release integrations passed in 0.209 seconds. They cover ACK
+  barriers, both ACK-loss outcomes, abandoned release futures, exact replay,
+  queued-root handoff across three epochs, record/journal tampering, detached SDK
+  finalization and confirmed outcomes after delivery acknowledgement loss.
+- Workspace all-feature nextest: 3910 passed, 22 skipped, in 88.431 seconds,
+  using four test threads. The existing external-editor PTY test also passed.
+- Strict workspace/all-target/all-feature clippy passed after replacing a map
+  lookup with the equivalent `contains_key` predicate. Strict workspace rustdoc
+  passed; workspace doctests: 5 passed, 1 ignored.
+- Rust 1.93.0 workspace/all-feature `cargo check`, formatting and diff checks
+  passed. The final independent review confirmed the delivery-marker repair and
+  found no remaining P1/P2 issue in this increment.
+
+Remote CI remains a separate gate. The preceding budget commit's macOS job
+reported an external-editor PTY submission timeout; its failed job was rerun.
+Neither that pending rerun nor the new increment's CI is counted as a pass here.

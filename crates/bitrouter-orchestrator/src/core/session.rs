@@ -43,6 +43,7 @@ mod preparation_work;
 mod provider_work;
 mod reconnect;
 mod recovery;
+pub mod release;
 pub mod root_queue;
 pub mod steering;
 mod tool_status;
@@ -296,6 +297,9 @@ pub struct SessionSnapshot {
     pub root_queue: root_queue::RootQueue,
     #[serde(default)]
     pub steering: BTreeMap<String, steering::SteeringRecord>,
+    /// Committed ownership releases remain available across later grants.
+    #[serde(default)]
+    pub releases: BTreeMap<String, release::ReleaseRecord>,
 }
 
 impl SessionSnapshot {
@@ -397,6 +401,7 @@ impl CoreSession {
             provider_evidence: BTreeMap::new(),
             root_queue: Default::default(),
             steering: BTreeMap::new(),
+            releases: BTreeMap::new(),
         };
         let session = Self {
             shared: Arc::new(Shared {
@@ -3253,6 +3258,7 @@ impl CoreSession {
                     if kind == "input.accepted" {
                         live.activity = Activity::default();
                     }
+                    release::fence(&mut live);
                     budget::watch(self, &mut live);
                     self.shared.changed.notify_one();
                     Ok(())
