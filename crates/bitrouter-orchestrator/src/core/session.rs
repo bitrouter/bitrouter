@@ -44,6 +44,7 @@ mod reconnect;
 mod recovery;
 pub mod root_queue;
 pub mod steering;
+mod tool_status;
 
 /// Implemented by the authenticated durable harness connection, including an
 /// in-process harness. Returning an ACK means the atomic append is durable.
@@ -172,6 +173,17 @@ pub struct Invocation {
     /// authorization to infer the outcome of a later crash.
     #[serde(default)]
     pub recovery_observation: Option<super::protocol::ToolObservation>,
+    /// Revision at which restoration accepted the fresh harness observation.
+    #[serde(default)]
+    pub recovery_observation_revision: u64,
+    /// Superseded restore evidence remains available for irreversible execution
+    /// facts and artifact retention. The snapshot byte limit bounds this list.
+    #[serde(default)]
+    pub prior_recovery_observations: Vec<super::protocol::ToolObservation>,
+    /// Immutable observations keyed by operation ID, including new uncertainty
+    /// episodes. The complete snapshot remains bounded by checkpoint limits.
+    #[serde(default)]
+    pub tool_observations: BTreeMap<String, super::protocol::ToolObservation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2509,6 +2521,9 @@ impl CoreSession {
                     }
                     calls.push(Invocation {
                         recovery_observation: None,
+                        recovery_observation_revision: 0,
+                        prior_recovery_observations: Vec::new(),
+                        tool_observations: BTreeMap::new(),
                         workspace_revision: manifest.workspace_revision.clone(),
                         prior_uncertain_result: None,
                         signal_revision:step.signal_revision,
@@ -2652,6 +2667,9 @@ impl CoreSession {
                 .ok_or_else(|| reject(ErrorCode::Busy, "no final model step"))?;
             turn.invocations.push(Invocation {
                 recovery_observation: None,
+                recovery_observation_revision: 0,
+                prior_recovery_observations: Vec::new(),
+                tool_observations: BTreeMap::new(),
                 workspace_revision: manifest.workspace_revision.clone(),
                 prior_uncertain_result: None,
                 signal_revision,
@@ -3070,6 +3088,15 @@ impl CoreSession {
                 let mut next = live.state.clone();
                 let head = live.gate.head().clone();
                 let payload = change(&mut next, &head, live.gate.can_dispatch())?;
+                if let Some(run) = &mut next.run
+                    && live
+                        .state
+                        .run
+                        .as_ref()
+                        .is_some_and(|previous| previous.run_id == run.run_id)
+                {
+                    run.active_ms = run.active_ms.max(live.activity.elapsed_ms());
+                }
                 if !matches!(kind, "run.completed" | "run.failed" | "run.cancelled") {
                     refresh_run(&mut next);
                 }
@@ -3121,6 +3148,11 @@ impl CoreSession {
                     },
                 };
                 let batch = live.gate.propose(proposed)?.clone();
+                // Status/result receipt establishes a local observation time,
+                // independent of the later durable ACK. Keep confirmed running
+                // tools in the same union clock as concurrent model work.
+                live.activity
+                    .synchronize_tools(&tool_status::activity_ids(&next));
                 live.pending = Some(next);
                 (batch, live.disconnected.clone())
             };

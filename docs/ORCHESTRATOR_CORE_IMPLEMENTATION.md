@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue and targeted steering implemented; release, live tool-status observations and remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue, targeted steering and live tool observations implemented; release, complete active-time enforcement/reconciliation and remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -1800,3 +1800,74 @@ Validation of the final source on Rust 1.99:
   reported no remaining P1/P2 issue in this increment.
 
 Remote CI and complete cross-stage acceptance remain separate gates.
+
+The pushed `c2db646c` steering increment subsequently passed every executed CI
+check, including Linux/macOS/Windows tests and clippy, MSRV, docs and feature
+isolation. Publishing jobs were skipped by workflow policy.
+
+## C4 live tool observations
+
+`CoreSession::tool_status(operation_id, observation)` records authenticated
+harness evidence for an already dispatched invocation/attempt behind its own
+checkpoint ACK. Observations and their evidence remain immutable under operation
+identity, bounded by ingress and complete checkpoint limits. Exact operation
+replay returns the original receipt; a new operation is validated against current
+execution facts. Restore checks observation identity, receipt fingerprint,
+assigned IDs, accepted disposition and committed revision, and requires every
+referenced artifact, including evidence retained from prior restorations.
+
+`stopped` supplies neither an execution outcome nor redispatch permission.
+`effect_unknown` blocks the turn/run, pauses the root queue and invalidates
+workspace provenance. A later live definite result is retained, but explicit
+authenticated restoration must reconcile the blocker. If restoration confirms
+the invocation is still running, a fresh uncertainty operation, including one
+with new evidence, blocks again. A definite result rejects a new contradictory
+uncertainty claim while preserving exact replay of an earlier receipt.
+
+Ordinary lifecycle observations cannot regress. An authenticated restoration can
+prove that a pending approval never crossed durable start admission and return
+it to `not_started`; the old owner/approval must be fenced. The new epoch still
+passes normal workspace, permission and steering checks before dispatch. Restore
+revision distinguishes the superseded approval from later live observations.
+Any historical `running` or `stopped` evidence, including evidence from earlier
+restorations, prevents this reset. A late status for a retained child invocation
+keeps the child's original run attribution after the root starts another run.
+
+Known running tools share the model activity clock: overlapping executions count
+once, approval waits add no time, and stopped/definite outcomes end tool activity.
+An uncertain effect does not erase earlier running evidence. Same-owner reconnect
+keeps local elapsed time accrued while awaiting its checkpoint ACK. Replacement
+restoration preserves persisted elapsed time and starts observation of tools
+confirmed or previously known to be running without evidence of termination.
+
+This increment does not establish full active-time acceptance. Process downtime
+still needs authoritative elapsed-interval reconciliation, and all workspace
+dispatch/verification admission paths must enforce the exhausted run budget.
+These remain required C4/A20 work, along with session release and the remaining
+fault matrix. C5 remote/auth integration, C6 production conformance and the full
+A01–A23 audit remain open.
+
+Independent review drove repairs for lost reconnect-ACK activity, renewed
+uncertainty being mistaken for an earlier observation, pending approvals that
+could not be reconciled as unstarted, irreversible restore evidence being
+overwritten, old child observations receiving a new root's run attribution, and
+restored uncertainty remaining blocked despite explicit definite-result
+reconciliation. The final read-only review found no remaining P1/P2 issue in
+this increment; complete C4 and cross-stage acceptance remain separate gates.
+
+Validation with Rust 1.99:
+
+- Twelve focused live-status integrations passed. They cover ACK barriers and
+  both forms of ACK loss, exact-operation replay, conflicting IDs/evidence,
+  bounded input, artifact and receipt tampering, renewed uncertainty, definite
+  result reconciliation, approval restoration, retained execution facts across
+  three replacements, old child attribution, overlapping tool intervals and
+  held reconnect-ACK timing.
+- Workspace all-feature nextest: 3891 passed, 22 skipped, in 87.486 seconds,
+  using four test threads.
+- Strict workspace/all-target/all-feature clippy passed after collapsing one
+  nested condition without changing its behavior. Strict workspace rustdoc,
+  formatting and diff checks passed; workspace doctests: 5 passed, 1 ignored.
+- Rust 1.93.0 workspace/all-feature `cargo check` passed.
+
+The new increment's remote CI remains separate from these local checks.

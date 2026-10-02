@@ -30,6 +30,8 @@ impl CoreSession {
         let outputs = resume_model_steps(&mut state);
         let binding = request.binding;
         let active_ms = state.run.as_ref().map_or(0, |run| run.active_ms);
+        let mut activity = Activity::restored(active_ms);
+        activity.synchronize_tools(&tool_status::activity_ids(&state));
         let session = Self {
             shared: Arc::new(Shared {
                 live: Mutex::new(LiveSession {
@@ -48,7 +50,7 @@ impl CoreSession {
                     provisional_steering: BTreeMap::new(),
                     disconnected: CancellationToken::new(),
                     connection_generation: 0,
-                    activity: Activity::restored(active_ms),
+                    activity,
                     model_controls: Vec::new(),
                     provider_evidence: Default::default(),
                     reconnecting: false,
@@ -318,6 +320,11 @@ fn validate_snapshot(
             }
         }
         for invocation in &turn.invocations {
+            tool_status::validate(
+                invocation,
+                &state.operations,
+                binding.durable_head.state_revision,
+            )?;
             let call = &invocation.dispatch;
             unique(&mut ids, &call.invocation_id)?;
             unique(&mut ids, &call.attempt_id)?;
@@ -443,6 +450,7 @@ fn reconcile_tools(
             let observation = observations.remove(&invocation_id);
             let result = results.remove(&invocation_id);
             if let Some(observation) = observation {
+                tool_status::validate_restored_phase(call, observation, &state.operations)?;
                 if observation.attempt_id != call.dispatch.attempt_id {
                     return Err(reject(
                         ErrorCode::InvalidToolResult,
@@ -461,7 +469,18 @@ fn reconcile_tools(
                         "observation conflicts with committed tool outcome",
                     ));
                 }
+                if let Some(previous) = &call.recovery_observation
+                    && !call.prior_recovery_observations.contains(previous)
+                {
+                    call.prior_recovery_observations.push(previous.clone());
+                }
                 call.recovery_observation = Some(observation.clone());
+                call.recovery_observation_revision = request
+                    .binding
+                    .durable_head
+                    .state_revision
+                    .checked_add(1)
+                    .ok_or_else(|| reject(ErrorCode::LimitExceeded, "state revision exhausted"))?;
             }
             if let Some(result) = result {
                 validate_result(call, result)?;
@@ -486,7 +505,8 @@ fn reconcile_tools(
                     matches!(
                         observation.status,
                         ToolStatus::NotStarted | ToolStatus::WaitingApproval | ToolStatus::Running
-                    )
+                    ) || (observation.status == ToolStatus::EffectUnknown
+                        && result.status != ToolOutcome::EffectUnknown)
                 }) {
                     return Err(reject(
                         ErrorCode::OperationConflict,
@@ -502,6 +522,10 @@ fn reconcile_tools(
                                 ToolOutcome::NotExecuted | ToolOutcome::Denied
                             ));
                 }
+                // A later live result remains blocked after effect_unknown.
+                // Explicit authenticated restoration confirms that outcome.
+                reconciled |= result.status != ToolOutcome::EffectUnknown
+                    && tool_status::observed(call, ToolStatus::EffectUnknown);
                 call.result = Some(result.clone());
             }
             if let Some(result) = &call.result {
@@ -631,6 +655,16 @@ pub(super) fn artifacts(
                     )
                     .chain(
                         call.recovery_observation
+                            .iter()
+                            .flat_map(|observation| &observation.evidence),
+                    )
+                    .chain(
+                        call.tool_observations
+                            .values()
+                            .flat_map(|observation| &observation.evidence),
+                    )
+                    .chain(
+                        call.prior_recovery_observations
                             .iter()
                             .flat_map(|observation| &observation.evidence),
                     )
