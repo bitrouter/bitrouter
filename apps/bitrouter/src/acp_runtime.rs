@@ -191,6 +191,13 @@ impl AcpRuntime {
         self.resolve_route(api_principal, controller_instance_id, &[session_id])
     }
 
+    /// Count live leases before an automatic daemon handoff.
+    pub fn active_lease_count(&self) -> usize {
+        let mut state = self.write_state();
+        cleanup_expired(&mut state, Utc::now());
+        state.leases.len()
+    }
+
     fn write_state(&self) -> std::sync::RwLockWriteGuard<'_, RuntimeState> {
         match self.state.write() {
             Ok(state) => state,

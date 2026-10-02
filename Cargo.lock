@@ -677,6 +677,7 @@ dependencies = [
  "hex",
  "hmac 0.13.0",
  "http",
+ "http-body",
  "jsonschema",
  "opentelemetry-proto",
  "portable-pty",
