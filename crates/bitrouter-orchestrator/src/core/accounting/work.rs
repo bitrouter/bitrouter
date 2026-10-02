@@ -19,6 +19,7 @@ pub enum CostWorkKind {
     ContextValidation,
     ContextRebuild,
     WorkspaceTool,
+    MaterialFetch,
     AuthenticationPreparation,
     Authentication,
     AuthenticationRefresh,
@@ -38,7 +39,9 @@ pub enum CostWorkState {
 pub struct CostWork {
     pub agent_id: String,
     pub agent_turn_id: String,
-    pub step_id: String,
+    /// Material fetching precedes model-step admission and has no step ID.
+    pub step_id: Option<String>,
+    /// SDK billing identity, never a harness material request ID.
     pub request_id: Option<String>,
     pub kind: CostWorkKind,
     pub state: CostWorkState,
@@ -91,7 +94,7 @@ fn work(agent_id: &str, turn: &AgentTurn, step: &ModelStep, kind: CostWorkKind) 
     CostWork {
         agent_id: agent_id.into(),
         agent_turn_id: turn.agent_turn_id.clone(),
-        step_id: step.step_id.clone(),
+        step_id: Some(step.step_id.clone()),
         request_id: step
             .plan
             .as_ref()
@@ -195,7 +198,7 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                 CostWork {
                     agent_id: dispatch.agent_id.clone(),
                     agent_turn_id: dispatch.agent_turn_id.clone(),
-                    step_id: dispatch.step_id.clone(),
+                    step_id: Some(dispatch.step_id.clone()),
                     request_id: None,
                     kind: CostWorkKind::WorkspaceTool,
                     state: if invocation.result.is_some() {
@@ -209,6 +212,34 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                 },
             )?;
         }
+    }
+    // Requests outlive their initiating turns. Reusing a pending fetch never
+    // transfers its expenditure to a newer run or duplicates it for consumers.
+    for request in state.signals.requests.values() {
+        let Some(origin) = &request.origin else {
+            continue;
+        };
+        let Some(ledger) = state.cost_work.get_mut(&origin.run_id) else {
+            continue;
+        };
+        ledger.record(
+            request.request_id.clone(),
+            CostWork {
+                agent_id: origin.agent_id.clone(),
+                agent_turn_id: origin.agent_turn_id.clone(),
+                step_id: None,
+                request_id: None,
+                kind: CostWorkKind::MaterialFetch,
+                state: if request.resolved {
+                    CostWorkState::OutcomeRecorded
+                } else {
+                    CostWorkState::IntentRecorded
+                },
+                elapsed_ms: None,
+                token_estimate: None,
+                unknown_cost_reason: "harness_cost_not_reported".into(),
+            },
+        )?;
     }
     Ok(())
 }

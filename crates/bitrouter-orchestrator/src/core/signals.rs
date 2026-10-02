@@ -27,10 +27,21 @@ pub struct SignalState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaterialRequest {
     pub request_id: String,
+    /// The first consumer owns a shared fetch even after its turn is retired.
+    /// Older checkpoints without attribution cannot establish cost coverage.
+    #[serde(default)]
+    pub origin: Option<MaterialRequestOrigin>,
     pub signal_revision: u64,
     pub reference: MaterialRef,
     pub resolved: bool,
     pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaterialRequestOrigin {
+    pub run_id: String,
+    pub agent_id: String,
+    pub agent_turn_id: String,
 }
 
 impl SignalState {
