@@ -3,7 +3,7 @@ use bitrouter_orchestrator::core::accounting::work::CostWorkState;
 use bitrouter_orchestrator::core::protocol::ProviderAttemptEvidence;
 use bitrouter_orchestrator::core::session::AgentStatus;
 
-struct FaultPort {
+pub(super) struct FaultPort {
     harness: Arc<Harness>,
     kind: &'static str,
     committed: bool,
@@ -12,7 +12,7 @@ struct FaultPort {
 }
 
 impl FaultPort {
-    fn new(harness: Arc<Harness>, kind: &'static str, committed: bool) -> Self {
+    pub(super) fn new(harness: Arc<Harness>, kind: &'static str, committed: bool) -> Self {
         Self {
             harness,
             kind,

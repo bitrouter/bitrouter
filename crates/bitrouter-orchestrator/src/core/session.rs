@@ -42,6 +42,7 @@ mod preparation_work;
 mod provider_work;
 mod reconnect;
 mod recovery;
+pub mod root_queue;
 
 /// Implemented by the authenticated durable harness connection, including an
 /// in-process harness. Returning an ACK means the atomic append is durable.
@@ -270,6 +271,8 @@ pub struct SessionSnapshot {
     /// Late results are retained as evidence, never injected into agent history.
     #[serde(default)]
     pub provider_evidence: BTreeMap<String, super::protocol::ProviderAttemptEvidence>,
+    #[serde(default)]
+    pub root_queue: root_queue::RootQueue,
 }
 
 impl SessionSnapshot {
@@ -365,6 +368,7 @@ impl CoreSession {
             allocations: BTreeMap::new(),
             cost_work: BTreeMap::new(),
             provider_evidence: BTreeMap::new(),
+            root_queue: Default::default(),
         };
         let session = Self {
             shared: Arc::new(Shared {
@@ -460,52 +464,19 @@ impl CoreSession {
                     "session already owns an active root run",
                 ));
             }
+            if !state.root_queue.pending.is_empty() {
+                return Err(reject(
+                    ErrorCode::Busy,
+                    "pending root inputs must retain FIFO order",
+                ));
+            }
             let run_id = id("run");
             let turn_id = id("turn");
             let limits = input
                 .limits
                 .clone()
                 .unwrap_or_else(|| self.shared.limits.clone());
-            let agent = state
-                .agents
-                .get_mut(&state.agent_id)
-                .ok_or_else(|| reject(ErrorCode::CheckpointConflict, "root agent is absent"))?;
-            let history_start = agent.history.len();
-            agent.history.push(Message::text(Role::User, &input.text));
-            if !agent.required_instructions.contains(&input.text) {
-                agent.required_instructions.push(input.text.clone());
-            }
-            agent.context_revision += 1;
-            agent.turn = Some(AgentTurn {
-                run_id: run_id.clone(),
-                agent_turn_id: turn_id.clone(),
-                assigned_by: agent.agent_id.clone(),
-                input: input.clone(),
-                allocation_id: None,
-                history_start: Some(history_start),
-                status: AgentStatus::Runnable,
-                cancellation_requested: false,
-                steps: Vec::new(),
-                invocations: Vec::new(),
-                core_calls: Vec::new(),
-                final_answer: None,
-                terminal_reason: None,
-                notified: false,
-            });
-            state.cost_work.insert(run_id.clone(), Default::default());
-            state.run = Some(RootRun {
-                run_id: run_id.clone(),
-                agent_turn_id: turn_id.clone(),
-                input,
-                limits,
-                status: RunStatus::Running,
-                model_attempts: 0,
-                token_accounting: Some(Default::default()),
-                active_ms: 0,
-                cancellation: None,
-                final_answer: None,
-                terminal_reason: None,
-            });
+            root_queue::activate(state, &run_id, &turn_id, input, limits)?;
             let receipt = OperationReceipt {
                 operation_id: operation_id.clone(),
                 request_sha256: fingerprint.clone(),
@@ -601,6 +572,13 @@ impl CoreSession {
                     .filter(|material| material.required)
                     .map(|material| material.material_id.clone())
                     .collect::<Vec<_>>();
+                for queued in &mut state.root_queue.pending {
+                    for id in &required {
+                        if !queued.required_materials.contains(id) {
+                            queued.required_materials.push(id.clone());
+                        }
+                    }
+                }
                 for agent in state.agents.values_mut() {
                     if let Some(turn) = &mut agent.turn
                         && !turn.status.terminal()
@@ -840,8 +818,15 @@ impl CoreSession {
         let mut running = BTreeSet::new();
         let mut first_error = None;
         loop {
+            if jobs.is_empty() && self.advance_root_queue().await? {
+                first_error = None;
+                continue;
+            }
             self.advance_runtime_waits().await?;
             let state = self.snapshot().await;
+            if state.run.is_none() && !state.root_queue.pending.is_empty() {
+                return Ok(state);
+            }
             let run = state
                 .run
                 .as_ref()
@@ -883,7 +868,7 @@ impl CoreSession {
                 let state = self.snapshot().await;
                 if jobs.is_empty() {
                     match self.finish_run_if_settled(&state).await {
-                        Ok(true) => return first_error.map_or(Ok(self.snapshot().await), Err),
+                        Ok(true) => continue,
                         Err(error) if error.code == ErrorCode::Busy => continue,
                         Err(error) => return Err(error),
                         Ok(false) => {}
@@ -1769,6 +1754,18 @@ impl CoreSession {
         let result = async {
             if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
                 return Ok(receipt);
+            }
+            if self
+                .snapshot()
+                .await
+                .root_queue
+                .pending
+                .iter()
+                .any(|entry| entry.run_id == run_id)
+            {
+                return self
+                    .cancel_queued_root(operation_id, expected_revision, run_id, &fingerprint)
+                    .await;
             }
             self.transition("run.cancelling", |state, head| {
                 if head.state_revision != expected_revision {
@@ -2917,45 +2914,59 @@ impl CoreSession {
         F: FnOnce(&mut SessionSnapshot, &DurableHead, bool) -> Result<Value, CoreError> + Send,
     {
         let _commit = self.shared.commits.lock().await;
-        let (batch, disconnected) = {
-            let mut live = self.shared.live.lock().await;
-            let mut next = live.state.clone();
-            let head = live.gate.head().clone();
-            let payload = change(&mut next, &head, live.gate.can_dispatch())?;
-            if !matches!(kind, "run.completed" | "run.failed" | "run.cancelled") {
-                refresh_run(&mut next);
-            }
-            super::accounting::work::synchronize(&mut next)?;
-            let artifacts = recovery::artifacts(&next)?;
-            let proposed = CheckpointPayload {
-                identity: BatchIdentity {
-                    batch_id: id("batch"),
-                    session_id: next.session_id.clone(),
-                    execution_epoch: live.gate.grant().execution_epoch,
-                    core_instance_id: live.gate.grant().core_instance_id.clone(),
-                },
-                base_event_seq: head.event_seq,
-                base_state_revision: head.state_revision,
-                events: vec![DurableEvent {
-                    event_seq: head.event_seq + 1,
-                    kind: kind.to_owned(),
-                    run_id: run_id
-                        .map(str::to_owned)
-                        .or_else(|| next.run.as_ref().map(|run| run.run_id.clone())),
-                    agent_id: Some(agent_id.unwrap_or(&next.agent_id).to_owned()),
-                    payload,
-                }],
-                checkpoint: Checkpoint {
-                    schema_version: VERSION,
-                    state_revision: head.state_revision + 1,
-                    artifact_refs: artifacts.into_values().collect(),
-                    state: encode(&next)?,
-                },
+        let (batch, disconnected) =
+            {
+                let mut live = self.shared.live.lock().await;
+                let mut next = live.state.clone();
+                let head = live.gate.head().clone();
+                let payload = change(&mut next, &head, live.gate.can_dispatch())?;
+                if !matches!(kind, "run.completed" | "run.failed" | "run.cancelled") {
+                    refresh_run(&mut next);
+                }
+                if next.run.as_ref().is_some_and(|run| {
+                    matches!(
+                        run.status,
+                        RunStatus::Failed
+                            | RunStatus::Cancelled
+                            | RunStatus::Cancelling
+                            | RunStatus::RecoveryRequired
+                    ) && live.state.run.as_ref().is_none_or(|prior| {
+                        prior.run_id != run.run_id || prior.status != run.status
+                    })
+                }) {
+                    next.root_queue.paused = true;
+                }
+                super::accounting::work::synchronize(&mut next)?;
+                let artifacts = recovery::artifacts(&next)?;
+                let proposed = CheckpointPayload {
+                    identity: BatchIdentity {
+                        batch_id: id("batch"),
+                        session_id: next.session_id.clone(),
+                        execution_epoch: live.gate.grant().execution_epoch,
+                        core_instance_id: live.gate.grant().core_instance_id.clone(),
+                    },
+                    base_event_seq: head.event_seq,
+                    base_state_revision: head.state_revision,
+                    events: vec![DurableEvent {
+                        event_seq: head.event_seq + 1,
+                        kind: kind.to_owned(),
+                        run_id: run_id
+                            .map(str::to_owned)
+                            .or_else(|| next.run.as_ref().map(|run| run.run_id.clone())),
+                        agent_id: Some(agent_id.unwrap_or(&next.agent_id).to_owned()),
+                        payload,
+                    }],
+                    checkpoint: Checkpoint {
+                        schema_version: VERSION,
+                        state_revision: head.state_revision + 1,
+                        artifact_refs: artifacts.into_values().collect(),
+                        state: encode(&next)?,
+                    },
+                };
+                let batch = live.gate.propose(proposed)?.clone();
+                live.pending = Some(next);
+                (batch, live.disconnected.clone())
             };
-            let batch = live.gate.propose(proposed)?.clone();
-            live.pending = Some(next);
-            (batch, live.disconnected.clone())
-        };
         let acknowledgement = tokio::select! {
             biased;
             _ = disconnected.cancelled() => Err(reject(ErrorCode::CheckpointUnavailable, "durable authority disconnected during commit")),

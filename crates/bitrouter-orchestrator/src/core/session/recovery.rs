@@ -240,6 +240,7 @@ fn validate_snapshot(
         ));
     }
     state.manifest.validate(caps, &binding.limits)?;
+    root_queue::validate(state, &binding.limits)?;
     let root = state
         .agents
         .get(&state.agent_id)
