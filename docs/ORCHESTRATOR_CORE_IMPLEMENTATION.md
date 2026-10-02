@@ -1288,3 +1288,68 @@ ACK loss, cancellation, failed refresh, retry-budget and timing assertions. They
 do not establish complete native SSE bridge provenance/continuation, live-provider
 behavior, auxiliary/material monetary coverage, or crash recovery. Those C3
 requirements and C4–C6, A01–A23 acceptance, final audit, PR and CI remain open.
+
+## C3 native Responses SSE bridge provenance
+
+The built-in native SSE bridge now renders the same authenticated continuation
+view as direct execution. The complete canonical prompt remains in plans and
+history; only the actual wire request uses a verified suffix. Input counting
+commits the actual streaming request shape and endpoint, including the stream
+flag, so generation cannot silently diverge from its counted view. Dispatch
+observations are shared with direct HTTP and occur after durable admission.
+
+The bridge captures the successful request's final credential/scope authority,
+storage permission and effective-effort binding. It consumes the complete SSE
+stream through the existing decoder's terminal/EOF checks, then parses the full
+terminal response through the shared Responses adapter. Ordered reasoning items,
+encrypted metadata, empty summaries and supported provider output no longer
+depend on their lossy delta projection. Terminal content replaces that projection
+instead of being concatenated with it. Source proofs, encrypted continuation,
+raw-handle redaction and state-required markers use the existing native policy.
+
+A missing or non-array terminal `output` cannot authenticate a complete local
+message. The bridge preserves received delta content and usage but does not
+register a successful source or issue a continuation. Managed output carries
+unverified state and cannot silently re-enter a subsequent model request.
+Ordinary legacy bridge calls still receive their folded result. Unsupported
+items inside a complete output retain the existing state-required semantics;
+this does not expand the shared adapter's supported replay vocabulary.
+
+Eight new loopback tests use the production installation-key policy with the real
+SDK HTTP executor, including complete reasoning order, unstored replay, stored
+suffix/count parity after App reconstruction, actual-key changes, incomplete
+usage, invalid terminal/EOF, malformed output, outbound storage denial and two
+CoreSession turns. Real TCP fixtures deliver a valid terminal before truncating
+the HTTP body or exhausting the request's total timeout. A proven-authentication
+retry fixture rejects reuse by the failed principal and permits only the actual
+successful principal. Existing HTTP retry fixtures now exercise both direct Chat
+Completions and the Responses bridge for budget, cancellation, ACK loss, failed
+refresh, timing and single settlement.
+
+These bridge fixtures use static or fixture authentication. The production Codex
+OAuth adapter still removes the required output-token limit and remains
+ineligible for managed core execution; its hard admission rule is unchanged.
+The tests do not establish live subscription support, remote streaming API
+conformance, complete provider output fidelity, full monetary coverage or crash
+restoration. Remaining C3 requirements, C4–C6, A01–A23 acceptance, final audit,
+PR and CI remain open.
+
+Independent review found the malformed-terminal source-binding gap described
+above; missing, null and wrong-type output regressions cover the fix. Follow-up
+review found no remaining blocker. The two additional transport/identity
+regressions were also independently reviewed before final focused validation.
+
+Validation with Rust 1.95.0:
+
+- Workspace all-feature nextest: 3812 passed, 22 skipped, in 250.046 seconds.
+  This run predates only the final two test additions and equivalent fixture
+  builder extraction; production code did not change afterward.
+- Final `test(stream_bridge) or test(provider_work)` selection: 16 passed in
+  9.151 seconds, including all eight new tests and both retry protocol paths.
+- Final strict all-target/all-feature workspace clippy passed without warnings.
+- Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
+- An initial module move had one invalid relative import, corrected before
+  executable validation. An intermediate run mixed a pre-fix SDK build with a
+  strengthened malformed-output assertion and failed; the rebuilt focused run
+  passed all 14 then-current tests. A test-only boolean simplification resolved
+  the initial strict-clippy finding. Failed runs are not passing evidence.

@@ -150,10 +150,16 @@ impl HttpExecutor {
             .input_token_count_endpoint(target)
             .ok_or_else(|| invalid("transport does not support input counting"))?;
         Self::check_response_format(prompt, adapter, target)?;
-        let mut body = self.render_execution_request(adapter.as_ref(), target, prompt, ctx)?;
+        let mut body = self.render_execution_request(
+            adapter.as_ref(),
+            target,
+            prompt,
+            ctx,
+            target.provider_name == "openai-codex",
+        )?;
         let managed_expected = self.managed_expected_body(&body, target, ctx)?;
         apply_provider_continuation(&mut body, target, ctx)?;
-        let url = transport.endpoint_url(target, false);
+        let url = transport.endpoint_url(target, target.provider_name == "openai-codex");
         let (client, timeouts) = self.client_for(
             target,
             ctx.extension::<crate::language_model::native::NativeManagedRequest>()
