@@ -23,7 +23,7 @@
 //!   crate-root library code below, never a shared trait.
 //!
 //! - **Shared crate-root infrastructure** that every protocol uses:
-//!   - [`app`] — [`App`] / [`AppBuilder`] / [`Plugin`].
+//!   - [`app`] — [`App`] / [`AppBuilder`] and legacy custom-host [`Plugin`] assembly.
 //!   - [`error`] — the unified [`BitrouterError`] / [`Result`].
 //!   - [`caller`] — [`CallerContext`] (identity-only; business
 //!     classifications like payment method live in deployment code, not
@@ -32,7 +32,13 @@
 //!   - [`metrics`] — the [`MetricsRenderer`] trait (the `GET /metrics`
 //!     endpoint contract; spend / token / rate aggregation are
 //!     deployment-specific concerns).
+//!   - [`observe`] — the observability *contract*: the span schema
+//!     ([`observe::schema`], rendered to the committed `span-schema.json`) and
+//!     the [`SpanAttributes`](observe::SpanAttributes) extension hatch.
+//!     Ungated and dependency-free; rendering it onto a wire is
+//!     `bitrouter-telemetry`'s job.
 //!   - [`plugin`] — [`PluginId`] and SQL [`MigrationItem`]s.
+//!   - [`extension`] — registration and typed capabilities for compiled extensions.
 //!
 //! - **Optional features** (off by default):
 //!   - `server` — an [axum] HTTP front-end ([`server::build_router`],
@@ -80,55 +86,102 @@
 //! use bitrouter_sdk::language_model::{HttpExecutor, StaticRoutingTable};
 //!
 //! # fn run() -> bitrouter_sdk::Result<()> {
+//! let executor = Arc::new(HttpExecutor::with_defaults()?);
 //! let app = App::builder()
 //!     .language_model(|lm| {
 //!         lm.routing_table(Arc::new(StaticRoutingTable::new()))
-//!           .executor(Arc::new(HttpExecutor::with_defaults().unwrap()));
+//!           .executor(executor);
 //!     })
 //!     .build()?;
 //! # let _ = app;
 //! # Ok(()) }
 //! ```
 //!
-//! Shared library plugins implement one or more hook traits from this SDK
-//! and install themselves through [`AppBuilder::plugin`] (a convenience
-//! that drops their hooks into the right sub-builder; hooks can equally be
-//! registered one-by-one without [`Plugin`]).
+//! This builder is for trusted host assembly. Legacy [`Plugin`] packages can
+//! install hooks and migrations through [`AppBuilder::plugin`]; hosts can also
+//! register hooks individually. These facilities retain their existing behavior
+//! in the current alpha SDK API. Removal of the legacy package API requires an
+//! explicitly announced breaking SDK release with migration notes.
+//!
+//! New request-check extension authors use
+//! [`extension::ExtensionApi::request_check`] in this SDK,
+//! called through `bitrouter::assemble::build_app_with_extensions`. This
+//! restricted registration path provides callbacks for explicit router bindings;
+//! it does not grant the builder, global hooks or migrations. It does not replace
+//! legacy global/output protection with input-only checks. See the extension
+//! guide in the repository for a runnable custom-host example.
 //!
 //! With the `server` feature on, `app.serve("0.0.0.0:4356")` wires the
 //! whole router and runs it until SIGTERM.
 //!
-//! ## What ships in adjacent crates
+//! ## What ships here, and what ships elsewhere
 //!
-//! Two shared library plugins in this repo:
+//! The dividing line is **contracts and the seams they plug into ship here;
+//! renderers of them, and deployment business logic, do not.**
 //!
-//! - `bitrouter-observe` — Prometheus exporter + OTLP/HTTP traces.
-//! - `bitrouter-guardrails` — request / response content scanning (block +
-//!   redact).
+//! [`observe`] is the case in point, and it is the one that used to be
+//! misdrawn. What the SDK owns is the **span schema** — the span names
+//! (`chat`, `route`, `settle`, the per-hop `chat`), the `bitrouter.*`
+//! attribute vocabulary, and the invariants that fail silently and expensively
+//! when a deployment gets them wrong: a hop is not a `gen_ai` generation, and
+//! stamping it as one makes every gen_ai-aware backend double-count the
+//! reported cost. That schema has to be identical across every deployment or
+//! "interop surface" means nothing, and it is declared here as data, under no
+//! feature gate, so a deployment can implement it without taking a renderer.
 //!
-//! Anything else (auth, policy, charging, metering) is **deployment-specific
-//! business logic, not shared library code**. The OSS `apps/bitrouter`
-//! binary provides its own implementations under
+//! What the SDK does *not* own is any rendering of it. OTLP transport,
+//! credentials, batch processing, endpoint configuration and cardinality
+//! limiting are one egress path's implementation, not contract, and they ship
+//! in `bitrouter-telemetry`. [`ObserveHook`](language_model::ObserveHook) is
+//! the seam they plug into — a seam with more than one production
+//! implementation, since the OSS binary registers its own observers alongside
+//! the OTLP one.
+//!
+//! Shared implementations live in their own crates:
+//!
+//! - `bitrouter-telemetry` — optional telemetry egress: the OTLP exporter, the
+//!   inbound ingress span, and the `tracing` ↔ OpenTelemetry bridge.
+//! - `bitrouter-guardrails` — regex rules and the input request-check callback.
+//!   It depends on this SDK's extension contract. Its optional `sdk` feature
+//!   retains legacy global/request-scoped and output block/redact hooks for
+//!   compatible custom hosts. These hooks are not the new request-check API.
+//!   Content policy is a deployment's own call.
+//!
+//! Everything else in that category (auth, policy, charging, metering) is
+//! **deployment-specific business logic, not shared library code**. The OSS
+//! `apps/bitrouter` binary provides its own implementations under
 //! `apps/bitrouter/src/{auth,policy,metering}/`. Closed-source deployments
 //! (e.g. a cloud product) write their own `PreRequestHook` /
 //! `SettlementRecorder` impls against the SDK's stable traits.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 // ===== shared library code (crate root) =====
 pub mod app;
 pub mod caller;
 pub mod error;
 pub mod event;
+pub mod extension;
+// The CLI name a user-facing hint should tell the operator to type. Ungated:
+// every layer that renders a "run `… <subcommand>`" hint needs it.
+pub mod invocation;
 pub mod metrics;
+// The observability contract — the span schema and the attribute extension
+// hatch. Ungated and dependency-free on purpose: a deployment implementing the
+// contract must not have to enable a renderer it is not using. Rendering it
+// onto a wire is `bitrouter-telemetry`'s job, not this crate's.
+pub mod observe;
 pub mod plugin;
 pub mod url_validator;
 
 #[cfg(feature = "config_file")]
+#[cfg_attr(docsrs, doc(cfg(feature = "config_file")))]
 pub mod config;
 
 #[cfg(feature = "server")]
+#[cfg_attr(docsrs, doc(cfg(feature = "server")))]
 pub mod server;
 
 // ===== per-protocol modules =====

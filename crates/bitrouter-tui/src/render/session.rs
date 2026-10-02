@@ -7,7 +7,7 @@
 //! | Variant | Where |
 //! |---|---|
 //! | `Plan` | the document, in order, patched in place like a tool call |
-//! | `AvailableCommandsUpdate` | listed on request, because a list of commands is not a thing to keep on screen |
+//! | `AvailableCommandsUpdate` | the journal holds it; the *app* renders it, through the report `bro acp commands` shares, so one session is not described two ways |
 //! | `CurrentModeUpdate` | the footer |
 //! | `ConfigOptionUpdate` | the footer |
 //! | `SessionInfoUpdate` | the footer, as the title |
@@ -18,8 +18,8 @@
 //! unconditional in v1.
 
 use agent_client_protocol_schema::v1::{
-    AvailableCommand, Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionConfigKind,
-    SessionConfigOption, SessionModeId,
+    Plan, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionConfigKind, SessionConfigOption,
+    SessionModeId, UsageUpdate,
 };
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -61,32 +61,47 @@ fn entry(entry: &PlanEntry) -> Line<'static> {
     ])
 }
 
-/// The agent's own slash commands.
+/// Plain bytes as lines, one `Line` per line of text.
 ///
-/// Listed when asked for rather than kept on screen: the list is static for
-/// most of a session and long for some agents, and rows on screen are rows the
-/// transcript does not get.
-pub fn commands(commands: &[AvailableCommand]) -> Vec<Line<'static>> {
-    if commands.is_empty() {
-        return vec![Line::from(Span::styled(
-            "this agent advertises no commands",
-            Style::default().fg(Color::DarkGray),
-        ))];
+/// The seam between a report the CLI rendered and the screen. It lives here
+/// rather than app-side because `apps/bitrouter` deliberately has no `ratatui`
+/// dependency — the app forwards `Vec<Line>` it never names. Taking bytes
+/// rather than a report is also what lets the chat guard assert the driver
+/// cannot name, and therefore cannot retain, a report type.
+pub fn plain_lines(bytes: &[u8]) -> Vec<Line<'static>> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(|line| Line::from(expand_tabs(line)))
+        .collect()
+}
+
+/// Expand tabs to the next eight-column stop.
+///
+/// A CLI report may hold a real tab — `bro models --human` separates its
+/// two columns with one so a shell can `cut -f1`, which is right for a pipe and
+/// unsafe here. The differential writer measures a row with `unicode-width`,
+/// where a tab counts one column, while the terminal advances the cursor to the
+/// next tab stop; the two disagree and the screen model drifts. Expanding at
+/// this seam is what keeps the writer's arithmetic true, and it puts the same
+/// columns on screen that the terminal would have shown.
+fn expand_tabs(line: &str) -> String {
+    const STOP: usize = 8;
+    if !line.contains('\t') {
+        return line.to_string();
     }
-    let mut lines = vec![Line::from(Span::styled(
-        format!("commands · {}", commands.len()),
-        Style::default().add_modifier(Modifier::BOLD),
-    ))];
-    lines.extend(commands.iter().map(|command| {
-        Line::from(vec![
-            Span::styled(
-                format!("  /{}", command.name),
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::raw(format!("  {}", command.description)),
-        ])
-    }));
-    lines
+    let mut out = String::with_capacity(line.len());
+    let mut column = 0;
+    for character in line.chars() {
+        if character == '\t' {
+            let pad = STOP - (column % STOP);
+            out.extend(std::iter::repeat_n(' ', pad));
+            column += pad;
+        } else {
+            out.push(character);
+            column += unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
+        }
+    }
+    out
 }
 
 /// Mode, configuration, and title, as spans for the caller's footer row.
@@ -118,6 +133,62 @@ pub fn state(
         spans.push(Span::raw(format!(" · {title}")));
     }
     spans
+}
+
+/// When the context window is close enough to full that the reader should be
+/// told. Below this the figure is background; at or above it, running out is
+/// plausibly the next thing that happens to the session.
+const CROWDED: f64 = 0.8;
+
+/// How full the context window is, for the footer.
+///
+/// `used` and `size` are the harness's own — it owns the context window, and
+/// this renderer never computes or adjusts them. Unlike cost, they need no
+/// attribution: the number means the same thing whoever routed the traffic.
+///
+/// **Empty when there is nothing honest to say.** `UsageUpdate` is optional,
+/// so a session may never carry one; and a `size` of zero is the harness
+/// saying it does not know its own window. Either way the pair is the unit of
+/// meaning — almost all the value here is *proximity to a limit*, so a used
+/// figure with no window to measure it against is the same error as an
+/// unscoped cost: a number the reader cannot act on. Half a pair is not drawn.
+pub fn context(usage: Option<&UsageUpdate>) -> Vec<Span<'static>> {
+    let Some(usage) = usage.filter(|usage| usage.size > 0) else {
+        return Vec::new();
+    };
+    // Saturating rather than exact: a harness that reports more used than its
+    // window holds is describing a full context, not a 120% one.
+    let share = (usage.used as f64 / usage.size as f64).min(1.0);
+    let style = if share >= CROWDED {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
+    vec![Span::styled(
+        format!(" · ctx {}/{}", compact(usage.used), compact(usage.size)),
+        style,
+    )]
+}
+
+/// `12_400` → `12.4k`. The footer is one row shared with everything else the
+/// session has to say, and what the reader wants from a token count is its
+/// magnitude rather than its digits.
+fn compact(tokens: u64) -> String {
+    let (value, suffix) = if tokens >= 1_000_000 {
+        (tokens as f64 / 1_000_000.0, "M")
+    } else if tokens >= 1_000 {
+        (tokens as f64 / 1_000.0, "k")
+    } else {
+        return tokens.to_string();
+    };
+    // A trailing `.0` is noise at this width: `200k`, not `200.0k`.
+    if (value.fract() * 10.0).round() == 0.0 {
+        format!("{value:.0}{suffix}")
+    } else {
+        format!("{value:.1}{suffix}")
+    }
 }
 
 /// What a configuration option is currently set to.
@@ -163,6 +234,76 @@ mod tests {
         spans.iter().map(|span| span.content.as_ref()).collect()
     }
 
+    fn usage(used: u64, size: u64) -> UsageUpdate {
+        UsageUpdate::new(used, size)
+    }
+
+    /// The rule this renderer shares with `cost`: a figure the reader cannot
+    /// act on is not drawn. Almost all the value of an occupancy figure is
+    /// proximity to a limit, so without a window there is nothing to say.
+    #[test]
+    fn half_a_pair_is_never_drawn() {
+        assert!(context(None).is_empty(), "no usage at all");
+        assert!(
+            context(Some(&usage(12_400, 0))).is_empty(),
+            "a harness that does not know its own window"
+        );
+        assert!(context(Some(&usage(0, 0))).is_empty(), "neither half known");
+    }
+
+    /// Both halves, and in the compact spelling the one-row footer needs.
+    #[test]
+    fn context_reports_the_pair() {
+        assert_eq!(
+            spans_text(&context(Some(&usage(12_400, 200_000)))),
+            " · ctx 12.4k/200k"
+        );
+    }
+
+    /// Below the threshold the figure is background; at or above it the reader
+    /// is told, because running out is plausibly what happens next.
+    #[test]
+    fn a_crowded_window_is_flagged_and_a_roomy_one_is_not() {
+        let roomy = context(Some(&usage(20_000, 200_000)));
+        let crowded = context(Some(&usage(160_000, 200_000)));
+
+        assert_eq!(
+            roomy.first().map(|span| span.style.fg),
+            Some(None),
+            "a roomy window carries no warning colour"
+        );
+        assert_eq!(
+            crowded.first().and_then(|span| span.style.fg),
+            Some(Color::Yellow),
+            "at {CROWDED:.0?} of the window the reader is told"
+        );
+    }
+
+    /// A harness reporting more used than its window holds is describing a
+    /// full context, not a 120% one — and must not panic or render one.
+    #[test]
+    fn an_overfull_window_saturates() {
+        let over = context(Some(&usage(250_000, 200_000)));
+        assert_eq!(spans_text(&over), " · ctx 250k/200k");
+        assert_eq!(
+            over.first().and_then(|span| span.style.fg),
+            Some(Color::Yellow)
+        );
+    }
+
+    /// The compact spelling: magnitude, not digits — and no trailing `.0`,
+    /// which is pure noise at this width.
+    #[test]
+    fn compact_keeps_the_magnitude_and_drops_the_noise() {
+        assert_eq!(compact(0), "0");
+        assert_eq!(compact(999), "999");
+        assert_eq!(compact(1_500), "1.5k");
+        assert_eq!(compact(12_400), "12.4k");
+        assert_eq!(compact(200_000), "200k", "no trailing .0");
+        assert_eq!(compact(1_500_000), "1.5M");
+        assert_eq!(compact(2_000_000), "2M");
+    }
+
     /// `Plan` renders — every step, its state, and the two priorities worth
     /// marking.
     #[test]
@@ -194,29 +335,23 @@ mod tests {
         assert!(out.contains("· delete the old renderer (low)"), "{out:?}");
     }
 
-    /// `AvailableCommandsUpdate` renders — the surface that matters most,
-    /// because `/route` is ours and everything else the agent offers was
-    /// invisible.
+    /// A report's tabs become spaces before they reach the screen.
+    ///
+    /// The writer measures rows with `unicode-width`, where a tab is one
+    /// column, and the terminal advances to the next tab stop. Left alone the
+    /// two disagree and every row after the tab is misplaced.
     #[test]
-    fn available_commands_render_with_their_descriptions() {
-        let rendered = commands(&[
-            AvailableCommand::new("compact", "summarize the conversation"),
-            AvailableCommand::new("init", "write an AGENTS.md"),
-        ]);
-        let out = text(&rendered);
-        assert!(out.contains("commands · 2"), "{out:?}");
+    fn plain_lines_expand_tabs_to_the_next_stop() {
+        let rendered = plain_lines(b"demo-model\tdemo\nab\tcd\n");
+        let text: Vec<String> = rendered
+            .iter()
+            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(text, ["demo-model      demo", "ab      cd"]);
         assert!(
-            out.contains("/compact  summarize the conversation"),
-            "{out:?}"
+            !text.iter().any(|line| line.contains('\t')),
+            "no tab may reach the writer: {text:?}"
         );
-        assert!(out.contains("/init  write an AGENTS.md"), "{out:?}");
-    }
-
-    /// An agent that advertises none says so, rather than rendering a heading
-    /// over nothing.
-    #[test]
-    fn no_commands_says_so() {
-        assert!(text(&commands(&[])).contains("no commands"));
     }
 
     /// `CurrentModeUpdate` renders, in the footer.

@@ -53,7 +53,7 @@ Choose `evaluator.kind` from the actual source:
 5. Write a draft subject with an empty `evidence_digest`, then seal it:
 
    ```bash
-   bitrouter eval subject seal subject-draft.json --output subject.json
+   bro eval subject seal subject-draft.json --output subject.json
    ```
 
 6. For a multi-decision subject, derive `decision_credit` from the fixed
@@ -72,14 +72,14 @@ Choose `evaluator.kind` from the actual source:
    `eval_id` and `evidence_digest`.
 
    ```bash
-   bitrouter eval subject put subject.json --config bitrouter.yaml
-   bitrouter eval result submit result.json --config bitrouter.yaml
+   bro eval subject put subject.json --config bitrouter.yaml
+   bro eval result submit result.json --config bitrouter.yaml
    ```
 
 2. Treat an `admitted` response as eligible evidence. Preserve `held_out`,
    `rejected`, and `disputed` responses as non-training records.
 3. Hand off the sealed subject, result, submission response, and private
-   evidence references, then stop. A later `bitrouter optimize run` invocation
+   evidence references, then stop. A later `bro optimize run` invocation
    is a separate autonomous authorization; do not review, publish, or run it as
    part of evaluation.
 

@@ -514,6 +514,7 @@ mod tests {
                         candidate_tier: Some("economy".into()),
                         policy_digest: POLICY_DIGEST.into(),
                         experiment: None,
+                        route_measurement: None,
                         policy: ProgressGuardPolicy {
                             escalation_tier: "strong".into(),
                             protected_tiers: BTreeSet::from(["strong".into()]),

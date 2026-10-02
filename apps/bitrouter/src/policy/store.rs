@@ -24,6 +24,23 @@ pub struct PolicyStore {
     path: RwLock<Option<PathBuf>>,
 }
 
+/// Policies read and validated from disk but not yet installed in the live
+/// store. The reload coordinator prepares this before it changes any other
+/// runtime participant.
+pub(crate) struct PreparedPolicyStore {
+    policies: HashMap<String, Policy>,
+}
+
+/// Safe inspection result for the configured access-policy directory.
+pub(crate) enum PolicySourceState {
+    NotConfigured,
+    InSync,
+    Changed,
+    Missing,
+    Invalid,
+    Unavailable,
+}
+
 impl PolicyStore {
     /// An empty store.
     pub fn new() -> Self {
@@ -57,13 +74,68 @@ impl PolicyStore {
     /// no-op for stores not built from a directory. The new set REPLACES the
     /// old set (a deleted yaml file → that policy is gone).
     pub async fn reload(&self) -> Result<()> {
-        let dir = self.path.read().expect("policy lock poisoned").clone();
-        let Some(dir) = dir else {
+        let Some(prepared) = self.prepare_reload().await? else {
             return Ok(());
         };
-        let fresh = scan_policy_dir(&dir).await?;
-        *self.policies.write().expect("policy lock poisoned") = fresh;
+        self.commit_prepared(prepared)
+    }
+
+    /// Read a complete replacement policy set without altering the live store.
+    /// `None` means this in-memory store has no source directory and therefore
+    /// has no reload work.
+    pub(crate) async fn prepare_reload(&self) -> Result<Option<PreparedPolicyStore>> {
+        let dir = match self.path.read() {
+            Ok(path) => path.clone(),
+            Err(_) => {
+                return Err(BitrouterError::internal(
+                    "reading policy reload source failed",
+                ));
+            }
+        };
+        let Some(dir) = dir else {
+            return Ok(None);
+        };
+        let policies = scan_policy_dir(&dir).await?;
+        Ok(Some(PreparedPolicyStore { policies }))
+    }
+
+    /// Install an already prepared replacement policy set.
+    pub(crate) fn commit_prepared(&self, prepared: PreparedPolicyStore) -> Result<()> {
+        let mut policies = self
+            .policies
+            .write()
+            .map_err(|_| BitrouterError::internal("installing reloaded policies failed"))?;
+        *policies = prepared.policies;
         Ok(())
+    }
+
+    /// Compare disk and active policy sets without exposing contents or errors.
+    pub(crate) async fn source_state(&self) -> PolicySourceState {
+        let directory = match self.path.read() {
+            Ok(path) => path.clone(),
+            Err(_) => return PolicySourceState::Unavailable,
+        };
+        let Some(directory) = directory else {
+            return PolicySourceState::NotConfigured;
+        };
+        match tokio::fs::metadata(&directory).await {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return PolicySourceState::Invalid,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return PolicySourceState::Missing;
+            }
+            Err(_) => return PolicySourceState::Unavailable,
+        }
+        let saved = match scan_policy_dir(&directory).await {
+            Ok(saved) => saved,
+            Err(BitrouterError::BadRequest { .. }) => return PolicySourceState::Invalid,
+            Err(_) => return PolicySourceState::Unavailable,
+        };
+        match self.policies.read() {
+            Ok(active) if *active == saved => PolicySourceState::InSync,
+            Ok(_) => PolicySourceState::Changed,
+            Err(_) => PolicySourceState::Unavailable,
+        }
     }
 
     /// Look up a policy by id, applying `f` while the lock is held.
@@ -139,4 +211,45 @@ async fn scan_policy_dir(dir: &Path) -> Result<HashMap<String, Policy>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod source_state_tests {
+    use super::{PolicySourceState, PolicyStore};
+
+    #[tokio::test]
+    async fn source_inspection_distinguishes_invalid_missing_and_changed() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let policies = directory.path().join("policies");
+        tokio::fs::create_dir(&policies).await?;
+        let file = policies.join("operator.yaml");
+        tokio::fs::write(&file, "id: operator\nallowed_models: [first]\n").await?;
+        let store = PolicyStore::load_dir(&policies).await?;
+        assert!(matches!(
+            store.source_state().await,
+            PolicySourceState::InSync
+        ));
+
+        tokio::fs::write(&file, "id: operator\nallowed_models: [second]\n").await?;
+        assert!(matches!(
+            store.source_state().await,
+            PolicySourceState::Changed
+        ));
+        tokio::fs::write(&file, "allowed_models: [broken\n").await?;
+        assert!(matches!(
+            store.source_state().await,
+            PolicySourceState::Invalid
+        ));
+        tokio::fs::remove_file(&file).await?;
+        tokio::fs::remove_dir(&policies).await?;
+        assert!(matches!(
+            store.source_state().await,
+            PolicySourceState::Missing
+        ));
+        assert!(matches!(
+            PolicyStore::new().source_state().await,
+            PolicySourceState::NotConfigured
+        ));
+        Ok(())
+    }
 }

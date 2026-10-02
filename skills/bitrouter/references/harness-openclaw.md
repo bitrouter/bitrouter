@@ -6,7 +6,7 @@ Wire OpenClaw to route its model calls through BitRouter at `http://localhost:43
 
 ## Prerequisites
 
-- BitRouter installed and running (`bitrouter status` shows green).
+- BitRouter installed and running (`bro status` shows green).
 - An active provider that serves the models OpenClaw drives (Claude family → `anthropic` or `github-copilot`; OpenAI family → `openai`).
 - OpenClaw installed (`github.com/openclaw/openclaw`).
 

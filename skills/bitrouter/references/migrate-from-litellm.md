@@ -72,11 +72,11 @@ response = client.chat.completions.create(model="gpt-4", messages=[...])
 
 ```bash
 # 1. start bitrouter alongside the running litellm
-bitrouter start
+bro start
 
 # 2. verify aliases resolve
-bitrouter route gpt-4
-bitrouter route claude
+bro route gpt-4
+bro route claude
 
 # 3. smoke test
 curl http://localhost:4356/v1/chat/completions \
@@ -92,11 +92,11 @@ pkill -f 'litellm' || true
 
 | LiteLLM | BitRouter equivalent |
 |---|---|
-| `master_key` | `bitrouter key sign --user <id>` (mint `brvk_…` virtual keys); set `server.skip_auth: false` |
+| `master_key` | `bro key sign --user <id>` (mint `brvk_…` virtual keys); set `server.skip_auth: false` |
 | `router_settings.fallbacks` | Provider `accounts` with `account_strategy: failover`, or per-pattern `derives` |
 | `router_settings.routing_strategy: simple-shuffle` | `account_strategy: balance` on a multi-account provider |
 | `litellm_params.rpm` / `tpm` | `providers.<id>.rate_limits` (glob-prefix pattern map) |
-| Callbacks / logging | `bitrouter observe status`; OTel exporter via env (`OTEL_EXPORTER_OTLP_ENDPOINT`) |
+| Callbacks / logging | `bro observe status`; OTel exporter via env (`OTEL_EXPORTER_OTLP_ENDPOINT`) |
 
 For richer routing (`derives`, multi-account, per-pattern `api_protocol`), see `providers.md`.
 

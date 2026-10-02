@@ -433,6 +433,7 @@ mod tests {
             baseline_effort: None,
             policy_digest: subject.policy_digest.clone(),
             experiment: None,
+            route_measurement: None,
         });
         subject
             .requested_dimensions
@@ -511,6 +512,7 @@ mod tests {
                 policy_digest:
                     "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
                 experiment: None,
+                route_measurement: None,
             }],
             requested_dimensions: BTreeSet::from(["quality.pass".into()]),
             evidence_digest: evidence_digest(&evidence)?,

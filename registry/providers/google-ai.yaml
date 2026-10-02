@@ -4,7 +4,7 @@
 # distinct from the metered `google` (Gemini API) provider.
 #
 # The `google-ai` handler is implemented in bitrouter_providers::antigravity: it
-# imports the `agy` OS-keyring session (`bitrouter providers login google-ai`),
+# imports the `agy` OS-keyring session (`bro providers login google-ai`),
 # refreshes via the confidential `agy` OAuth client (secret read from the local
 # `agy` binary — never vendored), and speaks the `antigravity` custom protocol,
 # which is Gemini `generateContent` retargeted at

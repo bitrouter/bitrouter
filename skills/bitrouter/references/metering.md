@@ -60,7 +60,7 @@ reward and metering rows. Export their deterministically replayed circuit state
 with the same frozen config used by the daemon:
 
 ```bash
-bitrouter workflow-state reliability-report \
+bro workflow-state reliability-report \
   --database-url sqlite://$HOME/.bitrouter/bitrouter.db \
   --config $HOME/.bitrouter/bitrouter.yaml \
   --output artifacts/reliability-report.json
@@ -75,10 +75,10 @@ prompt/response content, or tool commands.
 
 Hosted BitRouter Cloud rows can be reconciled without exporting a static API
 key into the environment. Point the command at the owner-only credential file
-used by `bitrouter cloud login`, provided that file contains a static API key:
+used by `bro cloud login`, provided that file contains a static API key:
 
 ```bash
-bitrouter workflow-state reconcile-metering \
+bro workflow-state reconcile-metering \
   --database-url sqlite://$HOME/.bitrouter/bitrouter.db \
   --credentials-file "$XDG_DATA_HOME/bitrouter/account-credentials.json" \
   --request-id req-123 \
@@ -94,7 +94,7 @@ logs, or benchmark artifacts.
 ## Export an auditable usage snapshot
 
 ```bash
-bitrouter workflow-state metering-usage \
+bro workflow-state metering-usage \
   --database-url sqlite://$HOME/.bitrouter/bitrouter.db \
   --since 2026-07-14T00:00:00Z \
   --until 2026-07-15T00:00:00Z \
@@ -105,7 +105,7 @@ If a provider price was unavailable during the run, impute all four rates
 explicitly:
 
 ```bash
-bitrouter workflow-state metering-usage \
+bro workflow-state metering-usage \
   --database-url sqlite://$HOME/.bitrouter/bitrouter.db \
   --output artifacts/cloud-usage.jsonl \
   --impute-price 'provider:model=1.0,0.1,1.25,6.0'
@@ -117,7 +117,7 @@ no cache usage. Overrides are preserved as `pricing_source: override` evidence.
 ## Build the strict run bundle
 
 ```bash
-bitrouter workflow-state bundle \
+bro workflow-state bundle \
   --run-label short13-fixed-strong \
   --traces artifacts/traces.jsonl \
   --cloud-usage artifacts/cloud-usage.jsonl \
@@ -145,6 +145,19 @@ admission additionally requires the exact request-ID joins, a completed
 request, and authoritative computed settlement; diagnostic identity fields do
 not participate in learning.
 
+The bundle writes `routing-baselines.json` in addition to the run artifact,
+trace, usage, outcome, decision, and shadow-policy files. Eligible policy
+decisions carry a versioned `route_measurement`: the complete semantic
+tier/model/effort candidate set, pre-guard logging action, and integer-ppm
+logging probabilities from one immutable policy snapshot. Effective
+`selected_*` fields can differ after safety or progress guards.
+
+Routing baselines are deterministic measurement controls. They are isolated by
+candidate-set digest, expose no raw request IDs, and include both every
+always-tier allocation and an exact share-matched content-blind allocation.
+They make no counterfactual quality claim; decisions without measurement are
+reported as excluded rather than silently synthesized.
+
 The in-memory analytical `build*` APIs may omit usage and decisions for
 extractor development. The `workflow-state bundle` command is benchmark-grade
 and fails closed when traces exist without usage evidence.
@@ -152,7 +165,7 @@ and fails closed when traces exist without usage evidence.
 ## Rank a candidate policy by settled baseline cost
 
 ```bash
-bitrouter workflow-state policy-oracle \
+bro workflow-state policy-oracle \
   --traces artifacts/traces.jsonl \
   --cloud-usage artifacts/cloud-usage.jsonl \
   --policy-lock policy-lock.yaml \

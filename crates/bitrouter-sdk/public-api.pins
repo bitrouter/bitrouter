@@ -1,0 +1,33 @@
+# Pins for `public-api-deps.txt`, the committed manifest of foreign crates
+# reachable from this crate's public API. The `sdk-public-api` CI job reads
+# both values out of here, so this is the single source of truth — the
+# workflow does not repeat them.
+#
+# Both pins matter: `cargo public-api`'s listing is the input the manifest is
+# derived from, and anything that changes the *rendering* can change which
+# paths the extraction sees.
+#
+#   toolchain  — rustdoc's JSON format changes shape across nightlies.
+#   tool       — `cargo public-api`'s own rendering changes across releases.
+#
+# Regenerate with exactly these:
+#
+#   rustup toolchain install nightly-2026-05-05
+#   cargo install cargo-public-api --locked --version 0.52.0
+#   cargo +nightly-2026-05-05 public-api -p bitrouter-sdk --all-features --simplified \
+#     | grep -oE '\b[a-z_][a-z0-9_]*(::[a-zA-Z_][a-zA-Z0-9_]*)+' \
+#     | cut -d: -f1 | sort -u \
+#     | grep -vxE 'bitrouter_sdk|core|std|alloc'
+#
+# Append the result under the comment header in `public-api-deps.txt`; the
+# header is stripped before comparison, so keep it out of the generated part.
+#
+# Run it on Linux or macOS. `bitrouter-sdk` has `#[cfg(unix)]` items, so a
+# Windows-generated listing will not match; the CI job runs on Linux.
+#
+# Because the manifest is a set of crate names rather than a byte-for-byte
+# listing, moving either pin is far less disruptive than it used to be:
+# rendering churn no longer rewrites the file, and only a genuine change in
+# the public dependency surface produces a diff.
+toolchain=nightly-2026-05-05
+tool=cargo-public-api@0.52.0

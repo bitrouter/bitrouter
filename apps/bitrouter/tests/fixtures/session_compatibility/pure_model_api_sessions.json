@@ -1,0 +1,144 @@
+[
+  {
+    "name": "explicit workflow header wins adapter body hints",
+    "protocol": "chat_completions",
+    "harnessHint": "hermes",
+    "headers": {
+      "x-bitrouter-workflow-session": "explicit-session"
+    },
+    "rawBody": {
+      "metadata": { "job_id": "ignored-hermes-job" }
+    },
+    "firstUserText": "explicit task",
+    "expected": {
+      "key": "explicit-session",
+      "confidence": "high",
+      "source": "header.x-bitrouter-workflow-session",
+      "agentSessionId": "explicit-session",
+      "parentSessionId": "explicit-session",
+      "identitySource": "inferred",
+      "fingerprint": "sha256:0229f33e896dedc0d56ef65c6da5f50737c324524d6d72204aaeffb2591fd448"
+    }
+  },
+  {
+    "name": "adapter body hint",
+    "protocol": "chat_completions",
+    "harnessHint": "generic",
+    "headers": {},
+    "rawBody": {
+      "metadata": { "job_id": "hermes-job" }
+    },
+    "firstUserText": "adapter body task",
+    "expected": {
+      "key": "hermes-job",
+      "confidence": "medium",
+      "source": "raw_body.metadata.job_id",
+      "agentSessionId": "hermes-job",
+      "parentSessionId": "hermes-job",
+      "identitySource": "inferred",
+      "fingerprint": "sha256:dd7df36237959c5873e6b145fcd72d034b0a4cfef7aa64f95e3a9d45c1a44e50"
+    }
+  },
+  {
+    "name": "first user message fallback",
+    "protocol": "chat_completions",
+    "harnessHint": "generic",
+    "headers": {},
+    "rawBody": {},
+    "firstUserText": "fallback task",
+    "expected": {
+      "key": "prompt:8abaaa78fcbd3b3938a50ff2",
+      "confidence": "low",
+      "source": "prompt.first_user_message_sha256",
+      "agentSessionId": "prompt:8abaaa78fcbd3b3938a50ff2",
+      "parentSessionId": "prompt:8abaaa78fcbd3b3938a50ff2",
+      "identitySource": "inferred",
+      "fingerprint": "sha256:ebd8a7dc0031fc1206cae3f7fdb7091a7af68edb60f2837e08ce85f724ad21db"
+    }
+  },
+  {
+    "name": "generic responses continuation",
+    "protocol": "responses",
+    "harnessHint": "generic",
+    "headers": {},
+    "rawBody": {
+      "previous_response_id": "resp-generic"
+    },
+    "firstUserText": "generic continuation",
+    "expected": {
+      "key": "resp-generic",
+      "confidence": "medium",
+      "source": "raw_body.previous_response_id",
+      "agentSessionId": "resp-generic",
+      "parentSessionId": "resp-generic",
+      "identitySource": "inferred",
+      "fingerprint": "sha256:b046e0021cc9a79af0553fbe48f7d20035c8ccc842eed1b7929ed50868614a21"
+    }
+  },
+  {
+    "name": "claude like messages traffic",
+    "protocol": "messages",
+    "harnessHint": "generic",
+    "headers": {
+      "anthropic-beta": "claude-code-20250219"
+    },
+    "rawBody": {
+      "metadata": {
+        "user_id": "{\"device_id\":\"device-1\",\"session_id\":\"claude-native\"}"
+      }
+    },
+    "firstUserText": "claude task",
+    "expected": {
+      "key": "claude-native",
+      "confidence": "high",
+      "source": "raw_body.metadata.user_id.session_id",
+      "agentSessionId": "claude-native",
+      "parentSessionId": "claude-native",
+      "identitySource": "inferred",
+      "fingerprint": "sha256:61d5274ea5dd0467f076bdbee3abd9a0cb3dd7600dc300a18255266d27eb5b5b"
+    }
+  },
+  {
+    "name": "codex like responses traffic",
+    "protocol": "responses",
+    "harnessHint": "generic",
+    "headers": {
+      "user-agent": "codex-cli/1.0"
+    },
+    "rawBody": {
+      "previous_response_id": "resp-codex"
+    },
+    "firstUserText": "codex task",
+    "expected": {
+      "key": "resp-codex",
+      "confidence": "medium",
+      "source": "raw_body.previous_response_id",
+      "agentSessionId": "resp-codex",
+      "parentSessionId": "resp-codex",
+      "identitySource": "inferred",
+      "fingerprint": "sha256:f3365d448f250d9602cbd63bd3d68bfe1c87c0c91f9043b098ea85926981d9de"
+    }
+  },
+  {
+    "name": "conflicting native and generic headers stay generic",
+    "protocol": "responses",
+    "harnessHint": "generic",
+    "headers": {
+      "anthropic-beta": "claude-code-20250219",
+      "user-agent": "codex-cli/1.0",
+      "session-id": "untrusted-session",
+      "thread-id": "untrusted-thread"
+    },
+    "rawBody": {},
+    "firstUserText": "conflicting native evidence",
+    "expected": {
+      "key": "prompt:032c6c6c6af3369713f8bb6d",
+      "confidence": "low",
+      "source": "prompt.first_user_message_sha256",
+      "agentSessionId": "prompt:032c6c6c6af3369713f8bb6d",
+      "parentSessionId": "prompt:032c6c6c6af3369713f8bb6d",
+      "identitySource": "inferred",
+      "fingerprint": "sha256:017a97cd7de535e9811032afd751f1394fd29ca3fbd55127d70cc2775199b45c"
+    }
+  }
+]

@@ -18,6 +18,7 @@ use crate::language_model::protocol::responses::{
     AssistantTurnCommitment, CausalPrefixPlan, StreamingAssistantTurnCommitment,
     assistant_turn_commitment, extend_causal_prefix,
 };
+use crate::language_model::routing::RouterRequestIdentity;
 use crate::language_model::settlement::RequiredFinalizationContext;
 use crate::language_model::settlement::SettlementContext;
 use crate::language_model::stream::UsageAccumulator;
@@ -157,6 +158,7 @@ fn count_media<'a>(blocks: impl Iterator<Item = &'a Content>) -> u64 {
 pub struct PipelineContext {
     // ===== original request (Stage 0, read-only) =====
     request_id: String,
+    original_model: String,
     model: String,
     caller: CallerContext,
     headers: http::HeaderMap,
@@ -167,7 +169,9 @@ pub struct PipelineContext {
     inbound_protocol: Option<ApiProtocol>,
     request_started_at: Instant,
     delivery_attempt_id: u64,
-
+    /// Named router identity frozen by Stage 0. Policy selection and fallback
+    /// may change `model` and the serving target but never this binding.
+    router_identity: Option<RouterRequestIdentity>,
     // ===== accumulated: written per stage, readable downstream =====
     /// The resolved fallback chain (Stage 2).
     pub route_chain: Option<Vec<RoutingTarget>>,
@@ -227,6 +231,7 @@ impl PipelineContext {
     pub fn new(req: PipelineRequest) -> Self {
         Self {
             request_id: req.request_id,
+            original_model: req.original_model,
             model: req.model,
             caller: req.caller,
             headers: req.headers,
@@ -234,6 +239,7 @@ impl PipelineContext {
             inbound_protocol: req.inbound_protocol,
             request_started_at: Instant::now(),
             delivery_attempt_id: NEXT_DELIVERY_ATTEMPT_ID.fetch_add(1, Ordering::Relaxed),
+            router_identity: None,
             route_chain: None,
             last_attempted_target: Mutex::new(None),
             successful_target: Arc::new(Mutex::new(None)),
@@ -262,6 +268,7 @@ impl PipelineContext {
     pub(crate) fn fork_for_prompt(&self, prompt: Prompt) -> Self {
         Self {
             request_id: self.request_id.clone(),
+            original_model: self.original_model.clone(),
             model: self.model.clone(),
             caller: self.caller.clone(),
             headers: self.headers.clone(),
@@ -269,6 +276,7 @@ impl PipelineContext {
             inbound_protocol: self.inbound_protocol.clone(),
             request_started_at: self.request_started_at,
             delivery_attempt_id: self.delivery_attempt_id,
+            router_identity: self.router_identity.clone(),
             route_chain: self.route_chain.clone(),
             last_attempted_target: Mutex::new(None),
             successful_target: self.successful_target.clone(),
@@ -434,6 +442,11 @@ impl PipelineContext {
         &self.request_id
     }
 
+    /// Caller-supplied model selector before any ingress transform rewrote it.
+    pub fn original_model(&self) -> &str {
+        &self.original_model
+    }
+
     /// The requested model string (may still carry `@preset` / `:variant`).
     pub fn model(&self) -> &str {
         &self.model
@@ -507,6 +520,16 @@ impl PipelineContext {
     /// Replace the canonical model name (used after preset/variant stripping).
     pub fn set_model(&mut self, model: impl Into<String>) {
         self.model = model.into();
+    }
+
+    /// Freeze the named router selected for this request.
+    pub(crate) fn set_router_identity(&mut self, identity: RouterRequestIdentity) {
+        self.router_identity = Some(identity);
+    }
+
+    /// Named router identity selected for this request, if any.
+    pub fn router_identity(&self) -> Option<&RouterRequestIdentity> {
+        self.router_identity.as_ref()
     }
 
     /// Apply a policy-owned reasoning effort to the canonical request.
@@ -1073,7 +1096,10 @@ impl StreamContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::PromptOverrides;
+    // The canonical path, not `crate::config`'s re-export of it: that module is
+    // `config_file`-gated, and importing through it made the whole lib-test
+    // target fail to build under the crate's default features.
+    use crate::language_model::routing::PromptOverrides;
     use crate::language_model::stream::{StreamOutcome, StreamProcessor};
     use crate::language_model::types::{ReasoningEffort, ReasoningEffortSource, StreamPart};
     use crate::language_model::{Message, PipelineRequest, Role};
@@ -1081,6 +1107,7 @@ mod tests {
     fn ctx_from_prompt(prompt: Prompt) -> PipelineContext {
         let req = PipelineRequest {
             request_id: "test".to_string(),
+            original_model: prompt.model.clone(),
             model: prompt.model.clone(),
             caller: CallerContext::local(),
             headers: http::HeaderMap::new(),
@@ -1132,6 +1159,18 @@ mod tests {
         signal.await;
 
         assert!(ctx.client_disconnected());
+    }
+
+    #[test]
+    fn original_model_survives_effective_model_changes() {
+        let prompt = empty_prompt();
+        let request = PipelineRequest::new("@careful", CallerContext::local(), prompt);
+        let mut context = PipelineContext::new(request);
+
+        context.set_model("openai:gpt-5.5");
+
+        assert_eq!(context.original_model(), "@careful");
+        assert_eq!(context.model(), "openai:gpt-5.5");
     }
 
     #[test]

@@ -1,0 +1,33 @@
+[package]
+name = "bitrouter-guardrails"
+description = "Compiled regex request-check extension with legacy guardrail hooks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# Legacy input/output hooks and Plugin adapter for custom BitRouter hosts.
+# The ordinary request-check callback uses the SDK without optional features.
+sdk = ["dep:async-trait", "dep:serde_json"]
+
+[dependencies]
+bitrouter-sdk = { workspace = true, default-features = false }
+async-trait = { workspace = true, optional = true }
+serde.workspace = true
+serde_json = { workspace = true, optional = true }
+regex.workspace = true
+# `JsonSchema` derives on the serializable config types (`RuleSpec`,
+# `GuardrailConfig`, `Action`) so a downstream host (e.g. bitrouter-cloud) can
+# embed them in its own OpenAPI-published policy types. Mirrors how
+# `bitrouter-sdk` carries `schemars` for its wire types; already in the build
+# graph via the `bitrouter-sdk` dependency, so this adds no new crate.
+schemars.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+futures.workspace = true
+serde_json.workspace = true

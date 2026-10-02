@@ -120,7 +120,7 @@ async fn cli_and_rest_are_idempotent_semantic_equivalents() -> anyhow::Result<()
 }
 
 fn run_cli(arguments: &[&str]) -> anyhow::Result<()> {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
         .args(arguments)
         .output()?;
     if !output.status.success() {

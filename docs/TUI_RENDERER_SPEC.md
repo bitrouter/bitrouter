@@ -1,5 +1,11 @@
 # Spec: the TUI renderer — a retained journal behind a differential writer
 
+> Code presentation update (2026-09-08):
+> [CODE_TUI_UX_SPEC.md](CODE_TUI_UX_SPEC.md) supersedes permanent dashboard
+> navigation and independent interactive drivers. It preserves public CLI names,
+> native-session ownership, typed action boundaries, and read-only remote scope.
+> [Implementation verification](CODE_TUI_UX_PROGRESS.md) is tracked separately.
+
 Status: **historical design record; final boundary differs in Phase 4** ·
 Author: Claude (with Spikel) · Date: 2026-08-14 · Rev 3
 
@@ -367,6 +373,16 @@ the session's own summary. §19.4 is therefore about whether the footer should
 stderr into one per-session file so nothing else writes to this terminal. A
 writer owning more rows makes that more important. **Ctrl-L** forces a full
 redraw for when something writes anyway.
+
+**Before the writer exists, the file is the only record — so a failed launch
+prints its tail.** The rule above is about a terminal the writer owns; a launch
+that dies during the ACP handshake never reaches one. Its error is rendered by
+`main` as the command's stdout envelope, and it names a closed transport — the
+symptom — while the cause is the harness child's own stderr, which by this rule
+went to a file whose name the user has no way to guess. So both `chat` paths
+write the log's tail to **stderr** before returning such a failure, the same
+tail `run` writes to stdout when a session it *did* draw ends badly. No writer
+is drawing at that point, so nothing is scrolled out from under it.
 
 ## 5. Decision 3 — render scheduling
 
@@ -762,6 +778,12 @@ Proposed for v1, **contingent on §19.1**:
    `Ctrl-L` forces a redraw; the scheduler coalesces N chunk updates into one
    frame and renders a permission immediately; the non-TTY gate refuses.
 5. **Boundary checks, all satisfiable in the final boundary.**
+
+   > **SUPERSEDED — the naming check is retired.** The ACP-generic charter it
+   > enforced was dropped when the cost-scope `_meta` key moved into the crate;
+   > see `docs/DEVELOPMENT.md`. The boundary that remains is the Cargo one —
+   > the renderer cannot depend on the app — and the honesty rules the charter
+   > stood for are pinned by named tests instead.
    ```bash
    cargo tree -p bitrouter-tui          # must not include the bitrouter crate
    cargo tree -p bitrouter | rg ratatui # ratatui reaches the app only through bitrouter-tui

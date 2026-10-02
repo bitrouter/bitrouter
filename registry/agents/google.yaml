@@ -1,0 +1,21 @@
+# VERIFY BEFORE ACTIVATING — the local runtime pins this adapter at `@latest`
+# (see registry/runtimes/local.yaml). A conformance record cannot name an
+# `agent_version` for a floating tag, so this entry stays unpinned until the
+# suite runs against a fixed version.
+- id: gemini-cli
+  name: Gemini CLI
+  description: Google's Gemini CLI with `--experimental-acp` (best-effort routing)
+  project_url: https://github.com/google-gemini/gemini-cli
+  package_marker: gemini-cli
+  acp:
+    protocol_version: 1
+  # Best-effort: gemini-cli is deprecated upstream (Antigravity). It sends
+  # GEMINI_API_KEY as `x-goog-api-key`, not Bearer, which the daemon accepts
+  # only under `skip_auth: true` — hence `bearer_auth: false`, which callers
+  # turn into a warning.
+  routing:
+    kind: env
+    base_url_env: GOOGLE_GEMINI_BASE_URL
+    auth_env: GEMINI_API_KEY
+    bearer_auth: false
+    model_env: GEMINI_MODEL

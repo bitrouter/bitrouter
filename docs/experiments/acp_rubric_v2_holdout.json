@@ -1,0 +1,719 @@
+{
+  "version": "acp-rubric-v2-fresh-subscription-tasks",
+  "status": "complete controlled comparison; no natural-usage calibration or live routing benefit claim",
+  "artifact_root": "/Users/archer/.codex/worktrees/f171/bitrouter-ws/studies/acp-rubric-v2-holdout-20260911",
+  "source_head": "ad2bab71968e40752fe175433b23fd2098307c81",
+  "method_seal": {
+    "sealed_at": "2026-09-11T15:24:51.888403+00:00",
+    "source_head": "ad2bab71968e40752fe175433b23fd2098307c81",
+    "files": {
+      "reference.py": "75d873d05446f33aa31fb64c6f6d1391086aeec68b4fcd25c80fba6183548c54",
+      "reviews/reference-instructions.txt": "12441b6aa555feef56e6f9e8dbbf019e638f6f890ee0e38ca4e8379552b30cc3",
+      "protocol.md": "c792fbddcbdadd53f019e9995455c96d4e6cecf2393d5a421e232b717344fedc",
+      ".private/bin/bitrouter-v2": "8275b0f934538674d1d21fee3a2c85f6416a673ada10c3098f0e1d18b2413698",
+      "evidence/02-edit-only-cleanup-turn1.packet.json": "0bb79630742d7707a4ab7509066110049fef3cf8bc2114d7a6430b02ff039c55",
+      "evidence/01-review-capacity-turn1.packet.json": "72e5caf555c088d14e7feef32d1ad294e5f763242622dd600cf608a42c4db313",
+      "evidence/04-address-review-turn1.packet.json": "83be146c2bb0891d83a51b9a2e11b1d6dcb79824d7fc999cc6b3257a2427b3f1",
+      "evidence/03-fixed-env-version-turn1.packet.json": "14f5563271826e7c7875417d8ecf34083fa72dab541be9b0290c8b550392d66d",
+      "/Users/archer/.codex/worktrees/f171/bitrouter-ws/repos/bitrouter/apps/bitrouter/src/evolution/judge.rs": "9cb63fd1047350efdac142e5cdcf0c6df10d31087e1b517121c3bf03f5185edc",
+      "/Users/archer/.codex/worktrees/f171/bitrouter-ws/repos/bitrouter/apps/bitrouter/src/evolution/rubric.rs": "c29a415bd86438c1ebce38213ac05cfe71e32b28654f84bb2a79722e539192f7",
+      "/Users/archer/.codex/worktrees/f171/bitrouter-ws/repos/bitrouter/apps/bitrouter/src/evolution/evidence.rs": "5a1717e93abd702e96e95d0d84b3fef66788433a5ac5801b889652c75416bd38",
+      "/Users/archer/.codex/worktrees/f171/bitrouter-ws/repos/bitrouter/apps/bitrouter/src/evolution/scoring.rs": "a0eea128be4ded54761bdbe1bbf283c90f1bcaf3f4c29efa89ef8d6656894063",
+      "/Users/archer/.codex/worktrees/f171/bitrouter-ws/repos/bitrouter/apps/bitrouter/src/evolution/jobs.rs": "f178e50b2ebc617972705cfabd367b7a08908fa63a0d1338b671a30cc000b982"
+    }
+  },
+  "validation": {
+    "checked_at": "2026-09-11T15:34:39.129575+00:00",
+    "focused_tests": {
+      "passed": 101,
+      "filtered": 1376
+    },
+    "all_features_tests": {
+      "passed": 3377,
+      "skipped": 22
+    },
+    "doc_tests": {
+      "passed": 5,
+      "ignored": 1
+    },
+    "clippy_all_features_all_targets_deny_warnings": "passed",
+    "cargo_fmt_all_check": "passed",
+    "git_diff_check": "passed",
+    "source_digest_scope": "method-seal.json source files; no later source edits",
+    "logs": {
+      "validation/bitrouter-rubric-v2-all-tests.log": "3b674041be2c386cd5c39b365d3cf50d7b44244c1a9a82b614e08cf6b33e9d08",
+      "validation/bitrouter-rubric-v2-clippy.log": "86127db367553e48fc9b4593fc3f827960211d4e6ab32bf21d693d8ad3580a76",
+      "validation/bitrouter-rubric-v2-doc-tests.log": "c64edad0ca6a8f44f5ecd40a98e112bb75336f4b5604a9cf33dddde60f64c486",
+      "validation/bitrouter-rubric-v2-focused.log": "90ea69d35da96cba5ba7786c54237092c4ce472e706d8dd63bc6017c20534076",
+      "validation/bitrouter-rubric-v2-build.log": "d3dac9057e84d55bf7830c3872f1538fd90b96edf9fde7bb3ba884dcb8d444aa"
+    }
+  },
+  "audit": {
+    "audited_at": "2026-09-11T15:41:27.208284+00:00",
+    "public_files_checked": 156,
+    "json_files_validated": 93,
+    "credential_pattern_hits": [],
+    "seal_errors": [],
+    "invalid_citations": [],
+    "citation_occurrences": 196,
+    "families": 4,
+    "comparators_completed": 8,
+    "checkpoint_and_citation_identity_preserved": true,
+    "evolution_off": true,
+    "blocks": 0,
+    "publications": 0,
+    "daemon_running": false,
+    "upgrade": {
+      "elapsed_s": 0.028,
+      "job_id": "9c143d36a3754b02f2d68a4ecadfcb47e6c985877f5cb8f37fd13f8e342e6cae",
+      "request_count_before": 36,
+      "request_count_after": 36,
+      "request_ids_unchanged": true,
+      "history_unchanged": true,
+      "legacy_completed_job_unchanged": true,
+      "returned_judge_version": "recorded-evidence-judge-v1",
+      "binary_sha256": "8275b0f934538674d1d21fee3a2c85f6416a673ada10c3098f0e1d18b2413698"
+    },
+    "metering_groups": {
+      "coding": {
+        "requests": 20,
+        "failed_requests": 0,
+        "known_prompt_tokens": 217106,
+        "known_completion_tokens": 2744,
+        "unknown_prompt_usage": 0,
+        "unknown_completion_usage": 0,
+        "unpriced_requests": 20,
+        "usd_cost": null
+      },
+      "judge_v1": {
+        "requests": 8,
+        "failed_requests": 4,
+        "known_prompt_tokens": 15120,
+        "known_completion_tokens": 11036,
+        "unknown_prompt_usage": 4,
+        "unknown_completion_usage": 4,
+        "unpriced_requests": 8,
+        "usd_cost": null
+      },
+      "judge_v2": {
+        "requests": 4,
+        "failed_requests": 0,
+        "known_prompt_tokens": 17241,
+        "known_completion_tokens": 9306,
+        "unknown_prompt_usage": 0,
+        "unknown_completion_usage": 0,
+        "unpriced_requests": 4,
+        "usd_cost": null
+      },
+      "reference": {
+        "requests": 4,
+        "failed_requests": 0,
+        "known_prompt_tokens": 13493,
+        "known_completion_tokens": 7312,
+        "unknown_prompt_usage": 0,
+        "unknown_completion_usage": 0,
+        "unpriced_requests": 4,
+        "usd_cost": null
+      }
+    },
+    "limits": [
+      "Credential-pattern scan is limited to common JWT/key patterns; private credentials and database are excluded.",
+      "Citation presence does not establish semantic entailment.",
+      "Model reference has ambiguous general-repair booleans; no mechanical rubric-ground-truth mapping.",
+      "Unknown usage remains unknown despite stored zero-valued counters."
+    ]
+  },
+  "rows": [
+    {
+      "stem": "01-review-capacity-turn1",
+      "checkpoint_id": "0757911bc7c154aa8d4cd2ce7fc579f8300dc025be177f4a1168b3fd47734aa2",
+      "family_id": "5f7fb8498bbdd0170f027cb4c944b939f423668f01459d60982544c66b43f2e6",
+      "reference_outcome": "supported_delivery",
+      "reference_validation": {
+        "explicitly_forbidden_or_deferred": false,
+        "required_and_permitted": false,
+        "attempted": false,
+        "observed_result": "not_run",
+        "final_artifact_coverage": "none",
+        "explanation": "A small read-only check was permitted but not required. The observed command printed the source and line numbers; it did not execute fits or test a behavioral assertion. The reported result for fits(10, 7, 3) is supported by direct inspection of the strict comparison, not by a recorded execution. No environment blockage or failed test is shown.",
+        "evidence": [
+          {
+            "node_id": "c2842617-2c3b-4e9d-a3a9-7a455157e09d:5",
+            "digest": "6f81ac69216e9b61c077ee0a74bf2193efe04219ddf14658f464bed968f9e9c9"
+          },
+          {
+            "node_id": "c2842617-2c3b-4e9d-a3a9-7a455157e09d:9",
+            "digest": "8e85701ab0bd767ffa96e4fd35071e352f33632b5c9629cdec57d059ed5112e4"
+          },
+          {
+            "node_id": "c2842617-2c3b-4e9d-a3a9-7a455157e09d:12",
+            "digest": "062a3f4ed903eacc70721d904591dceb09b925bc0a1670a49901330701278fdd"
+          }
+        ]
+      },
+      "comparators": {
+        "v1": {
+          "job_id": "9c143d36a3754b02f2d68a4ecadfcb47e6c985877f5cb8f37fd13f8e342e6cae",
+          "bounds": {
+            "lower": 1.0,
+            "upper": 1.0,
+            "unknown_weight": 0,
+            "applicable_weight": 9
+          },
+          "items": [
+            {
+              "criterion_id": "delivery",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "constraints",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "verification",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "review_resolution",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "pr_delivery",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "user_acceptance",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            }
+          ]
+        },
+        "v2": {
+          "job_id": "75ee0c21546972d954a5ee8a709170dfd27f14bb4a77e79b0fd1c75b4aee7a4e",
+          "bounds": {
+            "lower": 1.0,
+            "upper": 1.0,
+            "unknown_weight": 0,
+            "applicable_weight": 7
+          },
+          "items": [
+            {
+              "criterion_id": "delivery",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "constraints",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "verification",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "review_resolution",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "pr_delivery",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "user_acceptance",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "stem": "02-edit-only-cleanup-turn1",
+      "checkpoint_id": "1b1099617c7d773ff45a056e3c02ca4a96df8d8150a0a4358a5831a392803467",
+      "family_id": "8cef0a7a58619290c10d2e1ffa217aae1299007be7eba784df0e8d2ed028e3e4",
+      "reference_outcome": "supported_delivery",
+      "reference_validation": {
+        "explicitly_forbidden_or_deferred": true,
+        "required_and_permitted": false,
+        "attempted": false,
+        "observed_result": "not_run",
+        "final_artifact_coverage": "none",
+        "explanation": "Executable validation was expressly forbidden. The visible commands inspect files and repository state rather than run tests, import the module, or execute the function. Post-edit tool output confirms the current file contains a comprehension that strips each name, filters empty stripped strings, and preserves iteration order and duplicates. This is current static evidence, not executable coverage. The initial discovery command's nonzero exit is not a failed behavioral assertion or an environment-blocked test.",
+        "evidence": [
+          {
+            "node_id": "66aa330f-5713-417e-a7f6-04bf7828e208:5",
+            "digest": "83273d57dd5a39937aed77c927735c5e7dc19fd03448cafd298dc15cf2e980a0"
+          },
+          {
+            "node_id": "66aa330f-5713-417e-a7f6-04bf7828e208:9",
+            "digest": "9acaa7e1298530d93c6756ce818876913d68367b263246a7324d578a92d0295a"
+          },
+          {
+            "node_id": "66aa330f-5713-417e-a7f6-04bf7828e208:23",
+            "digest": "52f0e2d7d84ae50f3540594ade32a6c840eeacf677cc478b50c403674118897c"
+          },
+          {
+            "node_id": "66aa330f-5713-417e-a7f6-04bf7828e208:24",
+            "digest": "0a05d98337c14bdeaaeb44e7aef9f05044a3c9106015b493853d77448172610d"
+          }
+        ]
+      },
+      "comparators": {
+        "v1": {
+          "job_id": "0bfe40494dde17bf2b91a2be91064b7946c9def3fad9a31bc60586c9661e896b",
+          "bounds": {
+            "lower": 1.0,
+            "upper": 1.0,
+            "unknown_weight": 0,
+            "applicable_weight": 10
+          },
+          "items": [
+            {
+              "criterion_id": "delivery",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "constraints",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "verification",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "review_resolution",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "pr_delivery",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "user_acceptance",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            }
+          ]
+        },
+        "v2": {
+          "job_id": "af68bb34a99919e302ef042f5c75cc7aa75d8bf7684ec850067c12bbcb2689b8",
+          "bounds": {
+            "lower": 1.0,
+            "upper": 1.0,
+            "unknown_weight": 0,
+            "applicable_weight": 7
+          },
+          "items": [
+            {
+              "criterion_id": "delivery",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "constraints",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "verification",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "review_resolution",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "pr_delivery",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "user_acceptance",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "stem": "03-fixed-env-version-turn1",
+      "checkpoint_id": "08941e81ae2204c3816442ff564c377206fc23d736c6077c96a986b33a47bade",
+      "family_id": "19f228d11b2f33337bef36e9a9f24f221dc8387583f741fafe34d3f6d22a0b0d",
+      "reference_outcome": "supported_delivery",
+      "reference_validation": {
+        "explicitly_forbidden_or_deferred": false,
+        "required_and_permitted": true,
+        "attempted": true,
+        "observed_result": "environment_blocked",
+        "final_artifact_coverage": "none",
+        "explanation": "The exact requested command was executed after the edit. Discovery failed while importing support.py because packaging was unavailable in the fixed environment. This is an import/environment blocker, not a failed behavioral assertion. The attempt targeted the current artifact, but no supported(version) behavioral tests executed. The user explicitly permitted reporting this limitation rather than bypassing it.",
+        "evidence": [
+          {
+            "node_id": "03e015b1-f28d-4f13-b30b-12b9a45ed7b6:5",
+            "digest": "7a72a32803486568ba43f95ca06197305bf251d38764e2b0694e249fac676384"
+          },
+          {
+            "node_id": "03e015b1-f28d-4f13-b30b-12b9a45ed7b6:20",
+            "digest": "603acc45ea97e23e1f31492c274ddc51fb9ded3d076e5e6c34de4b2a1c286e0c"
+          },
+          {
+            "node_id": "03e015b1-f28d-4f13-b30b-12b9a45ed7b6:21",
+            "digest": "45bb48309e9952acfbfed9681e4047278c74b5f62e7676b22348630c8c38ce95"
+          }
+        ]
+      },
+      "comparators": {
+        "v1": {
+          "job_id": "c1e3cb33dd636f53914a2ee3a96eb4cb358a09063abc4928dbab494030cbff97",
+          "bounds": {
+            "lower": 0.7,
+            "upper": 0.7,
+            "unknown_weight": 0,
+            "applicable_weight": 10
+          },
+          "items": [
+            {
+              "criterion_id": "delivery",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "constraints",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "verification",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 0
+              }
+            },
+            {
+              "criterion_id": "review_resolution",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "pr_delivery",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "user_acceptance",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            }
+          ]
+        },
+        "v2": {
+          "job_id": "3c462b16ab9109f11d90ceb458d4d140baa5434c6f6b9d728a4a6f6f1b15c677",
+          "bounds": {
+            "lower": 0.7,
+            "upper": 1.0,
+            "unknown_weight": 3,
+            "applicable_weight": 10
+          },
+          "items": [
+            {
+              "criterion_id": "delivery",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "constraints",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "verification",
+              "applicability": "applicable",
+              "score": {
+                "status": "unknown"
+              }
+            },
+            {
+              "criterion_id": "review_resolution",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "pr_delivery",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "user_acceptance",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "stem": "04-address-review-turn1",
+      "checkpoint_id": "935ea2f0216c1fa992b306bca02e78013f040a5b5a2a35f5ddc99eb1bbcd447c",
+      "family_id": "edbb01a1bd8e8969d653df638538e9ca0439844e35017e47424a885791e416e4",
+      "reference_outcome": "supported_delivery",
+      "reference_validation": {
+        "explicitly_forbidden_or_deferred": false,
+        "required_and_permitted": true,
+        "attempted": true,
+        "observed_result": "passed",
+        "final_artifact_coverage": "current",
+        "explanation": "The user explicitly required the existing unittest suite. After the implementation edit completed, python3 -m unittest -v ran both existing tests successfully. The order test checks the exact review example, including duplicate removal and first-seen ordering; the other test checks empty input. A subsequent read confirmed the changed implementation, and no later edit is visible. These are observed test results, not merely an assistant claim.",
+        "evidence": [
+          {
+            "node_id": "839aeb37-a672-4eba-88b0-26a12693f408:5",
+            "digest": "cd542fc8a75b2f529cc632b80142668e12bd296defe6baccffa66593dfc94673"
+          },
+          {
+            "node_id": "839aeb37-a672-4eba-88b0-26a12693f408:12",
+            "digest": "25e4086ea2ee7ede9f0ec8b4b7dc420bcd062d266dd56e367fe300a833dd1d4e"
+          },
+          {
+            "node_id": "839aeb37-a672-4eba-88b0-26a12693f408:17",
+            "digest": "18234e8cfa7ba65e30ee08a3203ca61cb77d7ab8714f99630a63fbc68d02906b"
+          },
+          {
+            "node_id": "839aeb37-a672-4eba-88b0-26a12693f408:20",
+            "digest": "cbbfa3cabbff8fd63eb980cd768d803ac2bd22dbf20b01e5fb4d30cf4c455a6c"
+          },
+          {
+            "node_id": "839aeb37-a672-4eba-88b0-26a12693f408:24",
+            "digest": "93430fdc09704ddb2a5542af8ab859558c179d4f2e9e04c6e2c479a7b34a221a"
+          }
+        ]
+      },
+      "comparators": {
+        "v1": {
+          "job_id": "5401bddf3ba36667f0785b6e4afd5230c5473443a40592367fbd7830d1862dbf",
+          "bounds": {
+            "lower": 1.0,
+            "upper": 1.0,
+            "unknown_weight": 0,
+            "applicable_weight": 12
+          },
+          "items": [
+            {
+              "criterion_id": "delivery",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "constraints",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "verification",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "review_resolution",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "pr_delivery",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "user_acceptance",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            }
+          ]
+        },
+        "v2": {
+          "job_id": "6c3e3ec3e05f2ac60fa8ed5a1d254cb75cf37c0d81c119dbe376164416a94146",
+          "bounds": {
+            "lower": 1.0,
+            "upper": 1.0,
+            "unknown_weight": 0,
+            "applicable_weight": 12
+          },
+          "items": [
+            {
+              "criterion_id": "delivery",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "constraints",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "verification",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "review_resolution",
+              "applicability": "applicable",
+              "score": {
+                "status": "scored",
+                "value_ppm": 1000000
+              }
+            },
+            {
+              "criterion_id": "pr_delivery",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            },
+            {
+              "criterion_id": "user_acceptance",
+              "applicability": "not_applicable",
+              "score": {
+                "status": "not_applicable"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "artifact_hashes": {
+    "README.md": "98270af2bfccdd00330bc03964d4d841fcd06ff76d880dc3384721b60f639a32",
+    "delivery-seal.json": "70f53f70947376386ccf7b095598652bf68bbd59604eb119545471391cf08b8d",
+    "analysis.json": "90f897b25711795e91626d798d59ec547f48e0733e8da70266a686a2783d959e",
+    "metering-final.json": "eff50dfebda8eb84b17d0cde1a5cb64d554faf5fa592bbfff6b912e820c2ebb6",
+    "audit-final.json": "8b2327855738d6fc078d55a30f09769e48149b036efb1bb8630e8ed9a9c29be4",
+    "validation.json": "c175a346052bde77979020b780ed19bde895392c210f7da345aab23fbf250efc",
+    "upgrade-check.json": "d17ad627b482082ec81900110156d9ea5b7b5a6b3348ea313f8ac0cb5526d7bb",
+    "reference-seal.json": "26b470d3129907a7c4f24ed1819a394f85d8e299050d4ebd6e57e138be4b9b50",
+    "method-seal.json": "4eca9f48832d1a2fc4da1c443be627146e0f31527a366d55a25c1093738a655b",
+    "protocol.md": "c792fbddcbdadd53f019e9995455c96d4e6cecf2393d5a421e232b717344fedc"
+  }
+}

@@ -6,20 +6,26 @@ use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result, bail};
 use bitrouter_sdk::language_model::types::ReasoningEffortConfig;
+use chrono::{Days, NaiveDate, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 pub fn validate(root: &Path) -> Result<()> {
     let loaded = load_registry(root)?;
+    load_model_discovery(root)?;
     let advisories = validate_loaded(&loaded)?;
     println!(
-        "registry valid: {} canonical models, {} providers",
+        "registry valid: {} canonical models, {} providers, {} agents, {} runtimes",
         loaded.models().count(),
-        loaded.providers.len()
+        loaded.providers.len(),
+        loaded.agents().count(),
+        loaded.runtimes.len()
     );
     if !advisories.is_empty() {
         println!(
-            "note: {} provider model(s) not in curated registry/models (BYOK / BYO-subscription extras):",
+            "note: {} advisory(ies) — non-curated provider models (BYOK / \
+             BYO-subscription extras) and unpinned agent invocations:",
             advisories.len()
         );
         for advisory in &advisories {
@@ -31,40 +37,66 @@ pub fn validate(root: &Path) -> Result<()> {
 
 pub fn build(root: &Path, check: bool) -> Result<()> {
     let artifacts = build_artifacts(root)?;
-    let providers_path = dist_dir(root).join("providers.json");
-    let models_path = dist_dir(root).join("models.json");
+    let documents = [
+        ("providers.json", &artifacts.providers),
+        ("models.json", &artifacts.models),
+        ("agents.json", &artifacts.agents),
+        ("runtimes.json", &artifacts.runtimes),
+    ];
+    let output_dirs = [dist_dir(root), package_registry_dir(root)];
     if check {
-        let current_providers = fs::read_to_string(&providers_path)
-            .with_context(|| format!("reading {}", providers_path.display()))?;
-        let current_models = fs::read_to_string(&models_path)
-            .with_context(|| format!("reading {}", models_path.display()))?;
-        if current_providers != artifacts.providers || current_models != artifacts.models {
-            bail!(
-                "registry dist is stale - run `cargo run -p dist-helper -- registry build` and commit dist/registry"
-            );
+        for output_dir in &output_dirs {
+            for (name, rendered) in documents {
+                let path = output_dir.join(name);
+                let current = fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                if &current != rendered {
+                    bail!(
+                        "registry dist is stale ({}) - run `cargo run -p dist-helper -- registry build` and commit generated registry artifacts",
+                        path.display()
+                    );
+                }
+            }
         }
         println!(
-            "registry dist is up to date: {} providers, {} canonical models",
-            artifacts.provider_count, artifacts.model_count
+            "registry dist is up to date: {} providers, {} canonical models, {} runtimes, {} agents",
+            artifacts.provider_count,
+            artifacts.model_count,
+            artifacts.runtime_count,
+            artifacts.agent_count
         );
         return Ok(());
     }
-    fs::create_dir_all(dist_dir(root))
-        .with_context(|| format!("creating {}", dist_dir(root).display()))?;
-    fs::write(&providers_path, artifacts.providers)
-        .with_context(|| format!("writing {}", providers_path.display()))?;
-    fs::write(&models_path, artifacts.models)
-        .with_context(|| format!("writing {}", models_path.display()))?;
+    for output_dir in &output_dirs {
+        fs::create_dir_all(output_dir)
+            .with_context(|| format!("creating {}", output_dir.display()))?;
+        for (name, rendered) in documents {
+            let path = output_dir.join(name);
+            fs::write(&path, rendered).with_context(|| format!("writing {}", path.display()))?;
+        }
+    }
     println!(
-        "wrote dist/registry/providers.json - {} providers; dist/registry/models.json - {} canonical models",
-        artifacts.provider_count, artifacts.model_count
+        "wrote dist/registry: {} providers, {} canonical models, {} runtimes, {} agents",
+        artifacts.provider_count,
+        artifacts.model_count,
+        artifacts.runtime_count,
+        artifacts.agent_count
     );
     Ok(())
 }
 
-pub async fn sync(root: &Path, write: bool) -> Result<()> {
+fn package_registry_dir(root: &Path) -> PathBuf {
+    root.join("apps/bitrouter/registry-dist")
+}
+
+pub async fn sync(root: &Path, write: bool, report_path: Option<&Path>) -> Result<()> {
     let mut loaded = load_registry(root)?;
     validate_loaded(&loaded)?;
+    let report = sync_openrouter_models(root, &loaded, write, Utc::now().date_naive()).await?;
+    if write {
+        loaded = load_registry(root)?;
+        validate_loaded(&loaded)?;
+    }
     sync_models_dev_loaded(root, &loaded, write).await?;
     if write {
         loaded = load_registry(root)?;
@@ -74,6 +106,821 @@ pub async fn sync(root: &Path, write: bool) -> Result<()> {
     if write {
         validate(root)?;
         println!("\nsynced registry source data");
+    }
+    if let Some(path) = report_path {
+        write_model_discovery_report(path, &report)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelDiscoveryFile {
+    source_url: String,
+    retain_versions: usize,
+    deprecation_days: u64,
+    #[serde(default)]
+    retired_models: Vec<String>,
+    families: Vec<ModelDiscoveryRule>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelDiscoveryRule {
+    key: String,
+    pattern: String,
+    #[serde(default)]
+    retain_versions: Option<usize>,
+    #[serde(default)]
+    exclude_variants: Vec<String>,
+}
+
+struct CompiledDiscoveryRule {
+    key: String,
+    regex: Regex,
+    retain_versions: usize,
+    exclude_variants: Vec<Regex>,
+}
+
+struct CompiledModelDiscovery {
+    source_url: String,
+    deprecation_days: u64,
+    retired_models: HashSet<String>,
+    families: Vec<CompiledDiscoveryRule>,
+}
+
+#[derive(Clone)]
+struct ClassifiedModel {
+    family: String,
+    version: String,
+    retain_versions: usize,
+    excluded: bool,
+}
+
+#[derive(Default)]
+struct ModelDiscoveryPlan {
+    additions: Vec<CanonicalModel>,
+    schedules: BTreeMap<String, String>,
+    cancellations: HashSet<String>,
+    removals: HashSet<String>,
+}
+
+#[derive(Default)]
+struct ModelDiscoveryReport {
+    added: Vec<String>,
+    scheduled: Vec<(String, String)>,
+    cancelled: Vec<String>,
+    removed: Vec<(String, Vec<String>)>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterModelsResponse {
+    data: Vec<OpenRouterModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterModel {
+    id: String,
+    name: String,
+    created: i64,
+    #[serde(default)]
+    context_length: Option<u64>,
+    #[serde(default)]
+    architecture: OpenRouterArchitecture,
+    #[serde(default)]
+    top_provider: Option<OpenRouterTopProvider>,
+    #[serde(default)]
+    knowledge_cutoff: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OpenRouterArchitecture {
+    #[serde(default)]
+    input_modalities: Vec<String>,
+    #[serde(default)]
+    output_modalities: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterTopProvider {
+    #[serde(default)]
+    max_completion_tokens: Option<u64>,
+}
+
+fn load_model_discovery(root: &Path) -> Result<CompiledModelDiscovery> {
+    let path = root.join("registry/model-discovery.yaml");
+    let config: ModelDiscoveryFile = read_yaml(&path)?;
+    if config.retain_versions == 0 {
+        bail!(
+            "{}: retain_versions must be greater than zero",
+            path.display()
+        );
+    }
+    if config.families.is_empty() {
+        bail!("{}: families must not be empty", path.display());
+    }
+    if config.deprecation_days == 0 {
+        bail!(
+            "{}: deprecation_days must be greater than zero",
+            path.display()
+        );
+    }
+    if !config.source_url.starts_with("https://")
+        || reqwest::Url::parse(&config.source_url).is_err()
+    {
+        bail!("{}: source_url must be an HTTPS URL", path.display());
+    }
+
+    let default_retain_versions = config.retain_versions;
+    let mut families = Vec::with_capacity(config.families.len());
+    for family in config.families {
+        let retain_versions = family.retain_versions.unwrap_or(default_retain_versions);
+        if retain_versions == 0 {
+            bail!(
+                "{}: retain_versions for {} must be greater than zero",
+                path.display(),
+                family.key
+            );
+        }
+        let regex = Regex::new(&family.pattern)
+            .with_context(|| format!("{}: invalid pattern for {}", path.display(), family.key))?;
+        if regex.capture_names().all(|name| name != Some("version")) {
+            bail!(
+                "{}: pattern for {} must define a named 'version' capture",
+                path.display(),
+                family.key
+            );
+        }
+        let has_series = regex.capture_names().any(|name| name == Some("series"));
+        if family.key.contains("{series}") != has_series {
+            bail!(
+                "{}: family {} must use '{{series}}' exactly when its pattern captures 'series'",
+                path.display(),
+                family.key
+            );
+        }
+        let has_variant = regex.capture_names().any(|name| name == Some("variant"));
+        if !family.exclude_variants.is_empty() && !has_variant {
+            bail!(
+                "{}: family {} must capture 'variant' when exclude_variants is configured",
+                path.display(),
+                family.key
+            );
+        }
+        let exclude_variants = family
+            .exclude_variants
+            .iter()
+            .map(|pattern| {
+                Regex::new(pattern).with_context(|| {
+                    format!(
+                        "{}: invalid exclude_variants pattern for {}",
+                        path.display(),
+                        family.key
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        families.push(CompiledDiscoveryRule {
+            key: family.key,
+            regex,
+            retain_versions,
+            exclude_variants,
+        });
+    }
+
+    let mut retired_models = HashSet::new();
+    for id in config.retired_models {
+        if !valid_canonical_id(&id) {
+            bail!("{}: invalid retired model id '{id}'", path.display());
+        }
+        if !retired_models.insert(id.clone()) {
+            bail!("{}: duplicate retired model id '{id}'", path.display());
+        }
+    }
+    let discovery = CompiledModelDiscovery {
+        source_url: config.source_url,
+        deprecation_days: config.deprecation_days,
+        retired_models,
+        families,
+    };
+    for id in &discovery.retired_models {
+        if discovery.classify(id)?.is_none() {
+            bail!(
+                "{}: retired model '{id}' does not match a configured family",
+                path.display()
+            );
+        }
+    }
+    Ok(discovery)
+}
+
+impl CompiledModelDiscovery {
+    fn classify(&self, id: &str) -> Result<Option<ClassifiedModel>> {
+        let mut found = None;
+        for rule in &self.families {
+            let Some(captures) = rule.regex.captures(id) else {
+                continue;
+            };
+            if found.is_some() {
+                bail!("model discovery patterns overlap for '{id}'");
+            }
+            let version = captures
+                .name("version")
+                .map(|value| value.as_str().to_string())
+                .with_context(|| {
+                    format!("model discovery pattern did not capture version for {id}")
+                })?;
+            let family = match captures.name("series") {
+                Some(series) => rule.key.replace("{series}", series.as_str()),
+                None => rule.key.clone(),
+            };
+            let variant = captures.name("variant").map_or("", |value| value.as_str());
+            found = Some(ClassifiedModel {
+                family,
+                version,
+                retain_versions: rule.retain_versions,
+                excluded: rule
+                    .exclude_variants
+                    .iter()
+                    .any(|pattern| pattern.is_match(variant)),
+            });
+        }
+        Ok(found)
+    }
+}
+
+async fn sync_openrouter_models(
+    root: &Path,
+    loaded: &LoadedRegistry,
+    write: bool,
+    today: NaiveDate,
+) -> Result<ModelDiscoveryReport> {
+    let discovery = load_model_discovery(root)?;
+    // Official API contract: https://openrouter.ai/docs/api/api-reference/models/get-models
+    let body = fetch_v1_models(&discovery.source_url, Vec::new())
+        .await
+        .context("fetching OpenRouter model discovery catalog")?;
+    let catalog: OpenRouterModelsResponse =
+        serde_json::from_str(&body).context("parsing OpenRouter model discovery catalog")?;
+    let plan = plan_openrouter_models(&discovery, loaded, catalog, today)?;
+    let report = report_for_model_discovery(loaded, &plan);
+
+    println!(
+        "\nregistry sync - {} - OpenRouter canonical model lifecycle",
+        if write { "WRITE" } else { "dry-run" }
+    );
+    println!(
+        "add {}; schedule {}; cancel deprecation {}; remove {} canonical model(s)",
+        report.added.len(),
+        report.scheduled.len(),
+        report.cancelled.len(),
+        report.removed.len()
+    );
+    for id in &report.added {
+        println!("  + {id}");
+    }
+    for (id, date) in &report.scheduled {
+        println!("  ~ {id} (remove on {date})");
+    }
+    for id in &report.cancelled {
+        println!("  = {id} (deprecation cancelled)");
+    }
+    for (id, providers) in &report.removed {
+        println!("  - {id} (providers: {})", providers.join(", "));
+    }
+
+    if write {
+        apply_model_discovery_plan(root, loaded, &plan)?;
+    } else {
+        println!("\n(dry run - pass --write to apply)");
+    }
+    Ok(report)
+}
+
+fn plan_openrouter_models(
+    discovery: &CompiledModelDiscovery,
+    loaded: &LoadedRegistry,
+    catalog: OpenRouterModelsResponse,
+    today: NaiveDate,
+) -> Result<ModelDiscoveryPlan> {
+    if catalog.data.is_empty() {
+        bail!("OpenRouter model discovery catalog is empty");
+    }
+
+    let mut candidates = Vec::new();
+    let mut seen_ids = HashSet::new();
+    let mut version_dates: BTreeMap<(String, String), i64> = BTreeMap::new();
+    let mut retention_by_family = BTreeMap::new();
+    let mut matched_family = false;
+    for model in catalog.data {
+        if model.id.contains(':') {
+            continue;
+        }
+        let retired = discovery.retired_models.contains(&model.id);
+        let Some(classified) = discovery.classify(&model.id)? else {
+            continue;
+        };
+        matched_family = true;
+        record_family_retention(&mut retention_by_family, &classified)?;
+        if !valid_canonical_id(&model.id) {
+            bail!(
+                "OpenRouter returned invalid canonical model id '{}'",
+                model.id
+            );
+        }
+        if chrono::DateTime::from_timestamp(model.created, 0).is_none() {
+            bail!(
+                "OpenRouter model '{}' has invalid created timestamp",
+                model.id
+            );
+        }
+        if !seen_ids.insert(model.id.clone()) {
+            bail!("OpenRouter returned duplicate model id '{}'", model.id);
+        }
+        let key = (classified.family.clone(), classified.version.clone());
+        version_dates
+            .entry(key)
+            .and_modify(|created| *created = (*created).min(model.created))
+            .or_insert(model.created);
+        if !retired && !classified.excluded {
+            candidates.push((model, classified));
+        }
+    }
+    if !matched_family {
+        bail!("OpenRouter model discovery catalog matched no configured family");
+    }
+
+    for model in loaded.models() {
+        if discovery.retired_models.contains(&model.id) {
+            continue;
+        }
+        let Some(classified) = discovery.classify(&model.id)? else {
+            continue;
+        };
+        record_family_retention(&mut retention_by_family, &classified)?;
+        let introduced = model
+            .release_date
+            .as_deref()
+            .and_then(|date| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+            .and_then(|date| date.and_hms_opt(0, 0, 0))
+            .map(|date| date.and_utc().timestamp())
+            .unwrap_or(i64::MIN);
+        version_dates
+            .entry((classified.family, classified.version))
+            .or_insert(introduced);
+    }
+
+    let mut versions_by_family: BTreeMap<String, Vec<(String, i64)>> = BTreeMap::new();
+    for ((family, version), introduced) in version_dates {
+        versions_by_family
+            .entry(family)
+            .or_default()
+            .push((version, introduced));
+    }
+    let mut retained = HashSet::new();
+    for (family, versions) in &mut versions_by_family {
+        let retain_versions = retention_by_family
+            .get(family)
+            .with_context(|| format!("missing retention policy for model family '{family}'"))?;
+        versions.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| compare_version_numbers(&b.0, &a.0))
+        });
+        for (version, _) in versions.iter().take(*retain_versions) {
+            retained.insert((family.clone(), version.clone()));
+        }
+    }
+
+    let removal_date = today
+        .checked_add_days(Days::new(discovery.deprecation_days))
+        .context("model discovery deprecation date overflow")?
+        .format("%Y-%m-%d")
+        .to_string();
+    let current_ids: HashSet<&str> = loaded.models().map(|model| model.id.as_str()).collect();
+    let mut plan = ModelDiscoveryPlan::default();
+
+    let today_text = today.format("%Y-%m-%d").to_string();
+    for model in loaded.models() {
+        if discovery.retired_models.contains(&model.id) {
+            plan.removals.insert(model.id.clone());
+            continue;
+        }
+        let classified = discovery.classify(&model.id)?;
+        if classified
+            .as_ref()
+            .is_some_and(|classified| classified.excluded)
+        {
+            plan.removals.insert(model.id.clone());
+            continue;
+        }
+        let is_retained = classified.as_ref().is_some_and(|classified| {
+            retained.contains(&(classified.family.clone(), classified.version.clone()))
+        });
+        if is_retained {
+            if model.deprecation_date.is_some() {
+                plan.cancellations.insert(model.id.clone());
+            }
+            continue;
+        }
+        if model
+            .deprecation_date
+            .as_deref()
+            .is_some_and(|date| date <= today_text.as_str())
+        {
+            plan.removals.insert(model.id.clone());
+            continue;
+        }
+        if classified.is_some() && model.deprecation_date.is_none() {
+            plan.schedules
+                .insert(model.id.clone(), removal_date.clone());
+        }
+    }
+
+    for (model, classified) in candidates {
+        if retained.contains(&(classified.family, classified.version))
+            && !current_ids.contains(model.id.as_str())
+        {
+            plan.additions.push(canonical_model_from_openrouter(model)?);
+        }
+    }
+    plan.additions.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(plan)
+}
+
+fn record_family_retention(
+    retention_by_family: &mut BTreeMap<String, usize>,
+    classified: &ClassifiedModel,
+) -> Result<()> {
+    if let Some(existing) = retention_by_family.get(&classified.family) {
+        if *existing != classified.retain_versions {
+            bail!(
+                "model discovery family '{}' has conflicting retain_versions values: {} and {}",
+                classified.family,
+                existing,
+                classified.retain_versions
+            );
+        }
+    } else {
+        retention_by_family.insert(classified.family.clone(), classified.retain_versions);
+    }
+    Ok(())
+}
+
+fn compare_version_numbers(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |value: &str| {
+        value
+            .split('.')
+            .map(str::parse::<u64>)
+            .collect::<std::result::Result<Vec<_>, _>>()
+    };
+    match (parse(a), parse(b)) {
+        (Ok(a), Ok(b)) => a.cmp(&b),
+        _ => a.cmp(b),
+    }
+}
+
+fn canonical_model_from_openrouter(model: OpenRouterModel) -> Result<CanonicalModel> {
+    let release_date = chrono::DateTime::from_timestamp(model.created, 0)
+        .with_context(|| {
+            format!(
+                "OpenRouter model '{}' has invalid created timestamp",
+                model.id
+            )
+        })?
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let mut input_modalities = model.architecture.input_modalities;
+    input_modalities.sort();
+    input_modalities.dedup();
+    let mut output_modalities = model.architecture.output_modalities;
+    output_modalities.sort();
+    output_modalities.dedup();
+    let knowledge_cutoff = model
+        .knowledge_cutoff
+        .filter(|date| valid_yyyy_mm_or_dd(date));
+
+    let canonical = CanonicalModel {
+        id: model.id,
+        name: Some(model.name),
+        description: None,
+        input_modalities,
+        output_modalities,
+        max_input_tokens: model.context_length,
+        max_output_tokens: model
+            .top_provider
+            .and_then(|provider| provider.max_completion_tokens),
+        release_date: Some(release_date),
+        knowledge_cutoff,
+        open_weights: None,
+        family: None,
+        deprecation_date: None,
+        benchmarks: None,
+    };
+    let mut issues = Vec::new();
+    validate_canonical_model(&canonical, &mut issues);
+    if !issues.is_empty() {
+        bail!(
+            "OpenRouter model '{}' cannot be added to the canonical registry:\n  - {}",
+            canonical.id,
+            issues.join("\n  - ")
+        );
+    }
+    Ok(canonical)
+}
+
+fn report_for_model_discovery(
+    loaded: &LoadedRegistry,
+    plan: &ModelDiscoveryPlan,
+) -> ModelDiscoveryReport {
+    let mut report = ModelDiscoveryReport {
+        added: plan
+            .additions
+            .iter()
+            .map(|model| model.id.clone())
+            .collect(),
+        scheduled: plan
+            .schedules
+            .iter()
+            .map(|(id, date)| (id.clone(), date.clone()))
+            .collect(),
+        cancelled: plan.cancellations.iter().cloned().collect(),
+        removed: Vec::new(),
+    };
+    for id in &plan.removals {
+        let mut providers: Vec<String> = loaded
+            .providers
+            .iter()
+            .filter(|provider| provider.data.models.iter().any(|model| model.id == *id))
+            .map(|provider| provider.data.name.clone())
+            .collect();
+        providers.sort();
+        report.removed.push((id.clone(), providers));
+    }
+    report.added.sort();
+    report.scheduled.sort();
+    report.cancelled.sort();
+    report.removed.sort_by(|a, b| a.0.cmp(&b.0));
+    report
+}
+
+fn apply_model_discovery_plan(
+    root: &Path,
+    loaded: &LoadedRegistry,
+    plan: &ModelDiscoveryPlan,
+) -> Result<()> {
+    let mut additions_by_vendor: BTreeMap<String, Vec<CanonicalModel>> = BTreeMap::new();
+    for model in &plan.additions {
+        let (vendor, _) = model
+            .id
+            .split_once('/')
+            .context("planned canonical model is missing vendor prefix")?;
+        additions_by_vendor
+            .entry(vendor.to_string())
+            .or_default()
+            .push(model.clone());
+    }
+
+    for model_file in &loaded.model_files {
+        let vendor = model_file
+            .path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .context("canonical model file has no UTF-8 stem")?;
+        let original = fs::read_to_string(&model_file.path)
+            .with_context(|| format!("reading {}", model_file.path.display()))?;
+        let mut raw = original.clone();
+        raw = remove_model_items(&raw, "", &plan.removals);
+        raw = remove_canonical_deprecation_dates(&raw, &plan.cancellations);
+        raw = insert_canonical_deprecation_dates(&raw, &plan.schedules);
+        if let Some(additions) = additions_by_vendor.remove(vendor) {
+            append_canonical_models(&mut raw, &additions)?;
+        }
+        let _: Vec<CanonicalModel> = serde_saphyr::from_str(&raw)
+            .with_context(|| format!("validating updated {}", model_file.path.display()))?;
+        if raw != original {
+            fs::write(&model_file.path, raw)
+                .with_context(|| format!("writing {}", model_file.path.display()))?;
+        }
+    }
+    for (vendor, additions) in additions_by_vendor {
+        let path = root.join("registry/models").join(format!("{vendor}.yaml"));
+        let mut raw = String::new();
+        append_canonical_models(&mut raw, &additions)?;
+        fs::write(&path, raw).with_context(|| format!("writing {}", path.display()))?;
+    }
+
+    if !plan.removals.is_empty() {
+        for provider in &loaded.providers {
+            if !provider
+                .data
+                .models
+                .iter()
+                .any(|model| plan.removals.contains(&model.id))
+            {
+                continue;
+            }
+            let raw = fs::read_to_string(&provider.path)
+                .with_context(|| format!("reading {}", provider.path.display()))?;
+            let updated = remove_model_items(&raw, "  ", &plan.removals);
+            let parsed: ProviderFile = serde_saphyr::from_str(&updated)
+                .with_context(|| format!("validating updated {}", provider.path.display()))?;
+            if parsed
+                .models
+                .iter()
+                .any(|model| plan.removals.contains(&model.id))
+            {
+                bail!(
+                    "failed to remove expired model from {}",
+                    provider.path.display()
+                );
+            }
+            fs::write(&provider.path, updated)
+                .with_context(|| format!("writing {}", provider.path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_model_items(raw: &str, indent: &str, ids: &HashSet<String>) -> String {
+    if ids.is_empty() {
+        return raw.to_string();
+    }
+    let marker = format!("{indent}- id: ");
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for line in raw.split_inclusive('\n') {
+        lines.push((offset, line));
+        offset += line.len();
+    }
+    let mut ranges = Vec::new();
+    for (index, (start, line)) in lines.iter().enumerate() {
+        let id = line.trim_end_matches(['\r', '\n']).strip_prefix(&marker);
+        if !id.is_some_and(|id| ids.contains(id)) {
+            continue;
+        }
+        let mut end_index = lines.len();
+        for (candidate, (_, next)) in lines.iter().enumerate().skip(index + 1) {
+            let text = next.trim_end_matches(['\r', '\n']);
+            let next_item = text.starts_with(&format!("{indent}- "));
+            let next_top_level =
+                !indent.is_empty() && !text.is_empty() && !text.starts_with([' ', '\t', '#']);
+            if next_item || next_top_level {
+                end_index = candidate;
+                break;
+            }
+        }
+        while end_index > index + 1 {
+            let text = lines[end_index - 1].1.trim();
+            if text.is_empty() || text.starts_with('#') {
+                end_index -= 1;
+            } else {
+                break;
+            }
+        }
+        let end = lines.get(end_index).map_or(raw.len(), |(start, _)| *start);
+        ranges.push((*start, end));
+    }
+    let mut updated = raw.to_string();
+    for (start, end) in ranges.into_iter().rev() {
+        updated.replace_range(start..end, "");
+    }
+    updated
+}
+
+fn insert_canonical_deprecation_dates(raw: &str, schedules: &BTreeMap<String, String>) -> String {
+    if schedules.is_empty() {
+        return raw.to_string();
+    }
+    let mut inserts = Vec::new();
+    let mut offset = 0;
+    for line in raw.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if let Some(id) = trimmed.strip_prefix("- id: ")
+            && let Some(date) = schedules.get(id)
+        {
+            inserts.push((offset + line.len(), format!("  deprecation_date: {date}\n")));
+        }
+        offset += line.len();
+    }
+    let mut updated = raw.to_string();
+    for (at, value) in inserts.into_iter().rev() {
+        updated.insert_str(at, &value);
+    }
+    updated
+}
+
+fn remove_canonical_deprecation_dates(raw: &str, cancellations: &HashSet<String>) -> String {
+    if cancellations.is_empty() {
+        return raw.to_string();
+    }
+    let mut current_id = None;
+    let mut ranges = Vec::new();
+    let mut offset = 0;
+    for line in raw.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if let Some(id) = trimmed.strip_prefix("- id: ") {
+            current_id = Some(id);
+        } else if trimmed.starts_with("  deprecation_date:")
+            && current_id.is_some_and(|id| cancellations.contains(id))
+        {
+            ranges.push((offset, offset + line.len()));
+        }
+        offset += line.len();
+    }
+    let mut updated = raw.to_string();
+    for (start, end) in ranges.into_iter().rev() {
+        updated.replace_range(start..end, "");
+    }
+    updated
+}
+
+fn append_canonical_models(raw: &mut String, additions: &[CanonicalModel]) -> Result<()> {
+    if !raw.is_empty() && !raw.ends_with('\n') {
+        raw.push('\n');
+    }
+    for model in additions {
+        raw.push_str(&render_canonical_model(model)?);
+    }
+    Ok(())
+}
+
+fn render_canonical_model(model: &CanonicalModel) -> Result<String> {
+    let mut out = format!("- id: {}\n", model.id);
+    if let Some(name) = &model.name {
+        writeln!(out, "  name: '{}'", name.replace('\'', "''"))?;
+    }
+    if !model.input_modalities.is_empty() {
+        out.push_str("  input_modalities:\n");
+        for modality in &model.input_modalities {
+            writeln!(out, "  - {modality}")?;
+        }
+    }
+    if !model.output_modalities.is_empty() {
+        out.push_str("  output_modalities:\n");
+        for modality in &model.output_modalities {
+            writeln!(out, "  - {modality}")?;
+        }
+    }
+    if let Some(tokens) = model.max_input_tokens {
+        writeln!(out, "  max_input_tokens: {tokens}")?;
+    }
+    if let Some(tokens) = model.max_output_tokens {
+        writeln!(out, "  max_output_tokens: {tokens}")?;
+    }
+    if let Some(date) = &model.release_date {
+        writeln!(out, "  release_date: {date}")?;
+    }
+    if let Some(date) = &model.knowledge_cutoff {
+        writeln!(out, "  knowledge_cutoff: {date}")?;
+    }
+    Ok(out)
+}
+
+fn write_model_discovery_report(path: &Path, report: &ModelDiscoveryReport) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let mut out = String::from("## Canonical model lifecycle\n\n### Added\n\n");
+    render_report_ids(&mut out, &report.added)?;
+    out.push_str("\n### Scheduled for deprecation\n\n");
+    if report.scheduled.is_empty() {
+        out.push_str("None.\n");
+    } else {
+        for (id, date) in &report.scheduled {
+            writeln!(out, "- `{id}` — removal date: {date}")?;
+        }
+    }
+    out.push_str("\n### Deprecation cancelled\n\n");
+    render_report_ids(&mut out, &report.cancelled)?;
+    out.push_str("\n### Removed\n\n");
+    if report.removed.is_empty() {
+        out.push_str("None.\n");
+    } else {
+        for (id, providers) in &report.removed {
+            let served_by = if providers.is_empty() {
+                "no provider routes".to_string()
+            } else {
+                providers
+                    .iter()
+                    .map(|provider| format!("`{provider}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            writeln!(out, "- `{id}` — removed from: {served_by}")?;
+        }
+    }
+    fs::write(path, out).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+fn render_report_ids(out: &mut String, ids: &[String]) -> Result<()> {
+    if ids.is_empty() {
+        out.push_str("None.\n");
+    } else {
+        for id in ids {
+            writeln!(out, "- `{id}`")?;
+        }
     }
     Ok(())
 }
@@ -272,7 +1119,6 @@ fn models_dev_plan_for_provider(
         .map(|model| model.provider_model_id.as_str())
         .collect();
     let mut staged = HashSet::new();
-    let subscription = provider.billing == Billing::Subscription;
     let mut adds = Vec::new();
 
     for (model_id, model) in &catalog.models {
@@ -282,14 +1128,17 @@ fn models_dev_plan_for_provider(
         let Some(canonical_id) = resolve(model_id) else {
             continue;
         };
-        if have.contains(canonical_id.as_str()) || !staged.insert(canonical_id.clone()) {
+        if have.contains(canonical_id.as_str()) || staged.contains(&canonical_id) {
             continue;
         }
-        let pricing = if subscription {
-            None
-        } else {
-            pricing_from_cost(model.cost.as_ref())
+        let pricing = match provider.billing {
+            Billing::Subscription => None,
+            Billing::UsageToken => match pricing_from_cost(model.cost.as_ref()) {
+                Some(pricing) => Some(pricing),
+                None => continue,
+            },
         };
+        staged.insert(canonical_id.clone());
         adds.push(ProviderModel {
             id: canonical_id,
             provider_model_id: model_id.clone(),
@@ -737,8 +1586,12 @@ fn agentic_diff_issues_from_numstat(numstat: &str) -> Vec<String> {
 struct Artifacts {
     providers: String,
     models: String,
+    agents: String,
+    runtimes: String,
     provider_count: usize,
     model_count: usize,
+    agent_count: usize,
+    runtime_count: usize,
 }
 
 fn build_artifacts(root: &Path) -> Result<Artifacts> {
@@ -789,11 +1642,64 @@ fn build_artifacts(root: &Path) -> Result<Artifacts> {
         models.push(value);
     }
 
+    // The agent view mirrors the model view: one entry per curated agent,
+    // carrying every runtime that can run it. An addressable `<runtime>/<agent>`
+    // is never declared — it exists because a runtime lists the agent, exactly
+    // as a routable model exists because a provider lists it.
+    let mut run_by: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for runtime in &loaded.runtimes {
+        for entry in &runtime.data.agents {
+            let mut value = serde_json::to_value(entry).context("serializing runtime agent")?;
+            let obj = value
+                .as_object_mut()
+                .context("runtime agent must serialize as object")?;
+            obj.remove("id");
+            obj.insert(
+                "runtime".to_string(),
+                Value::String(runtime.data.name.clone()),
+            );
+            run_by.entry(entry.id.clone()).or_default().push(value);
+        }
+    }
+    for runtimes_for_agent in run_by.values_mut() {
+        runtimes_for_agent.sort_by(|a, b| a["runtime"].as_str().cmp(&b["runtime"].as_str()));
+    }
+
+    let mut catalog: Vec<CanonicalAgent> = loaded.agents().cloned().collect();
+    catalog.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut agents = Vec::with_capacity(catalog.len());
+    for agent in catalog {
+        let mut value = serde_json::to_value(&agent).context("serializing canonical agent")?;
+        value
+            .as_object_mut()
+            .context("canonical agent must serialize as object")?
+            .insert(
+                "runtimes".to_string(),
+                Value::Array(run_by.remove(&agent.id).unwrap_or_default()),
+            );
+        agents.push(value);
+    }
+
+    let mut runtimes = Vec::with_capacity(loaded.runtimes.len());
+    for runtime in &loaded.runtimes {
+        let mut value = serde_json::to_value(&runtime.data).context("serializing runtime")?;
+        value
+            .as_object_mut()
+            .context("runtime must serialize as object")?
+            .insert("id".to_string(), Value::String(runtime.data.name.clone()));
+        runtimes.push(value);
+    }
+    runtimes.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+
     Ok(Artifacts {
         provider_count: providers.len(),
         model_count: models.len(),
+        agent_count: agents.len(),
+        runtime_count: runtimes.len(),
         providers: serialize_data(providers)?,
         models: serialize_data(models)?,
+        agents: serialize_data(agents)?,
+        runtimes: serialize_data(runtimes)?,
     })
 }
 
@@ -922,7 +1828,12 @@ fn serialize_data(data: Vec<Value>) -> Result<String> {
     Ok(out)
 }
 
-fn sort_value(value: Value) -> Value {
+/// Recursively key-sort a JSON value so a generated artifact's bytes do not
+/// depend on map iteration order.
+///
+/// `pub(crate)` because `schema` needs the same guarantee for the same reason —
+/// see its `render`.
+pub(crate) fn sort_value(value: Value) -> Value {
     match value {
         Value::Array(values) => Value::Array(values.into_iter().map(sort_value).collect()),
         Value::Object(obj) => {
@@ -944,6 +1855,8 @@ fn sort_value(value: Value) -> Value {
 struct LoadedRegistry {
     model_files: Vec<LoadedModelFile>,
     providers: Vec<LoadedProvider>,
+    agent_files: Vec<LoadedAgentFile>,
+    runtimes: Vec<LoadedRuntime>,
 }
 
 #[derive(Debug)]
@@ -952,9 +1865,19 @@ struct LoadedModelFile {
     models: Vec<CanonicalModel>,
 }
 
+#[derive(Debug)]
+struct LoadedAgentFile {
+    path: PathBuf,
+    agents: Vec<CanonicalAgent>,
+}
+
 impl LoadedRegistry {
     fn models(&self) -> impl Iterator<Item = &CanonicalModel> + '_ {
         self.model_files.iter().flat_map(|file| file.models.iter())
+    }
+
+    fn agents(&self) -> impl Iterator<Item = &CanonicalAgent> + '_ {
+        self.agent_files.iter().flat_map(|file| file.agents.iter())
     }
 }
 
@@ -962,6 +1885,12 @@ impl LoadedRegistry {
 struct LoadedProvider {
     path: PathBuf,
     data: ProviderFile,
+}
+
+#[derive(Debug)]
+struct LoadedRuntime {
+    path: PathBuf,
+    data: RuntimeFile,
 }
 
 fn load_registry(root: &Path) -> Result<LoadedRegistry> {
@@ -986,9 +1915,27 @@ fn load_registry(root: &Path) -> Result<LoadedRegistry> {
         providers.push(LoadedProvider { path, data });
     }
     providers.sort_by(|a, b| a.path.cmp(&b.path));
+
+    // `agents/` and `runtimes/` are additive primitives: a registry tree
+    // without them loads as one with no agents, rather than failing. Keeps
+    // minimal fixture trees (and any older mirror) valid.
+    let mut agent_files = Vec::new();
+    for path in optional_yaml_files(&registry.join("agents"))? {
+        let agents: Vec<CanonicalAgent> = read_yaml(&path)?;
+        agent_files.push(LoadedAgentFile { path, agents });
+    }
+
+    let mut runtimes = Vec::new();
+    for path in optional_yaml_files(&registry.join("runtimes"))? {
+        let data = read_yaml(&path)?;
+        runtimes.push(LoadedRuntime { path, data });
+    }
+
     Ok(LoadedRegistry {
         model_files,
         providers,
+        agent_files,
+        runtimes,
     })
 }
 
@@ -1002,6 +1949,16 @@ fn load_canonical_models(registry: &Path) -> Result<Vec<LoadedModelFile>> {
         out.push(LoadedModelFile { path, models });
     }
     Ok(out)
+}
+
+/// YAML files under `dir`, or none when the directory does not exist.
+fn optional_yaml_files(dir: &Path) -> Result<Vec<PathBuf>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    collect_yaml_files(dir, &mut files)?;
+    Ok(files)
 }
 
 fn collect_yaml_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
@@ -1074,6 +2031,30 @@ fn validate_loaded(registry: &LoadedRegistry) -> Result<Vec<String>> {
         );
     }
 
+    let mut canonical_agents = HashSet::new();
+    for agent_file in &registry.agent_files {
+        let file = path_label(&agent_file.path);
+        for agent in &agent_file.agents {
+            if !canonical_agents.insert(agent.id.as_str()) {
+                issues.push(format!("registry/agents: duplicate agent '{}'", agent.id));
+            }
+            validate_agent(agent, &file, &mut issues);
+        }
+    }
+
+    let mut runtime_names = HashMap::new();
+    for runtime in &registry.runtimes {
+        validate_runtime(
+            runtime,
+            &canonical_agents,
+            &mut runtime_names,
+            &mut issues,
+            &mut advisories,
+        );
+    }
+
+    validate_agent_runtime_pairs(registry, &mut issues);
+
     if !issues.is_empty() {
         bail!("registry validation failed:\n  - {}", issues.join("\n  - "));
     }
@@ -1104,7 +2085,10 @@ fn reject_reserved_namespace(model_id: &str, context: &str, issues: &mut Vec<Str
 
 fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
     for modality in &model.input_modalities {
-        if !matches!(modality.as_str(), "text" | "image" | "audio" | "video") {
+        if !matches!(
+            modality.as_str(),
+            "text" | "image" | "audio" | "video" | "file"
+        ) {
             issues.push(format!(
                 "registry/models: model '{}' has invalid input modality '{}'",
                 model.id, modality
@@ -1112,7 +2096,7 @@ fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
         }
     }
     for modality in &model.output_modalities {
-        if !matches!(modality.as_str(), "text" | "audio") {
+        if !matches!(modality.as_str(), "text" | "image" | "audio") {
             issues.push(format!(
                 "registry/models: model '{}' has invalid output modality '{}'",
                 model.id, modality
@@ -1132,6 +2116,14 @@ fn validate_canonical_model(model: &CanonicalModel, issues: &mut Vec<String>) {
     {
         issues.push(format!(
             "registry/models: model '{}' has invalid knowledge_cutoff '{}'",
+            model.id, date
+        ));
+    }
+    if let Some(date) = &model.deprecation_date
+        && !valid_yyyy_mm_dd(date)
+    {
+        issues.push(format!(
+            "registry/models: model '{}' has invalid deprecation_date '{}'",
             model.id, date
         ));
     }
@@ -1227,7 +2219,7 @@ fn validate_provider<'a>(
     validate_auth(data.auth.as_ref(), &file, issues);
     validate_auto_sync(data.auto_sync.as_ref(), &file, issues);
 
-    if data.status == ProviderStatus::Active
+    if data.status == EntryStatus::Active
         && data.models.is_empty()
         && data.auto_sync.is_none()
         && !matches!(data.access, Access::LocalOauth | Access::LocalPkce)
@@ -1324,6 +2316,601 @@ fn validate_provider<'a>(
             }
         }
     }
+}
+
+fn validate_agent(agent: &CanonicalAgent, file: &str, issues: &mut Vec<String>) {
+    if !valid_slug(&agent.id, false) {
+        issues.push(format!(
+            "{file}: agent id '{}' must be a bare lowercase slug (no vendor prefix — \
+             the only prefix an agent id carries is its runtime)",
+            agent.id
+        ));
+    }
+    for (field, value) in [
+        ("name", &agent.name),
+        ("description", &agent.description),
+        ("package_marker", &agent.package_marker),
+    ] {
+        if value.trim().is_empty() {
+            issues.push(format!("{file}: agent '{}' has an empty {field}", agent.id));
+        }
+    }
+    validate_https(&agent.project_url, file, "project_url", issues);
+    if agent.acp.protocol_version == 0 {
+        issues.push(format!(
+            "{file}: agent '{}' has acp.protocol_version 0; ACP versions start at 1",
+            agent.id
+        ));
+    }
+    match &agent.routing {
+        AgentRouting::Env {
+            base_url_env,
+            auth_env,
+            ..
+        } => {
+            for (field, value) in [("base_url_env", base_url_env), ("auth_env", auth_env)] {
+                if value.trim().is_empty() {
+                    issues.push(format!(
+                        "{file}: agent '{}' routing.{field} must name a variable",
+                        agent.id
+                    ));
+                }
+            }
+        }
+        AgentRouting::ConfigFile {
+            dir,
+            file: config_file,
+            skeleton,
+            models,
+            default_model,
+            mcp,
+            env,
+            args,
+        } => {
+            if let Some(dir) = dir {
+                validate_relative_path(&agent.id, "routing.dir", dir, file, issues);
+            }
+            validate_relative_path(&agent.id, "routing.file", config_file, file, issues);
+            // The renderer writes `dir.join(file)` and creates only `dir`, so a
+            // nested filename fails at launch with a missing-directory error.
+            if config_file.contains('/') {
+                issues.push(format!(
+                    "{file}: agent '{}' routing.file must be a filename — put any \
+                     subdirectory in routing.dir, which is the directory the renderer creates",
+                    agent.id
+                ));
+            }
+            let parsed: Option<Value> = match serde_json::from_str(skeleton) {
+                Ok(value @ Value::Object(_)) => Some(value),
+                Ok(_) => {
+                    issues.push(format!(
+                        "{file}: agent '{}' routing.skeleton must be a JSON object",
+                        agent.id
+                    ));
+                    None
+                }
+                Err(error) => {
+                    issues.push(format!(
+                        "{file}: agent '{}' routing.skeleton is not valid JSON: {error}",
+                        agent.id
+                    ));
+                    None
+                }
+            };
+            // Placeholders are checked in the parsed *string leaves*, not the
+            // raw text, because that is precisely what the renderer
+            // substitutes into — a JSON skeleton is full of braces that are
+            // structure, not placeholders.
+            if let Some(parsed) = &parsed {
+                validate_string_leaves(&agent.id, "routing.skeleton", parsed, file, issues);
+            }
+            // The renderer replaces values in place and only ever *appends*
+            // new keys, so a model list whose key is missing from the skeleton
+            // would land at the end of its parent rather than where the
+            // harness expects it. Catch that here, not in a diff of rendered
+            // bytes.
+            if let Some(list) = models
+                && validate_pointer(&agent.id, "routing.models.at", &list.at, file, issues)
+                && let Some(parsed) = &parsed
+                && parsed.pointer(&list.at).is_none()
+            {
+                issues.push(format!(
+                    "{file}: agent '{}' routing.models.at '{}' is not a key in the \
+                     skeleton — the model list would be appended instead of landing \
+                     where the harness expects it",
+                    agent.id, list.at
+                ));
+            }
+            if let Some(default) = default_model
+                && validate_pointer(
+                    &agent.id,
+                    "routing.default_model.at",
+                    &default.at,
+                    file,
+                    issues,
+                )
+                && let Some(parsed) = &parsed
+            {
+                validate_pointer_parents(
+                    &agent.id,
+                    "routing.default_model.at",
+                    &default.at,
+                    parsed,
+                    file,
+                    issues,
+                );
+            }
+            if let Some(mcp) = mcp
+                && validate_pointer(&agent.id, "routing.mcp.at", &mcp.at, file, issues)
+                && let Some(parsed) = &parsed
+            {
+                validate_pointer_parents(
+                    &agent.id,
+                    "routing.mcp.at",
+                    &mcp.at,
+                    parsed,
+                    file,
+                    issues,
+                );
+            }
+            if env.is_empty() {
+                issues.push(format!(
+                    "{file}: agent '{}' has `routing.kind: config_file` but sets no \
+                     variables, so nothing would point the harness at the synthesized \
+                     config",
+                    agent.id
+                ));
+            }
+            for entry in env {
+                validate_placeholders(
+                    &agent.id,
+                    &format!("routing.env.{}", entry.name),
+                    &entry.value,
+                    ENV_PLACEHOLDERS,
+                    file,
+                    issues,
+                );
+            }
+            for arg in args.always.iter().chain(&args.with_default_model) {
+                validate_placeholders(
+                    &agent.id,
+                    "routing.args",
+                    arg,
+                    ARG_PLACEHOLDERS,
+                    file,
+                    issues,
+                );
+            }
+        }
+        AgentRouting::CodexArgs => {}
+    }
+}
+
+/// Checks that need both halves of the primitive pair in hand.
+///
+/// These are the rules a per-file pass cannot see, and each of them guards a
+/// failure that would otherwise land far from its cause — a build error, or a
+/// harness that launches unrouted.
+fn validate_agent_runtime_pairs(registry: &LoadedRegistry, issues: &mut Vec<String>) {
+    let agents: Vec<&CanonicalAgent> = registry.agents().collect();
+
+    // An agent no runtime lists produces `runtimes: []` in the dist artifact,
+    // and `apps/bitrouter/build.rs` then fails the *compile* — after both
+    // `registry validate` and `dist-helper check` passed.
+    let listed: HashSet<&str> = registry
+        .runtimes
+        .iter()
+        .flat_map(|runtime| runtime.data.agents.iter())
+        .map(|entry| entry.id.as_str())
+        .collect();
+    for agent in &agents {
+        if !listed.contains(agent.id.as_str()) {
+            issues.push(format!(
+                "registry/agents: '{}' is listed by no runtime, so nothing can run it",
+                agent.id
+            ));
+        }
+    }
+
+    // `package_marker` is how a user-renamed `agents:` entry is mapped back to
+    // its routing. A marker that does not occur in the agent's own invocation
+    // matches nothing, and the harness launches unrouted with no error.
+    for runtime in &registry.runtimes {
+        let file = path_label(&runtime.path);
+        for entry in &runtime.data.agents {
+            let Some(agent) = agents.iter().find(|agent| agent.id == entry.id) else {
+                continue;
+            };
+            let AgentTransport::Stdio { command, args } = &entry.transport;
+            let present = command.contains(&agent.package_marker)
+                || args.iter().any(|arg| arg.contains(&agent.package_marker));
+            if !present {
+                issues.push(format!(
+                    "{file}: agent '{}' has package_marker '{}', which appears nowhere in its \
+                     invocation — invocation matching would never map it back to its routing",
+                    entry.id, agent.package_marker
+                ));
+            }
+        }
+    }
+
+    // One marker containing another would mis-route the first harness as the
+    // second, since matching is a substring test over the invocation.
+    for outer in &agents {
+        for inner in &agents {
+            if outer.id != inner.id && outer.package_marker.contains(&inner.package_marker) {
+                issues.push(format!(
+                    "registry/agents: '{}' package_marker '{}' contains '{}' from '{}', so an \
+                     invocation would match both",
+                    outer.id, outer.package_marker, inner.package_marker, inner.id
+                ));
+            }
+        }
+    }
+}
+
+/// Placeholders each part of a routing block may use. Context-specific,
+/// because they resolve at different moments: the skeleton is rendered before
+/// the file has a path, and `{default_model}` exists only where a default was
+/// resolved.
+const SKELETON_PLACEHOLDERS: &[&str] = &["base_url_v1", "auth"];
+const ENV_PLACEHOLDERS: &[&str] = &["dir", "file", "auth"];
+const ARG_PLACEHOLDERS: &[&str] = &["default_model"];
+
+/// Every `{…}` span in `value` must name a placeholder the renderer knows.
+fn validate_placeholders(
+    agent_id: &str,
+    field: &str,
+    value: &str,
+    allowed: &[&str],
+    file: &str,
+    issues: &mut Vec<String>,
+) {
+    let mut rest = value;
+    while let Some(open) = rest.find('{') {
+        let Some(close) = rest[open..].find('}') else {
+            issues.push(format!(
+                "{file}: agent '{agent_id}' {field} has an unterminated placeholder"
+            ));
+            return;
+        };
+        let placeholder = &rest[open + 1..open + close];
+        if !allowed.contains(&placeholder) {
+            issues.push(format!(
+                "{file}: agent '{agent_id}' {field} uses unknown placeholder \
+                 '{{{placeholder}}}' (known here: {})",
+                allowed.join(", ")
+            ));
+        }
+        rest = &rest[open + close + 1..];
+    }
+}
+
+/// Check every string leaf of a parsed skeleton for unknown placeholders.
+fn validate_string_leaves(
+    agent_id: &str,
+    field: &str,
+    value: &Value,
+    file: &str,
+    issues: &mut Vec<String>,
+) {
+    match value {
+        Value::String(text) => {
+            validate_placeholders(agent_id, field, text, SKELETON_PLACEHOLDERS, file, issues);
+        }
+        Value::Array(items) => {
+            for item in items {
+                validate_string_leaves(agent_id, field, item, file, issues);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values() {
+                validate_string_leaves(agent_id, field, item, file, issues);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every parent segment of a filled pointer must already be an object in the
+/// skeleton, or be absent.
+///
+/// The renderer creates missing intermediates but cannot descend through a
+/// string or an array, so a skeleton of `{"model": "x"}` with
+/// `default_model.at: /model/default` validates on shape and then fails at
+/// launch.
+fn validate_pointer_parents(
+    agent_id: &str,
+    field: &str,
+    pointer: &str,
+    skeleton: &Value,
+    file: &str,
+    issues: &mut Vec<String>,
+) {
+    let segments: Vec<&str> = pointer.trim_start_matches('/').split('/').collect();
+    let mut cursor = skeleton;
+    for segment in segments.iter().take(segments.len().saturating_sub(1)) {
+        let Some(map) = cursor.as_object() else {
+            issues.push(format!(
+                "{file}: agent '{agent_id}' {field} '{pointer}' descends through a non-object \
+                 in the skeleton"
+            ));
+            return;
+        };
+        match map.get(*segment) {
+            // Absent is fine — the renderer creates it.
+            None => return,
+            Some(next) => cursor = next,
+        }
+    }
+}
+
+/// A synthesized config's directory and filename must stay inside the
+/// per-launch scratch directory.
+///
+/// The launch-time renderer is not asked to re-check this, because it joins
+/// these onto the scratch path directly — which is exactly why the value must
+/// be rejected here, before it is ever published to a fetched artifact.
+fn validate_relative_path(
+    agent_id: &str,
+    field: &str,
+    value: &str,
+    file: &str,
+    issues: &mut Vec<String>,
+) {
+    // Every platform's escaping forms are rejected on every platform: the
+    // validator and the renderer need not run on the same host, so the verdict
+    // may not depend on which one it is. `..\\evil` and `C:\\evil` escape on
+    // Windows, and `/etc/profile` escapes on Unix.
+    //
+    // `has_root`, not `is_absolute`: on Windows a path is absolute only with a
+    // drive or UNC prefix, so `/etc/profile` is merely rooted there and would
+    // pass a validator running on Windows.
+    let windows_drive = value.len() >= 2
+        && value.as_bytes()[0].is_ascii_alphabetic()
+        && value.as_bytes()[1] == b':';
+    let offending = value.is_empty()
+        || Path::new(value).has_root()
+        || windows_drive
+        || value.contains('\\')
+        || value.split('/').any(|segment| segment == "..");
+    if offending {
+        issues.push(format!(
+            "{file}: agent '{agent_id}' {field} must be a relative path inside the \
+             per-launch directory"
+        ));
+    }
+}
+
+/// A JSON pointer the renderer can follow. Returns whether it is well formed,
+/// so a caller can skip checks that would be meaningless otherwise.
+fn validate_pointer(
+    agent_id: &str,
+    field: &str,
+    pointer: &str,
+    file: &str,
+    issues: &mut Vec<String>,
+) -> bool {
+    // `~` is rejected so the validator's RFC 6901 reader and the renderer's
+    // literal `/` split cannot disagree about what a pointer means.
+    let well_formed = pointer.starts_with('/')
+        && pointer.len() > 1
+        && !pointer.contains('~')
+        && !pointer.split('/').skip(1).any(str::is_empty);
+    if !well_formed {
+        issues.push(format!(
+            "{file}: agent '{agent_id}' {field} must be a JSON pointer like '/a/b'"
+        ));
+    }
+    well_formed
+}
+
+/// Package runners whose invocation fetches the package, so the version in the
+/// spec is what decides which code runs.
+const PACKAGE_RUNNERS: &[&str] = &["npx", "uvx"];
+
+fn validate_runtime<'a>(
+    runtime: &'a LoadedRuntime,
+    canonical_agents: &HashSet<&str>,
+    names: &mut HashMap<&'a str, String>,
+    issues: &mut Vec<String>,
+    advisories: &mut Vec<String>,
+) {
+    let file = path_label(&runtime.path);
+    let data = &runtime.data;
+    if !valid_provider_name(&data.name) {
+        issues.push(format!(
+            "{file}: runtime name '{}' must be lowercase alphanumeric with '-' or '_'",
+            data.name
+        ));
+    }
+    if runtime.path.file_stem().and_then(|s| s.to_str()) != Some(data.name.as_str()) {
+        issues.push(format!(
+            "{file}: runtime name '{}' must equal the filename stem",
+            data.name
+        ));
+    }
+    if let Some(previous) = names.insert(data.name.as_str(), file.clone()) {
+        issues.push(format!(
+            "{file}: duplicate runtime name '{}' (also in {previous})",
+            data.name
+        ));
+    }
+    if data.agents.is_empty() {
+        issues.push(format!(
+            "{file}: runtime '{}' lists no agents, so nothing can launch through it",
+            data.name
+        ));
+    }
+
+    let mut seen = HashSet::new();
+    for entry in &data.agents {
+        if !seen.insert(entry.id.as_str()) {
+            issues.push(format!(
+                "{file}: runtime '{}' lists agent '{}' twice",
+                data.name, entry.id
+            ));
+        }
+        if !canonical_agents.contains(entry.id.as_str()) {
+            advisories.push(format!(
+                "{file}: agent '{}' not in curated registry/agents",
+                entry.id
+            ));
+        }
+        let AgentTransport::Stdio { command, args } = &entry.transport;
+        if command.trim().is_empty() {
+            issues.push(format!(
+                "{file}: agent '{}' has an empty stdio command",
+                entry.id
+            ));
+            continue;
+        }
+        let record = entry.conformance.as_ref().map(|c| &c.acp_compat_1);
+        if PACKAGE_RUNNERS.contains(&command.as_str()) {
+            match package_spec(args) {
+                Some(spec) if package_spec_is_pinned(spec) => {}
+                // A conformance record names the `agent_version` it exercised.
+                // A floating tag cannot honestly supply one — whatever the
+                // suite ran against is not what the next install will fetch —
+                // so recording a result promotes this from advisory to error.
+                Some(spec) if record.is_some() => issues.push(format!(
+                    "{file}: agent '{}' carries a conformance record but its invocation is \
+                     unpinned ('{spec}'), so the record cannot describe what a user would run",
+                    entry.id
+                )),
+                Some(spec) => advisories.push(format!(
+                    "{file}: agent '{}' is unpinned ('{spec}') — a floating tag lets the \
+                     fetched catalog choose which code runs, and a conformance record \
+                     cannot name an agent_version",
+                    entry.id
+                )),
+                None => issues.push(format!(
+                    "{file}: agent '{}' runs '{command}' with no package argument",
+                    entry.id
+                )),
+            }
+        } else if entry.requires_binary.is_none() {
+            issues.push(format!(
+                "{file}: agent '{}' runs '{command}', which is not a package runner, so \
+                 it must declare `requires_binary`",
+                entry.id
+            ));
+        }
+        match record {
+            Some(record) => validate_conformance(record, &entry.id, data.status, &file, issues),
+            None => advisories.push(format!(
+                "{file}: agent '{}' has no {SUITE} record — run \
+                 `bro agents conformance {}/{}`",
+                entry.id, data.name, entry.id
+            )),
+        }
+    }
+}
+
+/// The suite whose records this registry understands.
+const SUITE: &str = "acp_compat_1";
+
+/// Check a conformance record's provenance, and refuse to serve an agent whose
+/// own record says it does not work.
+fn validate_conformance(
+    record: &ConformanceRecord,
+    agent_id: &str,
+    runtime_status: EntryStatus,
+    file: &str,
+    issues: &mut Vec<String>,
+) {
+    if record.suite_version.trim().is_empty() {
+        issues.push(format!(
+            "{file}: agent '{agent_id}' conformance record has no suite_version, so nothing \
+             says which checks it passed"
+        ));
+    }
+    if !valid_yyyy_mm_dd(&record.as_of) {
+        issues.push(format!(
+            "{file}: agent '{agent_id}' conformance as_of '{}' is not YYYY-MM-DD",
+            record.as_of
+        ));
+    }
+    if record.measured_by.trim().is_empty() {
+        issues.push(format!(
+            "{file}: agent '{agent_id}' conformance record has no measured_by"
+        ));
+    } else if record.measured_by != "bitrouter" {
+        // A cited third-party result must be checkable, or it is just a claim
+        // wearing a record's clothes.
+        match &record.source_url {
+            Some(url) => validate_https(url, file, "conformance.source_url", issues),
+            None => issues.push(format!(
+                "{file}: agent '{agent_id}' conformance is measured_by '{}' but cites no \
+                 source_url",
+                record.measured_by
+            )),
+        }
+    }
+    // The gate: an active runtime must not serve an agent whose own record
+    // reports a failed tier. A tier that simply was not run is absent, and
+    // that stays permitted — the advisory above is how it surfaces.
+    if runtime_status == EntryStatus::Active {
+        for (tier, outcome) in [
+            ("handshake", record.handshake),
+            ("routability", record.routability),
+            ("lifecycle", record.lifecycle),
+        ] {
+            if outcome == Some(TierOutcome::Fail) {
+                issues.push(format!(
+                    "{file}: agent '{agent_id}' records {SUITE} {tier}: fail, so it cannot be \
+                     served by an active runtime"
+                ));
+            }
+        }
+    }
+}
+
+/// The package spec in a runner invocation: the first argument that is neither
+/// a flag nor the `--` separator.
+fn package_spec(args: &[String]) -> Option<&str> {
+    args.iter()
+        .map(String::as_str)
+        .find(|arg| *arg != "--" && !arg.starts_with('-'))
+}
+
+/// Whether a package spec names an exact version. Scoped npm names lead with
+/// `@`, so the version is the *last* `@`-separated segment.
+///
+/// The test is that the version is exact semver, not that it avoids a list of
+/// known-floating tags. A denylist lets `^1.0.0`, `~1.2`, `1.x`, `*`, `>=1`
+/// and any unlisted dist-tag (`stable`, `rc`, `nightly`) through, and each of
+/// those hands the choice of which code runs back to the registry document —
+/// which is the exact thing this rule exists to prevent.
+fn package_spec_is_pinned(spec: &str) -> bool {
+    let body = spec.strip_prefix('@').unwrap_or(spec);
+    let Some((name, version)) = body.rsplit_once('@') else {
+        return false;
+    };
+    !name.is_empty() && is_exact_semver(version)
+}
+
+/// `MAJOR.MINOR.PATCH`, optionally with a pre-release or build suffix.
+fn is_exact_semver(version: &str) -> bool {
+    let (core, suffix) = match version.find(['-', '+']) {
+        Some(at) => (&version[..at], Some(&version[at + 1..])),
+        None => (version, None),
+    };
+    let mut parts = core.split('.');
+    let numeric = |part: Option<&str>| {
+        part.is_some_and(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let core_ok = numeric(parts.next())
+        && numeric(parts.next())
+        && numeric(parts.next())
+        && parts.next().is_none();
+    let suffix_ok = suffix.is_none_or(|suffix| {
+        !suffix.is_empty()
+            && suffix
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    });
+    core_ok && suffix_ok
 }
 
 fn resolved_required_config(provider: &ProviderFile) -> Vec<RequiredConfig> {
@@ -1820,6 +3407,301 @@ fn dist_dir(root: &Path) -> PathBuf {
     root.join("dist").join("registry")
 }
 
+/// One curated ACP agent — the harness catalog's runtime-independent half.
+///
+/// Everything here is true wherever the agent runs. Anything that varies by
+/// machine (the invocation, whether conformance passed) lives on the runtime
+/// entry that lists it, exactly as a model's pricing lives on the provider.
+///
+/// Ids are **bare** (`claude-acp`, not `anthropic/claude-acp`): the only
+/// prefix an agent id ever carries is the runtime it is addressed through
+/// (`local/claude-acp`), so a vendor prefix here would make the two
+/// indistinguishable. The filename is filing only — unlike `registry/models`,
+/// no id/stem relationship is enforced.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalAgent {
+    id: String,
+    name: String,
+    description: String,
+    project_url: String,
+    /// Substring that maps a user-renamed `agents:` entry in `bitrouter.yaml`
+    /// back to this catalog entry, so routing follows the invocation rather
+    /// than the YAML key.
+    package_marker: String,
+    /// The harness's own native-TUI binary, when it has one. Presence declares
+    /// a `bro launch` facet; absence means the agent is ACP-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interactive_binary: Option<String>,
+    acp: AgentAcp,
+    routing: AgentRouting,
+}
+
+/// The ACP contract an agent speaks.
+///
+/// `capabilities` is deliberately absent until the conformance suite can
+/// assert a claim against the `initialize` response — an unverified capability
+/// list is worse than none, per the catalog's "omit what you can't verify".
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AgentAcp {
+    /// ACP major version (`1` for the v1 wire semantics this workspace pins).
+    protocol_version: u32,
+}
+
+/// How an agent's LLM traffic is redirected at the BitRouter gateway.
+///
+/// The `{base_url}`, `{auth}`, `{model}` and `{dir}` placeholders in any value
+/// here are resolved at launch: `{base_url}` by the runtime that runs the
+/// agent, the rest per-launch.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum AgentRouting {
+    /// Set variables on the child process.
+    Env {
+        /// Var the harness reads its gateway base URL from.
+        base_url_env: String,
+        /// Var the harness turns into the gateway credential.
+        auth_env: String,
+        /// Whether `auth_env` is sent as `Authorization: Bearer` (BitRouter's
+        /// inbound scheme). `false` means a provider-native header the daemon
+        /// accepts only under `skip_auth: true`, and callers warn.
+        bearer_auth: bool,
+        /// Var that pins the model, when the harness supports one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model_env: Option<String>,
+        /// Fixed vars the redirect needs.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        extra: BTreeMap<String, String>,
+    },
+    /// Codex's one-shot `-c` provider overrides. Named for the harness rather
+    /// than the mechanism because that is what it is: the override list is
+    /// compiled, so a second agent selecting this would silently receive
+    /// Codex's `model_providers.bitrouter.*` arguments. A generic `args` kind
+    /// needs its own fields before it can honestly exist.
+    CodexArgs,
+    /// Render a config file into a per-launch scratch directory and point the
+    /// harness at it. The file's fixed structure is `skeleton`; everything
+    /// that varies structurally between harnesses is a knob below with a
+    /// closed set of values. See `docs/AGENT_REGISTRY_SPEC.md` D4 for why this
+    /// is not a template language.
+    ConfigFile {
+        /// Subdirectory under the launch state dir, when the harness wants a
+        /// directory of its own. Omitted writes into the state dir itself.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dir: Option<String>,
+        /// Filename within that directory.
+        file: String,
+        /// JSON structure; string leaves may use `{base_url_v1}` and `{auth}`.
+        skeleton: String,
+        /// Where the daemon's model catalog lands.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        models: Option<AgentModelList>,
+        /// Where the default model lands.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default_model: Option<AgentDefaultModel>,
+        /// Where injected MCP servers land. Omitted when the harness has no
+        /// MCP mechanism to inject into.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mcp: Option<AgentMcp>,
+        /// Variables pointing the harness at the file. Ordered, because the
+        /// overlay applies them in this order. Values may use `{dir}`,
+        /// `{file}` and `{auth}`.
+        env: Vec<AgentEnvVar>,
+        #[serde(default, skip_serializing_if = "AgentArgs::is_empty")]
+        args: AgentArgs,
+    },
+}
+
+/// Where and how the model catalog is rendered into a synthesized config.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AgentModelList {
+    /// JSON pointer to the key holding the collection. The key must already
+    /// exist in the skeleton, so its position — and the rendered bytes — stay
+    /// stable.
+    at: String,
+    shape: ModelShape,
+    order: ModelOrder,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ModelShape {
+    /// `{"<id>": {}}`.
+    MapOfEmpty,
+    /// `[{"id": "<id>"}]`.
+    ArrayOfId,
+    /// Fully-specified model records, for harnesses whose config validation
+    /// rejects anything less.
+    ArrayOfProfile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ModelOrder {
+    /// Catalog order, with the pinned model appended only if absent.
+    CatalogThenModel,
+    /// The pinned model first, then the whole catalog unfiltered.
+    ModelThenCatalog,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AgentDefaultModel {
+    /// JSON pointer; intermediate objects are created.
+    at: String,
+    format: DefaultFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DefaultFormat {
+    /// The bare model id.
+    Bare,
+    /// `bitrouter/<id>`.
+    ProviderPrefixed,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AgentMcp {
+    at: String,
+    entry: McpEntryShape,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum McpEntryShape {
+    /// An explicit `type` discriminant plus `enabled`, with the stdio command
+    /// and its arguments folded into one invocation array.
+    OpencodeTyped,
+    /// `{command, args}` for stdio, `{url, headers}` for HTTP.
+    CommandArgsOrUrl,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AgentEnvVar {
+    name: String,
+    value: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AgentArgs {
+    /// Always appended to the invocation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    always: Vec<String>,
+    /// Appended only when a default model exists; `{default_model}` is
+    /// substituted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    with_default_model: Vec<String>,
+}
+
+impl AgentArgs {
+    fn is_empty(&self) -> bool {
+        self.always.is_empty() && self.with_default_model.is_empty()
+    }
+}
+
+/// One machine class agents can execute on. v1 ships `local` only.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeFile {
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    kind: RuntimeKind,
+    status: EntryStatus,
+    agents: Vec<RuntimeAgent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RuntimeKind {
+    /// A child process on this machine, over ACP's canonical stdio transport.
+    Local,
+}
+
+/// One agent as a runtime runs it: the invocation, and what the machine must
+/// already have. The analogue of a provider's per-model entry.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeAgent {
+    id: String,
+    transport: AgentTransport,
+    /// A binary the user must have installed; the invocation does not fetch
+    /// it. Required whenever the command is not a package runner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    requires_binary: Option<String>,
+    /// What the ACP-compatibility suite observed for this (agent, runtime)
+    /// pair. Absent means **not measured** — never "passes".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    conformance: Option<AgentConformance>,
+}
+
+/// Conformance records, keyed by suite. Only the suite BitRouter runs has a
+/// field; the shape is extensible the way `Benchmarks` is.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AgentConformance {
+    acp_compat_1: ConformanceRecord,
+}
+
+/// One suite run against one (agent, runtime) pair.
+///
+/// Provenance is first-class for the same reason a benchmark score's is: a
+/// bare `pass` is not reproducible. `suite_version` says which checks ran,
+/// `agent_version` says what actually answered, and `measured_by` keeps a
+/// third-party claim from being mistaken for one we ran. A tier that did not
+/// run is **absent**, not `skipped` — skipped means the suite decided there
+/// was nothing to check.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ConformanceRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handshake: Option<TierOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    routability: Option<TierOutcome>,
+    /// Session lifecycle — specified but not yet implemented, so no record
+    /// carries it today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lifecycle: Option<TierOutcome>,
+    suite_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_version: Option<String>,
+    /// `bitrouter` for our own runs, otherwise the third-party source.
+    measured_by: String,
+    /// Snapshot date, `YYYY-MM-DD`.
+    as_of: String,
+    /// Required when `measured_by` is a third party.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum TierOutcome {
+    Pass,
+    Fail,
+    /// The suite determined there was nothing to check — an agent that is
+    /// never routed has no routability to verify.
+    Skipped,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum AgentTransport {
+    /// Launch `command` with `args` and exchange JSON-RPC over the child's
+    /// stdio. <https://agentclientprotocol.com/protocol/transports>
+    Stdio {
+        command: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<String>,
+    },
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CanonicalModel {
@@ -1844,6 +3726,8 @@ struct CanonicalModel {
     open_weights: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deprecation_date: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     benchmarks: Option<Benchmarks>,
 }
@@ -1912,7 +3796,7 @@ struct ProviderFile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     rate_limits: Vec<BTreeMap<String, RateLimits>>,
     models: Vec<ProviderModel>,
-    status: ProviderStatus,
+    status: EntryStatus,
     #[serde(default = "default_weight")]
     weight: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2068,9 +3952,13 @@ enum Capability {
     AudioOutput,
 }
 
+/// Lifecycle gate shared by provider and runtime entries: only `active` is
+/// served. `staging` marks an entry scaffolded from research but not yet
+/// confirmed against the live API (or, for a runtime agent, not yet exercised
+/// by the conformance suite).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum ProviderStatus {
+enum EntryStatus {
     Active,
     Staging,
     Suspended,
@@ -2269,6 +4157,158 @@ struct ModelsDevCost {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// The pin rule is the security contract of `registry/runtimes/`: the
+    /// catalog is fetched over the network and names commands BitRouter
+    /// spawns, so a floating tag means the fetched document chooses which code
+    /// runs. Scoped npm names lead with `@`, which is the case that makes a
+    /// naive `split_once('@')` wrong.
+    fn conformance(handshake: TierOutcome, measured_by: &str) -> ConformanceRecord {
+        ConformanceRecord {
+            handshake: Some(handshake),
+            routability: Some(TierOutcome::Pass),
+            lifecycle: None,
+            suite_version: "1.0.0".to_string(),
+            agent_version: Some("0.70.0".to_string()),
+            measured_by: measured_by.to_string(),
+            as_of: "2026-09-06".to_string(),
+            source_url: None,
+        }
+    }
+
+    /// The gate that makes a conformance record mean something: an agent whose
+    /// own record says a tier failed cannot be served by an active runtime.
+    #[test]
+    fn an_active_runtime_cannot_serve_an_agent_whose_record_reports_failure() {
+        let mut issues = Vec::new();
+        validate_conformance(
+            &conformance(TierOutcome::Fail, "bitrouter"),
+            "claude-acp",
+            EntryStatus::Active,
+            "file",
+            &mut issues,
+        );
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(issues[0].contains("handshake: fail"), "{issues:?}");
+
+        // The same record under a staging runtime is the whole point of
+        // staging: it records what was observed without serving it.
+        let mut staged = Vec::new();
+        validate_conformance(
+            &conformance(TierOutcome::Fail, "bitrouter"),
+            "claude-acp",
+            EntryStatus::Staging,
+            "file",
+            &mut staged,
+        );
+        assert!(staged.is_empty(), "{staged:?}");
+    }
+
+    /// A cited third-party result must be checkable, or it is a claim wearing
+    /// a record's clothes.
+    #[test]
+    fn a_third_party_conformance_record_must_cite_a_source() {
+        let mut issues = Vec::new();
+        validate_conformance(
+            &conformance(TierOutcome::Pass, "some-vendor"),
+            "claude-acp",
+            EntryStatus::Active,
+            "file",
+            &mut issues,
+        );
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(issues[0].contains("source_url"), "{issues:?}");
+
+        // Our own runs need no citation.
+        let mut ours = Vec::new();
+        validate_conformance(
+            &conformance(TierOutcome::Pass, "bitrouter"),
+            "claude-acp",
+            EntryStatus::Active,
+            "file",
+            &mut ours,
+        );
+        assert!(ours.is_empty(), "{ours:?}");
+    }
+
+    #[test]
+    fn package_pinning_reads_the_version_not_the_npm_scope() {
+        assert!(package_spec_is_pinned(
+            "@agentclientprotocol/claude-agent-acp@0.70.0"
+        ));
+        assert!(package_spec_is_pinned("pi-acp@1.2.3"));
+        assert!(!package_spec_is_pinned("@google/gemini-cli@latest"));
+        assert!(!package_spec_is_pinned("pi-acp@latest"));
+        assert!(!package_spec_is_pinned("pi-acp@next"));
+        // Ranges and dist-tags hand the choice of which code runs back to the
+        // registry document just as `@latest` does, so the rule tests for
+        // exact semver rather than screening a list of known-floating tags —
+        // a denylist would let every one of these through.
+        for floating in [
+            "pi-acp@^1.0.0",
+            "pi-acp@~1.2.3",
+            "pi-acp@1.x",
+            "pi-acp@*",
+            "pi-acp@>=1.0.0",
+            "pi-acp@1.2",
+            "pi-acp@stable",
+            "pi-acp@nightly",
+        ] {
+            assert!(!package_spec_is_pinned(floating), "{floating} is not a pin");
+        }
+        // Pre-release and build metadata are still exact.
+        assert!(package_spec_is_pinned("pi-acp@1.2.3-rc.1"));
+        assert!(package_spec_is_pinned("pi-acp@1.2.3+build.5"));
+        // No version at all — `npx` would resolve whatever is current.
+        assert!(!package_spec_is_pinned("pi-acp"));
+        // A scope with no version must not read as `scope@name`.
+        assert!(!package_spec_is_pinned("@agentclientprotocol/codex-acp"));
+    }
+
+    #[test]
+    fn package_spec_skips_runner_flags_and_the_separator() {
+        let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            package_spec(&args(&["-y", "--", "@google/gemini-cli@1.0.0", "--acp"])),
+            Some("@google/gemini-cli@1.0.0")
+        );
+        assert_eq!(package_spec(&args(&["-y"])), None);
+    }
+
+    #[test]
+    fn routing_placeholders_are_checked_against_the_context_they_appear_in() {
+        let check = |value: &str, allowed: &[&str]| {
+            let mut issues = Vec::new();
+            validate_placeholders("agent", "field", value, allowed, "file", &mut issues);
+            issues
+        };
+        assert!(check("{base_url_v1}", SKELETON_PLACEHOLDERS).is_empty());
+        assert!(check("{dir}", ENV_PLACEHOLDERS).is_empty());
+        assert!(check("no placeholders here", ENV_PLACEHOLDERS).is_empty());
+
+        // `{dir}` only exists once the file has a path — it is not a skeleton
+        // placeholder, and using it there must not silently render literally.
+        let wrong_context = check("{dir}", SKELETON_PLACEHOLDERS);
+        assert_eq!(wrong_context.len(), 1, "{wrong_context:?}");
+        assert!(wrong_context[0].contains("unknown placeholder"));
+
+        assert_eq!(check("{secret}", ENV_PLACEHOLDERS).len(), 1);
+        assert_eq!(check("{dir", ENV_PLACEHOLDERS).len(), 1);
+    }
+
+    #[test]
+    fn config_paths_must_stay_inside_the_per_launch_directory() {
+        let check = |value: &str| {
+            let mut issues = Vec::new();
+            validate_relative_path("agent", "routing.file", value, "file", &mut issues);
+            issues
+        };
+        assert!(check("opencode.json").is_empty());
+        assert!(check("pi-agent/models.json").is_empty());
+        assert_eq!(check("../../etc/profile").len(), 1);
+        assert_eq!(check("/etc/profile").len(), 1);
+        assert_eq!(check("").len(), 1);
+    }
 
     #[test]
     fn canonical_resolver_matches_full_ids_and_unique_bare_slugs() {
@@ -2740,6 +4780,57 @@ auto_sync:
     }
 
     #[test]
+    fn models_dev_catalog_skips_usage_token_models_without_pricing() {
+        let provider: ProviderFile = serde_saphyr::from_str(
+            r#"
+name: acme
+api_protocol:
+  - "*": openai
+models: []
+status: active
+billing: usage_token
+api_base: https://api.acme.test/v1
+auto_sync:
+  feed: models_dev
+"#,
+        )
+        .unwrap();
+        let catalog: ModelsDevProvider =
+            serde_json::from_str(r#"{"models":{"gpt-5.5":{}}}"#).unwrap();
+        let resolve = canonical_resolver(["openai/gpt-5.5"]);
+
+        let adds = models_dev_plan_for_provider(&provider, &catalog, &resolve);
+
+        assert!(adds.is_empty());
+    }
+
+    #[test]
+    fn models_dev_catalog_keeps_priced_alias_after_unpriced_match() -> Result<()> {
+        let provider: ProviderFile = serde_saphyr::from_str(
+            r#"
+name: acme
+api_protocol:
+  - "*": openai
+models: []
+status: active
+billing: usage_token
+"#,
+        )?;
+        let catalog: ModelsDevProvider = serde_json::from_str(
+            r#"{"models":{"model-1":{},"model_1":{"cost":{"input":1,"output":2}}}}"#,
+        )?;
+        let resolve = canonical_resolver(["acme/model-1"]);
+
+        let adds = models_dev_plan_for_provider(&provider, &catalog, &resolve);
+
+        assert_eq!(adds.len(), 1);
+        assert_eq!(adds[0].id, "acme/model-1");
+        assert_eq!(adds[0].provider_model_id, "model_1");
+        assert!(adds[0].pricing.is_some());
+        Ok(())
+    }
+
+    #[test]
     fn v1_models_catalog_attaches_known_canonical_models_only() {
         let provider: ProviderFile = serde_saphyr::from_str(
             r#"
@@ -3013,7 +5104,9 @@ auto_sync:
         let workflow = include_str!("../../../.github/workflows/registry-sync.yml");
 
         assert!(workflow.contains(r#"cron: "0 22 * * *""#));
-        assert!(workflow.contains("AGENTIC_SYNC_MODEL: moonshotai/kimi-k2.7-code"));
+        assert!(workflow.contains("AGENTIC_SYNC_MODEL:"));
+        assert!(workflow.contains("--report target/registry-sync-lifecycle.md"));
+        assert!(workflow.contains("cp target/registry-sync-lifecycle.md /tmp/registry-sync-pr.md"));
         assert!(workflow.contains("uses: actions/create-github-app-token@v2"));
         assert!(workflow.contains("app-id: ${{ secrets.APP_ID }}"));
         assert!(workflow.contains("private-key: ${{ secrets.APP_PRIVATE_KEY }}"));
@@ -3099,33 +5192,6 @@ EOF
             "no agentic registry providers configured"
         );
         Ok(())
-    }
-
-    #[test]
-    fn tencent_tokenhub_base_urls_match_official_hosts() {
-        let root = crate::workspace_root();
-        let loaded = load_registry(&root).expect("loads checked-in registry");
-        let api_base = |name: &str| {
-            loaded
-                .providers
-                .iter()
-                .find(|provider| provider.data.name == name)
-                .unwrap_or_else(|| panic!("missing provider {name}"))
-                .data
-                .api_base
-                .as_deref()
-                .unwrap_or_else(|| panic!("provider {name} must set api_base"))
-                .to_string()
-        };
-
-        assert_eq!(
-            api_base("tencent"),
-            "https://tokenhub-intl.tencentcloudmaas.com/v1"
-        );
-        assert_eq!(
-            api_base("tencent_cn"),
-            "https://tokenhub.tencentmaas.com/v1"
-        );
     }
 
     #[test]
@@ -3452,404 +5518,446 @@ api_base: https://api.acme.test/v1
     }
 
     #[test]
-    fn built_registry_maps_configured_provider_ids_for_recovered_models() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let artifacts = build_artifacts(&root).expect("builds repository registry");
-        let providers: Value =
-            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
-        let empty = Vec::new();
-        let provider_data = providers["data"].as_array();
-        assert!(provider_data.is_some(), "provider data array");
-        let provider_data = provider_data.unwrap_or(&empty);
-
-        let gmicloud = provider_data
-            .iter()
-            .find(|provider| provider["name"] == "gmicloud");
-        assert!(gmicloud.is_some(), "GMI Cloud provider");
-        assert_provider_mapping(
-            gmicloud,
-            "GMI Cloud",
-            "qwen/qwen3.7-max",
-            "Qwen/Qwen3.7-Max",
-            2.5,
-            (Some(0.25), Some(3.125)),
-            7.5,
-        );
-
-        let siliconflow = provider_data
-            .iter()
-            .find(|provider| provider["name"] == "siliconflow");
-        assert!(siliconflow.is_some(), "SiliconFlow provider");
-        assert_provider_mapping(
-            siliconflow,
-            "SiliconFlow",
-            "deepseek/deepseek-v4-pro",
-            "deepseek-ai/DeepSeek-V4-Pro",
-            1.74,
-            (Some(0.145), None),
-            3.48,
-        );
-    }
-
-    #[test]
-    fn checked_in_registry_pins_the_official_effort_matrix() -> Result<()> {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let loaded = load_registry(&root)?;
-        validate_loaded(&loaded)?;
-        let cases: &[(&str, &str, &[&str], &str)] = &[
+    fn model_discovery_matchers_cover_supported_id_shapes() -> Result<()> {
+        let discovery = load_model_discovery(&crate::workspace_root())?;
+        let cases = [
+            ("anthropic/claude-fable-5", "anthropic/claude/fable", "5"),
+            ("anthropic/claude-opus-4.8", "anthropic/claude/opus", "4.8"),
             (
-                "openai",
-                "openai/gpt-5.6-sol",
-                &["none", "low", "medium", "high", "xhigh", "max"],
-                "medium",
+                "deepseek/deepseek-v4-flash-0731",
+                "deepseek/deepseek-v",
+                "4",
             ),
-            (
-                "openai",
-                "openai/gpt-5.5",
-                &["none", "low", "medium", "high", "xhigh"],
-                "medium",
-            ),
-            (
-                "openai-codex",
-                "openai/gpt-5.4",
-                &["none", "low", "medium", "high", "xhigh"],
-                "none",
-            ),
-            (
-                "anthropic",
-                "anthropic/claude-opus-4.8",
-                &["low", "medium", "high", "xhigh", "max"],
-                "high",
-            ),
-            (
-                "claude-code",
-                "anthropic/claude-opus-4.6",
-                &["low", "medium", "high", "max"],
-                "high",
-            ),
-            (
-                "google",
-                "google/gemini-3.1-pro-preview",
-                &["low", "medium", "high"],
-                "high",
-            ),
-            (
-                "google",
-                "google/gemini-3.5-flash",
-                &["minimal", "low", "medium", "high"],
-                "medium",
-            ),
-            (
-                "bitrouter",
-                "openai/gpt-5.6-sol",
-                &["none", "low", "medium", "high", "xhigh", "max"],
-                "medium",
-            ),
+            ("google/gemini-3.1-pro-preview", "google/gemini", "3.1"),
+            ("minimax/minimax-m2.7", "minimax/minimax-m", "2.7"),
+            ("moonshotai/kimi-k2.7-code", "moonshotai/kimi-k", "2.7"),
+            ("openai/gpt-5.6-sol", "openai/gpt", "5.6"),
+            ("qwen/qwen3.8-2.4t-a95b", "qwen/qwen", "3.8"),
+            ("x-ai/grok-4.20-multi-agent", "x-ai/grok", "4.20"),
+            ("x-ai/grok-build-0.1", "x-ai/grok-build", "0.1"),
+            ("xiaomi/mimo-v2.5-pro", "xiaomi/mimo-v", "2.5"),
+            ("z-ai/glm-5.3-flash", "z-ai/glm", "5.3"),
+            ("z-ai/glm-4.5v", "z-ai/glm", "4.5"),
+            ("z-ai/glm-5v-turbo", "z-ai/glm", "5"),
         ];
-
-        for (provider_name, model_id, expected_levels, expected_default) in cases {
-            let provider = loaded
-                .providers
-                .iter()
-                .find(|provider| provider.data.name == *provider_name)
-                .ok_or_else(|| anyhow::anyhow!("missing provider {provider_name}"))?;
-            let model = provider
-                .data
-                .models
-                .iter()
-                .find(|model| model.id == *model_id)
-                .ok_or_else(|| anyhow::anyhow!("missing route {provider_name}:{model_id}"))?;
-            let effort = model.reasoning_effort.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("missing effort matrix for {provider_name}:{model_id}")
-            })?;
-            let actual_levels = effort
-                .levels
-                .iter()
-                .map(|value| value.as_str())
-                .collect::<Vec<_>>();
-            assert_eq!(
-                actual_levels, *expected_levels,
-                "{provider_name}:{model_id}"
-            );
-            assert_eq!(
-                effort.default.map(|value| value.as_str()),
-                Some(*expected_default),
-                "{provider_name}:{model_id}"
-            );
+        for (id, family, version) in cases {
+            let classified = discovery
+                .classify(id)?
+                .with_context(|| format!("expected {id} to match"))?;
+            assert_eq!(classified.family, family, "{id}");
+            assert_eq!(classified.version, version, "{id}");
         }
-        for (provider_name, model_id) in [
-            ("anthropic", "anthropic/claude-sonnet-4.5"),
-            ("google", "google/gemini-3.1-flash-lite-preview"),
+        for (id, expected) in [
+            ("anthropic/claude-opus-4.6", 2),
+            ("deepseek/deepseek-v4-pro", 1),
+            ("google/gemini-3.1-pro-preview", 2),
+            ("qwen/qwen3.5-27b", 2),
+            ("x-ai/grok-4.20", 4),
+            ("openai/gpt-5.6-sol", 2),
         ] {
-            let provider = loaded
-                .providers
-                .iter()
-                .find(|provider| provider.data.name == provider_name)
-                .ok_or_else(|| anyhow::anyhow!("missing provider {provider_name}"))?;
-            let model = provider
-                .data
-                .models
-                .iter()
-                .find(|model| model.id == model_id)
-                .ok_or_else(|| anyhow::anyhow!("missing route {provider_name}:{model_id}"))?;
-            assert!(
-                model.reasoning_effort.is_none(),
-                "unverified route must not advertise effort support: {provider_name}:{model_id}"
-            );
+            let classified = discovery
+                .classify(id)?
+                .with_context(|| format!("expected {id} to match"))?;
+            assert_eq!(classified.retain_versions, expected, "{id}");
+        }
+        for id in [
+            "deepseek/deepseek-v3.2-exp",
+            "deepseek/deepseek-v4-flash-vision-exp",
+            "google/gemini-3.1-pro-preview",
+            "google/gemini-3.1-pro-preview-customtools",
+            "qwen/qwen3.6-max-preview",
+        ] {
+            let classified = discovery
+                .classify(id)?
+                .with_context(|| format!("expected {id} to match"))?;
+            assert!(classified.excluded, "{id}");
+        }
+        for id in [
+            "deepseek/deepseek-v4-pro",
+            "google/gemini-3.1-flash-lite",
+            "qwen/qwen3.6-plus",
+        ] {
+            let classified = discovery
+                .classify(id)?
+                .with_context(|| format!("expected {id} to match"))?;
+            assert!(!classified.excluded, "{id}");
+        }
+        for alias in [
+            "openai/gpt-5.6-sol:batch",
+            "~anthropic/claude-opus-latest",
+            "openai/gpt-4o",
+        ] {
+            assert!(discovery.classify(alias)?.is_none(), "{alias}");
         }
         Ok(())
     }
 
     #[test]
-    fn built_registry_separates_deepseek_v4_flash_revisions() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let artifacts = build_artifacts(&root).expect("builds repository registry");
-        let models: Value = serde_json::from_str(&artifacts.models).expect("valid models JSON");
-        let providers: Value =
-            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
-
-        let dated = models["data"].as_array().and_then(|models| {
-            models
-                .iter()
-                .find(|model| model["id"] == "deepseek/deepseek-v4-flash-0731")
-        });
-        assert!(dated.is_some(), "dated canonical model");
-        let Some(dated) = dated else {
-            return;
+    fn excluded_variants_are_removed_without_being_added() -> Result<()> {
+        let root = test_root("model-discovery-variant-exclusion");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/model-1
+- id: acme/model-2-exp
+"#,
+        );
+        let loaded = load_registry(&root)?;
+        let discovery = CompiledModelDiscovery {
+            source_url: "https://example.test/models".to_string(),
+            deprecation_days: 30,
+            retired_models: HashSet::new(),
+            families: vec![CompiledDiscoveryRule {
+                key: "acme/model".to_string(),
+                regex: Regex::new(r"^acme/model-(?P<version>[0-9]+)(?P<variant>(?:-[a-z0-9]+)*)$")?,
+                retain_versions: 2,
+                exclude_variants: vec![Regex::new(r"-exp$")?],
+            }],
         };
-        assert_eq!(dated["name"], "DeepSeek: DeepSeek V4 Flash 0731");
+        let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
+            "data": [
+                {"id": "acme/model-1", "name": "Stable", "created": 100},
+                {"id": "acme/model-2-exp", "name": "Experimental", "created": 200}
+            ]
+        }))?;
+
+        let plan = plan_openrouter_models(
+            &discovery,
+            &loaded,
+            catalog,
+            NaiveDate::from_ymd_opt(2026, 9, 5).context("valid test date")?,
+        )?;
+
         assert_eq!(
-            dated["description"],
-            "Official DeepSeek V4 Flash release with enhanced agentic capabilities."
+            plan.removals,
+            HashSet::from(["acme/model-2-exp".to_string()])
         );
-        assert_eq!(dated["input_modalities"], serde_json::json!(["text"]));
-        assert_eq!(dated["output_modalities"], serde_json::json!(["text"]));
-        assert_eq!(dated["release_date"], "2026-07-31");
-        assert_eq!(dated["max_input_tokens"], 1_000_000);
-        assert_eq!(dated["max_output_tokens"], 384_000);
-        assert_eq!(dated["knowledge_cutoff"], "2025-05");
-        assert_eq!(dated["open_weights"], true);
-        assert_eq!(dated["family"], "deepseek-flash");
-
-        let preview = models["data"].as_array().and_then(|models| {
-            models
-                .iter()
-                .find(|model| model["id"] == "deepseek/deepseek-v4-flash")
-        });
-        assert!(preview.is_some(), "preview canonical model");
-        let Some(preview) = preview else {
-            return;
-        };
-        assert_eq!(preview["name"], "DeepSeek: DeepSeek V4 Flash");
-        assert!(preview.get("description").is_none());
-        assert_eq!(preview["input_modalities"], serde_json::json!(["text"]));
-        assert_eq!(preview["output_modalities"], serde_json::json!(["text"]));
-        assert_eq!(preview["release_date"], "2026-04-24");
-        assert_eq!(preview["max_input_tokens"], 262_144);
-        assert_eq!(preview["max_output_tokens"], 262_144);
-        assert_eq!(preview["knowledge_cutoff"], "2025-05");
-        assert_eq!(preview["open_weights"], true);
-        assert_eq!(preview["family"], "deepseek-flash");
-
-        let provider_data = providers["data"].as_array();
-        assert!(provider_data.is_some(), "provider data array");
-        let Some(provider_data) = provider_data else {
-            return;
-        };
-        let find_mapping = |provider_name: &str, canonical_id: &str| {
-            provider_data
-                .iter()
-                .find(|provider| provider["name"] == provider_name)
-                .and_then(|provider| provider["models"].as_array())
-                .and_then(|models| models.iter().find(|model| model["id"] == canonical_id))
-        };
-
-        let expected = [
-            ("deepseek", "deepseek-v4-flash"),
-            ("opencode-zen", "deepseek-v4-flash"),
-            ("opencode-go", "deepseek-v4-flash"),
-            ("alibaba_cn", "deepseek-v4-flash-0731"),
-            ("ambient", "deepseek/deepseek-v4-flash-0731"),
-            ("atlascloud", "deepseek-ai/deepseek-v4-flash-0731"),
-            ("novita", "deepseek/deepseek-v4-flash-0731"),
-            ("openrouter", "deepseek/deepseek-v4-flash-0731"),
-            ("qianfan", "deepseek-v4-flash-0731"),
-        ];
-        for (provider_name, provider_model_id) in expected {
-            let mapping = find_mapping(provider_name, "deepseek/deepseek-v4-flash-0731");
-            assert!(
-                mapping.is_some(),
-                "{provider_name} should serve the dated canonical model"
-            );
-            assert_eq!(
-                mapping.and_then(|model| model["provider_model_id"].as_str()),
-                Some(provider_model_id),
-                "{provider_name} upstream model ID"
-            );
-        }
-
-        for provider_name in ["deepseek", "opencode-zen", "opencode-go"] {
-            assert!(
-                find_mapping(provider_name, "deepseek/deepseek-v4-flash").is_none(),
-                "{provider_name} no longer serves the preview alias"
-            );
-        }
-        for provider_name in [
-            "alibaba_cn",
-            "ambient",
-            "atlascloud",
-            "novita",
-            "openrouter",
-            "qianfan",
-        ] {
-            assert!(
-                find_mapping(provider_name, "deepseek/deepseek-v4-flash").is_some(),
-                "{provider_name} keeps its distinct preview model"
-            );
-        }
-
-        let deepseek = find_mapping("deepseek", "deepseek/deepseek-v4-flash-0731");
+        assert!(plan.schedules.is_empty());
+        assert!(plan.additions.is_empty());
+        apply_model_discovery_plan(&root, &loaded, &plan)?;
+        let updated = load_registry(&root)?;
         assert_eq!(
-            deepseek.map(|model| model["api_protocol"].clone()),
-            Some(serde_json::json!(["openai", "responses", "anthropic"]))
+            updated
+                .models()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["acme/model-1"]
         );
-
-        let openrouter = find_mapping("openrouter", "deepseek/deepseek-v4-flash-0731");
-        assert_eq!(
-            openrouter.and_then(|model| model["pricing"]["input_tokens"]["no_cache"].as_f64()),
-            Some(0.09)
-        );
-        assert_eq!(
-            openrouter.and_then(|model| model["pricing"]["input_tokens"]["cache_read"].as_f64()),
-            Some(0.018)
-        );
-        assert_eq!(
-            openrouter.and_then(|model| model["pricing"]["output_tokens"]["text"].as_f64()),
-            Some(0.18)
-        );
+        Ok(())
     }
 
     #[test]
-    fn built_registry_refreshes_qianfan_international_catalog() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let artifacts = build_artifacts(&root).expect("builds repository registry");
-        let providers: Value =
-            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
-        let qianfan = providers["data"]
-            .as_array()
-            .expect("provider data array")
-            .iter()
-            .find(|provider| provider["name"] == "qianfan");
+    fn openrouter_dates_take_precedence_over_canonical_fallbacks() -> Result<()> {
+        let root = test_root("model-discovery-source-date");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/model-1
+  release_date: 1970-01-01
+"#,
+        );
+        let loaded = load_registry(&root)?;
+        let discovery = CompiledModelDiscovery {
+            source_url: "https://example.test/models".to_string(),
+            deprecation_days: 30,
+            retired_models: HashSet::new(),
+            families: vec![CompiledDiscoveryRule {
+                key: "acme/model".to_string(),
+                regex: Regex::new(r"^acme/model-(?P<version>[0-9]+)$")?,
+                retain_versions: 2,
+                exclude_variants: Vec::new(),
+            }],
+        };
+        let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
+            "data": [
+                {"id": "acme/model-1", "name": "Newest", "created": 400},
+                {"id": "acme/model-2", "name": "Middle", "created": 300},
+                {"id": "acme/model-3", "name": "Oldest", "created": 200}
+            ]
+        }))?;
 
-        assert!(qianfan.is_some(), "Qianfan International provider");
-        assert_provider_mapping(
-            qianfan,
-            "Qianfan International",
-            "deepseek/deepseek-v4-pro",
-            "deepseek-v4-pro",
-            1.69,
-            (Some(0.14), None),
-            3.38,
+        let plan = plan_openrouter_models(
+            &discovery,
+            &loaded,
+            catalog,
+            NaiveDate::from_ymd_opt(2026, 9, 5).context("valid test date")?,
+        )?;
+
+        assert!(plan.schedules.is_empty());
+        assert_eq!(
+            plan.additions
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["acme/model-2"]
         );
-        assert_provider_mapping(
-            qianfan,
-            "Qianfan International",
-            "z-ai/glm-5.2",
-            "glm-5.2",
-            1.4,
-            (Some(0.26), None),
-            4.4,
-        );
+        Ok(())
     }
 
     #[test]
-    fn built_registry_uses_current_bitrouter_cloud_kimi_pricing() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let artifacts = build_artifacts(&root).expect("builds repository registry");
-        let providers: Value =
-            serde_json::from_str(&artifacts.providers).expect("valid providers JSON");
-        let bitrouter = providers["data"]
-            .as_array()
-            .expect("provider data array")
-            .iter()
-            .find(|provider| provider["name"] == "bitrouter");
-
-        assert!(bitrouter.is_some(), "BitRouter Cloud provider");
-        assert_provider_mapping(
-            bitrouter,
-            "BitRouter Cloud",
-            "moonshotai/kimi-k2.7-code",
-            "moonshotai/kimi-k2.7-code",
-            0.7125,
-            (Some(0.1425), None),
-            3.0,
+    fn model_discovery_ranks_versions_by_first_release_not_semver_or_late_variant() -> Result<()> {
+        let root = test_root("model-discovery-ranking");
+        write(
+            &root,
+            "registry/models/x-ai.yaml",
+            r#"
+- id: x-ai/grok-4.20
+  release_date: 2026-03-31
+- id: x-ai/grok-4.20-multi-agent
+  release_date: 2026-03-31
+"#,
         );
+        let loaded = load_registry(&root)?;
+        let discovery = CompiledModelDiscovery {
+            source_url: "https://example.test/models".to_string(),
+            deprecation_days: 30,
+            retired_models: HashSet::new(),
+            families: vec![CompiledDiscoveryRule {
+                key: "x-ai/grok".to_string(),
+                regex: Regex::new(
+                    r"^x-ai/grok-(?P<version>[0-9]+(?:\.[0-9]+)*)(?P<variant>(?:-[a-z0-9]+)*)$",
+                )?,
+                retain_versions: 3,
+                exclude_variants: Vec::new(),
+            }],
+        };
+        let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
+            "data": [
+                {"id": "x-ai/grok-4.20", "name": "Grok 4.20", "created": 100},
+                {"id": "x-ai/grok-4.20-multi-agent", "name": "Grok 4.20 Multi", "created": 500},
+                {"id": "x-ai/grok-4.3", "name": "Grok 4.3", "created": 200},
+                {"id": "x-ai/grok-4.5", "name": "Grok 4.5", "created": 300},
+                {"id": "x-ai/grok-4.6", "name": "Grok 4.6", "created": 400}
+            ]
+        }))?;
+
+        let plan = plan_openrouter_models(
+            &discovery,
+            &loaded,
+            catalog,
+            NaiveDate::from_ymd_opt(2026, 9, 5).context("valid test date")?,
+        )?;
+
+        assert_eq!(
+            plan.schedules.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "x-ai/grok-4.20".to_string(),
+                "x-ai/grok-4.20-multi-agent".to_string()
+            ]
+        );
+        assert_eq!(
+            plan.additions
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["x-ai/grok-4.3", "x-ai/grok-4.5", "x-ai/grok-4.6"]
+        );
+        assert!(plan.schedules.values().all(|date| date == "2026-10-05"));
+        Ok(())
     }
 
-    fn assert_provider_mapping(
-        provider: Option<&Value>,
-        provider_name: &str,
-        canonical_id: &str,
-        provider_model_id: &str,
-        input_price: f64,
-        cache_prices: (Option<f64>, Option<f64>),
-        output_price: f64,
-    ) {
-        let model = provider
-            .and_then(|provider| provider["models"].as_array())
-            .and_then(|models| models.iter().find(|model| model["id"] == canonical_id));
+    #[test]
+    fn family_retention_override_cancels_existing_deprecations() -> Result<()> {
+        let root = test_root("model-discovery-retention-override");
+        write(
+            &root,
+            "registry/models/x-ai.yaml",
+            r#"
+- id: x-ai/grok-4.20
+  deprecation_date: 2026-10-05
+- id: x-ai/grok-4.20-multi-agent
+  deprecation_date: 2026-10-05
+"#,
+        );
+        let loaded = load_registry(&root)?;
+        let discovery = CompiledModelDiscovery {
+            source_url: "https://example.test/models".to_string(),
+            deprecation_days: 30,
+            retired_models: HashSet::new(),
+            families: vec![CompiledDiscoveryRule {
+                key: "x-ai/grok".to_string(),
+                regex: Regex::new(
+                    r"^x-ai/grok-(?P<version>[0-9]+(?:\.[0-9]+)*)(?P<variant>(?:-[a-z0-9]+)*)$",
+                )?,
+                retain_versions: 4,
+                exclude_variants: Vec::new(),
+            }],
+        };
+        let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
+            "data": [
+                {"id": "x-ai/grok-4.20", "name": "Grok 4.20", "created": 100},
+                {"id": "x-ai/grok-4.20-multi-agent", "name": "Grok 4.20 Multi", "created": 500},
+                {"id": "x-ai/grok-4.3", "name": "Grok 4.3", "created": 200},
+                {"id": "x-ai/grok-4.5", "name": "Grok 4.5", "created": 300},
+                {"id": "x-ai/grok-4.6", "name": "Grok 4.6", "created": 400}
+            ]
+        }))?;
 
-        assert!(
-            model.is_some(),
-            "{provider_name} mapping for {canonical_id}"
-        );
+        let plan = plan_openrouter_models(
+            &discovery,
+            &loaded,
+            catalog,
+            NaiveDate::from_ymd_opt(2026, 9, 5).context("valid test date")?,
+        )?;
+
+        assert!(plan.schedules.is_empty());
         assert_eq!(
-            model.and_then(|model| model["id"].as_str()),
-            Some(canonical_id)
+            plan.cancellations,
+            HashSet::from([
+                "x-ai/grok-4.20".to_string(),
+                "x-ai/grok-4.20-multi-agent".to_string()
+            ])
         );
+        let report = report_for_model_discovery(&loaded, &plan);
         assert_eq!(
-            model.and_then(|model| model["provider_model_id"].as_str()),
-            Some(provider_model_id)
+            report.cancelled,
+            vec![
+                "x-ai/grok-4.20".to_string(),
+                "x-ai/grok-4.20-multi-agent".to_string()
+            ]
         );
+        apply_model_discovery_plan(&root, &loaded, &plan)?;
+        let raw = fs::read_to_string(root.join("registry/models/x-ai.yaml"))?;
+        assert!(!raw.contains("deprecation_date:"));
+        Ok(())
+    }
+
+    #[test]
+    fn retired_models_still_occupy_the_retained_version_window() -> Result<()> {
+        let root = test_root("model-discovery-retired-window");
+        write(
+            &root,
+            "registry/models/other.yaml",
+            r#"
+- id: other/model-1
+"#,
+        );
+        let loaded = load_registry(&root)?;
+        let discovery = CompiledModelDiscovery {
+            source_url: "https://example.test/models".to_string(),
+            deprecation_days: 30,
+            retired_models: HashSet::from(["x-ai/grok-4.5".to_string()]),
+            families: vec![CompiledDiscoveryRule {
+                key: "x-ai/grok".to_string(),
+                regex: Regex::new(
+                    r"^x-ai/grok-(?P<version>[0-9]+(?:\.[0-9]+)*)(?P<variant>(?:-[a-z0-9]+)*)$",
+                )?,
+                retain_versions: 3,
+                exclude_variants: Vec::new(),
+            }],
+        };
+        let catalog: OpenRouterModelsResponse = serde_json::from_value(json!({
+            "data": [
+                {"id": "x-ai/grok-4.20", "name": "Grok 4.20", "created": 100},
+                {"id": "x-ai/grok-4.3", "name": "Grok 4.3", "created": 200},
+                {"id": "x-ai/grok-4.5", "name": "Grok 4.5", "created": 300},
+                {"id": "x-ai/grok-4.6", "name": "Grok 4.6", "created": 400}
+            ]
+        }))?;
+
+        let plan = plan_openrouter_models(
+            &discovery,
+            &loaded,
+            catalog,
+            NaiveDate::from_ymd_opt(2026, 9, 5).context("valid test date")?,
+        )?;
+
         assert_eq!(
-            model.and_then(|model| model["pricing"]["input_tokens"]["no_cache"].as_f64()),
-            Some(input_price)
+            plan.additions
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["x-ai/grok-4.3", "x-ai/grok-4.6"]
         );
-        let input_tokens = model
-            .and_then(|model| model["pricing"]["input_tokens"].as_object())
-            .expect("input token pricing");
-        match cache_prices.0 {
-            Some(cache_read_price) => {
-                assert_eq!(
-                    input_tokens.get("cache_read").and_then(Value::as_f64),
-                    Some(cache_read_price)
-                );
-            }
-            None => {
-                assert!(
-                    !input_tokens.contains_key("cache_read"),
-                    "{provider_name} {canonical_id} should not advertise cache-read pricing"
-                );
-            }
+        Ok(())
+    }
+
+    #[test]
+    fn expired_canonical_model_is_removed_from_every_provider() -> Result<()> {
+        let root = test_root("model-discovery-removal");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/old-1
+  deprecation_date: 2026-09-05
+# Keep this comment with the surviving model.
+- id: acme/new-2
+"#,
+        );
+        for provider in ["first", "second"] {
+            write(
+                &root,
+                &format!("registry/providers/{provider}.yaml"),
+                &format!(
+                    r#"
+name: {provider}
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/old-1
+    provider_model_id: old
+  # Keep the surviving route comment.
+  - id: acme/new-2
+    provider_model_id: new
+status: active
+billing: subscription
+api_base: https://api.{provider}.test/v1
+"#
+                ),
+            );
         }
-        match cache_prices.1 {
-            Some(cache_write_price) => {
-                assert_eq!(
-                    input_tokens.get("cache_write").and_then(Value::as_f64),
-                    Some(cache_write_price)
-                );
-            }
-            None => {
-                assert!(
-                    !input_tokens.contains_key("cache_write"),
-                    "{provider_name} {canonical_id} should not advertise cache-write pricing"
-                );
-            }
-        }
+        let loaded = load_registry(&root)?;
+        let plan = ModelDiscoveryPlan {
+            additions: Vec::new(),
+            schedules: BTreeMap::from([("acme/new-2".to_string(), "2026-10-05".to_string())]),
+            cancellations: HashSet::new(),
+            removals: HashSet::from(["acme/old-1".to_string()]),
+        };
+        let report = report_for_model_discovery(&loaded, &plan);
+
+        apply_model_discovery_plan(&root, &loaded, &plan)?;
+
+        let updated = load_registry(&root)?;
         assert_eq!(
-            model.and_then(|model| model["pricing"]["output_tokens"]["text"].as_f64()),
-            Some(output_price)
+            updated
+                .models()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["acme/new-2"]
         );
+        assert_eq!(
+            updated
+                .models()
+                .next()
+                .and_then(|model| model.deprecation_date.as_deref()),
+            Some("2026-10-05")
+        );
+        assert!(updated.providers.iter().all(|provider| {
+            provider.data.models.len() == 1 && provider.data.models[0].id == "acme/new-2"
+        }));
+        assert_eq!(
+            report.removed,
+            vec![(
+                "acme/old-1".to_string(),
+                vec!["first".to_string(), "second".to_string()]
+            )]
+        );
+        let report_path = root.join("lifecycle.md");
+        write_model_discovery_report(&report_path, &report)?;
+        let report_raw = fs::read_to_string(report_path)?;
+        assert!(report_raw.contains("### Added\n\nNone."));
+        assert!(report_raw.contains("`acme/new-2` — removal date: 2026-10-05"));
+        assert!(report_raw.contains("`acme/old-1` — removed from: `first`, `second`"));
+        let canonical_raw = fs::read_to_string(root.join("registry/models/acme.yaml"))?;
+        assert!(canonical_raw.contains("# Keep this comment with the surviving model."));
+        for provider in ["first", "second"] {
+            let raw = fs::read_to_string(root.join(format!("registry/providers/{provider}.yaml")))?;
+            assert!(raw.contains("# Keep the surviving route comment."));
+        }
+        Ok(())
     }
 
     fn test_root(name: &str) -> PathBuf {
@@ -3862,6 +5970,18 @@ api_base: https://api.acme.test/v1
             std::process::id()
         ));
         fs::create_dir_all(root.join("registry/providers")).unwrap();
+        write(
+            &root,
+            "registry/model-discovery.yaml",
+            r#"
+source_url: https://openrouter.ai/api/v1/models
+retain_versions: 3
+deprecation_days: 30
+families:
+  - key: acme/model
+    pattern: '^acme/model-(?P<version>[0-9]+(?:\.[0-9]+)*)$'
+"#,
+        );
         root
     }
 

@@ -13,17 +13,6 @@ rate_limits:
   - "*":
       requests_per_minute: 30
 models:
-  - id: moonshotai/kimi-k2.5
-    provider_model_id: moonshotai/Kimi-K2.5-TEE
-    pricing:
-      input_tokens:
-        no_cache: 0.44
-        cache_read: 0.22
-      output_tokens:
-        text: 2
-    capabilities:
-      - reasoning
-      - tools
   - id: moonshotai/kimi-k2.6
     provider_model_id: moonshotai/Kimi-K2.6-TEE
     pricing:
@@ -46,17 +35,6 @@ models:
     capabilities:
       - reasoning
       - tools
-  - id: z-ai/glm-5
-    provider_model_id: zai-org/GLM-5-TEE
-    pricing:
-      input_tokens:
-        no_cache: 0.95
-        cache_read: 0.475
-      output_tokens:
-        text: 2.55
-    capabilities:
-      - reasoning
-      - tools
   - id: deepseek/deepseek-v3.2
     provider_model_id: deepseek-ai/DeepSeek-V3.2-TEE
     pricing:
@@ -65,17 +43,6 @@ models:
         cache_read: 0.5
       output_tokens:
         text: 1
-    capabilities:
-      - reasoning
-      - tools
-  - id: minimax/minimax-m2.5
-    provider_model_id: MiniMaxAI/MiniMax-M2.5-TEE
-    pricing:
-      input_tokens:
-        no_cache: 0.15
-        cache_read: 0.075
-      output_tokens:
-        text: 1.2
     capabilities:
       - reasoning
       - tools

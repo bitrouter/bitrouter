@@ -45,8 +45,6 @@ use agent_client_protocol_schema::v1::{
     SessionModeId, SessionUpdate, ToolCall, ToolCallId, ToolCallUpdate, UsageUpdate,
 };
 
-use crate::permission::Prompt;
-
 /// Ids synthesized for chunks that carry none are prefixed with this. An agent
 /// id colliding with it would have to contain a colon-delimited `journal`
 /// namespace, which no agent has reason to mint.
@@ -125,12 +123,16 @@ pub struct Journal {
     tools: HashMap<ToolCallId, ToolCall>,
     plan: Option<Plan>,
     commands: Vec<AvailableCommand>,
+    /// Whether an `available_commands_update` has arrived at all.
+    ///
+    /// Separate from `commands` being empty, because the two mean different
+    /// things: an agent that has said nothing yet may still speak, and one
+    /// that said *none* will not.
+    commands_received: bool,
     mode: Option<SessionModeId>,
     config: Vec<SessionConfigOption>,
     title: Option<String>,
     usage: Option<UsageUpdate>,
-    /// Not a `SessionUpdate`: permission arrives on its own request channel.
-    pending_permission: Option<Prompt>,
     /// The open run, if any — at most one across all voices, because the
     /// other voice speaking is what closes it.
     open: Option<(Voice, MessageId)>,
@@ -181,6 +183,7 @@ impl Journal {
             }
             SessionUpdate::AvailableCommandsUpdate(update) => {
                 self.commands = update.available_commands;
+                self.commands_received = true;
             }
             SessionUpdate::CurrentModeUpdate(update) => self.mode = Some(update.current_mode_id),
             SessionUpdate::ConfigOptionUpdate(update) => self.config = update.config_options,
@@ -205,13 +208,16 @@ impl Journal {
         }
     }
 
-    /// Set or clear the open permission prompt.
+    /// End the current unkeyed message run at a prompt lifecycle boundary.
     ///
-    /// Separate from [`Journal::apply`] because `session/request_permission`
-    /// is a request, not an update: it arrives on its own channel and is
-    /// resolved by an answer rather than superseded by the next notification.
-    pub fn set_pending_permission(&mut self, prompt: Option<Prompt>) {
-        self.pending_permission = prompt;
+    /// ACP v1 permits chunks without a message id. Such chunks remain one run
+    /// while a response streams, but a completed prompt is an equally real
+    /// boundary even when the agent did not send a tool call or a user echo
+    /// between its final chunk and the next turn's first chunk. The interactive
+    /// reducer calls this when a prompt starts or settles so adjacent turns do
+    /// not become one wrapped transcript paragraph.
+    pub fn finish_stream(&mut self) {
+        self.close_run();
     }
 
     /// The document, in first-seen order.
@@ -240,6 +246,12 @@ impl Journal {
         &self.commands
     }
 
+    /// Whether the agent has sent its command list at all — as distinct from
+    /// having sent an empty one.
+    pub fn commands_received(&self) -> bool {
+        self.commands_received
+    }
+
     /// The session's current mode, if the agent reports one.
     pub fn mode(&self) -> Option<&SessionModeId> {
         self.mode.as_ref()
@@ -258,11 +270,6 @@ impl Journal {
     /// Context-window and cost, as last reported.
     pub fn usage(&self) -> Option<&UsageUpdate> {
         self.usage.as_ref()
-    }
-
-    /// The permission question waiting for an answer, if any.
-    pub fn pending_permission(&self) -> Option<&Prompt> {
-        self.pending_permission.as_ref()
     }
 
     /// Append a chunk to the open run, or start a new one.
@@ -396,10 +403,10 @@ fn block_text(block: &ContentBlock) -> String {
 #[cfg(test)]
 mod tests {
     use agent_client_protocol_schema::v1::{
-        AvailableCommandsUpdate, ConfigOptionUpdate, CurrentModeUpdate, Diff, PermissionOption,
-        PermissionOptionId, PermissionOptionKind, PlanEntry, PlanEntryPriority, PlanEntryStatus,
-        SessionConfigBoolean, SessionConfigId, SessionConfigKind, SessionInfoUpdate, TextContent,
-        ToolCallContent, ToolCallStatus, ToolCallUpdateFields, ToolKind,
+        AvailableCommandsUpdate, ConfigOptionUpdate, CurrentModeUpdate, Diff, PlanEntry,
+        PlanEntryPriority, PlanEntryStatus, SessionConfigBoolean, SessionConfigId,
+        SessionConfigKind, SessionInfoUpdate, TextContent, ToolCallContent, ToolCallStatus,
+        ToolCallUpdateFields, ToolKind,
     };
 
     use super::*;
@@ -738,6 +745,34 @@ mod tests {
         );
     }
 
+    /// Prompt lifecycle boundaries are document boundaries when an ACP v1
+    /// agent omits message ids. The next turn must not glue its opening status
+    /// onto the prior turn's final sentence.
+    #[test]
+    fn an_explicit_stream_boundary_splits_unkeyed_turns() {
+        let mut journal = Journal::default();
+        journal.apply(SessionUpdate::AgentMessageChunk(chunk(
+            "first turn complete",
+        )));
+        journal.finish_stream();
+        journal.apply(SessionUpdate::AgentMessageChunk(chunk(
+            "second turn started",
+        )));
+
+        assert_eq!(
+            document(&journal),
+            vec![
+                ("agent".to_string(), "first turn complete".to_string()),
+                ("agent".to_string(), "second turn started".to_string()),
+            ]
+        );
+        let complete: Vec<bool> = messages(&journal)
+            .iter()
+            .map(|message| message.complete)
+            .collect();
+        assert_eq!(complete, vec![true, false]);
+    }
+
     /// A message id seen again keeps the place it already had. Patches never
     /// reorder — the property the whole document depends on.
     #[test]
@@ -835,29 +870,5 @@ mod tests {
         cleared.title = agent_client_protocol_schema::MaybeUndefined::Null;
         journal.apply(SessionUpdate::SessionInfoUpdate(cleared));
         assert_eq!(journal.title(), None, "an explicit null does clear it");
-    }
-
-    /// Permission is set and cleared by the caller, not by the stream.
-    #[test]
-    fn a_pending_permission_is_set_and_cleared_by_its_owner() {
-        let mut journal = Journal::default();
-        assert!(journal.pending_permission().is_none());
-
-        journal.set_pending_permission(Some(Prompt::new(
-            Some("Write src/lib.rs".to_string()),
-            "t1",
-            vec![PermissionOption::new(
-                PermissionOptionId::new("allow"),
-                "Allow",
-                PermissionOptionKind::AllowOnce,
-            )],
-        )));
-        assert!(journal.pending_permission().is_some());
-
-        journal.set_pending_permission(None);
-        assert!(
-            journal.pending_permission().is_none(),
-            "an answered question stops being asked"
-        );
     }
 }

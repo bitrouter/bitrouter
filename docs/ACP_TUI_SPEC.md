@@ -3,13 +3,20 @@
 Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-08-13
 
 > **Historical note (2026-08-16):** `status --watch` was later removed in favor
-> of `bitrouter status --requests`; references below to it being untouched or
+> of `bro status --requests`; references below to it being untouched or
 > authoritative describe the codebase state when this spec was written.
+>
+> **Controller boundary update (2026-09-01):**
+> [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) supersedes this spec's
+> single-session product boundary, manager-facing use of `providers/*` for
+> BitRouter route selection, and one-`Session` relay architecture. The shipped
+> renderer, inline terminal behavior, permission UI, cost presentation, and
+> `chat` command remain valid as clients of the new controller.
 
 Supersedes the `launch --tui` half of
 [`OBSERVABILITY_TUI_SPEC.md`](OBSERVABILITY_TUI_SPEC.md) (#782) and retires
 [`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md) with it. Leaves
-`bitrouter status --watch` (#797) untouched. Builds on #613 (per-session ACP
+`bro status --watch` (#797) untouched. Builds on #613 (per-session ACP
 substrate) and the ACP rightsizing of #745–#749.
 
 **Context.** #749 ratified that BitRouter is a self-improving LLM router, not
@@ -60,7 +67,7 @@ decision at n=4, and the stale text is still in source in two places.
 They are a deliberate split, and each is coherent alone:
 
 - Want Claude Code's own plan mode, slash commands, and native affordances?
-  `bitrouter launch` — inherited, zero BitRouter terminal code, all launchable
+  `bro launch` — inherited, zero BitRouter terminal code, all launchable
   catalog harnesses.
 - Want to swap **agent and model** freely with router-measured cost? The ACP
   TUI.
@@ -83,9 +90,9 @@ Nothing needs to sit between them.
 
 - Anything #786 removed: fleets, subagents, worktree isolation, review queues,
   autonomy tiers, multi-pane splits. **Single-session is the line.**
-- Replacing `bitrouter status --watch`. That view is the router lens over the
+- Replacing `bro status --watch`. That view is the router lens over the
   metering store and is untouched by this spec.
-- Replacing `bitrouter launch`. Inherited launch stays, and regains the four
+- Replacing `bro launch`. Inherited launch stays, and regains the four
   harnesses `--tui` cost it.
 - A reusable TUI widget crate. See §9 — deferred, with a stated trigger.
 - ACP v2. See §10.
@@ -272,7 +279,7 @@ Two real gaps replace it:
 
 1. **`reload` does not rebuild the policy table.** Probe 5: with the daemon
    live and serving `beta:m1-beta`, editing `tiers` to `alpha:m1-alpha` and
-   running `bitrouter reload` returned `{"action":"reload","status":"reloaded"}`
+   running `bro reload` returned `{"action":"reload","status":"reloaded"}`
    and kept routing to `beta`. Only `restart` picked up the change. Providers
    *are* hot-reloaded (probe 3), so this is specific to `policy_table` — a
    success-reporting silent no-op, and a bug on its own merits. `providers/set`
@@ -374,7 +381,7 @@ strategy change that also permits a subtraction. Anyone reading §3 as "delete
 
 ### 8.1 The command: a distinct verb sharing `spawn`'s options
 
-**Not `bitrouter tui`.** Three reasons, the third decisive: it resurrects the
+**Not `bro tui`.** Three reasons, the third decisive: it resurrects the
 deleted orchestrator's name and expectations; it names the medium rather than
 the function; and **`status --watch` is also a TUI**, so the name would be
 permanently ambiguous inside BitRouter's own surface.
@@ -404,7 +411,7 @@ and the new command is the **interactive sibling of `spawn`**:
 | Interactive | `launch` | **this command** |
 | Headless | — | `spawn -p` / `acp prompt` |
 
-`bitrouter chat <agent>` is the working name: function-describing, no
+`bro chat <agent>` is the working name: function-describing, no
 collision, no inherited expectations. Its weakness is real — "chat" undersells
 tool calls, diffs, and plans — so the name is not frozen here. Two constraints
 that are: do not name it after the medium, and do not reuse `attach`, which was
@@ -487,6 +494,13 @@ BitRouter-specific wire key in `apps/bitrouter/src/chat/cost.rs`; the removed
 credential (Claude Code on Max), requests never reach the daemon, so session
 cost is **structurally unknowable**. The TUI must render `Scope::DaemonWide`
 visibly rather than silently. Inherit that behaviour; do not reinvent it.
+
+> **Superseded 2026-09-02 by [`ACP_CONTROLLER_AMENDMENT_1.md`](ACP_CONTROLLER_AMENDMENT_1.md)
+> C2/C3/C5.** `Scope::Wider` left the ACP surface: `UsageUpdate.cost` is
+> session-attributed or absent, `_meta["bitrouter.dev/cost"]` marks
+> *provenance* rather than scope, and every unattributable case above is
+> reached through absence — the footer shows `cost unreported`, never a
+> daemon-wide figure.
 
 ## 9. Decision 6 — no crate yet, with a stated trigger
 
@@ -575,7 +589,7 @@ methods behind one feature flag.
 These are BitRouter-side and must land before any inline TUI, or the TUI will
 look broken in ways that read as its own bug.
 
-0. **`bitrouter reload` silently ignores `policy_table` changes** (§6.1, probe
+0. **`bro reload` silently ignores `policy_table` changes** (§6.1, probe
    5). It returns `{"status":"reloaded"}` and keeps the old routing; only
    `restart` applies the edit. Provider activation *is* hot-reloaded, so the
    gap is specific to the policy table. This blocks `providers/set` outright
@@ -706,9 +720,9 @@ land with:
 3. ~~**Does the TUI get its own command, or a flag?**~~ **Answered — see
    §8.1.** A distinct verb, sharing `spawn`'s options via `RoutingOptions` +
    `#[command(flatten)]` — flag reuse without collapsing SPAWN_SPEC's
-   interactive/headless verb split. Not `bitrouter tui`: it names the medium,
+   interactive/headless verb split. Not `bro tui`: it names the medium,
    inherits the orchestrator's expectations, and is ambiguous against
-   `status --watch`, which is also a TUI. `bitrouter chat <agent>` is the
+   `status --watch`, which is also a TUI. `bro chat <agent>` is the
    working name; **the spelling is the one thing still open here**, subject to
    two constraints — do not name it after the medium, and do not reuse `attach`
    (removed with #745).

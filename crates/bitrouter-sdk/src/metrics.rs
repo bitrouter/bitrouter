@@ -1,11 +1,18 @@
 //! Observability rendering interface — the `GET /metrics` endpoint contract.
 //!
-//! The SDK ships exactly one observability seam — the [`MetricsRenderer`]
-//! trait — because the HTTP server needs to render Prometheus text without
-//! knowing where the counters come from. The accumulator side is
-//! deployment-specific (the OSS binary uses `bitrouter-observe`'s
-//! `PrometheusHook`; a custom deployment may register its own
-//! [`ObserveHook`](crate::language_model::ObserveHook)).
+//! This is a *pull*-shaped seam: the HTTP server needs to render Prometheus
+//! text without knowing where the counters come from. The accumulator side is
+//! deployment-specific, and the OSS binary no longer has one: it pushes
+//! metrics over OTLP through `bitrouter-telemetry` and mounts a stub renderer
+//! that serves a migration banner. A deployment that still wants a pull-based
+//! endpoint registers its own
+//! [`ObserveHook`](crate::language_model::ObserveHook) and points this trait
+//! at it.
+//!
+//! The trait and the accumulator are the same split the rest of the
+//! observability story is drawn on: the SDK owns the contract — this trait,
+//! `ObserveHook`, and the span schema in [`observe`](crate::observe) — and
+//! never a renderer of it.
 //!
 //! Spend / token / rate aggregations are *not* SDK concerns. Any deployment
 //! that needs them owns its own storage; see the OSS binary's `metering`
@@ -14,8 +21,8 @@
 /// A renderer of Prometheus-style text-exposition metrics. The SDK's HTTP
 /// server mounts `GET /metrics` against this trait. The trait is
 /// deliberately tiny — synchronous, returns owned text — so any in-process
-/// accumulator (e.g. `bitrouter_observe::PrometheusHook`) can implement it
-/// without dragging Prometheus library types into the SDK.
+/// accumulator can implement it without dragging Prometheus library types
+/// into the SDK.
 pub trait MetricsRenderer: Send + Sync {
     /// Render the current accumulator state as a Prometheus text-exposition
     /// payload. Called once per `GET /metrics` request.

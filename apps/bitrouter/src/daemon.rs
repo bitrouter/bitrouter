@@ -1,6 +1,6 @@
 //! Daemon control over a local IPC channel.
 //!
-//! A running `bitrouter serve` listens on a control endpoint alongside the
+//! A running `bro serve` listens on a control endpoint alongside the
 //! HTTP API. The CLI's `stop` / `restart` / `reload` / `status` / `route`
 //! subcommands are thin clients that connect, send one newline-delimited JSON
 //! [`DaemonCommand`], and read one [`DaemonResponse`].
@@ -22,6 +22,15 @@ use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::RoutingPrefs;
 
+use chrono::{DateTime, Utc};
+
+use crate::acp_runtime::AcpRuntime;
+use crate::actions::administration::{
+    Administration, AgentsReport, ObserveReport, PolicyInput, PolicyReport, ProvidersReport,
+};
+use crate::metering::{MeteringStore, TimeWindow};
+use crate::reload::{ReloadAdmissionError, ReloadReport, ReloadReservation, ReloadState};
+
 /// Anything the daemon's `Reload` command (and SIGHUP) should re-read. The
 /// runtime reloader fans out to every reloadable subsystem — routing table,
 /// policy store, … — atomically per subsystem. A failure in one is reported
@@ -31,6 +40,51 @@ use bitrouter_sdk::language_model::RoutingPrefs;
 pub trait DaemonReloader: Send + Sync {
     /// Reload every reloadable subsystem.
     async fn reload(&self) -> anyhow::Result<()>;
+
+    /// Reload with owner-trusted local environment overrides. Implementations
+    /// that own a coordinator install overrides after reserving exclusive
+    /// reload ownership; a generic reloader cannot truthfully promise that.
+    async fn reload_with_env(&self, env: Vec<(String, String)>) -> anyhow::Result<()> {
+        if env.is_empty() {
+            self.reload().await
+        } else {
+            Err(anyhow::anyhow!(
+                "this daemon reloader does not support coordinated environment overrides"
+            ))
+        }
+    }
+
+    /// Return boot-local reload state when this implementation supports guarded
+    /// reload admission. `None` deliberately means unsupported, rather than a
+    /// fabricated instance identity or generation.
+    fn reload_state(&self) -> Option<ReloadState> {
+        None
+    }
+
+    /// Redaction-safe saved/running configuration state. The read is async
+    /// because the server must inspect its own source files; callers must not
+    /// substitute a client-local config.
+    async fn configuration_state(&self) -> Option<crate::reload::ConfigurationState> {
+        None
+    }
+
+    /// Atomically fence a remote operation against the current boot and
+    /// generation. The reservation must be passed to [`Self::reload_reserved`]
+    /// exactly once or dropped so its coordinator can clear the admission.
+    fn reserve_remote(
+        &self,
+        _expected_instance: &str,
+        _expected_generation: u64,
+    ) -> Result<ReloadReservation, ReloadAdmissionError> {
+        Err(ReloadAdmissionError::Unsupported)
+    }
+
+    /// Execute a previously admitted remote reload. The default is reachable
+    /// only through an invalid implementation because [`Self::reserve_remote`]
+    /// rejects every request, and still returns a truthful unsupported report.
+    async fn reload_reserved(&self, _reservation: ReloadReservation) -> ReloadReport {
+        ReloadReport::unsupported()
+    }
 }
 
 /// A reloader that does nothing — useful for tests / minimal embeddings of the
@@ -52,7 +106,7 @@ pub enum DaemonCommand {
     Stop,
     /// Hot-reload the config / routing table. The CLI piggybacks a
     /// snapshot of API-key-style env vars from its own process so a
-    /// `export OPENAI_API_KEY=…; bitrouter reload` propagates the new
+    /// `export OPENAI_API_KEY=…; bro reload` propagates the new
     /// value into the running daemon without requiring a restart.
     /// `env` is `#[serde(default)]` for wire-compat with the
     /// historical unit variant — older clients sending `{"cmd":"reload"}`
@@ -63,8 +117,19 @@ pub enum DaemonCommand {
         #[serde(default)]
         env: Vec<(String, String)>,
     },
+    /// Read the reload coordinator's boot-local state without mutating it.
+    ReloadState,
     /// Report daemon status.
     Status,
+    /// List every model the live routing table can route, each with the
+    /// providers that can serve it.
+    ///
+    /// Distinct from [`Self::Status`], which reports only the *count* and the
+    /// distinct provider set: this is the catalog itself, and it is what lets
+    /// `bro models` and the MCP `list_models` tool answer with the
+    /// daemon's real view — subscription-backed providers and post-`reload`
+    /// state included — instead of a static config projection.
+    Models,
     /// Resolve a model name through the live routing table.
     Route {
         /// The model name to resolve.
@@ -73,23 +138,95 @@ pub enum DaemonCommand {
     /// Report the OTel exporter's current state — what's wired, current
     /// cardinality usage, in-flight span count. Returned as a JSON
     /// snapshot. The wire format is the same `ObserveStatusPayload` the
-    /// CLI pretty-prints for `bitrouter observe status`.
+    /// CLI pretty-prints for `bro observe status`.
     ObserveStatus,
-    /// Point one launch's traffic at a provider, or clear that redirection.
+    /// Run one safe, typed administration read against the live daemon.
     ///
-    /// Backs ACP `providers/set` (ACP_TUI_SPEC §6): the substrate is a
-    /// separate process from the daemon and the agent child talks to the
-    /// daemon directly, so a mid-session switch has to be installed *here*.
-    /// Scoped to a launch id, so it can only ever move the traffic of the
-    /// session that asked — never another caller's.
-    SetRoute {
-        /// The launch whose traffic moves. Attribution, not authorization:
-        /// see [`bitrouter_sdk::caller::launch_tag`].
-        launch_id: String,
-        /// Provider to route to, or `None` to drop the override.
-        #[serde(default)]
-        provider_id: Option<String>,
+    /// This is intentionally a closed enum rather than a JSON method name or
+    /// a serialized HTTP request.  The local control socket remains a
+    /// host-local transport with its own contract.
+    Inspect { inspection: DaemonInspection },
+    /// Local, owner-scoped checkpoint evolution control.
+    Evolution {
+        operation: crate::evolution::operator::EvolutionOperation,
     },
+    /// Acknowledge request inventory for a recorder before capture starts.
+    AcpRecordingRegister {
+        connection_id: String,
+        api_principal: String,
+        controller_instance_id: String,
+    },
+    /// Remove every route lease in one principal/controller namespace.
+    AcpControllerCleanup {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
+        controller_instance_id: String,
+    },
+    /// Query routes and exact lease state for one native session.
+    AcpRouteList {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+    },
+    /// Install or replace one native-session route lease.
+    AcpRouteSet {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+        /// BitRouter route selector.
+        route: String,
+    },
+    /// Remove one native-session route lease.
+    /// Read the spend metered under one controller for one native session.
+    AcpSessionSpend {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+    },
+    AcpRouteReset {
+        /// Opaque principal derived from the normal API credential, or local.
+        api_principal: String,
+        /// Caller-declared controller process identity.
+        controller_instance_id: String,
+        /// Harness-native ACP session identity.
+        session_id: String,
+    },
+    /// Versioned daemon-owned ACP session control. This variant is accepted
+    /// only on the owner-scoped local transport; the remote control server has
+    /// no corresponding operation.
+    Sessions {
+        request: crate::supervisor::SessionRequest,
+    },
+}
+
+/// Passive live inspection operations accepted over the local control socket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "inspection", rename_all = "snake_case")]
+pub enum DaemonInspection {
+    Providers,
+    Agents,
+    Observe,
+    Policy { input: PolicyInput },
+}
+
+/// Typed result of a [`DaemonInspection`] request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "report", rename_all = "snake_case")]
+pub enum DaemonInspectionReport {
+    Providers(ProvidersReport),
+    Agents(AgentsReport),
+    Observe(ObserveReport),
+    Policy(PolicyReport),
 }
 
 /// One resolved hop of a route chain.
@@ -117,16 +254,98 @@ pub enum DaemonResponse {
         listen: String,
         /// Count of routable models.
         models: usize,
+        /// The distinct providers behind those models, sorted.
+        ///
+        /// `#[serde(default)]` for wire-compat: a client talking to a daemon
+        /// from before this field existed reads an empty list rather than
+        /// failing the whole exchange.
+        #[serde(default)]
+        providers: Vec<String>,
+        /// Router inventory from the configuration source owned by this
+        /// daemon. A caller-local `--config` is never mixed into a live reply.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        saved_routers: Option<Vec<crate::actions::models::RouterStatus>>,
+        /// Router inventory from the same running config. `None` means the
+        /// daemon predates this field or has no inspectable app routing config.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        running_routers: Option<Vec<crate::actions::models::RouterStatus>>,
+        /// Whether the saved canonical router map differs from the full map
+        /// held by this daemon. Computed host-side so secret default values do
+        /// not cross the control boundary.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        router_restart_required: Option<bool>,
+        /// Whole saved/running configuration state computed by the daemon.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        config_state: Option<crate::reload::ConfigurationState>,
+    },
+    /// The live routing table's catalog.
+    Models {
+        /// Every routable model, each with all the providers declaring it.
+        models: Vec<bitrouter_sdk::language_model::routing::ModelInfo>,
+        /// Routers from the same live routing snapshot.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        routers: Option<Vec<crate::actions::models::RouterStatus>>,
     },
     /// A resolved route chain.
     Route {
         /// The ordered fallback chain.
         chain: Vec<RouteHop>,
+        /// Stage-0 model used to build `chain`. Missing from older daemons.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolved_model: Option<String>,
+        /// Stable named-router identity, when the selector resolved one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
+        /// Canonical or legacy source of the named-router definition.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        router_source: Option<crate::actions::models::RouterSource>,
+        /// Dynamic policy bound to the router. The control verb does not run
+        /// that policy and therefore never reports a selected candidate.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bound_policy: Option<String>,
+        /// Redaction-safe possible targets from the active policy snapshot.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        candidate_models: Vec<String>,
     },
     /// OTel exporter snapshot.
     ObserveStatus {
         /// The serialized exporter state.
         payload: ObserveStatusPayload,
+    },
+    /// Reload coordinator state for the current daemon boot.
+    ReloadState { state: ReloadState },
+    /// A typed administration inspection result.
+    Inspection { report: DaemonInspectionReport },
+    Evolution {
+        report: Box<crate::evolution::operator::EvolutionReport>,
+    },
+    /// This daemon shares the recorder's database and records gateway requests.
+    AcpRecordingRegistered {
+        registration: crate::evolution::inventory::CoverageRegistration,
+    },
+    /// Daemon-confirmed route state for one native ACP session.
+    AcpRouteState {
+        /// Live model selectors accepted as logical routes.
+        available: Vec<String>,
+        /// Exact installed session route, if any.
+        current: Option<String>,
+        /// `session` for a lease and `default` otherwise.
+        scope: String,
+    },
+    /// Spend metered under one controller for one native session and its
+    /// descendants. Raw summary: the controller decides what reaches the
+    /// wire, and unpriced rows are never a computed zero.
+    AcpSessionSpend {
+        /// Micro-USD across the rows that carry charge evidence.
+        spend_micro_usd: u64,
+        /// Rows attributed to the session, priced or not.
+        requests: u64,
+        /// Rows without charge evidence, absent from `spend_micro_usd`.
+        unpriced: u64,
+    },
+    /// Versioned daemon-owned ACP session response.
+    Sessions {
+        response: crate::supervisor::SessionResponse,
     },
     /// The command failed.
     Error {
@@ -136,11 +355,12 @@ pub enum DaemonResponse {
 }
 
 /// Serializable snapshot of the OTel exporter's state, transported over
-/// the daemon control socket. Fields mirror `bitrouter_observe::otel::OtelStatus`
-/// — this module re-states the wire format so the daemon crate doesn't
-/// need to depend on the observe crate's type when the `otel` feature is
-/// off (and so the JSON shape stays stable if the observe-side type
-/// ever moves).
+/// the daemon control socket. Fields mirror `bitrouter_telemetry::otel::OtelStatus`
+/// — but this module deliberately re-states the wire format rather than
+/// serializing the SDK type directly, so the JSON shape on the control
+/// socket stays stable even if `OtelStatus` gains, drops, or renames a
+/// field. The duplication is the point: it makes any wire-format change a
+/// visible edit here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObserveStatusPayload {
     /// Whether the `otel` feature was compiled in.
@@ -292,7 +512,7 @@ pub fn is_not_reachable(err: &anyhow::Error) -> bool {
 /// The daemon's self-reported readiness snapshot, returned by
 /// [`probe_status`]. A successful probe means the control socket is bound
 /// and the app is assembled (the model count is populated), which is exactly
-/// the signal `bitrouter status` reports.
+/// the signal `bro status` reports.
 #[derive(Debug, Clone)]
 pub struct ReadyInfo {
     /// The daemon's process id.
@@ -330,6 +550,7 @@ pub async fn probe_status(socket: &Path) -> Result<Option<ReadyInfo>> {
             pid,
             listen,
             models,
+            ..
         }) => Ok(Some(ReadyInfo {
             pid,
             listen,
@@ -356,20 +577,147 @@ pub async fn run_control_socket(
     listen: String,
     reloader: Arc<dyn DaemonReloader>,
     observe: Arc<dyn ObserveStatusProvider>,
-    policy_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
+    metering: MeteringStore,
 ) -> Result<()> {
-    let mut listener = transport::bind(&socket_path).await?;
+    run_control_socket_with_acp_runtime(
+        socket_path,
+        app,
+        listen,
+        reloader,
+        observe,
+        AcpControlPlane {
+            runtime: Arc::new(AcpRuntime::new()),
+            metering,
+            inventory: None,
+            evolution: None,
+        },
+    )
+    .await
+}
+
+/// Run the control listener with the same ACP route runtime used by the model
+/// request pipeline.
+/// Authenticated ACP control state the control socket shares with the model
+/// request pipeline.
+///
+/// One value rather than two parameters: `dispatch` already carries seven, and
+/// an eighth trips `clippy::too_many_arguments`, which the house rules forbid
+/// silencing.
+#[derive(Clone)]
+pub struct AcpControlPlane {
+    /// In-memory route leases, keyed by principal and controller.
+    pub runtime: Arc<AcpRuntime>,
+    /// Settled-request store behind session-attributed spend.
+    pub metering: MeteringStore,
+    /// The inventory installed in this daemon's model request pipeline.
+    pub inventory: Option<crate::evolution::inventory::GatewayInventory>,
+    /// Live route validation and checkpoint worker status, when installed.
+    pub evolution: Option<crate::evolution::runtime::EvolutionRuntime>,
+}
+
+pub async fn run_control_socket_with_acp_runtime(
+    socket_path: PathBuf,
+    app: Arc<App>,
+    listen: String,
+    reloader: Arc<dyn DaemonReloader>,
+    observe: Arc<dyn ObserveStatusProvider>,
+    acp: AcpControlPlane,
+) -> Result<()> {
+    run_control_socket_with_acp_runtime_and_administration(
+        socket_path,
+        app,
+        listen,
+        reloader,
+        observe,
+        acp,
+        None,
+    )
+    .await
+}
+
+/// Run the local control socket with optional live administration ports.
+///
+/// Existing embeddings retain the historical control-socket surface through
+/// [`run_control_socket_with_acp_runtime`].  The app assembly injects these
+/// ports only after it has constructed the running routing and policy state.
+pub async fn run_control_socket_with_acp_runtime_and_administration(
+    socket_path: PathBuf,
+    app: Arc<App>,
+    listen: String,
+    reloader: Arc<dyn DaemonReloader>,
+    observe: Arc<dyn ObserveStatusProvider>,
+    acp: AcpControlPlane,
+    administration: Option<Administration>,
+) -> Result<()> {
+    let listener = bind_control_socket(&socket_path).await?;
+    run_bound_control_socket(
+        listener,
+        app,
+        listen,
+        reloader,
+        observe,
+        acp,
+        administration,
+    )
+    .await
+}
+
+/// Bound local endpoint owned by one foreground startup attempt.
+pub(crate) struct BoundControlSocket {
+    listener: transport::ControlListener,
+}
+
+pub(crate) async fn bind_control_socket(path: &Path) -> Result<BoundControlSocket> {
+    Ok(BoundControlSocket {
+        listener: transport::bind(path).await?,
+    })
+}
+
+pub(crate) async fn run_bound_control_socket(
+    bound: BoundControlSocket,
+    app: Arc<App>,
+    listen: String,
+    reloader: Arc<dyn DaemonReloader>,
+    observe: Arc<dyn ObserveStatusProvider>,
+    acp: AcpControlPlane,
+    administration: Option<Administration>,
+) -> Result<()> {
+    let supervisor = match &administration {
+        Some(administration) => Some(
+            crate::supervisor::Supervisor::open(
+                administration.source.clone(),
+                administration.routing.clone(),
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let services = LocalControlServices {
+        administration,
+        supervisor,
+    };
+    let mut listener = bound.listener;
     let result = accept_loop(
         &mut listener,
         &app,
         &listen,
         &reloader,
         &observe,
-        policy_router.as_ref(),
+        &acp,
+        &services,
     )
     .await;
+    if let Some(supervisor) = &services.supervisor {
+        supervisor.shutdown().await;
+    }
     listener.cleanup().await;
     result
+}
+
+#[derive(Clone)]
+struct LocalControlServices {
+    administration: Option<Administration>,
+    supervisor: Option<crate::supervisor::Supervisor>,
 }
 
 async fn accept_loop(
@@ -378,15 +726,47 @@ async fn accept_loop(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
+    acp: &AcpControlPlane,
+    services: &LocalControlServices,
 ) -> Result<()> {
+    let (stop_tx, mut stop_rx) = tokio::sync::mpsc::unbounded_channel();
     loop {
-        let stream = listener.accept().await?;
-        // Handle one command per connection. A `Stop` ends the loop (and thus
-        // the whole `serve`); any other command loops for the next client.
-        if handle_connection(stream, app, listen, reloader, observe, policy_router).await? {
-            tracing::info!("stop command received — shutting down");
-            return Ok(());
+        tokio::select! {
+            accepted = listener.accept() => {
+                let stream = accepted?;
+                let app = app.clone();
+                let listen = listen.to_string();
+                let reloader = reloader.clone();
+                let observe = observe.clone();
+                let acp = acp.clone();
+                let services = services.clone();
+                let stop_tx = stop_tx.clone();
+                tokio::spawn(async move {
+                    match handle_connection(
+                        stream,
+                        &app,
+                        &listen,
+                        &reloader,
+                        &observe,
+                        &acp,
+                        &services,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            let _ = stop_tx.send(());
+                        }
+                        Ok(false) => {}
+                        Err(error) => tracing::warn!(%error, "local control connection failed"),
+                    }
+                });
+            }
+            stopped = stop_rx.recv() => {
+                if stopped.is_some() {
+                    tracing::info!("stop command received — shutting down");
+                }
+                return Ok(());
+            }
         }
     }
 }
@@ -402,7 +782,8 @@ async fn handle_connection<S>(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
+    acp: &AcpControlPlane,
+    services: &LocalControlServices,
 ) -> Result<bool>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -427,7 +808,7 @@ where
     };
 
     let is_stop = matches!(command, DaemonCommand::Stop);
-    let response = dispatch(command, app, listen, reloader, observe, policy_router).await;
+    let response = dispatch(command, app, listen, reloader, observe, acp, services).await;
     write_response(reader.get_mut(), &response).await?;
     Ok(is_stop)
 }
@@ -438,63 +819,251 @@ async fn dispatch(
     listen: &str,
     reloader: &Arc<dyn DaemonReloader>,
     observe: &Arc<dyn ObserveStatusProvider>,
-    policy_router: Option<&Arc<crate::policy_table_router::PolicyTableRouter>>,
+    acp: &AcpControlPlane,
+    services: &LocalControlServices,
 ) -> DaemonResponse {
     match command {
         DaemonCommand::Stop => DaemonResponse::Ok,
-        DaemonCommand::Reload { env } => {
-            // Apply the CLI's env snapshot first so file-mode YAML
-            // `${VAR}` substitution and zero-config's "is this
-            // provider's key set" check see the freshly-exported
-            // values. Empty list = caller didn't ask us to update env;
-            // we keep whatever was already in the override map.
-            if !env.is_empty() {
-                let map: std::collections::HashMap<String, String> = env.into_iter().collect();
-                bitrouter_sdk::config::set_env_overrides(map);
-                tracing::info!("env override map updated by reload");
-            }
-            match reloader.reload().await {
-                Ok(()) => {
-                    tracing::info!("reload succeeded");
-                    DaemonResponse::Ok
-                }
-                Err(e) => DaemonResponse::Error {
-                    message: format!("reload failed: {e}"),
+        DaemonCommand::Evolution { operation } => {
+            let Some(runtime) = &acp.evolution else {
+                return DaemonResponse::Error {
+                    message: "checkpoint evolution is unavailable on this daemon".into(),
+                };
+            };
+            match runtime.operate("local", operation).await {
+                Ok(report) => DaemonResponse::Evolution {
+                    report: Box::new(report),
+                },
+                Err(error) => DaemonResponse::Error {
+                    message: error.to_string(),
                 },
             }
         }
+        DaemonCommand::AcpRecordingRegister {
+            connection_id,
+            api_principal,
+            controller_instance_id,
+        } => {
+            let Some(inventory) = &acp.inventory else {
+                return DaemonResponse::Error {
+                    message: "gateway request inventory is unavailable on this daemon".into(),
+                };
+            };
+            match inventory
+                .register_capture(&connection_id, &api_principal, &controller_instance_id)
+                .await
+            {
+                Ok(registration) => DaemonResponse::AcpRecordingRegistered { registration },
+                Err(error) => DaemonResponse::Error {
+                    message: error.to_string(),
+                },
+            }
+        }
+        DaemonCommand::Reload { env } => match reloader.reload_with_env(env).await {
+            Ok(()) => {
+                tracing::info!("reload succeeded");
+                DaemonResponse::Ok
+            }
+            Err(e) => DaemonResponse::Error {
+                message: format!("reload failed: {e}"),
+            },
+        },
+        DaemonCommand::ReloadState => match reloader.reload_state() {
+            Some(state) => DaemonResponse::ReloadState { state },
+            None => DaemonResponse::Error {
+                message: "reload state is unavailable on this daemon".to_string(),
+            },
+        },
         DaemonCommand::Status => {
-            let models = app
+            let routable = app
                 .language_model()
-                .map(|p| p.routing_table().list_models().len())
-                .unwrap_or(0);
+                .map(|p| p.routing_table().list_models())
+                .unwrap_or_default();
+            // One pass over the table the model count already walks: the
+            // distinct providers behind it, which is what an operator or an
+            // agent actually wants to see next to "42 routable".
+            let providers: Vec<String> = routable
+                .iter()
+                .flat_map(|m| m.providers.iter().cloned())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let router_state = router_state(&services.administration).await;
+            let config_state = reloader.configuration_state().await;
             DaemonResponse::Status {
                 pid: std::process::id(),
                 listen: listen.to_string(),
-                models,
+                models: routable.len(),
+                providers,
+                saved_routers: router_state.as_ref().and_then(|state| state.saved.clone()),
+                running_routers: router_state
+                    .as_ref()
+                    .and_then(|state| state.running.clone()),
+                router_restart_required: router_state.and_then(|state| state.restart_required),
+                config_state,
             }
         }
-        DaemonCommand::SetRoute {
-            launch_id,
-            provider_id,
+        DaemonCommand::Models => {
+            let routers = router_state(&services.administration)
+                .await
+                .and_then(|state| state.running);
+            DaemonResponse::Models {
+                // The same read `Status` counts, returned whole. A daemon with no
+                // language-model pipeline routes nothing, which is an empty
+                // catalog rather than an error.
+                models: app
+                    .language_model()
+                    .map(|p| p.routing_table().list_models())
+                    .unwrap_or_default(),
+                routers,
+            }
+        }
+        DaemonCommand::AcpSessionSpend {
+            api_principal,
+            controller_instance_id,
+            session_id,
         } => {
-            let Some(router) = policy_router else {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+            {
                 return DaemonResponse::Error {
-                    message: "no policy_table: section is configured, so this daemon has no \
-                              transform to install a route override into"
+                    message: "principal, controller and session must not be empty".to_string(),
+                };
+            }
+            // Unbounded on purpose. This launcher mints a fresh controller id
+            // per process, so in practice "since the epoch" is "this
+            // controller's lifetime" — but that is a property of how we mint,
+            // not of the identifier, which is a claim nothing verifies. What
+            // the window must not do is reset a session's cumulative figure at
+            // a month boundary the way the rolling ones would.
+            let window = TimeWindow::Custom {
+                start: DateTime::<Utc>::UNIX_EPOCH,
+                end: Utc::now(),
+            };
+            match acp
+                .metering
+                .spend_summary_for_acp_session(
+                    &api_principal,
+                    &controller_instance_id,
+                    &session_id,
+                    window,
+                )
+                .await
+            {
+                Ok(summary) => DaemonResponse::AcpSessionSpend {
+                    spend_micro_usd: summary.spend_micro_usd,
+                    requests: summary.requests,
+                    unpriced: summary.unpriced,
+                },
+                Err(error) => DaemonResponse::Error {
+                    message: format!("session spend is unavailable: {error}"),
+                },
+            }
+        }
+        DaemonCommand::AcpControllerCleanup {
+            api_principal,
+            controller_instance_id,
+        } => {
+            acp.runtime
+                .remove_controller(&api_principal, &controller_instance_id);
+            DaemonResponse::Ok
+        }
+        DaemonCommand::AcpRouteList {
+            api_principal,
+            controller_instance_id,
+            session_id,
+        } => {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+            {
+                DaemonResponse::Error {
+                    message: "API principal, controller id, and session id must not be empty"
                         .to_string(),
+                }
+            } else {
+                let current = acp
+                    .runtime
+                    .current_route(&api_principal, &controller_instance_id, &session_id)
+                    .map(|lease| lease.route().to_string());
+                DaemonResponse::AcpRouteState {
+                    available: route_suggestions(app),
+                    scope: if current.is_some() {
+                        "session"
+                    } else {
+                        "default"
+                    }
+                    .to_string(),
+                    current,
+                }
+            }
+        }
+        DaemonCommand::AcpRouteSet {
+            api_principal,
+            controller_instance_id,
+            session_id,
+            route,
+        } => {
+            let Some(pipeline) = app.language_model() else {
+                return DaemonResponse::Error {
+                    message: "no language_model pipeline configured".to_string(),
                 };
             };
-            let installed = match &provider_id {
-                Some(provider) => router.set_route_override(&launch_id, provider),
-                None => router.clear_route_override(&launch_id),
-            };
-            if installed {
-                tracing::info!(launch_id, ?provider_id, "route override updated");
-                DaemonResponse::Ok
-            } else {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+                || route.trim().is_empty()
+            {
+                return DaemonResponse::Error {
+                    message:
+                        "API principal, controller id, session id, and route must not be empty"
+                            .to_string(),
+                };
+            }
+            if let Err(error) = pipeline
+                .routing_table()
+                .route_chain(&route, &RoutingPrefs::default(), &CallerContext::local())
+                .await
+            {
+                return DaemonResponse::Error {
+                    message: format!("route is not available: {error}"),
+                };
+            }
+            match acp.runtime.set_route(
+                &api_principal,
+                &controller_instance_id,
+                &session_id,
+                &route,
+            ) {
+                Ok(lease) => DaemonResponse::AcpRouteState {
+                    available: route_suggestions(app),
+                    current: Some(lease.route().to_string()),
+                    scope: "session".to_string(),
+                },
+                Err(message) => DaemonResponse::Error { message },
+            }
+        }
+        DaemonCommand::AcpRouteReset {
+            api_principal,
+            controller_instance_id,
+            session_id,
+        } => {
+            if api_principal.trim().is_empty()
+                || controller_instance_id.trim().is_empty()
+                || session_id.trim().is_empty()
+            {
                 DaemonResponse::Error {
-                    message: "route override lock was poisoned; the route is unchanged".to_string(),
+                    message: "API principal, controller id, and session id must not be empty"
+                        .to_string(),
+                }
+            } else {
+                acp.runtime
+                    .reset_route(&api_principal, &controller_instance_id, &session_id);
+                DaemonResponse::AcpRouteState {
+                    available: route_suggestions(app),
+                    current: None,
+                    scope: "default".to_string(),
                 }
             }
         }
@@ -504,11 +1073,50 @@ async fn dispatch(
                     message: "no language_model pipeline configured".to_string(),
                 };
             };
-            match pipeline
-                .routing_table()
-                .route_chain(&model, &RoutingPrefs::default(), &CallerContext::local())
-                .await
-            {
+            let table = pipeline.routing_table();
+            let resolution = match table.resolve_model(&model).await {
+                Ok(resolution) => resolution,
+                Err(error) => {
+                    return DaemonResponse::Error {
+                        message: error.to_string(),
+                    };
+                }
+            };
+            let router_source = services.administration.as_ref().and_then(|administration| {
+                resolution.router.as_ref().and_then(|identity| {
+                    crate::actions::route::router_source(
+                        &administration.routing.snapshot_config(),
+                        &identity.router_id,
+                    )
+                })
+            });
+            let policy_report = services
+                .administration
+                .as_ref()
+                .map(|administration| administration.policy.administration_snapshot());
+            let candidate_models = crate::actions::route::policy_candidate_models(
+                policy_report.as_ref(),
+                resolution.policy.as_deref(),
+                &resolution.clean_model,
+            );
+            let candidate_models = crate::actions::route::resolvable_policy_candidates(
+                table.as_ref(),
+                candidate_models,
+                &resolution.prefs,
+            )
+            .await;
+            let chain = if resolution.policy.is_some() {
+                Ok(Vec::new())
+            } else {
+                table
+                    .route_resolved(
+                        &resolution.clean_model,
+                        &resolution.prefs,
+                        &CallerContext::local(),
+                    )
+                    .await
+            };
+            match chain {
                 Ok(chain) => DaemonResponse::Route {
                     chain: chain
                         .into_iter()
@@ -518,16 +1126,126 @@ async fn dispatch(
                             api_protocol: format!("{:?}", t.api_protocol).to_lowercase(),
                         })
                         .collect(),
+                    resolved_model: Some(resolution.clean_model),
+                    router: resolution.router,
+                    router_source,
+                    bound_policy: resolution.policy,
+                    candidate_models,
                 },
-                Err(e) => DaemonResponse::Error {
-                    message: e.to_string(),
+                Err(error) => DaemonResponse::Error {
+                    message: error.to_string(),
                 },
             }
         }
         DaemonCommand::ObserveStatus => DaemonResponse::ObserveStatus {
             payload: observe.status(),
         },
+        DaemonCommand::Inspect { inspection } => {
+            inspection_response(inspection, &services.administration).await
+        }
+        DaemonCommand::Sessions { request } => {
+            let Some(supervisor) = &services.supervisor else {
+                return DaemonResponse::Error {
+                    message: "supervised sessions are unavailable on this daemon".to_string(),
+                };
+            };
+            match supervisor.dispatch(request).await {
+                Ok(response) => DaemonResponse::Sessions { response },
+                Err(error) => DaemonResponse::Error {
+                    message: format!("supervised session request failed: {error:#}"),
+                },
+            }
+        }
     }
+}
+
+struct RouterState {
+    saved: Option<Vec<crate::actions::models::RouterStatus>>,
+    running: Option<Vec<crate::actions::models::RouterStatus>>,
+    restart_required: Option<bool>,
+}
+
+fn router_configuration_restart_required(
+    saved: &bitrouter_sdk::config::Config,
+    running: &bitrouter_sdk::config::Config,
+) -> bool {
+    saved.routers != running.routers
+}
+
+async fn router_state(administration: &Option<Administration>) -> Option<RouterState> {
+    let administration = administration.as_ref()?;
+    let running = administration.routing.snapshot_config();
+    let policy_report = administration.policy.administration_snapshot();
+    let running_statuses = crate::actions::models::router_statuses(
+        &running,
+        crate::actions::models::PolicyReadiness::Known(&policy_report),
+    )
+    .await
+    .ok();
+    let saved = crate::reload::inspect_configuration_baseline(&administration.source)
+        .await
+        .ok();
+    let saved_statuses = match &saved {
+        Some(saved) => {
+            crate::actions::models::disk_router_statuses_for_config(
+                saved.config(),
+                &administration.source,
+            )
+            .await
+        }
+        None => None,
+    };
+    let restart_required = saved
+        .as_ref()
+        .map(|saved| router_configuration_restart_required(saved.config(), &running));
+    Some(RouterState {
+        saved: saved_statuses,
+        running: running_statuses,
+        restart_required,
+    })
+}
+
+async fn inspection_response(
+    inspection: DaemonInspection,
+    administration: &Option<Administration>,
+) -> DaemonResponse {
+    let Some(administration) = administration else {
+        return DaemonResponse::Error {
+            message: "live administration reads are unavailable on this daemon".to_string(),
+        };
+    };
+    match inspection {
+        DaemonInspection::Providers => DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Providers(administration.providers()),
+        },
+        DaemonInspection::Agents => DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Agents(administration.agents()),
+        },
+        DaemonInspection::Observe => DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Observe(administration.observe()),
+        },
+        DaemonInspection::Policy { input } => match administration.policy(input).await {
+            Ok(report) => DaemonResponse::Inspection {
+                report: DaemonInspectionReport::Policy(report),
+            },
+            Err(error) => DaemonResponse::Error {
+                message: format!("policy inspection failed: {error}"),
+            },
+        },
+    }
+}
+
+fn route_suggestions(app: &Arc<App>) -> Vec<String> {
+    app.language_model()
+        .map(|pipeline| {
+            pipeline
+                .routing_table()
+                .list_models()
+                .into_iter()
+                .map(|model| model.id)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn write_response<S>(stream: &mut S, response: &DaemonResponse) -> Result<()>
@@ -596,28 +1314,79 @@ mod transport {
     pub struct ControlListener {
         listener: UnixListener,
         path: PathBuf,
+        identity: (u64, u64),
+        _lock: std::fs::File,
     }
 
-    /// Bind the control socket, removing any stale file first and tightening
-    /// permissions to owner-only.
+    /// Bind one owner-only endpoint, preserving active endpoints and unrelated files.
     pub async fn bind(path: &Path) -> Result<ControlListener> {
-        // A stale socket file from a crashed daemon would block the bind.
-        let _ = tokio::fs::remove_file(path).await;
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+
+        // Keep the lock file in place: unlinking it would let a new process lock
+        // a different inode while another startup still owns the old one.
+        let lock_path = path.with_extension("sock.lock");
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(&lock_path)
+            .with_context(|| format!("opening control lock {}", lock_path.display()))?;
+        lock.try_lock()
+            .with_context(|| format!("control socket {} is already owned", path.display()))?;
+        match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata) => {
+                anyhow::ensure!(
+                    metadata.file_type().is_socket(),
+                    "refusing to replace non-socket path {}",
+                    path.display()
+                );
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(250),
+                    UnixStream::connect(path),
+                )
+                .await
+                {
+                    Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
+                    _ => anyhow::bail!("control socket {} is already in use", path.display()),
+                }
+                let current = tokio::fs::symlink_metadata(path).await?;
+                anyhow::ensure!(
+                    (current.dev(), current.ino()) == (metadata.dev(), metadata.ino()),
+                    "control socket changed during startup: {}",
+                    path.display()
+                );
+                tokio::fs::remove_file(path).await?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("inspecting control endpoint"),
+        }
         let listener = UnixListener::bind(path)
             .with_context(|| format!("binding control socket {}", path.display()))?;
-        // The control surface includes Stop / Reload — only the daemon owner
-        // may reach it. `UnixListener::bind` respects the process umask
-        // (typically 022 → 0755); tighten to 0600 explicitly so any other
-        // local user is excluded.
-        use std::os::unix::fs::PermissionsExt;
+        let metadata = std::fs::symlink_metadata(path)?;
+        let bound = ControlListener {
+            listener,
+            path: path.to_path_buf(),
+            identity: (metadata.dev(), metadata.ino()),
+            _lock: lock,
+        };
         tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .await
             .with_context(|| format!("chmod 0600 {}", path.display()))?;
         tracing::info!(socket = %path.display(), "control socket listening (mode 0600)");
-        Ok(ControlListener {
-            listener,
-            path: path.to_path_buf(),
-        })
+        Ok(bound)
+    }
+
+    impl Drop for ControlListener {
+        fn drop(&mut self) {
+            use std::os::unix::fs::MetadataExt;
+            if let Ok(metadata) = std::fs::symlink_metadata(&self.path)
+                && (metadata.dev(), metadata.ino()) == self.identity
+            {
+                let _ = std::fs::remove_file(&self.path);
+            }
+        }
     }
 
     impl ControlListener {
@@ -633,7 +1402,7 @@ mod transport {
 
         /// Remove the socket file on shutdown.
         pub async fn cleanup(self) {
-            let _ = tokio::fs::remove_file(&self.path).await;
+            drop(self);
         }
     }
 
@@ -641,8 +1410,9 @@ mod transport {
     pub async fn connect(path: &Path) -> Result<UnixStream> {
         UnixStream::connect(path).await.with_context(|| {
             format!(
-                "connecting to {} — is the daemon running? (`bitrouter start`)",
-                path.display()
+                "connecting to {} — is the daemon running? (`{cli} start`)",
+                path.display(),
+                cli = bitrouter_sdk::invocation::name()
             )
         })
     }
@@ -754,7 +1524,10 @@ mod transport {
                 }
                 Err(e) => {
                     return Err(e).with_context(|| {
-                        format!("connecting to {name} — is the daemon running? (`bitrouter start`)")
+                        format!(
+                            "connecting to {name} — is the daemon running? (`{cli} start`)",
+                            cli = bitrouter_sdk::invocation::name()
+                        )
                     });
                 }
             }
@@ -825,6 +1598,46 @@ mod transport {
     }
 }
 
+/// Check one positive Unix PID without sending a signal.
+///
+/// Only a missing process (`ESRCH`) or an unrepresentable PID is considered
+/// dead. Permission errors retain the PID as live, so startup does not reclaim
+/// another user's PID file merely because this process cannot signal it.
+#[cfg(unix)]
+pub fn process_is_alive(pid: u32) -> bool {
+    let Some(pid) = i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return false;
+    };
+    !matches!(
+        rustix::process::test_kill_process(pid),
+        Err(rustix::io::Errno::SRCH)
+    )
+}
+
+/// Liveness check on Windows: `tasklist` filtered to the pid. `tasklist` ships
+/// on every Windows install, so we shell out (rather than calling the Win32
+/// API) to keep `apps/bitrouter` free of `unsafe`. When no process matches,
+/// `tasklist` prints an informational line instead of a CSV row — so we look
+/// for the quoted pid the CSV format emits (`"<pid>"`).
+#[cfg(windows)]
+pub fn process_is_alive(pid: u32) -> bool {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output();
+    match output {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.contains(&format!("\"{pid}\""))
+        }
+        Err(_) => false,
+    }
+}
+
 // ===== PID file =====
 
 /// Write the current process id to `path`.
@@ -875,7 +1688,7 @@ pub enum DaemonStartOutcome {
     },
 }
 
-/// Spawn `bitrouter serve` as a detached background process writing to
+/// Spawn `bro serve` as a detached background process writing to
 /// `log_path` (append). Returns the child handle and the log's pre-spawn byte
 /// length so the caller can quote only this run's output on early death.
 ///
@@ -925,7 +1738,12 @@ fn spawn_detached_serve(
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
-    let child = cmd.spawn().context("spawning detached `bitrouter serve`")?;
+    let child = cmd.spawn().with_context(|| {
+        format!(
+            "spawning detached `{} serve`",
+            bitrouter_sdk::invocation::name()
+        )
+    })?;
     Ok((child, log_size_before))
 }
 
@@ -963,7 +1781,7 @@ pub fn eprint_failure_log(log_path: &Path, content: &str) {
     eprintln!();
 }
 
-/// Launch a detached `bitrouter serve` and poll the control socket until it
+/// Launch a detached `bro serve` and poll the control socket until it
 /// answers `Status`, the process dies, or `timeout` elapses. The daemon keeps
 /// running regardless of the outcome — this only reports what the launcher
 /// observed. `socket` is the control-socket path to poll; pass `None` when it
@@ -1010,6 +1828,60 @@ pub async fn start_and_wait(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn process_liveness_checks_one_representable_positive_pid() {
+        assert!(super::process_is_alive(std::process::id()));
+        assert!(!super::process_is_alive(0));
+        assert!(!super::process_is_alive(u32::MAX));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bound_control_socket_preserves_other_owners_and_cleans_its_own_path()
+    -> anyhow::Result<()> {
+        let home = tempfile::tempdir_in("/tmp")?;
+        let socket = home.path().join("control.sock");
+        let first = super::bind_control_socket(&socket).await?;
+        assert!(super::bind_control_socket(&socket).await.is_err());
+        assert!(socket.exists());
+        drop(first);
+        assert!(!socket.exists());
+
+        // A foreign listener that does not use our lock must also survive.
+        let foreign = tokio::net::UnixListener::bind(&socket)?;
+        assert!(super::bind_control_socket(&socket).await.is_err());
+        assert!(socket.exists());
+        drop(foreign);
+        // The now-stale socket can be reclaimed by the next host startup.
+        let recovered = super::bind_control_socket(&socket).await?;
+        drop(recovered);
+        assert!(!socket.exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bound_control_socket_does_not_remove_replacements_or_regular_files()
+    -> anyhow::Result<()> {
+        let home = tempfile::tempdir_in("/tmp")?;
+        let socket = home.path().join("control.sock");
+        let bound = super::bind_control_socket(&socket).await?;
+        std::fs::remove_file(&socket)?;
+        let replacement = tokio::net::UnixListener::bind(&socket)?;
+        drop(bound);
+        assert!(
+            socket.exists(),
+            "cleanup must not unlink another listener's inode"
+        );
+        drop(replacement);
+        std::fs::remove_file(&socket)?;
+        std::fs::write(&socket, "keep this file")?;
+        assert!(super::bind_control_socket(&socket).await.is_err());
+        assert_eq!(std::fs::read_to_string(&socket)?, "keep this file");
+        Ok(())
+    }
+
     use super::*;
 
     #[test]
@@ -1017,17 +1889,42 @@ mod tests {
         for cmd in [
             DaemonCommand::Stop,
             DaemonCommand::Reload { env: Vec::new() },
+            DaemonCommand::ReloadState,
             DaemonCommand::Status,
             DaemonCommand::Route {
                 model: "gpt-5".to_string(),
             },
             DaemonCommand::ObserveStatus,
+            DaemonCommand::Inspect {
+                inspection: DaemonInspection::Policy {
+                    input: PolicyInput::default(),
+                },
+            },
         ] {
             let json = serde_json::to_string(&cmd).unwrap();
             let back: DaemonCommand = serde_json::from_str(&json).unwrap();
             // tag-based round trip
             assert_eq!(std::mem::discriminant(&cmd), std::mem::discriminant(&back));
         }
+    }
+
+    #[test]
+    fn inspection_response_round_trips_as_json() -> anyhow::Result<()> {
+        let response = DaemonResponse::Inspection {
+            report: DaemonInspectionReport::Providers(ProvidersReport {
+                resolved_via: "live".to_string(),
+                providers: Vec::new(),
+            }),
+        };
+        let json = serde_json::to_string(&response)?;
+        let decoded: DaemonResponse = serde_json::from_str(&json)?;
+        match decoded {
+            DaemonResponse::Inspection {
+                report: DaemonInspectionReport::Providers(report),
+            } => assert_eq!(report.resolved_via, "live"),
+            other => anyhow::bail!("expected provider inspection, got {other:?}"),
+        }
+        Ok(())
     }
 
     #[test]
@@ -1110,16 +2007,84 @@ mod tests {
             pid: 42,
             listen: "0.0.0.0:4356".to_string(),
             models: 3,
+            providers: vec!["openai".to_string()],
+            saved_routers: None,
+            running_routers: None,
+            router_restart_required: None,
+            config_state: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         let back: DaemonResponse = serde_json::from_str(&json).unwrap();
         match back {
-            DaemonResponse::Status { pid, models, .. } => {
+            DaemonResponse::Status {
+                pid,
+                models,
+                providers,
+                ..
+            } => {
                 assert_eq!(pid, 42);
                 assert_eq!(models, 3);
+                assert_eq!(providers, ["openai"]);
             }
             other => panic!("expected Status, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn legacy_status_response_keeps_configuration_evidence_unknown() -> anyhow::Result<()> {
+        let response: DaemonResponse = serde_json::from_str(
+            r#"{
+                "resp":"status",
+                "pid":42,
+                "listen":"127.0.0.1:4356",
+                "models":3,
+                "providers":["openai"]
+            }"#,
+        )?;
+        let DaemonResponse::Status {
+            saved_routers,
+            running_routers,
+            router_restart_required,
+            config_state,
+            ..
+        } = response
+        else {
+            anyhow::bail!("legacy status payload decoded as the wrong response variant");
+        };
+        assert!(saved_routers.is_none());
+        assert!(running_routers.is_none());
+        assert!(router_restart_required.is_none());
+        assert!(config_state.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn router_restart_detection_uses_secret_defaults_without_exposing_them() -> anyhow::Result<()> {
+        let saved = bitrouter_sdk::config::parse(
+            "routers:\n  coding:\n    selection:\n      kind: model\n      model: demo/model\n    defaults:\n      system_prompt: saved secret\n      params:\n        temperature: 0.2\n",
+        )?;
+        let running = bitrouter_sdk::config::parse(
+            "routers:\n  coding:\n    selection:\n      kind: model\n      model: demo/model\n    defaults:\n      system_prompt: prior secret\n      params:\n        temperature: 0.8\n",
+        )?;
+
+        let saved_inventory = saved.router_inventory()?;
+        let saved_digest = saved_inventory
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("saved router inventory is empty"))?
+            .binding_digest
+            .clone();
+        let running_inventory = running.router_inventory()?;
+        let running_digest = running_inventory
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("running router inventory is empty"))?
+            .binding_digest
+            .clone();
+        assert_eq!(
+            saved_digest, running_digest,
+            "redacted binding identity deliberately excludes default values"
+        );
+        assert!(router_configuration_restart_required(&saved, &running));
+        Ok(())
     }
 
     #[test]

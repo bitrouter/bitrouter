@@ -1,4 +1,4 @@
-//! Integration tests for `bitrouter acp serve|prompt`.
+//! Integration tests for `bro acp serve|prompt`.
 //!
 //! Test 1 (`prompt_ndjson`) — in-process: build a `Config` with a bash ACP
 //! stub agent, call [`bitrouter::acp_cli::prompt`] with a `Vec<u8>` sink,
@@ -7,7 +7,7 @@
 //!   - the final line is `{"type":"result","stop_reason":"EndTurn"}`.
 //!
 //! Test 2 (`serve_subprocess_e2e`) — subprocess: write a temp config YAML,
-//! spawn `bitrouter acp serve --agent stub --config <path>` as a child
+//! spawn `bro acp serve --agent stub --config <path>` as a child
 //! process, drive its stdio with raw JSON-RPC NDJSON (the ACP wire format),
 //! and assert the full `initialize` → `session/new` → `session/prompt` round-
 //! trip succeeds, including the forwarded `session/update` carrying "hi".
@@ -16,8 +16,81 @@
 
 use std::collections::HashMap;
 
-use bitrouter_sdk::acp::{AcpAgentConfig, AcpTransport};
+use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
+
+// ===== process working directory =====
+//
+// Several tests below need the process to sit in a scratch directory, because
+// `Session::launch` resolves paths against `current_dir()`. The working
+// directory is **process**-global, and how much that matters depends on the
+// runner: `cargo nextest` gives each test its own process, so the original
+// code was safe under it, but `cargo test` runs the whole file as threads in
+// one process — and both are sanctioned by this repo's CLAUDE.md.
+//
+// Under `cargo test` the unsynchronized version raced in a way that was easy
+// to misread as a real failure: each test deletes its scratch directory when
+// it finishes, so a *different* test could find itself standing in a directory
+// that no longer existed. The symptoms landed far from the cause — a panicking
+// `current_dir()`, a prompt that failed for no visible reason, a subprocess
+// that timed out — and a different subset failed on every run.
+//
+// [`CwdGuard`] makes ownership of the directory explicit and exclusive.
+
+/// Serializes every test that depends on the process working directory.
+static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Where the process started, captured before any test has moved it. Restoring
+/// to this rather than to whatever was current at acquisition means a stray
+/// unguarded `set_current_dir` cannot become the "original" that every later
+/// test restores to.
+static ORIGINAL_CWD: std::sync::LazyLock<std::path::PathBuf> =
+    std::sync::LazyLock::new(|| std::env::current_dir().expect("a valid startup cwd"));
+
+/// Exclusive ownership of the process working directory for one test.
+///
+/// Restoring happens in `Drop`, so it also runs when a test panics while
+/// holding the guard — without that, one failure would leave the directory
+/// pointing at a deleted temp dir and cascade into every test that ran after
+/// it.
+///
+/// The guard is held across `.await`, which is normally a deadlock hazard for
+/// a blocking mutex. It is safe here because every holder is a `#[tokio::test]`
+/// with its own current-thread runtime on its own libtest thread: blocking
+/// while waiting parks that one test's thread, never a runtime shared with the
+/// task that would release the lock.
+struct CwdGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl CwdGuard {
+    /// Take the directory and move into `dir`.
+    fn enter(dir: &std::path::Path) -> Self {
+        let guard = Self::hold();
+        std::env::set_current_dir(dir).expect("set_current_dir");
+        guard
+    }
+
+    /// Take the directory without moving, for a test that only needs it to
+    /// stay put — `serve_subprocess_e2e` spawns a child that inherits it.
+    fn hold() -> Self {
+        // A poisoned lock means some earlier test panicked while holding it.
+        // Its `Drop` already restored the directory, so there is no broken
+        // state to protect and the poison is recovered rather than propagated
+        // into an unrelated failure.
+        let lock = CWD_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::sync::LazyLock::force(&ORIGINAL_CWD);
+        Self { _lock: lock }
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&*ORIGINAL_CWD);
+    }
+}
 
 /// Bash ACP stub: initialize → session/new → prompt emits one update then
 /// end_turn. Identical to the stubs used in the substrate engine/down tests.
@@ -61,11 +134,7 @@ fn stub_config() -> Config {
 async fn prompt_ndjson() {
     let base = tempfile::tempdir().expect("tempdir");
 
-    // Change cwd to the temp dir; restore on exit. `set_current_dir` is
-    // process-global, but each nextest test runs in its own process, so this
-    // does not race other tests under the default `cargo nextest` runner.
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -81,9 +150,7 @@ async fn prompt_ndjson() {
             ..Default::default()
         },
     };
-    let result = bitrouter::acp_cli::prompt(ctx, "hello", false, None, &mut buf).await;
-
-    let _ = std::env::set_current_dir(&orig_dir);
+    let result = bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf).await;
 
     result.expect("acp_cli::prompt should succeed");
 
@@ -102,9 +169,34 @@ async fn prompt_ndjson() {
         "first NDJSON line must be the session line; got: {}",
         lines[0]
     );
+    // Contract break, `docs/ACP_CONTROLLER_AMENDMENT_1.md` §2: the minted
+    // `record_id` alias is gone from the wire. Session identity is
+    // harness-native, so the correlation line carries the id the harness
+    // itself minted plus the controller instance the daemon meters by — the
+    // two columns a spend query actually joins on.
     assert!(
-        first.get("record_id").and_then(|r| r.as_str()).is_some(),
-        "session line must carry a record_id: {}",
+        first.get("record_id").is_none(),
+        "the manager-facing record_id alias is off the wire: {}",
+        lines[0]
+    );
+    assert_eq!(
+        first.get("session_id").and_then(|r| r.as_str()),
+        Some("u1"),
+        "session line must carry the harness-native session id: {}",
+        lines[0]
+    );
+    // Not `is_some()`: `Value::get` on a JSON `null` returns `Some(Null)`, so
+    // that spelling passes for a field that is present and empty — which is
+    // what the previous assertion actually checked.
+    assert!(
+        first.get("controller_instance_id").is_none(),
+        "the controller id is a claimed header, not the spend key on this \
+         path, and must not be reported as though it joined: {}",
+        lines[0]
+    );
+    assert!(
+        first.get("launch_id").is_some(),
+        "launch_id is what attributes a prompt session's spend: {}",
         lines[0]
     );
     assert!(
@@ -219,8 +311,7 @@ const OK_SCHEMA: &str =
 /// terminal result line.
 async fn result_line_for(script: &str) -> serde_json::Value {
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -238,9 +329,16 @@ async fn result_line_for(script: &str) -> serde_json::Value {
     };
     let contract =
         bitrouter::result_contract::ResultContract::from_flag(OK_SCHEMA).expect("valid schema");
-    let result =
-        bitrouter::acp_cli::prompt(ctx, "do the task", false, Some(contract), &mut buf).await;
-    let _ = std::env::set_current_dir(&orig_dir);
+    let result = bitrouter::acp_cli::prompt(
+        ctx,
+        "do the task",
+        bitrouter::acp_cli::PromptOptions {
+            contract: Some(contract),
+            ..Default::default()
+        },
+        &mut buf,
+    )
+    .await;
     result.expect("prompt should succeed");
 
     let output = String::from_utf8(buf).expect("valid utf8");
@@ -347,6 +445,109 @@ async fn routing_direct_skips_daemon_and_reports_no_via() {
     assert!(cfg.agents.contains_key("claude-acp"));
 }
 
+#[tokio::test]
+async fn routing_returns_and_applies_one_endpoint_plan() -> anyhow::Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let daemon = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/health"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&daemon)
+        .await;
+    let base = tempfile::tempdir()?;
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut config = Config::default();
+    config.server.skip_auth = true;
+    let options = bitrouter::acp_cli::RoutingOptions {
+        direct: false,
+        base_url: Some(daemon.uri()),
+        model: Some("logical/model".to_string()),
+        no_start: true,
+    };
+
+    let routed =
+        bitrouter::acp_cli::apply_routing(&source, &mut config, "claude-acp", &options).await?;
+    let plan = routed
+        .endpoint_plan
+        .ok_or_else(|| anyhow::anyhow!("routing did not return an endpoint plan"))?;
+    let controller_id = routed
+        .controller_instance_id
+        .ok_or_else(|| anyhow::anyhow!("routing did not return a controller id"))?;
+    assert_eq!(
+        plan.headers
+            .get("x-bitrouter-controller-id")
+            .map(String::as_str),
+        Some(controller_id.as_str())
+    );
+    assert_eq!(plan.model.as_deref(), Some("logical/model"));
+
+    let entry = config
+        .agents
+        .get("claude-acp")
+        .ok_or_else(|| anyhow::anyhow!("catalog agent was not synthesized"))?;
+    let AcpTransport::Stdio { args, env, .. } = &entry.transport;
+    assert_eq!(
+        args,
+        &["-y", "@agentclientprotocol/claude-agent-acp@0.75.1"]
+    );
+    assert_eq!(env.get("ANTHROPIC_BASE_URL"), Some(&daemon.uri()));
+    assert_eq!(
+        env.get("ANTHROPIC_MODEL").map(String::as_str),
+        Some("logical/model")
+    );
+    let custom = env
+        .get("ANTHROPIC_CUSTOM_HEADERS")
+        .ok_or_else(|| anyhow::anyhow!("static headers were not applied"))?;
+    assert!(custom.contains(&controller_id));
+    Ok(())
+}
+
+#[tokio::test]
+async fn unpinned_codex_acp_never_receives_cli_config_arguments() -> anyhow::Result<()> {
+    let base = tempfile::tempdir()?;
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut config = Config::default();
+    config.agents.insert(
+        "codex-custom".to_string(),
+        AcpAgentConfig {
+            name: "codex-custom".to_string(),
+            transport: AcpTransport::Stdio {
+                command: "npx".to_string(),
+                args: vec![
+                    "-y".to_string(),
+                    "@agentclientprotocol/codex-acp@1.6.0".to_string(),
+                ],
+                env: HashMap::new(),
+            },
+        },
+    );
+    let options = bitrouter::acp_cli::RoutingOptions {
+        direct: false,
+        base_url: Some("http://127.0.0.1:9".to_string()),
+        model: Some("logical/model".to_string()),
+        no_start: true,
+    };
+
+    let routed =
+        bitrouter::acp_cli::apply_routing(&source, &mut config, "codex-custom", &options).await?;
+    assert!(routed.via.is_none());
+    assert!(routed.endpoint_plan.is_none());
+    let entry = config
+        .agents
+        .get("codex-custom")
+        .ok_or_else(|| anyhow::anyhow!("custom Codex entry disappeared"))?;
+    let AcpTransport::Stdio { args, env, .. } = &entry.transport;
+    assert_eq!(args, &["-y", "@agentclientprotocol/codex-acp@1.6.0"]);
+    assert!(env.is_empty());
+    Ok(())
+}
+
 // ── shared raw JSON-RPC helpers (subprocess / socket e2e) ────────────────────
 
 /// Send a JSON-RPC request line and read back lines until one matches the
@@ -390,6 +591,18 @@ async fn rpc_round_trip(
     }
 }
 
+/// Budget for the **first** round-trip against a freshly spawned child.
+///
+/// This is not measuring the same thing as the steady-state deadline. Request
+/// id 1 also pays for the process spawn and the dynamic linking of a large
+/// debug binary, which on a loaded machine dominates the handshake itself.
+/// Under CPU saturation it was the *only* round-trip that ever elapsed — the
+/// steady-state ones stayed in the milliseconds — so separating it keeps the
+/// tight stalled-child deadline where it actually detects a stall, instead of
+/// widening every deadline to accommodate one slow step. The test is still
+/// bounded, so a child that never starts fails rather than hanging the runner.
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Run one round-trip under `timeout`; panic on elapse so a stalled server
 /// never hangs the test runner.
 async fn bounded_round_trip(
@@ -424,24 +637,30 @@ agents:
       args:
         - "-c"
         - |
+            session_count=0
             while read line; do
               id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
               case "$line" in
-                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
-                *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
-                *session/prompt*) printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"u1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}\n';
+                *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"list":{},"resume":{}}},"agentInfo":{"name":"stub-harness","version":"1.0.0"}}}\n' "$id";;
+                *session/new*)  session_count=$((session_count+1));
+                                if [ "$session_count" = 1 ]; then native="native-a"; else native="native-b"; fi;
+                                printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"%s"}}\n' "$id" "$native";;
+                *session/load*) printf '{"jsonrpc":"2.0","id":"%s","result":{"_meta":{"loadedBy":"harness"}}}\n' "$id";;
+                *session/prompt*) printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"native-b","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}\n';
                                   printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$id";;
               esac
             done
 "#;
 
-/// Spawn `bitrouter acp serve --agent stub --config <path>` as a child process
+/// Spawn `bro acp serve --agent stub --config <path>` as a child process
 /// and drive it with raw JSON-RPC NDJSON — the actual ACP wire format over
 /// stdio. This exercises the path that the in-process `down.rs` duplex tests
 /// cannot: real OS-level stdio pipes and the CLI entry point.
 ///
-/// The test sends `initialize` → `session/new` → `session/prompt` and asserts:
+/// The test sends `initialize` → two `session/new` calls → `session/load` →
+/// `session/prompt` and asserts:
 /// - each request receives its JSON-RPC response, and
+/// - every session ID is the harness-authored native ID, and
 /// - the forwarded `session/update` containing "hi" arrives before the prompt
 ///   response.
 ///
@@ -459,6 +678,10 @@ async fn serve_subprocess_e2e() {
     /// handshake, tight enough to fail fast on a stalled child.
     const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
+    // The spawned child inherits this process's working directory, so this
+    // test needs it to stay put even though it never moves it itself.
+    let _cwd = CwdGuard::hold();
+
     // Write the config YAML to a temp file.
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join("bitrouter.yaml");
@@ -472,10 +695,7 @@ async fn serve_subprocess_e2e() {
     } else {
         "release"
     };
-    let binary = workspace_root
-        .join("target")
-        .join(profile)
-        .join("bitrouter");
+    let binary = workspace_root.join("target").join(profile).join("bro");
 
     if !binary.exists() {
         eprintln!(
@@ -485,7 +705,7 @@ async fn serve_subprocess_e2e() {
         return;
     }
 
-    // Spawn `bitrouter acp serve --agent stub --config <path>`.
+    // Spawn `bro acp serve --agent stub --config <path>`.
     // Redirect stderr to a temp file so we can inspect it on failure.
     let stderr_path = dir.path().join("serve.stderr");
     let stderr_file = std::fs::File::create(&stderr_path).expect("stderr file");
@@ -508,7 +728,7 @@ async fn serve_subprocess_e2e() {
         // a stalled server is reaped rather than leaked.
         .kill_on_drop(true)
         .spawn()
-        .expect("spawn bitrouter acp serve");
+        .expect("spawn bro acp serve");
 
     let mut child_stdin = child.stdin.take().expect("child stdin");
     let child_stdout = child.stdout.take().expect("child stdout");
@@ -525,12 +745,21 @@ async fn serve_subprocess_e2e() {
             "params": { "protocolVersion": 1 }
         }),
         "1",
-        RPC_TIMEOUT,
+        HANDSHAKE_TIMEOUT,
     )
     .await;
     assert!(
         init_resp.get("result").is_some(),
         "initialize must return a result; got: {init_resp}"
+    );
+    assert_eq!(
+        init_resp["result"]["agentInfo"]["name"],
+        "bitrouter-acp-controller"
+    );
+    assert!(init_resp["result"]["agentCapabilities"]["providers"].is_null());
+    assert_eq!(
+        init_resp["result"]["_meta"]["bitrouter.dev/controller"]["upstreamAgentInfo"]["name"],
+        "stub-harness"
     );
 
     // ── 2. session/new ────────────────────────────────────────────────────
@@ -547,27 +776,59 @@ async fn serve_subprocess_e2e() {
         RPC_TIMEOUT,
     )
     .await;
-    let session_id = new_resp["result"]["sessionId"]
+    let first_session_id = new_resp["result"]["sessionId"]
         .as_str()
         .expect("session/new must return sessionId");
-    assert!(!session_id.is_empty(), "sessionId must not be empty");
+    assert_eq!(first_session_id, "native-a");
+    assert!(new_resp["result"].get("record_id").is_none());
 
-    // ── 3. session/prompt ─────────────────────────────────────────────────
-    // The stub streams a `session/update` before the prompt result. Collect
-    // all lines until we get the response for id "3".
-    let (prompt_resp, notifications) = bounded_round_trip(
+    let (second_new_resp, _) = bounded_round_trip(
         &mut child_stdin,
         &mut reader,
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": "3",
+            "method": "session/new",
+            "params": { "cwd": "/", "mcpServers": [] }
+        }),
+        "3",
+        RPC_TIMEOUT,
+    )
+    .await;
+    let second_session_id = second_new_resp["result"]["sessionId"].clone();
+    assert_eq!(second_session_id, "native-b");
+
+    let (load_resp, _) = bounded_round_trip(
+        &mut child_stdin,
+        &mut reader,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "4",
+            "method": "session/load",
+            "params": { "sessionId": "native-a", "cwd": "/", "mcpServers": [] }
+        }),
+        "4",
+        RPC_TIMEOUT,
+    )
+    .await;
+    assert_eq!(load_resp["result"]["_meta"]["loadedBy"], "harness");
+
+    // ── 5. session/prompt ─────────────────────────────────────────────────
+    // The stub streams a `session/update` before the prompt result. Collect
+    // all lines until we get the response for id "5".
+    let (prompt_resp, notifications) = bounded_round_trip(
+        &mut child_stdin,
+        &mut reader,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "5",
             "method": "session/prompt",
             "params": {
-                "sessionId": session_id,
+                "sessionId": second_session_id,
                 "prompt": [{ "type": "text", "text": "do X" }]
             }
         }),
-        "3",
+        "5",
         RPC_TIMEOUT,
     )
     .await;
@@ -581,6 +842,7 @@ async fn serve_subprocess_e2e() {
     // was forwarded through the serve pipeline to our client.
     let has_hi = notifications.iter().any(|n| {
         n.get("method").and_then(|m| m.as_str()) == Some("session/update")
+            && n["params"]["sessionId"] == "native-b"
             && format!("{n}").contains("hi")
     });
     assert!(
@@ -590,7 +852,7 @@ async fn serve_subprocess_e2e() {
 
     // ── Disconnect: serve must exit on its OWN when the manager closes stdin ─
     // This is the regression guard for the process-leak bug: dropping the
-    // child's stdin handle delivers EOF to `bitrouter acp serve` (the manager
+    // child's stdin handle delivers EOF to `bro acp serve` (the manager
     // disconnecting). The server must detect EOF, tear down, drop its
     // `Arc<Session>` (which kills the upstream agent child), and exit — WITHOUT
     // us having to `kill()` it. We assert it exits on its own within a few
@@ -611,7 +873,7 @@ async fn serve_subprocess_e2e() {
             // then fail loudly — this is the bug we are guarding against.
             let _ = child.kill().await;
             panic!(
-                "bitrouter acp serve did NOT exit within 5s after the manager \
+                "bro acp serve did NOT exit within 5s after the manager \
                  closed stdin — it hung (process/agent-child leak regression)"
             );
         }
@@ -652,8 +914,7 @@ async fn prompt_headless_denies_permission_and_completes() {
     cfg.agents.insert("perm-stub".to_string(), agent_cfg);
 
     let base = tempfile::tempdir().expect("tempdir");
-    let orig_dir = std::env::current_dir().expect("cwd");
-    std::env::set_current_dir(base.path()).expect("set_current_dir");
+    let _cwd = CwdGuard::enter(base.path());
 
     let source = bitrouter::paths::ConfigSource::Default {
         home: base.path().to_path_buf(),
@@ -672,14 +933,12 @@ async fn prompt_headless_denies_permission_and_completes() {
     // Bound the whole run: before the fix this hung forever.
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(20),
-        bitrouter::acp_cli::prompt(ctx, "write it", false, None, &mut buf),
+        bitrouter::acp_cli::prompt(ctx, "write it", Default::default(), &mut buf),
     )
     .await;
 
-    let _ = std::env::set_current_dir(&orig_dir);
-
     let result = result.expect("headless prompt must not hang on a permission request");
-    result.expect("prompt should complete");
+    let tally = result.expect("prompt should complete");
 
     let output = String::from_utf8(buf).expect("utf8");
     assert!(
@@ -690,30 +949,296 @@ async fn prompt_headless_denies_permission_and_completes() {
         output.contains("\"result\""),
         "turn must complete:\n{output}"
     );
+    // The stream says what was decided, and the exit status says the agent
+    // was refused.
+    let permission = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|line| line["type"] == "permission");
+    assert_eq!(
+        permission.as_ref().map(|line| &line["decision"]),
+        Some(&serde_json::json!("denied"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["title"]),
+        Some(&serde_json::json!("write file"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["kind"]),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["version"]),
+        Some(&serde_json::json!(1))
+    );
+    assert_eq!(
+        tally.exit_code(),
+        5,
+        "denied and nothing approved is exit 5"
+    );
 }
 
-// ── Test 3: providers/*, usage cost, and the forwarded update variants ───────
+/// The ACP stub every headless-permission test drives: one
+/// `session/request_permission` whose tool call carries the given `kind`,
+/// answered with a message naming the option the client chose.
+fn permission_stub(kind: &str) -> String {
+    format!(
+        r#"
+        while read line; do
+          id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          case "$line" in
+            *initialize*)   printf '{{"jsonrpc":"2.0","id":"%s","result":{{"protocolVersion":1}}}}\n' "$id";;
+            *session/new*)  printf '{{"jsonrpc":"2.0","id":"%s","result":{{"sessionId":"u1"}}}}\n' "$id";;
+            *session/prompt*)
+                printf '{{"jsonrpc":"2.0","id":"99","method":"session/request_permission","params":{{"sessionId":"u1","toolCall":{{"toolCallId":"tc1","title":"Write src/main.rs","kind":"{kind}"}},"options":[{{"optionId":"allow","name":"Allow","kind":"allow_once"}},{{"optionId":"rej","name":"Reject","kind":"reject_once"}}]}}}}\n'
+                read resp
+                chosen=$(echo "$resp" | sed -n 's/.*"optionId":"\([^"]*\)".*/\1/p')
+                printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"u1","update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"chose:%s"}}}}}}}}\n' "$chosen"
+                printf '{{"jsonrpc":"2.0","id":"%s","result":{{"stopReason":"end_turn"}}}}\n' "$id";;
+          esac
+        done
+    "#
+    )
+}
+
+/// Run one headless prompt against `script` under `options`, from a temp cwd.
+/// Returns the tally and the bytes written.
+async fn headless(
+    script: String,
+    text: &str,
+    options: bitrouter::acp_cli::PromptOptions,
+) -> (bitrouter::acp_cli::PermissionTally, String) {
+    let base = tempfile::tempdir().expect("tempdir");
+    let _cwd = CwdGuard::enter(base.path());
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut buf: Vec<u8> = Vec::new();
+    let ctx = bitrouter::acp_cli::SpawnContext {
+        source: &source,
+        config: stub_config_with(&script),
+        agent_id: "stub",
+        options: bitrouter::acp_cli::launch_options(None),
+        routing: bitrouter::acp_cli::RoutingOptions {
+            direct: true,
+            ..Default::default()
+        },
+    };
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        bitrouter::acp_cli::prompt(ctx, text, options, &mut buf),
+    )
+    .await;
+    let tally = result
+        .expect("a headless prompt must not hang")
+        .expect("prompt should complete");
+    (tally, String::from_utf8(buf).expect("utf8"))
+}
+
+fn policy(mode: bitrouter_tui::permission::Mode) -> bitrouter_tui::permission::Policy {
+    bitrouter_tui::permission::Policy {
+        mode,
+        ..Default::default()
+    }
+}
+
+/// `--approve-all` selects the agent's allow option, says so on the stream,
+/// and exits 0.
+#[tokio::test]
+async fn prompt_approve_all_selects_the_allow_option() {
+    let options = bitrouter::acp_cli::PromptOptions {
+        policy: policy(bitrouter_tui::permission::Mode::ApproveAll),
+        ..Default::default()
+    };
+    let (tally, output) = headless(permission_stub("execute"), "run it", options).await;
+    assert!(output.contains("chose:allow"), "{output}");
+    let permission = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|line| line["type"] == "permission");
+    assert_eq!(
+        permission.as_ref().map(|line| &line["decision"]),
+        Some(&serde_json::json!("approved"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["title"]),
+        Some(&serde_json::json!("Write src/main.rs"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["kind"]),
+        Some(&serde_json::json!("execute"))
+    );
+    assert_eq!(
+        permission.as_ref().map(|line| &line["version"]),
+        Some(&serde_json::json!(1))
+    );
+    assert_eq!(tally.exit_code(), 0);
+}
+
+/// `--approve-reads` reads the tool kind the harness labelled the call with:
+/// a read is approved, an execute is denied and the run exits 5.
+#[tokio::test]
+async fn prompt_approve_reads_reads_the_kind() {
+    let reads = || bitrouter::acp_cli::PromptOptions {
+        policy: policy(bitrouter_tui::permission::Mode::ApproveReads),
+        ..Default::default()
+    };
+    let (tally, output) = headless(permission_stub("read"), "read it", reads()).await;
+    assert!(output.contains("chose:allow"), "{output}");
+    assert_eq!(tally.exit_code(), 0);
+
+    let (tally, output) = headless(permission_stub("execute"), "run it", reads()).await;
+    assert!(output.contains("chose:rej"), "{output}");
+    assert_eq!(tally.exit_code(), 5);
+}
+
+/// A per-tool deny outranks the blanket mode, matched on the title's first
+/// word.
+#[tokio::test]
+async fn prompt_permission_policy_title_head_wins() {
+    let options = bitrouter::acp_cli::PromptOptions {
+        policy: bitrouter_tui::permission::Policy {
+            mode: bitrouter_tui::permission::Mode::ApproveAll,
+            auto_deny: vec!["write".to_string()],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let (tally, output) = headless(permission_stub("edit"), "write it", options).await;
+    assert!(output.contains("chose:rej"), "{output}");
+    assert_eq!(tally.exit_code(), 5);
+}
+
+/// `--format quiet` prints the assistant's text and nothing else.
+#[tokio::test]
+async fn prompt_format_quiet_prints_only_the_text() {
+    let options = bitrouter::acp_cli::PromptOptions {
+        format: bitrouter::acp_cli::PromptFormat::Quiet,
+        ..Default::default()
+    };
+    let (_, output) = headless(BASH_STUB.to_string(), "hello", options).await;
+    assert_eq!(output, "hi\n");
+}
+
+/// `--format text` prints the transcript as `chat` prints it to a pipe: the
+/// message, the stop reason, and no JSON.
+#[tokio::test]
+async fn prompt_format_text_renders_the_transcript() {
+    let options = bitrouter::acp_cli::PromptOptions {
+        format: bitrouter::acp_cli::PromptFormat::Text,
+        ..Default::default()
+    };
+    let (_, output) = headless(BASH_STUB.to_string(), "hello", options).await;
+    assert!(output.contains("hi"), "{output}");
+    assert!(output.contains("[end_turn]"), "{output}");
+    assert!(
+        output.starts_with("session u1 · agent stub · direct\n"),
+        "{output}"
+    );
+    assert!(
+        !output.contains("{\"type\""),
+        "no JSON in the text presentation:\n{output}"
+    );
+}
+
+/// I8: a turn that blows `--turn-timeout` is cancelled cooperatively and then
+/// failed. The stub answers the handshake and `session/new`, acknowledges the
+/// `session/cancel` by doing nothing, and never answers `session/prompt` — so
+/// only the client's own deadline can end the turn.
+#[tokio::test]
+async fn prompt_turn_timeout_fails_the_turn_instead_of_hanging() {
+    const STALL_STUB: &str = r#"
+        while read line; do
+          id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          case "$line" in
+            *initialize*)   printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+            *session/new*)  printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+          esac
+        done
+    "#;
+    let base = tempfile::tempdir().expect("tempdir");
+    let _cwd = CwdGuard::enter(base.path());
+
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut buf: Vec<u8> = Vec::new();
+    let ctx = bitrouter::acp_cli::SpawnContext {
+        source: &source,
+        config: stub_config_with(STALL_STUB),
+        agent_id: "stub",
+        // One second, plus the client's three-second cooperative-cancel grace.
+        options: bitrouter::acp_cli::launch_options(Some(1)),
+        routing: bitrouter::acp_cli::RoutingOptions {
+            direct: true,
+            ..Default::default()
+        },
+    };
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf),
+    )
+    .await;
+
+    let result = outcome.expect("--turn-timeout must end the turn, not hang the process");
+    let error = format!("{:#}", result.expect_err("a stalled turn must fail"));
+    assert!(
+        error.contains("timed out"),
+        "the failure must name the deadline: {error}"
+    );
+}
+
+/// I11: a harness that dies mid-prompt fails the turn rather than hanging it.
+/// The stub answers the handshake and `session/new`, then exits with the
+/// prompt in flight.
+#[tokio::test]
+async fn prompt_fails_fast_when_the_harness_dies_mid_turn() {
+    const DYING_STUB: &str = r#"
+        while read line; do
+          id=$(echo "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          case "$line" in
+            *initialize*)     printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
+            *session/new*)    printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"u1"}}\n' "$id";;
+            *session/prompt*) exit 0;;
+          esac
+        done
+    "#;
+    let base = tempfile::tempdir().expect("tempdir");
+    let _cwd = CwdGuard::enter(base.path());
+
+    let source = bitrouter::paths::ConfigSource::Default {
+        home: base.path().to_path_buf(),
+    };
+    let mut buf: Vec<u8> = Vec::new();
+    let ctx = bitrouter::acp_cli::SpawnContext {
+        source: &source,
+        config: stub_config_with(DYING_STUB),
+        agent_id: "stub",
+        options: bitrouter::acp_cli::launch_options(None),
+        routing: bitrouter::acp_cli::RoutingOptions {
+            direct: true,
+            ..Default::default()
+        },
+    };
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        bitrouter::acp_cli::prompt(ctx, "hello", Default::default(), &mut buf),
+    )
+    .await;
+
+    let result = outcome.expect("a dead harness must fail the turn, not hang it");
+    assert!(
+        result.is_err(),
+        "a turn whose harness died must fail; output:\n{}",
+        String::from_utf8_lossy(&buf)
+    );
+}
+
+// ── Test 3: forwarded update variants ───────────────────────────────────────
 
 /// A stub that emits, during one prompt turn, every stable v1 `session/update`
 /// the gateway used to swallow — then ends the turn.
 const CONFORMANCE_CONFIG_YAML: &str = r#"
-database:
-  url: "sqlite://DB_PATH?mode=rwc"
-providers:
-  alpha:
-    api_base: https://alpha.example.com/v1
-    api_key: sk-CONFORMANCE-ALPHA-SECRET
-    api_protocol:
-      - "*": chat_completions
-    models:
-      - { id: m1 }
-  beta:
-    api_base: https://beta.example.com/v1
-    api_key: sk-CONFORMANCE-BETA-SECRET
-    api_protocol:
-      - "*": anthropic
-    models:
-      - { id: m1 }
 agents:
   stub:
     name: stub
@@ -739,71 +1264,13 @@ agents:
             done
 "#;
 
-/// Settle one request into the metering database the substrate reads, so a
-/// prompt turn has measured spend to report.
-///
-/// Called twice: once before launch to create the file and run migrations,
-/// and once *during* the session. Only the second lands inside the session's
-/// spend window — the substrate deliberately scopes cost to the session, so
-/// spend that predates it must not be attributed to it.
-async fn settle_request(db_path: &std::path::Path, request_id: &str, charge_micro_usd: i64) {
-    use bitrouter::metering::db::{ReconciliationStatus, RequestMetric};
-    use bitrouter::metering::pricing::{
-        ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource,
-    };
-    let url = format!("sqlite://{}?mode=rwc", db_path.display());
-    let db = bitrouter::db::connect(&url)
-        .await
-        .expect("open metering db");
-    bitrouter::db::run_migrations(&db).await.expect("migrate");
-    let store = bitrouter::metering::store::MeteringStore::new(db);
-    store
-        .record_request(RequestMetric {
-            request_id: request_id.to_string(),
-            user_id: "u1".into(),
-            api_key_id: "k1".into(),
-            launch_id: None,
-            model_id: "m1".into(),
-            provider_id: "alpha".into(),
-            prompt_tokens: 1_000,
-            completion_tokens: 200,
-            reasoning_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            uncached_input_tokens: 1_000,
-            output_tokens: 200,
-            usage_origin: bitrouter_sdk::language_model::UsageOrigin::ProviderReported,
-            raw_usage: None,
-            charge_status: ChargeStatus::Computed,
-            charge_evidence: ChargeEvidence {
-                status: ChargeStatus::Computed,
-                charge_micro_usd: Some(charge_micro_usd),
-                normalized_usage: Default::default(),
-                effective_rates: EffectivePricingRates::default(),
-                pricing_source: PricingSource::Configured,
-                pricing_version: "sha256:conformance".to_string(),
-                unknown_reason: None,
-            },
-            reconciliation_status: ReconciliationStatus::NotApplicable,
-            estimated_charge_micro_usd: charge_micro_usd,
-            latency_ms: 1_200,
-            generation_time_ms: 900,
-            streamed: false,
-            error: None,
-        })
-        .await
-        .expect("seed settled request");
-}
-
-/// A live `bitrouter acp serve` subprocess, initialized and with a session
+/// A live `bro acp serve` subprocess, initialized and with a session
 /// open — the fixture the four conformance assertions below each drive.
 struct ServeFixture {
     child: tokio::process::Child,
     stdin: tokio::process::ChildStdin,
     reader: tokio::io::BufReader<tokio::process::ChildStdout>,
     session_id: serde_json::Value,
-    stderr_path: std::path::PathBuf,
-    db_path: std::path::PathBuf,
     _dir: tempfile::TempDir,
 }
 
@@ -819,17 +1286,11 @@ impl ServeFixture {
         use tokio::io::BufReader;
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let db_path = dir.path().join("metering.db");
-        // Before launch: creates the file and runs migrations. This request
-        // predates the session, so it must NOT show up in its cost.
-        settle_request(&db_path, "before-session", 999_000).await;
-
         let config_path = dir.path().join("bitrouter.yaml");
-        std::fs::write(
-            &config_path,
-            CONFORMANCE_CONFIG_YAML.replace("DB_PATH", &db_path.display().to_string()),
-        )
-        .expect("write config");
+        assert!(
+            std::fs::write(&config_path, CONFORMANCE_CONFIG_YAML).is_ok(),
+            "write config"
+        );
 
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let workspace_root = manifest.ancestors().nth(2).expect("workspace root");
@@ -838,10 +1299,7 @@ impl ServeFixture {
         } else {
             "release"
         };
-        let binary = workspace_root
-            .join("target")
-            .join(profile)
-            .join("bitrouter");
+        let binary = workspace_root.join("target").join(profile).join("bro");
         if !binary.exists() {
             eprintln!(
                 "conformance: binary not found at {}; skipping",
@@ -868,7 +1326,7 @@ impl ServeFixture {
             .stderr(stderr_file)
             .kill_on_drop(true)
             .spawn()
-            .expect("spawn bitrouter acp serve");
+            .expect("spawn bro acp serve");
 
         let mut stdin = child.stdin.take().expect("child stdin");
         let stdout = child.stdout.take().expect("child stdout");
@@ -880,7 +1338,7 @@ impl ServeFixture {
             serde_json::json!({"jsonrpc":"2.0","id":"1","method":"initialize",
                                "params":{"protocolVersion":1}}),
             "1",
-            CONFORMANCE_TIMEOUT,
+            HANDSHAKE_TIMEOUT,
         )
         .await;
         assert!(init.get("result").is_some(), "initialize failed: {init}");
@@ -904,8 +1362,6 @@ impl ServeFixture {
             stdin,
             reader,
             session_id: new_resp["result"]["sessionId"].clone(),
-            stderr_path,
-            db_path,
             _dir: dir,
         })
     }
@@ -973,169 +1429,13 @@ impl ServeFixture {
                 // than a leak that outlives the run.
                 let _ = child.kill().await;
                 let _ = child.wait().await;
-                panic!("bitrouter acp serve did not exit within 5s of stdin close");
+                panic!("bro acp serve did not exit within 5s of stdin close");
             }
         }
     }
-
-    /// Fail if any provider credential appears in `value`'s serialized bytes.
-    /// Asserting on the bytes rather than on fields means a secret smuggled
-    /// through `_meta` fails too.
-    fn assert_no_credentials(value: &serde_json::Value) {
-        let wire = serde_json::to_string(value).expect("serialize");
-        for secret in ["sk-CONFORMANCE-ALPHA-SECRET", "sk-CONFORMANCE-BETA-SECRET"] {
-            assert!(
-                !wire.contains(secret),
-                "a credential reached the providers wire: {wire}"
-            );
-        }
-        assert!(!wire.contains("api_key"), "{wire}");
-    }
 }
 
-/// Assertion 1 — `providers/list` returns BitRouter's routing catalog, in the
-/// protocol's own nouns, with no route singled out before a `set`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conformance_providers_list_returns_the_catalog() {
-    let Some(mut fixture) = ServeFixture::launch().await else {
-        return;
-    };
-    let (listed, _) = fixture
-        .call("3", "providers/list", serde_json::json!({}))
-        .await;
-
-    let providers = listed["result"]["providers"]
-        .as_array()
-        .unwrap_or_else(|| panic!("providers/list must return a catalog; got {listed}"));
-    let ids: Vec<&str> = providers
-        .iter()
-        .filter_map(|p| p["providerId"].as_str())
-        .collect();
-    assert_eq!(ids, vec!["alpha", "beta"], "the routable catalog: {listed}");
-    assert!(
-        providers.iter().all(|p| p["current"].is_null()),
-        "no route is in force before providers/set: {listed}"
-    );
-    ServeFixture::assert_no_credentials(&listed);
-    fixture.shutdown().await;
-}
-
-/// Assertion 2 — `providers/set` never claims a switch it did not perform.
-///
-/// This fixture runs `--direct`, so the session has no daemon to install a
-/// route override in and genuinely *cannot* reroute. The wire-level guarantee
-/// is therefore that it says so: an error, and no route reported as in force
-/// afterwards. That a routable session really does move is a daemon-side fact,
-/// pinned by `set_route_reroutes_only_the_named_launch` in tests/daemon.rs.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conformance_providers_set_changes_the_effective_route() {
-    let Some(mut fixture) = ServeFixture::launch().await else {
-        return;
-    };
-    let (set_resp, _) = fixture
-        .call(
-            "3",
-            "providers/set",
-            serde_json::json!({"providerId":"beta","apiType":"anthropic",
-                               "baseUrl":"https://beta.example.com/v1","headers":{}}),
-        )
-        .await;
-    assert!(
-        set_resp.get("error").is_some(),
-        "a session that cannot reroute must refuse, not report success: {set_resp}"
-    );
-
-    let (relisted, _) = fixture
-        .call("4", "providers/list", serde_json::json!({}))
-        .await;
-    assert!(
-        relisted["result"]["providers"]
-            .as_array()
-            .expect("catalog")
-            .iter()
-            .all(|p| p["current"].is_null()),
-        "a refused set must leave no route reported as in force: {relisted}"
-    );
-    ServeFixture::assert_no_credentials(&relisted);
-
-    // An unroutable target is refused too, and before the daemon is asked.
-    let (rejected, _) = fixture
-        .call(
-            "5",
-            "providers/set",
-            serde_json::json!({"providerId":"nonexistent","apiType":"openai",
-                               "baseUrl":"https://nope.example.com/v1","headers":{}}),
-        )
-        .await;
-    assert!(
-        rejected.get("error").is_some(),
-        "an unknown provider must be refused: {rejected}"
-    );
-    fixture.shutdown().await;
-}
-
-/// Assertion 3 — a settled turn puts a **non-null, router-measured** cost on
-/// the wire, scoped to this session.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conformance_usage_update_carries_measured_cost() {
-    use tokio::io::AsyncBufReadExt;
-
-    let Some(mut fixture) = ServeFixture::launch().await else {
-        return;
-    };
-    // Settle a request *inside* the session window. The $0.999 settled before
-    // launch must not be counted: session cost is the session's.
-    let db_path = fixture.db_path.clone();
-    settle_request(&db_path, "during-session", 750_000).await;
-
-    let notifications = fixture.prompt("3", "go").await;
-
-    // The synthesized update races the prompt response, so accept it either
-    // among this turn's notifications or on a following read.
-    let mut usage_cost = notifications
-        .iter()
-        .filter(|n| n["method"] == "session/update")
-        .find(|n| n["params"]["update"]["sessionUpdate"] == "usage_update")
-        .map(|n| n["params"]["update"]["cost"].clone())
-        .filter(|c| !c.is_null());
-    let deadline = tokio::time::Instant::now() + CONFORMANCE_TIMEOUT;
-    while usage_cost.is_none() && tokio::time::Instant::now() < deadline {
-        let mut buf = String::new();
-        let read = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            fixture.reader.read_line(&mut buf),
-        )
-        .await;
-        let Ok(Ok(n)) = read else { break };
-        if n == 0 {
-            break;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(buf.trim()) else {
-            continue;
-        };
-        if v["method"] == "session/update"
-            && v["params"]["update"]["sessionUpdate"] == "usage_update"
-            && !v["params"]["update"]["cost"].is_null()
-        {
-            usage_cost = Some(v["params"]["update"]["cost"].clone());
-        }
-    }
-
-    let cost = usage_cost.unwrap_or_else(|| {
-        let stderr = std::fs::read_to_string(&fixture.stderr_path).unwrap_or_default();
-        panic!("no UsageUpdate with a non-null cost reached the manager\nstderr:\n{stderr}")
-    });
-    assert_eq!(
-        cost["amount"].as_f64(),
-        Some(0.75),
-        "the router-measured charge for THIS session, in USD — the $0.999 \
-         settled before launch must not be counted: {cost}"
-    );
-    assert_eq!(cost["currency"].as_str(), Some("USD"), "{cost}");
-    fixture.shutdown().await;
-}
-
-/// Assertion 4 — the five `session/update` variants the gateway used to
+/// The five `session/update` variants the legacy single-session gateway used to
 /// swallow survive the round-trip to the manager.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conformance_forwarded_update_variants_survive_round_trip() {
@@ -1161,7 +1461,7 @@ async fn conformance_forwarded_update_variants_survive_round_trip() {
 
 // ── Test 5: `chat` on a pipe ─────────────────────────────────────────────────
 
-/// `bitrouter chat` renders for a person; a redirect has none. Spawn it with
+/// `bro chat` renders for a person; a redirect has none. Spawn it with
 /// stdout on a pipe, feed it one prompt, and assert the transcript arrives as
 /// plain text — **no ESC byte anywhere**.
 ///
@@ -1189,10 +1489,7 @@ async fn chat_on_a_pipe_is_plain_text() {
     } else {
         "release"
     };
-    let binary = workspace_root
-        .join("target")
-        .join(profile)
-        .join("bitrouter");
+    let binary = workspace_root.join("target").join(profile).join("bro");
     if !binary.exists() {
         eprintln!(
             "chat_on_a_pipe_is_plain_text: binary not found at {}; skipping",
@@ -1217,7 +1514,7 @@ async fn chat_on_a_pipe_is_plain_text() {
         .stderr(stderr_file)
         .kill_on_drop(true)
         .spawn()
-        .expect("spawn bitrouter chat");
+        .expect("spawn bro chat");
 
     let mut child_stdin = child.stdin.take().expect("child stdin");
     child_stdin
@@ -1243,5 +1540,72 @@ async fn chat_on_a_pipe_is_plain_text() {
     assert!(
         stdout.contains("hi"),
         "the agent's reply must still reach a pipe; got {stdout:?}\nstderr:\n{stderr}"
+    );
+}
+
+// ── `acp serve` emits the ignored-config warnings ─────────────────────────────
+
+/// `bro acp serve` never builds an `App` and never reaches
+/// `build_observability`, so for the whole of PR #851 it was the one telemetry
+/// surface that read `plugins.*` and said nothing about the blocks it ignores.
+/// The guard is emitted first thing in `acp_cli::serve`, which is why this test
+/// can assert it without a live harness: `--direct` short-circuits routing, and
+/// an agent id that is in neither the config nor the harness catalog fails
+/// immediately *after* the warnings have gone out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_warns_about_ignored_plugin_blocks() {
+    use std::time::Duration;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("bitrouter.yaml");
+    std::fs::write(
+        &config_path,
+        "plugins:\n  bitrouter-observe:\n    enabled: true\n",
+    )
+    .expect("write config");
+
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest.ancestors().nth(2).expect("workspace root");
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let binary = workspace_root.join("target").join(profile).join("bro");
+    if !binary.exists() {
+        eprintln!(
+            "serve_warns_about_ignored_plugin_blocks: binary not found at {}; skipping",
+            binary.display()
+        );
+        return;
+    }
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new(&binary)
+            .args([
+                "acp",
+                "serve",
+                "--agent",
+                "no-such-agent",
+                "--direct",
+                "--config",
+                config_path.to_str().expect("config path utf8"),
+            ])
+            .current_dir(dir.path())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("acp serve must exit promptly on an unknown agent")
+    .expect("acp serve output");
+
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("plugins.bitrouter-observe is not read by this binary and is ignored"),
+        "acp serve must warn about `plugins.*` blocks it ignores; stderr was:\n{stderr}"
     );
 }

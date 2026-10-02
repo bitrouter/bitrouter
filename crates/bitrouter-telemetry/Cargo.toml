@@ -1,0 +1,156 @@
+[package]
+name = "bitrouter-telemetry"
+description = "BitRouter telemetry egress: OTLP traces and metrics with multi-tenant attribution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The observability contract this crate renders. Default-features off: the
+# contract (`bitrouter_sdk::observe`) is ungated, so nothing here needs the
+# SDK's server, config or protocol features — `server` below adds the one that
+# is genuinely required, and only when the ingress span is wanted.
+bitrouter-sdk.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+# ===== `otel` features =====
+# OpenTelemetry stack for OTLP export (traces + metrics). Every version pin,
+# feature set, and rationale lives in the root `[workspace.dependencies]` —
+# the 0.32.x line has to move as one piece, so it is declared in one place.
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+# The `otel-http` / `otel-grpc` features below layer the wire transport onto
+# this bare `trace` + `metrics` base.
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry-semantic-conventions = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+dashmap = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+futures-core = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
+
+# NOT the workspace pin: that carries `env-filter`, which drags matchers /
+# regex-automata / regex-syntax in. `otel::subscriber` needs only LookupSpan.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"], optional = true }
+
+# Custom OTLP/HTTP client that injects a freshly-resolved bearer per export
+# (`otel::auth_client`). Only compiled under `otel-http`.
+opentelemetry-http = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+# OTLP/gRPC transport (tonic). Only compiled under `otel-grpc`.
+tonic = { workspace = true, optional = true }
+
+# `server` feature — the inbound ingress span wraps an axum `Router`.
+# `http-body` carries `SpanBody`, which holds the SERVER span open until the
+# response body is drained rather than ending it at the response head.
+axum = { workspace = true, optional = true }
+http-body = { workspace = true, optional = true }
+# `SpanBody`'s pin projection — the wrapper that keeps the SERVER span open
+# until the response body drains.
+pin-project-lite = { workspace = true, optional = true }
+
+[features]
+default = []
+
+# OTLP export of the SDK's own span/metric model: the public entry point.
+# Always builds — it selects the default transport.
+otel = ["otel-http"]
+
+# OTLP/HTTP + protobuf transport over reqwest with rustls. Maps to upstream
+# `opentelemetry-otlp/{http-proto,reqwest-client,reqwest-rustls}`. The
+# `dep:opentelemetry-http` / `dep:reqwest` / `dep:bytes` entries pull in the
+# custom `AuthRefreshClient` (`otel::auth_client`) that injects a live bearer
+# per export — HTTP-only, since the cloud/default telemetry path is OTLP/HTTP.
+otel-http = [
+    "__otel-core",
+    "opentelemetry-otlp/http-proto",
+    "opentelemetry-otlp/reqwest-client",
+    "opentelemetry-otlp/reqwest-rustls",
+    "dep:opentelemetry-http",
+    "dep:reqwest",
+    "dep:bytes",
+]
+
+# OTLP/gRPC transport over tonic with rustls (native trust roots). Maps to
+# upstream `opentelemetry-otlp/{grpc-tonic,tls-roots}`. May be enabled
+# alongside `otel-http` (e.g. under `--all-features`); when both are present,
+# HTTP takes runtime precedence (see `otel::transport`).
+otel-grpc = [
+    "__otel-core",
+    "dep:tonic",
+    "opentelemetry-otlp/grpc-tonic",
+    "opentelemetry-otlp/tls-roots",
+]
+
+# The inbound HTTP SERVER span, as an axum middleware over the SDK's router.
+#
+# Split out rather than folded into `__otel-core` because the two halves have
+# different consumers: a deployment that builds its own ingress span and only
+# wants the `tracing` bridge (`otel::subscriber`) should not compile axum for
+# it. `bitrouter-cloud` is exactly that consumer — it installs its own
+# `TraceLayer` on purpose, so that a public multi-tenant edge does not let
+# callers control its trace ids or sampling.
+server = ["dep:axum", "dep:http-body", "dep:pin-project-lite", "bitrouter-sdk/server"]
+
+# Private carrier: the transport-agnostic stack. Never enable directly — it is
+# a compile error without a transport (see lib.rs).
+__otel-core = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-semantic-conventions",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
+    "dep:dashmap",
+    "dep:http",
+    "dep:futures-core",
+    "dep:tokio",
+]
+
+[dev-dependencies]
+# The schema's conformance helpers (`span_def_for`, `value_type_matches`,
+# `render_json`) are behind the SDK's default-off `testing` feature: they have
+# no production callers, here or anywhere. This crate's conformance tests are
+# the beneficiary, so the feature is enabled here and nowhere else. It carries
+# no dependency of its own.
+#
+# Path-only on purpose — NOT `workspace = true`, which would inherit a
+# `version` alongside the path. `cargo package` resolves a versioned
+# dev-dependency against the *registry*, and the published `bitrouter-sdk`
+# 1.0.0-alpha.27 predates the `testing` feature, so inheriting the version made
+# `cargo publish` fail on a feature that exists only in this tree. Dropping the
+# version makes cargo strip this entry from the packaged manifest, which is
+# correct: it is a test-only edge that no consumer of the published crate has.
+bitrouter-sdk = { path = "../bitrouter-sdk", features = ["testing"] }
+tokio = { workspace = true, features = [
+    "sync",
+    "rt",
+    "macros",
+    "time",
+    "rt-multi-thread",
+    "test-util",
+] }
+futures.workspace = true
+# `ServiceExt::oneshot`, to drive the ingress middleware without a live socket.
+tower.workspace = true
+criterion = { version = "0.8", features = ["async_tokio"] }
+
+[[test]]
+name = "ingress_log_target"
+required-features = ["otel-http", "server"]
+
+[[bench]]
+name = "observe_overhead"
+harness = false
+required-features = ["otel-http"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

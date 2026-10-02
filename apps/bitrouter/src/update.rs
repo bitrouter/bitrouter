@@ -1,4 +1,4 @@
-//! `bitrouter update` — in-place self-updater built on cargo-dist's
+//! `bro update` — in-place self-updater built on cargo-dist's
 //! `axoupdater`. Decision logic (install-method detection, release channel,
 //! nudge-cache TTL) lives in small pure functions so it can be unit-tested
 //! without touching the network or replacing the running binary.
@@ -7,10 +7,11 @@ use crate::output::reports::update::UpdateReport;
 use crate::{daemon, style};
 use anyhow::Result;
 use axoupdater::{AxoUpdater, UpdateRequest};
+use bitrouter_sdk::invocation;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// How the running `bitrouter` binary was installed, used to pick the right
+/// How the running `bro` binary was installed, used to pick the right
 /// upgrade path when there is no cargo-dist receipt to self-update from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InstallMethod {
@@ -57,6 +58,12 @@ fn detect_install_method(exe: &Path, cargo_home: Option<&Path>) -> InstallMethod
         return InstallMethod::Cargo;
     }
     InstallMethod::Unknown
+}
+
+/// Only an unclassified executable may rely on a cargo-dist receipt. Receipts
+/// are global user state and can describe a different installation method.
+fn should_load_receipt(method: InstallMethod) -> bool {
+    method == InstallMethod::Unknown
 }
 
 /// Stable lowercase label for the JSON `install_method` field.
@@ -109,7 +116,7 @@ fn choose_spec(tag: Option<&str>, stable: bool) -> VersionSpec {
     }
 }
 
-/// Options parsed from the `bitrouter update` flags.
+/// Options parsed from the `bro update` flags.
 #[derive(Debug)]
 pub struct UpdateOptions {
     pub check: bool,
@@ -126,7 +133,7 @@ pub struct UpdateOptions {
 /// [`Output`]: crate::output::Output
 #[derive(Debug)]
 pub struct RunOutcome {
-    /// The single result value for `bitrouter update`, rendered to stdout.
+    /// The single result value for `bro update`, rendered to stdout.
     pub report: UpdateReport,
     /// A running daemon needs restarting to pick up the new binary. When true,
     /// `report.daemon` is already set to `restarted` on the optimistic
@@ -167,8 +174,9 @@ fn to_request(spec: VersionSpec) -> UpdateRequest {
     }
 }
 
-/// Configure an axoupdater for the `bitrouter` app. Prefers the dist install
-/// receipt; if absent, returns `None` so the caller can delegate.
+/// Configure an axoupdater for the `bitrouter` app. Used only for an unknown
+/// install method: package-manager installs must delegate even if an unrelated
+/// cargo-dist receipt exists on the machine.
 fn build_updater() -> Option<AxoUpdater> {
     let mut updater = AxoUpdater::new_for("bitrouter");
     if let Err(e) = updater.load_receipt() {
@@ -181,18 +189,31 @@ fn build_updater() -> Option<AxoUpdater> {
 pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
     let current = current_version().to_string();
 
-    // 1. No receipt -> package-manager install; delegate, never clobber.
-    let Some(mut updater) = build_updater() else {
-        let exe = std::env::current_exe().unwrap_or_default();
-        let method = detect_install_method(&exe, cargo_home().as_deref());
+    // 1. The running binary's path is authoritative. A global cargo-dist
+    // receipt can outlive an older Cargo install while this invocation runs a
+    // Homebrew or npm binary, so never let that receipt override a known
+    // package-manager install.
+    let exe = std::env::current_exe().unwrap_or_default();
+    let method = detect_install_method(&exe, cargo_home().as_deref());
+    if !should_load_receipt(method) {
         return Ok(RunOutcome::done(UpdateReport::delegated(
             current,
             method_label(method),
             delegation_command(method),
         )));
+    }
+
+    // 2. An unknown install can use a cargo-dist receipt when one is present;
+    // otherwise provide the generic installer command.
+    let Some(mut updater) = build_updater() else {
+        return Ok(RunOutcome::done(UpdateReport::delegated(
+            current,
+            method_label(InstallMethod::Unknown),
+            delegation_command(InstallMethod::Unknown),
+        )));
     };
 
-    // 2. Channel / pin.
+    // 3. Channel / pin.
     let spec = choose_spec(opts.tag.as_deref(), opts.stable);
     let target_label = match &spec {
         VersionSpec::Tag(t) => format!("version {t}"),
@@ -203,7 +224,7 @@ pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
     }
     updater.configure_version_specifier(to_request(spec));
 
-    // 3. Dry run.
+    // 4. Dry run.
     if opts.check {
         let available = updater.is_update_needed().await?;
         let target = if available {
@@ -216,7 +237,7 @@ pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
         )));
     }
 
-    // 4. Confirm + swap. The prompt is interactive UI, not the command result,
+    // 5. Confirm + swap. The prompt is interactive UI, not the command result,
     // so it goes to stderr — stdout carries only the final report.
     if !opts.yes && !confirm(&current, &target_label)? {
         return Ok(RunOutcome::done(UpdateReport::aborted(current)));
@@ -226,7 +247,7 @@ pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
     };
     let new_version = result.new_version.to_string();
 
-    // 5. Daemon awareness. The dispatch layer performs the restart (when asked)
+    // 6. Daemon awareness. The dispatch layer performs the restart (when asked)
     // before emitting; we label the report optimistically here.
     let daemon_running = daemon::endpoint_in_use(socket);
     let (daemon, restart_needed) = match (daemon_running, opts.restart) {
@@ -246,7 +267,7 @@ fn confirm(current: &str, target: &str) -> Result<bool> {
     use std::io::Write;
     let p = style::Palette::for_stderr();
     eprint!(
-        "Update bitrouter from {bold}{current}{reset} to {target}? [y/N] ",
+        "Update BitRouter from {bold}{current}{reset} to {target}? [y/N] ",
         bold = p.bold,
         reset = p.reset,
     );
@@ -302,7 +323,7 @@ const NUDGE_DISABLE_ENV: &str = "BITROUTER_NO_UPDATE_CHECK";
 /// Nudge network check cadence: once per day.
 const NUDGE_TTL_SECS: i64 = 24 * 60 * 60;
 
-/// Best-effort "update available" line for `bitrouter status`. Never returns an
+/// Best-effort "update available" line for `bro status`. Never returns an
 /// error and never blocks meaningfully: it respects the opt-out env var, checks
 /// the network at most once per `NUDGE_TTL_SECS` (cached under `home`), and
 /// swallows every failure.
@@ -344,12 +365,13 @@ pub async fn maybe_nudge(home: &Path, p: &style::Palette) {
 
     if let Some(latest) = latest.filter(|l| is_newer(l, current_version())) {
         // Diagnostic, not the command result — goes to stderr so it never
-        // pollutes a command's JSON stdout (e.g. `bitrouter status`).
+        // pollutes a command's JSON stdout (e.g. `bro status`).
         eprintln!();
         eprintln!(
-            "  {dim}↑ {latest} available — run `bitrouter update`{reset}",
+            "  {dim}↑ {latest} available — run `{cli} update`{reset}",
             dim = p.dim,
             reset = p.reset,
+            cli = invocation::name(),
         );
     }
 }
@@ -357,6 +379,10 @@ pub async fn maybe_nudge(home: &Path, p: &style::Palette) {
 /// Query the newest version tag, prereleases included, with a short timeout.
 /// Returns `None` on any error or timeout — the nudge is strictly best-effort.
 async fn query_latest() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    if !should_load_receipt(detect_install_method(&exe, cargo_home().as_deref())) {
+        return None;
+    }
     let mut updater = build_updater()?;
     updater.configure_version_specifier(UpdateRequest::LatestMaybePrerelease);
     tokio::time::timeout(
@@ -389,13 +415,22 @@ mod tests {
 
     #[test]
     fn detects_homebrew_from_cellar_path() {
-        let exe = Path::new("/opt/homebrew/Cellar/bitrouter/1.0.0/bin/bitrouter");
+        let exe = Path::new("/opt/homebrew/Cellar/bitrouter/1.0.0/bin/bro");
         assert_eq!(detect_install_method(exe, None), InstallMethod::Homebrew);
     }
 
     #[test]
+    fn managed_homebrew_binary_does_not_load_a_global_receipt() {
+        // A cargo-dist receipt is global to the user, not to an executable.
+        // `run` must therefore delegate based on this path before it attempts
+        // to load any receipt.
+        let exe = Path::new("/opt/homebrew/Cellar/bitrouter/1.0.0/bin/bro");
+        assert!(!should_load_receipt(detect_install_method(exe, None)));
+    }
+
+    #[test]
     fn detects_cargo_from_cargo_home_bin() {
-        let exe = Path::new("/home/me/.cargo/bin/bitrouter");
+        let exe = Path::new("/home/me/.cargo/bin/bro");
         let cargo_home = Path::new("/home/me/.cargo");
         assert_eq!(
             detect_install_method(exe, Some(cargo_home)),
@@ -405,8 +440,7 @@ mod tests {
 
     #[test]
     fn detects_npm_from_bin_real_path() {
-        let exe =
-            Path::new("/usr/local/lib/node_modules/bitrouter/node_modules/.bin_real/bitrouter");
+        let exe = Path::new("/usr/local/lib/node_modules/bitrouter/node_modules/.bin_real/bro");
         assert_eq!(detect_install_method(exe, None), InstallMethod::Npm);
     }
 
@@ -414,14 +448,13 @@ mod tests {
     fn npm_under_homebrew_node_is_npm_not_homebrew() {
         // A global npm install under a Homebrew-managed Node contains
         // `/homebrew/`; npm detection must win over the Homebrew heuristic.
-        let exe =
-            Path::new("/opt/homebrew/lib/node_modules/bitrouter/node_modules/.bin_real/bitrouter");
+        let exe = Path::new("/opt/homebrew/lib/node_modules/bitrouter/node_modules/.bin_real/bro");
         assert_eq!(detect_install_method(exe, None), InstallMethod::Npm);
     }
 
     #[test]
     fn unknown_when_no_signal_matches() {
-        let exe = Path::new("/usr/local/bin/bitrouter");
+        let exe = Path::new("/usr/local/bin/bro");
         assert_eq!(detect_install_method(exe, None), InstallMethod::Unknown);
     }
 

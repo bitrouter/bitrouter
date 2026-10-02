@@ -2758,6 +2758,7 @@ mod tests {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            headers: Vec::new(),
         }
     }
 
@@ -3772,6 +3773,7 @@ mod tests {
         );
         PipelineContext::new(PipelineRequest {
             request_id: "next-gateway".into(),
+            original_model: "openai:gpt-5".into(),
             model: "openai:gpt-5".into(),
             caller: CallerContext::new("key", owner),
             headers: Default::default(),
@@ -7064,6 +7066,7 @@ mod tests {
         }
         PipelineRequest {
             request_id: request_id.into(),
+            original_model: "gpt-5".into(),
             model: "gpt-5".into(),
             caller: CallerContext::new("key", "tool-owner"),
             headers: Default::default(),

@@ -14,8 +14,9 @@
 //! reach.
 //!
 //! Connections are pooled per server-name and lazily started through the
-//! configured lifecycle: legacy `initialize` for `latest`, or
-//! `server/discover` with narrowly-defined legacy fallback for `2026-07-28`.
+//! configured lifecycle: modern `server/discover` with rmcp's classified
+//! legacy fallback for the default `auto`, or legacy `initialize` when forced
+//! with `latest`.
 //! Subsequent requests reuse the same [`RunningService`]. There is no idle
 //! eviction in v1.0 — the pool grows to the number of distinct servers reached.
 //!
@@ -30,6 +31,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream, StreamExt};
@@ -285,12 +287,13 @@ impl RmcpExecutor {
     /// Select `version` and its startup lifecycle instead of
     /// [`ProtocolVersion::LATEST`].
     ///
-    /// `LATEST` uses the legacy `initialize` path. `2026-07-28` uses
-    /// `server/discover` and falls back to legacy initialization only when the
-    /// peer returns `METHOD_NOT_FOUND`; any other discovery error fails the
-    /// connection. The modern version also permits `tools/call` to return MRTR
-    /// `input_required` or a Tasks handle, which `map_call_tool_result` turns
-    /// into explicit errors.
+    /// `LATEST` uses the legacy `initialize` path. `2026-07-28` uses rmcp's
+    /// `Auto` lifecycle: it probes with `server/discover`, falls back after the
+    /// 10-second discovery timeout or a correlated JSON-RPC error classified
+    /// as legacy, and does not fall back for transport failures, malformed or
+    /// uncorrelated responses, or modern rejection codes. The modern version
+    /// also permits `tools/call` to return MRTR `input_required` or a Tasks
+    /// handle, which `map_call_tool_result` turns into explicit errors.
     ///
     /// Applies to connections opened after this call; pooled ones keep the
     /// version they negotiated.
@@ -384,17 +387,16 @@ impl RmcpExecutor {
 ///
 /// So the opt-in switches lifecycle, not just the version string:
 ///
-/// - `latest` keeps rmcp's plain `serve` (the `initialize` handshake), exactly
-///   as every release before this one.
-/// - `2026-07-28` uses [`ClientLifecycleMode::Auto`], which probes
-///   `server/discover` and falls back to `initialize` only when the peer
-///   answers `METHOD_NOT_FOUND` — so pointing the opt-in at a server that has
-///   not caught up still connects.
+/// - `latest` keeps rmcp's plain `serve` (the `initialize` handshake).
+/// - `auto` and `2026-07-28` use [`ClientLifecycleMode::Auto`], which probes
+///   `server/discover` and applies rmcp's classified fallback: a 10-second
+///   timeout or a complete, correlated non-modern JSON-RPC error retries with
+///   legacy `initialize`; transport failures, malformed or uncorrelated
+///   responses, and modern rejection codes remain errors.
 ///
-/// This is the reason to accept `Auto`'s one weakness (a server that rejects an
-/// unknown method with something other than `METHOD_NOT_FOUND` gets no
-/// fallback): on the `2026-07-28` path there is no correct alternative, and the
-/// default path never reaches this branch.
+/// The explicitly forced legacy path never reaches this branch. Keep this
+/// wording synchronized with the pinned rmcp implementation: the fallback is
+/// broader than `METHOD_NOT_FOUND`, but it is not a catch-all downgrade.
 fn lifecycle_for(version: &ProtocolVersion) -> Option<ClientLifecycleMode> {
     (version.as_str() >= ProtocolVersion::V_2026_07_28.as_str()).then(|| {
         ClientLifecycleMode::Auto {
@@ -766,6 +768,24 @@ fn merge_paginated_cache_hints(
     }
 }
 
+/// Normalize one typed page before it participates in a merged result.
+/// Missing hints are unknown, not permission to inherit a reusable policy from
+/// another page.
+fn normalize_paginated_cache_hints(
+    ttl_ms: &mut Option<u64>,
+    cache_scope: &mut Option<rmcp::model::CacheScope>,
+) {
+    if ttl_ms.is_none() {
+        *ttl_ms = Some(0);
+    }
+    if !matches!(
+        cache_scope.as_ref(),
+        Some(rmcp::model::CacheScope::Public | rmcp::model::CacheScope::Private)
+    ) {
+        *cache_scope = Some(rmcp::model::CacheScope::Private);
+    }
+}
+
 fn take_custom_list_cursor(
     result: &mut serde_json::Value,
 ) -> std::result::Result<Option<String>, String> {
@@ -777,6 +797,40 @@ fn take_custom_list_cursor(
         Some(serde_json::Value::String(cursor)) => Ok(Some(cursor)),
         Some(_) => Err("skills/list nextCursor is not a string".to_string()),
     }
+}
+
+/// Fill the synchronous Skills result envelope that SEP-2640 requires.
+///
+/// Older or partially implemented upstreams can omit the draft cache hints.
+/// The gateway may still relay their payload, but it must not invent reusable
+/// freshness or cross-caller visibility: absent/unknown hints normalize to
+/// `ttlMs: 0` and `cacheScope: "private"`.
+fn normalize_cacheable_result_envelope(
+    result: &mut serde_json::Value,
+    method: &str,
+) -> std::result::Result<(), String> {
+    let object = result
+        .as_object_mut()
+        .ok_or_else(|| format!("{method} result is not an object"))?;
+    match object.get("resultType") {
+        None => {
+            object.insert("resultType".to_string(), "complete".into());
+        }
+        Some(serde_json::Value::String(kind)) if kind == "complete" => {}
+        Some(_) => return Err(format!("{method} resultType is not 'complete'")),
+    }
+    match object.get("ttlMs") {
+        None => {
+            object.insert("ttlMs".to_string(), 0.into());
+        }
+        Some(value) if value.as_u64().is_some() => {}
+        Some(_) => return Err(format!("{method} ttlMs is not an unsigned integer")),
+    }
+    let scope = object.get("cacheScope").and_then(|value| value.as_str());
+    if scope != Some("public") {
+        object.insert("cacheScope".to_string(), "private".into());
+    }
+    Ok(())
 }
 
 fn merge_custom_skills_page(
@@ -898,6 +952,8 @@ async fn dispatch(
                 .$call(None)
                 .await
                 .map_err(|e| map_service_error(server, method, e))?;
+            normalize_paginated_cache_hints(&mut result.ttl_ms, &mut result.cache_scope);
+            let mut policy_at = Instant::now();
             let mut cursor = result.next_cursor.take();
             while let Some(next) = cursor {
                 let mut page = peer
@@ -906,6 +962,12 @@ async fn dispatch(
                     ))
                     .await
                     .map_err(|e| map_service_error(server, method, e))?;
+                let received_at = Instant::now();
+                super::age_optional_ttl_ms(
+                    &mut result.ttl_ms,
+                    received_at.duration_since(policy_at),
+                );
+                normalize_paginated_cache_hints(&mut page.ttl_ms, &mut page.cache_scope);
                 merge_paginated_cache_hints(
                     &mut result.ttl_ms,
                     &mut result.cache_scope,
@@ -914,10 +976,17 @@ async fn dispatch(
                 );
                 result.$items.append(&mut page.$items);
                 cursor = page.next_cursor;
+                policy_at = received_at;
             }
-            serde_json::to_value(&result).map_err(|e| {
+            super::age_optional_ttl_ms(&mut result.ttl_ms, policy_at.elapsed());
+            let serialize_at = Instant::now();
+            let mut value = serde_json::to_value(&result).map_err(|e| {
                 BitrouterError::internal(format!("mcp '{server}' {method} serialise: {e}"))
-            })
+            })?;
+            normalize_cacheable_result_envelope(&mut value, method)
+                .map_err(|e| upstream(server, e))?;
+            super::age_cacheable_result(&mut value, serialize_at.elapsed());
+            Ok(value)
         }};
     }
 
@@ -945,9 +1014,12 @@ async fn dispatch(
                 .read_resource(params)
                 .await
                 .map_err(|e| map_service_error(server, method, e))?;
-            serde_json::to_value(&result).map_err(|e| {
+            let mut value = serde_json::to_value(&result).map_err(|e| {
                 BitrouterError::internal(format!("mcp '{server}' resources/read serialise: {e}"))
-            })
+            })?;
+            normalize_cacheable_result_envelope(&mut value, method)
+                .map_err(|e| upstream(server, e))?;
+            Ok(value)
         }
         "resources/templates/list" => {
             list_all_preserving!(list_resource_templates, resource_templates)
@@ -977,6 +1049,9 @@ async fn dispatch(
             };
             let mut result = send_custom_request(peer, server, relayed, params).await?;
             if relayed == super::skills::SKILLS_LIST_METHOD {
+                normalize_cacheable_result_envelope(&mut result, relayed)
+                    .map_err(|e| upstream(server, e))?;
+                let mut policy_at = Instant::now();
                 let mut cursor = take_custom_list_cursor(&mut result)
                     .map_err(|e| upstream(server, format!("{method}: {e}")))?;
                 let mut seen = std::collections::BTreeSet::new();
@@ -1001,11 +1076,20 @@ async fn dispatch(
                     let mut page =
                         send_custom_request(peer, server, relayed, Some(page_params.into()))
                             .await?;
+                    normalize_cacheable_result_envelope(&mut page, relayed)
+                        .map_err(|e| upstream(server, e))?;
+                    let received_at = Instant::now();
+                    super::age_cacheable_result(&mut result, received_at.duration_since(policy_at));
                     cursor = take_custom_list_cursor(&mut page)
                         .map_err(|e| upstream(server, format!("{method}: {e}")))?;
                     merge_custom_skills_page(&mut result, page)
                         .map_err(|e| upstream(server, format!("{method}: {e}")))?;
+                    policy_at = received_at;
                 }
+                super::age_cacheable_result(&mut result, policy_at.elapsed());
+            } else if relayed == super::skills::SKILLS_GET_METHOD {
+                normalize_cacheable_result_envelope(&mut result, relayed)
+                    .map_err(|e| upstream(server, e))?;
             }
             Ok(result)
         }
@@ -1105,6 +1189,36 @@ mod tests {
         assert!(aggregate.get("nextCursor").is_none());
     }
 
+    #[test]
+    fn typed_pages_with_missing_hints_fail_closed_in_either_order() {
+        let mut first_ttl = Some(600);
+        let mut first_scope = Some(rmcp::model::CacheScope::Public);
+        let mut missing_ttl = None;
+        let mut missing_scope = None;
+        normalize_paginated_cache_hints(&mut missing_ttl, &mut missing_scope);
+        merge_paginated_cache_hints(&mut first_ttl, &mut first_scope, missing_ttl, missing_scope);
+        assert_eq!(first_ttl, Some(0));
+        assert!(matches!(
+            first_scope,
+            Some(rmcp::model::CacheScope::Private)
+        ));
+
+        let mut first_ttl = None;
+        let mut first_scope = None;
+        normalize_paginated_cache_hints(&mut first_ttl, &mut first_scope);
+        merge_paginated_cache_hints(
+            &mut first_ttl,
+            &mut first_scope,
+            Some(600),
+            Some(rmcp::model::CacheScope::Public),
+        );
+        assert_eq!(first_ttl, Some(0));
+        assert!(matches!(
+            first_scope,
+            Some(rmcp::model::CacheScope::Private)
+        ));
+    }
+
     /// The relay is an allowlist. A method outside it must still be rejected
     /// rather than tunnelled to the upstream.
     #[test]
@@ -1146,6 +1260,15 @@ mod tests {
             client_for(&exec).get_info().protocol_version,
             ProtocolVersion::V_2026_07_28,
         );
+    }
+
+    #[test]
+    fn modern_protocol_uses_rmcp_auto_lifecycle() {
+        assert!(matches!(
+            lifecycle_for(&ProtocolVersion::V_2026_07_28),
+            Some(ClientLifecycleMode::Auto { .. })
+        ));
+        assert!(lifecycle_for(&ProtocolVersion::LATEST).is_none());
     }
 
     /// Build a `ServerResult` from JSON. The rmcp result types are

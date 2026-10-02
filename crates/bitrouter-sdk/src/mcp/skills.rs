@@ -25,10 +25,9 @@
 //! to re-derive these shapes downstream. Keeping them beside the hook traits is
 //! what stops that drift.
 //!
-//! The *port* a server implements to serve skills is a different concern and
-//! lives with its siblings in `bitrouter-mcp::capabilities::skill_catalog`.
-//! Filesystem format parsing stays in the embedding app; fetching and
-//! installing skills are deliberately outside BitRouter's runtime surface.
+//! An origin server's storage port is deployment-specific and does not live in
+//! this SDK. Filesystem format parsing, fetching, and installing local skills
+//! are outside the gateway runtime surface.
 //!
 //! [SEP-2640]: https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640
 //! [Agent Skills specification]: https://agentskills.io/specification
@@ -95,13 +94,116 @@ pub const SKILLS_GET_METHOD: &str = "skills/get";
 /// gateway's relay allowlist has to spell it.
 pub const RESOURCES_DIRECTORY_READ_METHOD: &str = "resources/directory/read";
 
-/// One file of a skill, paired with the digest of its bytes.
+/// The literal value `resources` takes when a skill's content is generated
+/// dynamically and therefore cannot be pre-digested.
+pub const DYNAMIC_RESOURCES: &str = "dynamic";
+
+/// SEP-2640's per-skill cap on `resources` entries, `SKILL.md` included.
+///
+/// "Servers SHOULD NOT serve a skill that exceeds either limit; a skill that
+/// does is not guaranteed to be loadable by any conforming host."
+pub const MAX_SKILL_RESOURCES: usize = 512;
+
+/// SEP-2640's per-skill cap on the sum of `resources[].size`: 16 MiB.
+pub const MAX_SKILL_TOTAL_BYTES: u64 = 16_777_216;
+
+/// The only result discriminator valid for the synchronous Skills methods.
+///
+/// MCP `2026-07-28` permits other result kinds for methods that support MRTR
+/// or Tasks. The Skills extension explicitly requires `"complete"` for both
+/// `skills/list` and `skills/get`, so representing any other value here would
+/// let an origin server construct an invalid result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillsResultType {
+    /// The operation completed synchronously.
+    Complete,
+}
+
+/// Cache visibility for a Skills result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillsCacheScope {
+    /// The result is identical for every caller of this server instance.
+    Public,
+    /// The result may only be reused for the caller that requested it.
+    Private,
+}
+
+/// One file of a skill, paired with the digest **and byte length** of its
+/// bytes.
+///
+/// `size` is not decoration: the accepted SEP makes it REQUIRED on every entry
+/// so a host can budget a skill from the listing alone — enforce
+/// [`MAX_SKILL_RESOURCES`] and [`MAX_SKILL_TOTAL_BYTES`] before fetching a
+/// single file — and so that "a read whose byte length differs from the entry's
+/// `size` is a verification failure equivalent to a digest mismatch, whether or
+/// not the host goes on to compute the digest".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkillResource {
     /// Resource URI of the file.
     pub uri: String,
     /// SHA-256 of the file's raw bytes, as `sha256:{64 lowercase hex}`.
     pub digest: String,
+    /// Length in bytes of the file's raw content — the same bytes `digest`
+    /// covers.
+    pub size: u64,
+}
+
+/// The two forms `skills[].resources` may take.
+///
+/// The accepted SEP makes the field REQUIRED and admits exactly two values: the
+/// complete array, or the literal string `"dynamic"`. "An entry with no
+/// `resources` at all, or with any value other than an array or `"dynamic"`, is
+/// invalid, and hosts MUST NOT load it" — so this type has no third state, and
+/// deserializing anything else is an error rather than a silently tolerated
+/// entry a conforming host would refuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillResources {
+    /// The complete manifest: every file of the skill, each exactly once,
+    /// including an entry matching the skill's own `uri`.
+    Enumerated(Vec<SkillResource>),
+    /// Content generated on demand, so no stable digests can be published. Such
+    /// a skill "offers no content integrity and cannot be content-bound".
+    Dynamic,
+}
+
+impl SkillResources {
+    /// The enumerated files, or `None` for a dynamic skill.
+    pub fn entries(&self) -> Option<&[SkillResource]> {
+        match self {
+            Self::Enumerated(entries) => Some(entries),
+            Self::Dynamic => None,
+        }
+    }
+}
+
+impl Serialize for SkillResources {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Enumerated(entries) => entries.serialize(serializer),
+            Self::Dynamic => serializer.serialize_str(DYNAMIC_RESOURCES),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SkillResources {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Enumerated(Vec<SkillResource>),
+            Marker(String),
+        }
+        match Wire::deserialize(deserializer)? {
+            Wire::Enumerated(entries) => Ok(Self::Enumerated(entries)),
+            Wire::Marker(marker) if marker == DYNAMIC_RESOURCES => Ok(Self::Dynamic),
+            Wire::Marker(other) => Err(serde::de::Error::invalid_value(
+                serde::de::Unexpected::Str(&other),
+                &"an array of resources or the string \"dynamic\"",
+            )),
+        }
+    }
 }
 
 /// A skill entry — identical in shape and meaning in `skills/list` and
@@ -120,14 +222,15 @@ pub struct SkillEntry {
     /// revisions of the Agent Skills specification "pass through unchanged",
     /// which a typed struct would silently drop.
     pub frontmatter: serde_json::Map<String, serde_json::Value>,
-    /// Complete enumeration of the skill's files with their digests.
+    /// Complete enumeration of the skill's files with their digests and sizes,
+    /// or [`SkillResources::Dynamic`].
     ///
-    /// `None` — the key omitted entirely — is meaningful and distinct from
-    /// `Some(vec![])`: the SEP permits omission *only* for dynamically
-    /// generated skills whose content cannot be pre-digested, and such a skill
-    /// "offers no content integrity and cannot be content-bound".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resources: Option<Vec<SkillResource>>,
+    /// **Required.** An earlier draft let the key be omitted to mean "generated
+    /// dynamically"; the accepted SEP replaced that with an explicit `"dynamic"`
+    /// marker precisely "so that a host can tell a deliberately unverifiable
+    /// skill from a malformed entry", and made an entry carrying neither form
+    /// invalid.
+    pub resources: SkillResources,
     /// Any *top-level* entry field this crate does not model, preserved
     /// verbatim.
     ///
@@ -142,11 +245,30 @@ pub struct SkillEntry {
 
 /// The `skills/list` result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListSkillsResult {
+    /// Skills list operations always complete synchronously.
+    pub result_type: SkillsResultType,
     /// The skills this server serves. MAY be empty; per the SEP a host "MUST
     /// NOT treat an empty or partial listing as proof that a server has no
     /// skills".
     pub skills: Vec<SkillEntry>,
+    /// Freshness hint for the listing, in milliseconds.
+    pub ttl_ms: u64,
+    /// Whether the listing may be reused across callers.
+    pub cache_scope: SkillsCacheScope,
+}
+
+impl ListSkillsResult {
+    /// Build a conformant, synchronously complete listing.
+    pub fn complete(skills: Vec<SkillEntry>, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self {
+        Self {
+            result_type: SkillsResultType::Complete,
+            skills,
+            ttl_ms,
+            cache_scope,
+        }
+    }
 }
 
 /// The `skills/get` params.
@@ -158,9 +280,28 @@ pub struct GetSkillParams {
 
 /// The `skills/get` result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GetSkillResult {
+    /// Skill lookups always complete synchronously.
+    pub result_type: SkillsResultType,
     /// The requested entry.
     pub skill: SkillEntry,
+    /// Freshness hint for the entry, in milliseconds.
+    pub ttl_ms: u64,
+    /// Whether the entry may be reused across callers.
+    pub cache_scope: SkillsCacheScope,
+}
+
+impl GetSkillResult {
+    /// Build a conformant, synchronously complete skill lookup.
+    pub fn complete(skill: SkillEntry, ttl_ms: u64, cache_scope: SkillsCacheScope) -> Self {
+        Self {
+            result_type: SkillsResultType::Complete,
+            skill,
+            ttl_ms,
+            cache_scope,
+        }
+    }
 }
 
 /// Whether a configured server name is safe as one URI authority segment.
@@ -297,31 +438,46 @@ pub fn namespace_entry(label: &str, entry: &serde_json::Value) -> Option<serde_j
     object.insert("uri".to_string(), namespaced.into());
 
     // `resources` is the integrity commitment a host's approval binds to, so
-    // every entry in it has to move with the skill.
-    if let Some(resources_value) = object.get_mut("resources") {
-        let resources = resources_value.as_array_mut()?;
-        if resources.is_empty() {
+    // every entry in it has to move with the skill — and the field is REQUIRED,
+    // so an entry without it is one a conforming host must refuse. Republishing
+    // it under our own namespace would be putting our name on an invalid entry.
+    let resources_value = object.get_mut("resources")?;
+    if resources_value.as_str() == Some(DYNAMIC_RESOURCES) {
+        // A dynamic skill carries no URIs to rewrite, and nothing to count
+        // against the limits.
+        return Some(entry);
+    }
+    let resources = resources_value.as_array_mut()?;
+    if resources.is_empty() || resources.len() > MAX_SKILL_RESOURCES {
+        return None;
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut includes_skill_md = false;
+    let mut total_bytes: u64 = 0;
+    for resource in resources.iter_mut() {
+        let resource = resource.as_object_mut()?;
+        let resource_uri = resource.get("uri")?.as_str()?.to_string();
+        let digest = resource.get("digest")?.as_str()?;
+        // `size` is required on every entry: it is what lets a host budget the
+        // skill before fetching anything, and a length mismatch on a later read
+        // is a verification failure in its own right.
+        let size = resource.get("size")?.as_u64()?;
+        if !valid_sha256_digest(digest)
+            || !seen.insert(resource_uri.clone())
+            || !resource_belongs_to(&root, &resource_uri)
+        {
             return None;
         }
-        let mut seen = std::collections::BTreeSet::new();
-        let mut includes_skill_md = false;
-        for resource in resources.iter_mut() {
-            let resource = resource.as_object_mut()?;
-            let resource_uri = resource.get("uri")?.as_str()?.to_string();
-            let digest = resource.get("digest")?.as_str()?;
-            if !valid_sha256_digest(digest)
-                || !seen.insert(resource_uri.clone())
-                || !resource_belongs_to(&root, &resource_uri)
-            {
-                return None;
-            }
-            includes_skill_md |= resource_uri == uri;
-            let namespaced = namespace_uri(label, &resource_uri)?;
-            resource.insert("uri".to_string(), namespaced.into());
-        }
-        if !includes_skill_md {
+        total_bytes = total_bytes.checked_add(size)?;
+        if total_bytes > MAX_SKILL_TOTAL_BYTES {
             return None;
         }
+        includes_skill_md |= resource_uri == uri;
+        let namespaced = namespace_uri(label, &resource_uri)?;
+        resource.insert("uri".to_string(), namespaced.into());
+    }
+    if !includes_skill_md {
+        return None;
     }
     Some(entry)
 }
@@ -341,15 +497,22 @@ mod tests {
         SkillEntry {
             uri: uri.into(),
             frontmatter: frontmatter(serde_json::json!({"name": name, "description": "d"})),
-            resources: None,
+            resources: SkillResources::Enumerated(vec![SkillResource {
+                uri: uri.into(),
+                digest: DIGEST.into(),
+                size: 12,
+            }]),
             extra: serde_json::Map::new(),
         }
     }
+
+    const DIGEST: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     /// The SEP's own `skills/list` example must round-trip byte-identically.
     #[test]
     fn sep_example_round_trips() {
         let wire = serde_json::json!({
+            "resultType": "complete",
             "skills": [
                 {
                     "uri": "skill://git-workflow/SKILL.md",
@@ -360,7 +523,8 @@ mod tests {
                     "resources": [
                         {
                             "uri": "skill://git-workflow/SKILL.md",
-                            "digest": "sha256:a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2"
+                            "digest": "sha256:a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2",
+                            "size": 2314
                         }
                     ]
                 },
@@ -374,11 +538,14 @@ mod tests {
                     "resources": [
                         {
                             "uri": "skill://acme/billing/refunds/SKILL.md",
-                            "digest": "sha256:b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5"
+                            "digest": "sha256:b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5b2c3d4e5",
+                            "size": 3871
                         }
                     ]
                 }
-            ]
+            ],
+            "ttlMs": 300000,
+            "cacheScope": "public"
         });
         let parsed: ListSkillsResult = serde_json::from_value(wire.clone()).expect("parses");
         assert_eq!(serde_json::to_value(&parsed).expect("serializes"), wire);
@@ -412,7 +579,7 @@ mod tests {
         let wire = serde_json::json!({
             "uri": "skill://x/SKILL.md",
             "frontmatter": {"name": "x", "description": "d"},
-            "resources": [{"uri": "skill://x/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+            "resources": [{"uri": "skill://x/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 12}],
             "someFutureField": {"attestation": "signed"},
             "anotherOne": 7
         });
@@ -428,29 +595,68 @@ mod tests {
         );
     }
 
-    /// `None` and `Some(vec![])` are different states and must stay so: the
-    /// first says "dynamically generated, no integrity available", the second
-    /// would claim a skill has no files at all.
+    /// The accepted SEP's two forms, and only those two. `"dynamic"` is a
+    /// *string marker*, not an omitted key — the change exists "so that a host
+    /// can tell a deliberately unverifiable skill from a malformed entry".
     #[test]
-    fn absent_resources_differs_from_empty_resources() {
-        let absent = entry("skill://x/SKILL.md", "x");
-        let empty = SkillEntry {
-            resources: Some(vec![]),
-            ..absent.clone()
+    fn resources_is_an_array_or_the_dynamic_marker() {
+        let dynamic = SkillEntry {
+            resources: SkillResources::Dynamic,
+            ..entry("skill://x/SKILL.md", "x")
         };
+        let wire = serde_json::to_value(&dynamic).expect("ser");
+        assert_eq!(wire["resources"], serde_json::json!("dynamic"));
+        let back: SkillEntry = serde_json::from_value(wire).expect("de");
+        assert_eq!(back.resources, SkillResources::Dynamic);
+        assert_eq!(back.resources.entries(), None);
 
-        let absent_wire = serde_json::to_value(&absent).expect("ser");
-        let empty_wire = serde_json::to_value(&empty).expect("ser");
-        assert!(
-            absent_wire.get("resources").is_none(),
-            "omitted, not null: {absent_wire}"
-        );
-        assert_eq!(empty_wire["resources"], serde_json::json!([]));
+        let enumerated = entry("skill://x/SKILL.md", "x");
+        let wire = serde_json::to_value(&enumerated).expect("ser");
+        assert_eq!(wire["resources"][0]["size"], serde_json::json!(12));
+        let back: SkillEntry = serde_json::from_value(wire).expect("de");
+        assert_eq!(back.resources.entries().map(<[_]>::len), Some(1));
+    }
 
-        let absent_back: SkillEntry = serde_json::from_value(absent_wire).expect("de");
-        let empty_back: SkillEntry = serde_json::from_value(empty_wire).expect("de");
-        assert_eq!(absent_back.resources, None);
-        assert_eq!(empty_back.resources, Some(vec![]));
+    /// "An entry with no `resources` at all, or with any value other than an
+    /// array or `\"dynamic\"`, is invalid, and hosts MUST NOT load it." A type
+    /// that parsed those would hand a caller an entry a conforming host refuses.
+    #[test]
+    fn an_entry_without_a_valid_resources_form_does_not_parse() {
+        for wire in [
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"}
+            }),
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": "generated"
+            }),
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": null
+            }),
+            // `size` is required on every entry.
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": [{"uri": "skill://x/SKILL.md", "digest": DIGEST}]
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<SkillEntry>(wire.clone()).is_err(),
+                "an invalid entry parsed: {wire}"
+            );
+        }
+    }
+
+    /// The two limits are fixed by the accepted SEP, not chosen by us.
+    #[test]
+    fn per_skill_limits_match_the_sep() {
+        assert_eq!(MAX_SKILL_RESOURCES, 512);
+        assert_eq!(MAX_SKILL_TOTAL_BYTES, 16_777_216);
+        assert_eq!(DYNAMIC_RESOURCES, "dynamic");
     }
 
     #[test]
@@ -460,11 +666,16 @@ mod tests {
                 .expect("parses");
         assert_eq!(params.uri, "skill://pdf/SKILL.md");
 
-        let result = GetSkillResult {
-            skill: entry("skill://pdf/SKILL.md", "pdf"),
-        };
+        let result = GetSkillResult::complete(
+            entry("skill://pdf/SKILL.md", "pdf"),
+            0,
+            SkillsCacheScope::Public,
+        );
         let wire = serde_json::to_value(&result).expect("ser");
+        assert_eq!(wire["resultType"], "complete");
         assert_eq!(wire["skill"]["uri"], "skill://pdf/SKILL.md");
+        assert_eq!(wire["ttlMs"], 0);
+        assert_eq!(wire["cacheScope"], "public");
     }
 
     /// The method names the relay allowlist and the origin server's dispatch
@@ -521,12 +732,12 @@ mod tests {
             serde_json::json!({
                 "uri": "skill://x/SKILL.md",
                 "frontmatter": {"name": "x", "description": "d"},
-                "resources": [{"uri": "https://evil.test/payload", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+                "resources": [{"uri": "https://evil.test/payload", "digest": DIGEST, "size": 1}]
             }),
             serde_json::json!({
                 "uri": "skill://x/SKILL.md",
                 "frontmatter": {"name": "x", "description": "d"},
-                "resources": [{"uri": "skill://other/file", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+                "resources": [{"uri": "skill://other/file", "digest": DIGEST, "size": 1}]
             }),
         ];
 
@@ -540,8 +751,6 @@ mod tests {
 
     #[test]
     fn resource_manifest_must_be_complete_unique_and_digest_bound() {
-        const DIGEST: &str =
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let malformed = [
             serde_json::json!({
                 "uri": "skill://x/SKILL.md",
@@ -551,25 +760,53 @@ mod tests {
             serde_json::json!({
                 "uri": "skill://x/SKILL.md",
                 "frontmatter": {"name": "x", "description": "d"},
-                "resources": [{"uri": "skill://x/other.md", "digest": DIGEST}]
+                "resources": [{"uri": "skill://x/other.md", "digest": DIGEST, "size": 1}]
             }),
             serde_json::json!({
                 "uri": "skill://x/SKILL.md",
                 "frontmatter": {"name": "x", "description": "d"},
                 "resources": [
-                    {"uri": "skill://x/SKILL.md", "digest": DIGEST},
-                    {"uri": "skill://x/SKILL.md", "digest": DIGEST}
+                    {"uri": "skill://x/SKILL.md", "digest": DIGEST, "size": 1},
+                    {"uri": "skill://x/SKILL.md", "digest": DIGEST, "size": 1}
                 ]
             }),
             serde_json::json!({
                 "uri": "skill://x/SKILL.md",
                 "frontmatter": {"name": "x", "description": "d"},
-                "resources": [{"uri": "skill://x/SKILL.md"}]
+                "resources": [{"uri": "skill://x/SKILL.md", "size": 1}]
             }),
             serde_json::json!({
                 "uri": "skill://x/SKILL.md",
                 "frontmatter": {"name": "x", "description": "d"},
-                "resources": [{"uri": "skill://x/SKILL.md", "digest": "sha256:AA"}]
+                "resources": [{"uri": "skill://x/SKILL.md", "digest": "sha256:AA", "size": 1}]
+            }),
+            // `size` missing: the accepted SEP requires it on every entry, and
+            // without it a host cannot apply the limits before fetching.
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": [{"uri": "skill://x/SKILL.md", "digest": DIGEST}]
+            }),
+            // 16 MiB + 1 byte, summed over `size`.
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": [
+                    {"uri": "skill://x/SKILL.md", "digest": DIGEST, "size": MAX_SKILL_TOTAL_BYTES},
+                    {"uri": "skill://x/big.bin", "digest": DIGEST, "size": 1}
+                ]
+            }),
+            // 513 entries.
+            serde_json::json!({
+                "uri": "skill://x/SKILL.md",
+                "frontmatter": {"name": "x", "description": "d"},
+                "resources": (0..=MAX_SKILL_RESOURCES)
+                    .map(|i| serde_json::json!({
+                        "uri": format!("skill://x/f{i}.md"),
+                        "digest": DIGEST,
+                        "size": 1
+                    }))
+                    .collect::<Vec<_>>()
             }),
         ];
 
@@ -620,13 +857,17 @@ mod tests {
                 "some-future-field": {"nested": true}
             },
             "resources": [
-                {"uri": "skill://refunds/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-                {"uri": "skill://refunds/examples/email.md", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+                {"uri": "skill://refunds/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 3871},
+                {"uri": "skill://refunds/examples/email.md", "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "size": 962}
             ]
         });
         let out = namespace_entry("acme", &entry).expect("aggregatable");
 
         assert_eq!(out["uri"], "skill://acme/refunds/SKILL.md");
+        // `size` rides along untouched: it is a property of the bytes, like the
+        // digest, and a host budgets the skill from it.
+        assert_eq!(out["resources"][0]["size"], serde_json::json!(3871));
+        assert_eq!(out["resources"][1]["size"], serde_json::json!(962));
         assert_eq!(out["resources"][0]["uri"], "skill://acme/refunds/SKILL.md");
         assert_eq!(
             out["resources"][1]["uri"],
@@ -661,16 +902,25 @@ mod tests {
         assert_eq!(namespace_entry("srv", &entry), None);
     }
 
+    /// A dynamic skill carries the marker through unchanged — there are no URIs
+    /// in it to rewrite — while an entry that simply omits `resources` is one a
+    /// conforming host must refuse, so the gateway will not republish it under
+    /// its own name.
     #[test]
-    fn entry_without_resources_stays_without_them() {
-        // A dynamically generated skill omits `resources`; rewriting must not
-        // invent the key, because its absence is meaningful.
-        let entry = serde_json::json!({
+    fn the_dynamic_marker_survives_and_an_omitted_key_does_not() {
+        let dynamic = serde_json::json!({
+            "uri": "skill://generated/SKILL.md",
+            "frontmatter": {"name": "generated", "description": "d"},
+            "resources": "dynamic"
+        });
+        let out = namespace_entry("srv", &dynamic).expect("aggregatable");
+        assert_eq!(out["uri"], "skill://srv/generated/SKILL.md");
+        assert_eq!(out["resources"], serde_json::json!("dynamic"));
+
+        let omitted = serde_json::json!({
             "uri": "skill://generated/SKILL.md",
             "frontmatter": {"name": "generated", "description": "d"}
         });
-        let out = namespace_entry("srv", &entry).expect("aggregatable");
-        assert_eq!(out["uri"], "skill://srv/generated/SKILL.md");
-        assert!(out.get("resources").is_none(), "not invented: {out}");
+        assert_eq!(namespace_entry("srv", &omitted), None);
     }
 }

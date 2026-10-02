@@ -640,7 +640,8 @@ fn stream_transport_error(is_timeout: bool, display: impl std::fmt::Display) -> 
 /// remain a sanitized 502 at the BitRouter boundary.
 fn classify_stream_decoder_error(error: BitrouterError) -> BitrouterError {
     match error {
-        error @ BitrouterError::UpstreamPolicyViolation { .. } => error,
+        error @ (BitrouterError::UpstreamPolicyViolation { .. }
+        | BitrouterError::Upstream { .. }) => error,
         error => BitrouterError::UpstreamInvalidResponse {
             message: error.to_string(),
         },
@@ -697,6 +698,15 @@ struct HttpClientSet {
     /// in the common single-timeout deployment.
     provider_clients: HashMap<String, (HttpTimeouts, reqwest::Client)>,
 }
+
+/// A fully constructed upstream-client replacement that has not yet become
+/// visible to requests.
+///
+/// Building a `reqwest::Client` can fail, while installing an already-built
+/// set only swaps a lock-protected value. Keeping those stages separate lets a
+/// caller validate an entire reload candidate before changing another live
+/// subsystem.
+pub struct PreparedProviderTimeouts(HttpClientSet);
 
 /// Immutable inputs reused each time an authenticated upstream request is
 /// rebuilt, including after a provider refreshes an expired credential.
@@ -804,13 +814,29 @@ impl HttpExecutor {
         default_timeouts: HttpTimeouts,
         per_provider: HashMap<String, HttpTimeouts>,
     ) -> Result<()> {
+        let prepared = self.prepare_provider_timeouts(default_timeouts, per_provider)?;
+        self.commit_provider_timeouts(prepared);
+        Ok(())
+    }
+
+    /// Build replacement timeout clients without making them live.
+    pub fn prepare_provider_timeouts(
+        &self,
+        default_timeouts: HttpTimeouts,
+        per_provider: HashMap<String, HttpTimeouts>,
+    ) -> Result<PreparedProviderTimeouts> {
         let clients = build_http_client_set(default_timeouts, per_provider)?;
+        Ok(PreparedProviderTimeouts(clients))
+    }
+
+    /// Make a previously prepared timeout-client set visible to new requests.
+    /// Existing requests retain the client they selected before this swap.
+    pub fn commit_provider_timeouts(&self, prepared: PreparedProviderTimeouts) {
         let mut guard = match self.clients.write() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        *guard = clients;
-        Ok(())
+        *guard = prepared.0;
     }
 
     /// Pick the client + timeouts for `target`: a per-provider override when one
@@ -896,6 +922,7 @@ impl HttpExecutor {
             .apply_auth(request, input.target, input.transport)
             .await?;
         let (mut request, mut credential_authority) = applied.into_parts();
+        apply_provider_headers(&mut request, input.target, input.ctx);
         merge_outbound_trace_headers(&mut request, input.trace_headers);
         inject_outbound_request_id(&mut request, input.ctx)?;
         credential_authority =
@@ -1000,6 +1027,7 @@ impl HttpExecutor {
                     id,
                     name,
                     arguments,
+                    provider_metadata,
                 } => {
                     let index = match tool_indices.get(&id).copied() {
                         Some(index) => index,
@@ -1011,7 +1039,7 @@ impl HttpExecutor {
                                 arguments: String::new(),
                                 provider_executed: false,
                                 dynamic: false,
-                                provider_metadata: Default::default(),
+                                provider_metadata: provider_metadata.clone(),
                             });
                             tool_indices.insert(id, index);
                             index
@@ -1116,6 +1144,41 @@ impl HttpExecutor {
             upstream_duration_ms: Some(elapsed),
             server_tool_calls: Vec::new(),
         })
+    }
+}
+
+/// Apply the selected provider's header rules after authentication. This lets
+/// explicit provider compatibility headers replace transport defaults while
+/// reserved authentication, framing, tracing, and request-id fields remain
+/// outside this mechanism. The rules themselves were validated when the route
+/// was built.
+///
+/// HTTP field semantics: <https://www.rfc-editor.org/rfc/rfc9110.html#section-5>
+fn apply_provider_headers(
+    request: &mut reqwest::Request,
+    target: &RoutingTarget,
+    ctx: &PipelineContext,
+) {
+    for rule in &target.headers {
+        let name = rule.name();
+        request.headers_mut().remove(name);
+        if rule.passthrough() {
+            let inbound = ctx
+                .headers()
+                .get_all(name)
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            if !inbound.is_empty() {
+                for value in inbound {
+                    request.headers_mut().append(name.clone(), value);
+                }
+                continue;
+            }
+        }
+        if let Some(value) = rule.default() {
+            request.headers_mut().insert(name.clone(), value.clone());
+        }
     }
 }
 
@@ -1717,6 +1780,19 @@ mod error_classification_tests {
     }
 
     #[test]
+    fn stream_decoder_preserves_explicit_upstream_status() {
+        let error = classify_stream_decoder_error(BitrouterError::Upstream {
+            status: 401,
+            message: "chat completions stream error".to_string(),
+        });
+
+        assert!(matches!(
+            error,
+            BitrouterError::Upstream { status: 401, .. }
+        ));
+    }
+
+    #[test]
     fn stream_decoder_still_wraps_generic_parse_errors_as_upstream_502() {
         let error =
             classify_stream_decoder_error(BitrouterError::bad_request("malformed provider event"));
@@ -1787,14 +1863,10 @@ mod error_classification_tests {
 mod beta_forward_tests {
     use super::*;
     use crate::caller::CallerContext;
-    use crate::language_model::types::Prompt;
+    use crate::language_model::types::{OutboundHeaderRule, Prompt};
     use crate::language_model::{Message, PipelineRequest, Role};
 
-    fn ctx_with_beta(beta: Option<&str>) -> PipelineContext {
-        let mut headers = http::HeaderMap::new();
-        if let Some(b) = beta {
-            headers.insert("anthropic-beta", http::HeaderValue::from_str(b).unwrap());
-        }
+    fn ctx_with_headers(headers: http::HeaderMap) -> PipelineContext {
         let prompt = Prompt {
             model: "claude".into(),
             system: None,
@@ -1811,12 +1883,23 @@ mod beta_forward_tests {
         };
         PipelineContext::new(PipelineRequest {
             request_id: "t".into(),
+            original_model: "claude".into(),
             model: "claude".into(),
             caller: CallerContext::local(),
             headers,
             prompt,
             inbound_protocol: None,
         })
+    }
+
+    fn ctx_with_beta(beta: Option<&str>) -> PipelineContext {
+        let mut headers = http::HeaderMap::new();
+        if let Some(b) = beta
+            && let Ok(value) = http::HeaderValue::from_str(b)
+        {
+            headers.insert("anthropic-beta", value);
+        }
+        ctx_with_headers(headers)
     }
 
     fn target(proto: ApiProtocol) -> RoutingTarget {
@@ -1834,6 +1917,7 @@ mod beta_forward_tests {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            headers: Vec::new(),
         }
     }
 
@@ -1918,6 +2002,111 @@ mod beta_forward_tests {
             Some("t")
         );
     }
+
+    #[test]
+    fn provider_headers_apply_passthrough_default_and_rejection() -> crate::Result<()> {
+        let mut inbound = http::HeaderMap::new();
+        inbound.append(
+            "x-opencode-session",
+            http::HeaderValue::from_static("request-session-a"),
+        );
+        inbound.append(
+            "x-opencode-session",
+            http::HeaderValue::from_static("request-session-b"),
+        );
+        inbound.insert(
+            "user-agent",
+            http::HeaderValue::from_static("untrusted-agent"),
+        );
+        inbound.insert("x-rejected", http::HeaderValue::from_static("untrusted"));
+        let ctx = ctx_with_headers(inbound);
+        let mut target = target(ApiProtocol::ChatCompletions);
+        target.headers = vec![
+            OutboundHeaderRule::new("x-opencode-session", Some("static-session"), true)?,
+            OutboundHeaderRule::new("user-agent", Some("my-agent/1.0"), false)?,
+            OutboundHeaderRule::new("x-rejected", None::<&str>, false)?,
+            OutboundHeaderRule::new("x-static-only", Some("static"), true)?,
+        ];
+        let mut request = fresh_request();
+        request
+            .headers_mut()
+            .insert("x-rejected", http::HeaderValue::from_static("transport"));
+
+        apply_provider_headers(&mut request, &target, &ctx);
+
+        let sessions = request
+            .headers()
+            .get_all("x-opencode-session")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect::<Vec<_>>();
+        assert_eq!(sessions, vec!["request-session-a", "request-session-b"]);
+        assert_eq!(request.headers()["user-agent"], "my-agent/1.0");
+        assert_eq!(request.headers()["x-static-only"], "static");
+        assert!(request.headers().get("x-rejected").is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn authenticated_request_applies_provider_headers() -> crate::Result<()> {
+        let mut inbound = http::HeaderMap::new();
+        inbound.insert(
+            "x-opencode-session",
+            http::HeaderValue::from_static("request-session"),
+        );
+        let ctx = ctx_with_headers(inbound);
+        let mut target = target(ApiProtocol::ChatCompletions);
+        target.api_key = "provider-secret".to_string();
+        target.headers = vec![OutboundHeaderRule::new(
+            "x-opencode-session",
+            Some("static-session"),
+            true,
+        )?];
+        let executor = HttpExecutor::with_defaults()?;
+        let (_, transport) = executor
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| BitrouterError::internal("chat transport was not registered"))?;
+        let (client, timeouts) = executor.client_for(&target);
+        let body = serde_json::json!({"model": "claude-haiku"});
+        let request = executor
+            .build_authenticated_request(&RequestBuildInput {
+                client: &client,
+                timeouts: &timeouts,
+                url: "https://api.example/v1/chat/completions",
+                body: &body,
+                target: &target,
+                transport,
+                ctx: &ctx,
+                trace_headers: None,
+            })
+            .await?;
+
+        assert_eq!(
+            request.headers()[reqwest::header::AUTHORIZATION],
+            "Bearer provider-secret"
+        );
+        assert_eq!(request.headers()["x-opencode-session"], "request-session");
+        assert_eq!(request.headers()["x-bitrouter-request-id"], "t");
+        Ok(())
+    }
+
+    #[test]
+    fn provider_headers_cannot_take_over_auth_or_internal_fields() {
+        for name in [
+            "authorization",
+            "x-api-key",
+            "x-goog-api-key",
+            "content-length",
+            "traceparent",
+            "x-bitrouter-request-id",
+        ] {
+            let error = OutboundHeaderRule::new(name, Some("value"), true)
+                .err()
+                .unwrap_or_else(|| BitrouterError::internal("reserved provider header accepted"));
+            assert!(error.to_string().contains("is reserved"), "got: {error}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1944,6 +2133,7 @@ mod provider_continuation_tests {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            headers: Vec::new(),
         }
     }
 
@@ -2198,6 +2388,7 @@ mod client_selection_tests {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            headers: Vec::new(),
         }
     }
 
@@ -2320,6 +2511,7 @@ mod client_selection_tests {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            headers: Vec::new(),
         };
         let prompt = Prompt {
             model: "m".into(),
@@ -2444,6 +2636,7 @@ mod openai_codex_stream_bridge_tests {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            headers: Vec::new(),
         };
         let prompt = Prompt {
             model: "gpt-5.6-terra".into(),

@@ -3,35 +3,34 @@
 //!
 //! A harness is drivable in either of two facets:
 //!
-//! - **interactive** (`bitrouter launch`) — the harness's own native TUI
+//! - **interactive** (`bro launch`) — the harness's own native TUI
 //!   (`claude`, `codex`, `opencode`, `pi`, `hermes`, `openclaw`, `grok`,
 //!   `agy`), launched as a child with its LLM traffic pointed at the daemon —
 //!   by env/args where that suffices, otherwise through a synthesized config
 //!   file ([`Harness::launch_overlay`]); the human drives it directly.
-//! - **ACP** (`bitrouter spawn`) — a headless ACP adapter
-//!   (`@zed-industries/claude-code-acp`, …) driven as a sub-agent by a program.
+//! - **ACP** (`bro spawn`) — a headless ACP adapter
+//!   (`@agentclientprotocol/claude-agent-acp`, …) driven as a sub-agent by a
+//!   program.
 //!
-//! The crucial fact this module encodes once: **both facets route through the
-//! daemon with the same [`Routing`]**, because the interactive binary and the
-//! ACP adapter of a given harness share a config/env surface (verified against
-//! adapter source — see `docs/SPAWN_SPEC.md` §6). So the routing knowledge that used
-//! to live in `spawn::AgentSpec` *and* would have been duplicated onto the ACP
-//! side lives here exactly once, and `launch`, `spawn`, and `agents install`
-//! all read it.
+//! This module keeps the shared routing knowledge in one catalog. Interactive
+//! launches render [`Routing`] through native CLI/config surfaces. Maintained
+//! ACP adapters render a [`HarnessEndpointPlan`] through their documented
+//! launch fallback and then apply that same plan through ACP provider setup;
+//! other adapters retain the catalog's legacy env/args behavior.
 
 /// BitRouter's own API-key env var (`brk_…`). When set, it is forwarded to the
 /// harness as the gateway bearer credential.
 pub const BITROUTER_API_KEY_ENV: &str = "BITROUTER_API_KEY";
 
 /// Placeholder credential injected when no real key is available. Ignored by
-/// the daemon under `skip_auth: true` (the `bitrouter init` default); the
+/// the daemon under `skip_auth: true` (the `bro init` default); the
 /// harness merely needs *some* credential to start.
 pub const PLACEHOLDER_API_KEY: &str = "bitrouter-local";
 
 use anyhow::Context;
 
 /// One catalog harness. Keyed by [`id`](Self::id), which is the ACP-facet
-/// id used under `agents:` in `bitrouter.yaml` and by `bitrouter agents`.
+/// id used under `agents:` in `bitrouter.yaml` and by `bro agents`.
 #[derive(Debug, Clone, Copy)]
 pub struct Harness {
     /// Catalog / ACP-config id (e.g. `claude-acp`). Also the `agents install`
@@ -41,7 +40,11 @@ pub struct Harness {
     pub description: &'static str,
     /// Upstream project URL — the source of the recommended invocation.
     pub project_url: &'static str,
-    /// The ACP adapter invocation (`command` + `args`) for `bitrouter spawn`,
+    /// The ACP major version this agent's registry entry declares. The
+    /// conformance suite's handshake tier checks the negotiated version
+    /// against it.
+    pub acp_protocol_version: u32,
+    /// The ACP adapter invocation (`command` + `args`) for `bro spawn`,
     /// when the harness has one. `None` for interactive-only harnesses
     /// (grok, antigravity) — they have no headless ACP adapter today.
     pub acp_command: Option<&'static str>,
@@ -52,7 +55,7 @@ pub struct Harness {
     /// `agents:` entry back to its catalog routing (invocation matching, so
     /// the YAML key carries no semantics). Usually the adapter package name.
     pub package_marker: &'static str,
-    /// The interactive native-TUI binary for `bitrouter launch`, when the
+    /// The interactive native-TUI binary for `bro launch`, when the
     /// harness has one. `None` for adapter-only harnesses (gemini).
     pub interactive_binary: Option<&'static str>,
     /// How this harness's LLM traffic is pointed at the daemon.
@@ -90,34 +93,14 @@ pub enum Routing {
     /// speak the OpenAI **Responses** API — pinned codex builds dropped
     /// `wire_api = "chat"`.
     CodexArgs,
-    /// Config-file synthesis (opencode): the harness loads the JSON config
-    /// `OPENCODE_CONFIG` points at, and routing, the default model, and MCP
-    /// injection all ride that one synthesized file. There is no pure
-    /// env/args overlay — headless spawn launches direct with a note; the
-    /// interactive facets synthesize via [`Harness::launch_overlay`].
-    OpencodeConfig,
-    /// Config-dir synthesis (pi — SPAWN_SPEC §6.4): pi has no base-URL env
-    /// var, so routing synthesizes a `models.json` in a per-launch dir and
-    /// points `PI_CODING_AGENT_DIR` at it, selecting the provider/model by
-    /// CLI flag. Interactive facet only; headless spawn launches direct
-    /// with a note.
-    PiConfigDir,
-    /// Home-dir synthesis (hermes): routing synthesizes a `config.yaml`
-    /// (`model.provider: custom` + a loopback `base_url` — hermes trusts
-    /// loopback custom endpoints) in a per-launch dir, points `HERMES_HOME`
-    /// at it, and passes the credential via `CUSTOM_API_KEY`. The same file
-    /// carries the default model and `mcp_servers` (the gateway servers).
-    /// Interactive facet only; headless spawn launches direct with a note
-    /// (hermes then uses the user's own `~/.hermes` provider).
-    HermesHome,
-    /// Profile-dir synthesis (openclaw): the interactive facet synthesizes
-    /// an isolated profile (`OPENCLAW_STATE_DIR`/`OPENCLAW_CONFIG_PATH`)
-    /// whose `openclaw.json` declares a `bitrouter` custom provider and
-    /// default model, and runs the embedded runtime (`tui --local`). The
-    /// ACP facet (`openclaw acp`) bridges into the user's running gateway,
-    /// which owns model routing — headless spawn launches direct with a
-    /// note.
-    OpenclawProfile,
+    /// Config-file synthesis: the harness exposes neither a base-URL variable
+    /// nor a CLI override, so routing writes a config into a per-launch
+    /// directory and points the harness at it. The shape is registry data
+    /// ([`crate::config_synthesis`]), which is why one variant covers
+    /// opencode, pi, hermes and openclaw. There is no pure env/args overlay —
+    /// headless spawn launches direct with a note; the interactive facet
+    /// synthesizes via [`Harness::launch_overlay`].
+    ConfigFile(&'static crate::config_synthesis::ConfigSynthesis),
     /// No gateway redirection, by design: the harness IS a subscription
     /// client whose session the daemon itself borrows as a provider (grok →
     /// `supergrok`, agy → `google-ai`) — routing it through the daemon would
@@ -137,131 +120,150 @@ pub struct RoutingOverlay {
     pub args: Vec<String>,
 }
 
-/// The bundled catalog. Limited to publicly-available, actively-maintained
-/// harnesses. Extend by PR to bitrouter.
-pub const CATALOG: &[Harness] = &[
-    Harness {
-        id: "claude-acp",
-        description: "Anthropic Claude via Zed's `claude-code-acp`",
-        project_url: "https://github.com/zed-industries/claude-code-acp",
-        acp_command: Some("npx"),
-        acp_args: &["-y", "@zed-industries/claude-code-acp@latest"],
-        // A substring of both the npm spec (`@zed-industries/claude-code-acp`)
-        // and the globally-installed binary name (`claude-code-acp`), so a
-        // `command: claude-code-acp` config still catalog-matches.
-        package_marker: "claude-code-acp",
-        interactive_binary: Some("claude"),
-        // claude-code-acp passes process env through to the SDK-spawned CLI,
-        // which honors these exactly as interactive Claude Code does.
-        // ANTHROPIC_AUTH_TOKEN → `Authorization: Bearer` (also suppresses the
-        // login requirement); ANTHROPIC_API_KEY would be `x-api-key`, not
-        // BitRouter's inbound scheme, so we never touch it.
-        routing: Routing::Env {
-            base_url_env: "ANTHROPIC_BASE_URL",
-            auth_env: "ANTHROPIC_AUTH_TOKEN",
-            bearer_auth: true,
-            model_env: Some("ANTHROPIC_MODEL"),
-            extra: &[],
-        },
-    },
-    Harness {
-        id: "codex-acp",
-        description: "OpenAI Codex via the Agent Client Protocol adapter",
-        project_url: "https://github.com/agentclientprotocol/codex-acp",
-        acp_command: Some("npx"),
-        acp_args: &["-y", "@agentclientprotocol/codex-acp@latest"],
-        package_marker: "codex-acp",
-        interactive_binary: Some("codex"),
-        routing: Routing::CodexArgs,
-    },
-    Harness {
-        id: "gemini-cli",
-        description: "Google's Gemini CLI with `--experimental-acp` (best-effort routing)",
-        project_url: "https://github.com/google-gemini/gemini-cli",
-        acp_command: Some("npx"),
-        acp_args: &[
-            "-y",
-            "--",
-            "@google/gemini-cli@latest",
-            "--experimental-acp",
-        ],
-        // Substring of both `@google/gemini-cli` and the `gemini-cli` binary.
-        package_marker: "gemini-cli",
-        interactive_binary: None,
-        // Best-effort: gemini-cli is deprecated upstream (Antigravity). Sends
-        // GEMINI_API_KEY as `x-goog-api-key`, which the daemon accepts only
-        // under skip_auth; GOOGLE_GEMINI_BASE_URL auto-selects GATEWAY auth.
-        routing: Routing::Env {
-            base_url_env: "GOOGLE_GEMINI_BASE_URL",
-            auth_env: "GEMINI_API_KEY",
-            // gemini sends GEMINI_API_KEY as `x-goog-api-key`, not Bearer —
-            // the daemon accepts it only under `skip_auth: true`.
-            bearer_auth: false,
-            model_env: Some("GEMINI_MODEL"),
-            extra: &[],
-        },
-    },
-    Harness {
-        id: "opencode",
-        description: "sst's opencode via its native `opencode acp`",
-        project_url: "https://github.com/sst/opencode",
-        acp_command: Some("opencode"),
-        acp_args: &["acp"],
-        package_marker: "opencode",
-        interactive_binary: Some("opencode"),
-        routing: Routing::OpencodeConfig,
-    },
-    Harness {
-        id: "pi-acp",
-        description: "pi coding agent via `pi-acp` (needs `pi` on PATH)",
-        project_url: "https://github.com/svkozak/pi-acp",
-        acp_command: Some("npx"),
-        acp_args: &["-y", "pi-acp@latest"],
-        package_marker: "pi-acp",
-        interactive_binary: Some("pi"),
-        routing: Routing::PiConfigDir,
-    },
-    Harness {
-        id: "hermes-acp",
-        description: "Nous Research's Hermes Agent via its native `hermes acp`",
-        project_url: "https://github.com/NousResearch/hermes-agent",
-        acp_command: Some("hermes"),
-        acp_args: &["acp"],
-        package_marker: "hermes",
-        interactive_binary: Some("hermes"),
-        routing: Routing::HermesHome,
-    },
-    Harness {
-        id: "openclaw",
-        description: "OpenClaw assistant via its gateway ACP bridge `openclaw acp`",
-        project_url: "https://github.com/openclaw/openclaw",
-        acp_command: Some("openclaw"),
-        acp_args: &["acp"],
-        package_marker: "openclaw",
-        interactive_binary: Some("openclaw"),
-        routing: Routing::OpenclawProfile,
-    },
-    Harness {
-        id: "grok",
-        description: "xAI's Grok CLI (interactive only; own SuperGrok auth)",
-        project_url: "https://x.ai/",
-        acp_command: None,
-        acp_args: &[],
-        package_marker: "grok-cli",
-        interactive_binary: Some("grok"),
-        routing: Routing::OwnAuth,
-    },
-    Harness {
-        id: "antigravity",
-        description: "Google's Antigravity CLI `agy` (interactive only; own Google auth)",
-        project_url: "https://antigravity.google/",
-        acp_command: None,
-        acp_args: &[],
-        package_marker: "antigravity-cli",
-        interactive_binary: Some("agy"),
-        routing: Routing::OwnAuth,
-    },
-];
+/// Wire protocol advertised to an ACP adapter through its provider endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HarnessProtocol {
+    /// Anthropic Messages-compatible endpoint.
+    Anthropic,
+    /// OpenAI Responses-compatible endpoint.
+    OpenAi,
+}
+
+impl HarnessProtocol {
+    /// ACP provider protocol identifier.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::OpenAi => "openai",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndpointFallback {
+    Claude,
+    Codex,
+}
+
+/// Process-scoped BitRouter endpoint configuration for a maintained ACP
+/// adapter.
+///
+/// The controller applies this plan through ACP provider configuration when
+/// the adapter advertises that capability. [`Self::fallback_overlay`] renders
+/// the same plan through the adapter's documented environment fallback, so a
+/// pinned adapter that loses provider support still routes deterministically.
+#[derive(Clone, PartialEq, Eq)]
+pub struct HarnessEndpointPlan {
+    /// Catalog harness id included in every routed request.
+    pub harness_id: &'static str,
+    /// Exact upstream adapter package.
+    pub adapter_package: &'static str,
+    /// Exact upstream adapter version.
+    pub adapter_version: &'static str,
+    /// Adapter-native provider id selected through ACP.
+    pub provider_id: &'static str,
+    /// Model API protocol exposed by BitRouter for this adapter.
+    pub protocol: HarnessProtocol,
+    /// Adapter-facing endpoint base URL.
+    pub base_url: String,
+    /// Optional logical model pin.
+    pub model: Option<String>,
+    /// HTTP headers passed to the adapter endpoint. Names are canonicalized
+    /// to lower case so observability and routing parse one stable shape.
+    pub headers: std::collections::BTreeMap<String, String>,
+    auth: String,
+    fallback: EndpointFallback,
+}
+
+impl std::fmt::Debug for HarnessEndpointPlan {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HarnessEndpointPlan")
+            .field("harness_id", &self.harness_id)
+            .field("adapter_package", &self.adapter_package)
+            .field("adapter_version", &self.adapter_version)
+            .field("provider_id", &self.provider_id)
+            .field("protocol", &self.protocol)
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("header_names", &self.headers.keys().collect::<Vec<_>>())
+            .field("auth", &"[REDACTED]")
+            .field("fallback", &self.fallback)
+            .finish()
+    }
+}
+
+impl HarnessEndpointPlan {
+    /// Render the documented process-environment fallback for this exact
+    /// adapter version. No routing configuration is added to adapter argv.
+    pub fn fallback_overlay(&self) -> anyhow::Result<RoutingOverlay> {
+        let static_headers = self
+            .headers
+            .iter()
+            .filter(|(name, _)| name.as_str() != "authorization")
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        match self.fallback {
+            EndpointFallback::Claude => {
+                let mut env = vec![
+                    ("ANTHROPIC_BASE_URL".to_string(), self.base_url.clone()),
+                    ("ANTHROPIC_AUTH_TOKEN".to_string(), self.auth.clone()),
+                    (
+                        "ANTHROPIC_CUSTOM_HEADERS".to_string(),
+                        static_headers
+                            .iter()
+                            .map(|(name, value)| format!("{name}: {value}"))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ),
+                ];
+                if let Some(model) = &self.model {
+                    env.push(("ANTHROPIC_MODEL".to_string(), model.clone()));
+                }
+                Ok(RoutingOverlay {
+                    env,
+                    args: Vec::new(),
+                })
+            }
+            EndpointFallback::Codex => {
+                let provider = serde_json::json!({
+                    "name": "BitRouter",
+                    "base_url": self.base_url,
+                    "wire_api": "responses",
+                    "env_key": BITROUTER_API_KEY_ENV,
+                    "http_headers": static_headers,
+                });
+                let mut config = serde_json::json!({
+                    "model_provider": "bitrouter",
+                    "model_providers": { "bitrouter": provider },
+                });
+                if let Some(model) = &self.model {
+                    config["model"] = serde_json::Value::String(model.clone());
+                }
+                let encoded = serde_json::to_string(&config)
+                    .context("serializing the Codex ACP endpoint fallback")?;
+                Ok(RoutingOverlay {
+                    env: vec![
+                        (BITROUTER_API_KEY_ENV.to_string(), self.auth.clone()),
+                        ("CODEX_CONFIG".to_string(), encoded),
+                        ("MODEL_PROVIDER".to_string(), "bitrouter".to_string()),
+                    ],
+                    args: Vec::new(),
+                })
+            }
+        }
+    }
+}
+
+// The ACP half of the catalog, generated by `build.rs` from
+// `dist/registry/agents.json`. Adding or changing an ACP agent is a PR against
+// `registry/`, not against this file.
+include!(concat!(env!("OUT_DIR"), "/catalog_generated.rs"));
+
+/// Every supported harness speaks ACP. Native subscription clients may still
+/// supply provider credentials, but are not agent entries.
+pub static CATALOG: &[Harness] = ACP_CATALOG;
 
 /// Look up a harness by its catalog id.
 pub fn by_id(id: &str) -> Option<&'static Harness> {
@@ -281,18 +283,103 @@ pub fn by_interactive_binary(binary: &str) -> Option<&'static Harness> {
 /// *invocation*, not the user-chosen YAML key. Checks the command and every
 /// arg for the marker substring.
 pub fn match_invocation(command: &str, args: &[String]) -> Option<&'static Harness> {
-    CATALOG.iter().find(|h| {
+    let catalog_match = CATALOG.iter().find(|h| {
         command.contains(h.package_marker) || args.iter().any(|a| a.contains(h.package_marker))
+    });
+    catalog_match.or_else(|| {
+        let legacy_claude = command.contains("claude-code-acp")
+            || args.iter().any(|arg| arg.contains("claude-code-acp"));
+        if legacy_claude {
+            by_id("claude-acp")
+        } else {
+            None
+        }
     })
 }
 
 impl Harness {
+    /// Exact maintained ACP adapter identity for controller diagnostics.
+    ///
+    /// `None` means the catalog entry has no pinned, provider-configurable ACP
+    /// adapter contract yet. Callers must identify such invocations as
+    /// configured/custom rather than attributing them to a maintained pin.
+    pub fn maintained_adapter_identity(&self) -> Option<(&'static str, &'static str)> {
+        match self.id {
+            "claude-acp" => Some(("@agentclientprotocol/claude-agent-acp", "0.75.1")),
+            "codex-acp" => Some(("@agentclientprotocol/codex-acp", "1.10.0")),
+            _ => None,
+        }
+    }
+
+    /// Whether a configured invocation uses this catalog entry's exact
+    /// maintained adapter pin.
+    pub fn uses_maintained_adapter(&self, command: &str, args: &[String]) -> bool {
+        let Some((package, version)) = self.maintained_adapter_identity() else {
+            return false;
+        };
+        let exact = format!("{package}@{version}");
+        command == exact || args.iter().any(|arg| arg == &exact)
+    }
+
+    /// Build the controller's process-scoped endpoint plan for a maintained
+    /// ACP adapter. Other catalog entries keep their existing launch routing
+    /// until their provider contracts are pinned and tested.
+    pub fn endpoint_plan(
+        &self,
+        base_url: &str,
+        auth: &str,
+        model: Option<&str>,
+        controller_id: &str,
+    ) -> Option<HarnessEndpointPlan> {
+        let mut headers = std::collections::BTreeMap::from([
+            ("authorization".to_string(), format!("Bearer {auth}")),
+            (
+                "x-bitrouter-controller-id".to_string(),
+                controller_id.to_string(),
+            ),
+            ("x-bitrouter-harness".to_string(), self.id.to_string()),
+        ]);
+        // Keep construction explicit: any future header added here becomes a
+        // reviewed part of the router/controller contract.
+        headers.retain(|name, value| !name.is_empty() && !value.is_empty());
+
+        let (adapter_package, adapter_version) = self.maintained_adapter_identity()?;
+        let (provider_id, protocol, base_url, fallback) = match self.id {
+            "claude-acp" => (
+                "main",
+                HarnessProtocol::Anthropic,
+                base_url.trim_end_matches('/').to_string(),
+                EndpointFallback::Claude,
+            ),
+            "codex-acp" => (
+                "openai",
+                HarnessProtocol::OpenAi,
+                v1_base_url(base_url),
+                EndpointFallback::Codex,
+            ),
+            _ => return None,
+        };
+
+        Some(HarnessEndpointPlan {
+            harness_id: self.id,
+            adapter_package,
+            adapter_version,
+            provider_id,
+            protocol,
+            base_url,
+            model: model.map(str::to_string),
+            headers,
+            auth: auth.to_string(),
+            fallback,
+        })
+    }
+
     /// Compute the child-process overlay that routes this harness's LLM
     /// traffic through `base_url`, authenticating with `auth` (already
     /// resolved by precedence — see [`resolve_gateway_auth`]). `model` pins
     /// the model when the harness supports it. Returns an empty overlay for
-    /// harnesses env/args can't route ([`OpencodeConfig`](Routing::OpencodeConfig)
-    /// / [`PiConfigDir`](Routing::PiConfigDir) / [`OwnAuth`](Routing::OwnAuth)
+    /// harnesses env/args can't route ([`ConfigFile`](Routing::ConfigFile) /
+    /// [`OwnAuth`](Routing::OwnAuth)
     /// — the caller warns and runs direct; see [`env_args_routable`](Self::env_args_routable)).
     pub fn routing_overlay(
         &self,
@@ -327,11 +414,7 @@ impl Harness {
             // Config-synthesis harnesses have no pure env/args overlay —
             // callers that can't synthesize launch direct (and say so) —
             // and own-auth harnesses are never redirected at all.
-            Routing::OpencodeConfig
-            | Routing::PiConfigDir
-            | Routing::HermesHome
-            | Routing::OpenclawProfile
-            | Routing::OwnAuth => RoutingOverlay::default(),
+            Routing::ConfigFile(_) | Routing::OwnAuth => RoutingOverlay::default(),
         }
     }
 
@@ -353,10 +436,7 @@ impl Harness {
             Routing::Env {
                 model_env: None, ..
             }
-            | Routing::OpencodeConfig
-            | Routing::PiConfigDir
-            | Routing::HermesHome
-            | Routing::OpenclawProfile
+            | Routing::ConfigFile(_)
             | Routing::OwnAuth => RoutingOverlay::default(),
         }
     }
@@ -390,15 +470,11 @@ impl Harness {
         match self.routing {
             Routing::Env { model_env, .. } => model_env.is_some(),
             Routing::CodexArgs => true,
-            Routing::OpencodeConfig
-            | Routing::PiConfigDir
-            | Routing::HermesHome
-            | Routing::OpenclawProfile
-            | Routing::OwnAuth => false,
+            Routing::ConfigFile(_) | Routing::OwnAuth => false,
         }
     }
 
-    /// Whether `bitrouter launch` will run this harness: exactly those with an
+    /// Whether `bro launch` will run this harness: exactly those with an
     /// [`interactive_binary`](Self::interactive_binary).
     ///
     /// The cut to four ids was made when `launch` also promised a *hosted
@@ -418,7 +494,7 @@ impl Harness {
     }
 
     /// Whether [`Self::launch_overlay`] can inject MCP servers (the
-    /// `bitrouter_tools` / `bitrouter_skills` gateways) into this harness.
+    /// `bitrouter_tools` gateway) into this harness.
     ///
     /// This is a *ceiling of the harness*, not of BitRouter: `pi` and
     /// `openclaw` expose no MCP mechanism to inject into, and the own-auth
@@ -429,13 +505,31 @@ impl Harness {
     /// `injects_mcp_matches_the_launch_overlay` — the predicate is declarative,
     /// and the test proves it agrees with what the overlay actually does.
     pub fn injects_mcp(&self) -> bool {
-        matches!(
-            self.id,
-            "claude-acp" | "codex-acp" | "opencode" | "hermes-acp"
-        )
+        match &self.routing {
+            // Whether a synthesized config has somewhere to put MCP servers is
+            // part of its registry shape, so this follows the data.
+            Routing::ConfigFile(synthesis) => {
+                !matches!(synthesis.mcp, crate::config_synthesis::McpShape::None)
+            }
+            // claude's `--mcp-config` file and codex's `-c mcp_servers.*`
+            // overrides are compiled MCP injection layered on env/args
+            // routing, so they stay named here.
+            Routing::Env { .. } | Routing::CodexArgs => {
+                matches!(self.id, "claude-acp" | "codex-acp")
+            }
+            Routing::OwnAuth => false,
+        }
     }
 
-    /// Interactive-launch overlay (`bitrouter launch`): the full routing
+    /// This harness's config-file synthesis, when routing uses one.
+    pub fn config_synthesis(&self) -> Option<&'static crate::config_synthesis::ConfigSynthesis> {
+        match self.routing {
+            Routing::ConfigFile(synthesis) => Some(synthesis),
+            _ => None,
+        }
+    }
+
+    /// Interactive-launch overlay (`bro launch`): the full routing
     /// overlay for *any* interactive harness — including the ones env/args
     /// cannot route, whose config files are synthesized under `state_dir`
     /// (opencode's `OPENCODE_CONFIG`, pi's `PI_CODING_AGENT_DIR`, hermes's
@@ -464,6 +558,12 @@ impl Harness {
         mcp: &[McpServer],
         state_dir: &std::path::Path,
     ) -> anyhow::Result<RoutingOverlay> {
+        // Harnesses that env/args cannot route synthesize a config file. The
+        // shape rides the routing itself, as registry data; the rendered bytes
+        // are pinned by `rendered_config_bytes_match_the_golden_fixtures`.
+        if let Routing::ConfigFile(synthesis) = &self.routing {
+            return synthesis.render(base_url, auth, model, catalog, mcp, state_dir);
+        }
         match self.id {
             // Claude Code loads extra MCP servers from `--mcp-config <file>`.
             // Stdio entries are `{command, args}`; HTTP entries need an
@@ -535,188 +635,6 @@ impl Harness {
                 }
                 Ok(overlay)
             }
-            // opencode: one synthesized JSON config carries the provider,
-            // the default model, and the MCP bridge; OPENCODE_CONFIG points
-            // at it.
-            "opencode" => {
-                std::fs::create_dir_all(state_dir)
-                    .with_context(|| format!("creating {}", state_dir.display()))?;
-                let path = state_dir.join("opencode.json");
-                let config = opencode_config(base_url, auth, model, catalog, mcp);
-                std::fs::write(&path, serde_json::to_string_pretty(&config)?)
-                    .context("writing opencode config")?;
-                Ok(RoutingOverlay {
-                    env: vec![("OPENCODE_CONFIG".to_string(), path.display().to_string())],
-                    args: Vec::new(),
-                })
-            }
-            // pi: synthesize `models.json` in a dir, point
-            // PI_CODING_AGENT_DIR at it, and select provider/model by flag
-            // (SPAWN_SPEC §6.4). No MCP mechanism — `mcp` is ignored.
-            "pi-acp" => {
-                let dir = state_dir.join("pi-agent");
-                std::fs::create_dir_all(&dir)
-                    .with_context(|| format!("creating {}", dir.display()))?;
-                let mut models: Vec<serde_json::Value> = catalog
-                    .iter()
-                    .map(|id| serde_json::json!({ "id": id }))
-                    .collect();
-                if let Some(m) = model
-                    && !catalog.iter().any(|id| id == m)
-                {
-                    models.push(serde_json::json!({ "id": m }));
-                }
-                let config = serde_json::json!({
-                    "providers": {
-                        "bitrouter": {
-                            "name": "BitRouter",
-                            "baseUrl": v1_base_url(base_url),
-                            "api": "openai-completions",
-                            "apiKey": auth,
-                            "models": models,
-                        }
-                    }
-                });
-                std::fs::write(
-                    dir.join("models.json"),
-                    serde_json::to_string_pretty(&config)?,
-                )
-                .context("writing pi models.json")?;
-                let mut args = Vec::new();
-                // Select the routed provider only when it has a model to
-                // offer; otherwise pi falls back to its own defaults.
-                if let Some(default) = model
-                    .map(str::to_string)
-                    .or_else(|| catalog.first().cloned())
-                {
-                    args.extend([
-                        "--provider".to_string(),
-                        "bitrouter".to_string(),
-                        "--model".to_string(),
-                        default,
-                    ]);
-                }
-                Ok(RoutingOverlay {
-                    env: vec![("PI_CODING_AGENT_DIR".to_string(), dir.display().to_string())],
-                    args,
-                })
-            }
-            // hermes: synthesize an isolated `HERMES_HOME` whose config.yaml
-            // routes via a `custom` loopback provider (hermes trusts loopback
-            // custom endpoints) and carries the injected MCP servers; the
-            // credential rides `CUSTOM_API_KEY`. The file is written as JSON
-            // — hermes parses config.yaml with a YAML 1.2 loader, and JSON
-            // is a YAML subset — so no YAML serializer dependency is needed.
-            "hermes-acp" => {
-                let dir = state_dir.join("hermes");
-                std::fs::create_dir_all(&dir)
-                    .with_context(|| format!("creating {}", dir.display()))?;
-                let default = model
-                    .map(str::to_string)
-                    .or_else(|| catalog.first().cloned());
-                let mut config = serde_json::json!({
-                    "model": {
-                        "provider": "custom",
-                        "base_url": v1_base_url(base_url),
-                    }
-                });
-                if let Some(default) = default {
-                    config["model"]["default"] = serde_json::Value::String(default);
-                }
-                if !mcp.is_empty() {
-                    let mut entries = serde_json::Map::new();
-                    for s in mcp {
-                        let entry = match &s.transport {
-                            McpTransport::Stdio { command, args } => {
-                                serde_json::json!({ "command": command, "args": args })
-                            }
-                            // hermes selects the HTTP transport by `url`
-                            // presence.
-                            McpTransport::Http { url, headers } => serde_json::json!({
-                                "url": url,
-                                "headers": headers_map(headers),
-                            }),
-                        };
-                        entries.insert(s.name.clone(), entry);
-                    }
-                    config["mcp_servers"] = serde_json::Value::Object(entries);
-                }
-                std::fs::write(
-                    dir.join("config.yaml"),
-                    serde_json::to_string_pretty(&config)?,
-                )
-                .context("writing hermes config.yaml")?;
-                Ok(RoutingOverlay {
-                    env: vec![
-                        ("HERMES_HOME".to_string(), dir.display().to_string()),
-                        ("CUSTOM_API_KEY".to_string(), auth.to_string()),
-                    ],
-                    args: Vec::new(),
-                })
-            }
-            // openclaw: synthesize an isolated profile (state dir + config)
-            // whose `openclaw.json` declares a `bitrouter` custom provider,
-            // and run the embedded local runtime (`tui --local` — no gateway
-            // needed). Model entries need the full schema (name/cost/window)
-            // or config validation rejects the file. No MCP injection yet —
-            // openclaw's MCP surface is gateway-scoped.
-            "openclaw" => {
-                let dir = state_dir.join("openclaw");
-                std::fs::create_dir_all(&dir)
-                    .with_context(|| format!("creating {}", dir.display()))?;
-                let ids: Vec<&str> = model
-                    .into_iter()
-                    .chain(catalog.iter().map(String::as_str))
-                    .collect();
-                let models: Vec<serde_json::Value> = ids
-                    .iter()
-                    .map(|id| {
-                        serde_json::json!({
-                            "id": id,
-                            "name": id,
-                            "reasoning": false,
-                            "input": ["text"],
-                            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-                            "contextWindow": 200000,
-                            "maxTokens": 8192,
-                        })
-                    })
-                    .collect();
-                let mut config = serde_json::json!({
-                    "gateway": { "mode": "local" },
-                    "models": {
-                        "mode": "merge",
-                        "providers": {
-                            "bitrouter": {
-                                "baseUrl": v1_base_url(base_url),
-                                "apiKey": auth,
-                                "api": "openai-completions",
-                                "models": models,
-                            }
-                        }
-                    }
-                });
-                if let Some(default) = ids.first() {
-                    config["agents"] = serde_json::json!({
-                        "defaults": { "model": format!("bitrouter/{default}") }
-                    });
-                }
-                std::fs::write(
-                    dir.join("openclaw.json"),
-                    serde_json::to_string_pretty(&config)?,
-                )
-                .context("writing openclaw.json")?;
-                Ok(RoutingOverlay {
-                    env: vec![
-                        ("OPENCLAW_STATE_DIR".to_string(), dir.display().to_string()),
-                        (
-                            "OPENCLAW_CONFIG_PATH".to_string(),
-                            dir.join("openclaw.json").display().to_string(),
-                        ),
-                    ],
-                    args: vec!["tui".to_string(), "--local".to_string()],
-                })
-            }
             // Own-auth harnesses (grok, agy): no redirection, no MCP
             // mechanism we can inject non-invasively — hosted with their own
             // subscription auth; `--model` forwards as their native flag.
@@ -739,7 +657,7 @@ impl Harness {
 }
 
 /// An MCP server to inject into a launched harness — the gateway servers
-/// (`bitrouter_tools` / `bitrouter_skills`, see `crate::gateways`).
+/// (`bitrouter_tools`, see `crate::gateways`).
 #[derive(Debug, Clone)]
 pub struct McpServer {
     /// Server name as the harness will list it (e.g. `bitrouter_tools`).
@@ -764,71 +682,13 @@ pub enum McpTransport {
 
 /// Render ordered header pairs as the JSON object shape harness config files
 /// expect (`{"Authorization": "Bearer …"}`).
-fn headers_map(headers: &[(String, String)]) -> serde_json::Map<String, serde_json::Value> {
+pub(crate) fn headers_map(
+    headers: &[(String, String)],
+) -> serde_json::Map<String, serde_json::Value> {
     headers
         .iter()
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect()
-}
-
-/// The synthesized opencode config: a `bitrouter` provider over the OpenAI
-/// wire, the daemon's catalog as its model list, an optional default model,
-/// and the injected MCP servers.
-fn opencode_config(
-    base_url: &str,
-    auth: &str,
-    model: Option<&str>,
-    catalog: &[String],
-    mcp: &[McpServer],
-) -> serde_json::Value {
-    let mut models = serde_json::Map::new();
-    for id in catalog {
-        models.insert(id.clone(), serde_json::json!({}));
-    }
-    if let Some(m) = model {
-        models
-            .entry(m.to_string())
-            .or_insert_with(|| serde_json::json!({}));
-    }
-    let mut config = serde_json::json!({
-        "$schema": "https://opencode.ai/config.json",
-        "provider": {
-            "bitrouter": {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "BitRouter",
-                "options": { "baseURL": v1_base_url(base_url), "apiKey": auth },
-                "models": serde_json::Value::Object(models),
-            }
-        },
-    });
-    if let Some(default) = model
-        .map(str::to_string)
-        .or_else(|| catalog.first().cloned())
-    {
-        config["model"] = serde_json::json!(format!("bitrouter/{default}"));
-    }
-    if !mcp.is_empty() {
-        let mut entries = serde_json::Map::new();
-        for s in mcp {
-            let entry = match &s.transport {
-                // opencode folds command+args into one invocation array.
-                McpTransport::Stdio { command, args } => {
-                    let mut invocation = vec![command.clone()];
-                    invocation.extend(args.iter().cloned());
-                    serde_json::json!({ "type": "local", "command": invocation, "enabled": true })
-                }
-                McpTransport::Http { url, headers } => serde_json::json!({
-                    "type": "remote",
-                    "url": url,
-                    "enabled": true,
-                    "headers": headers_map(headers),
-                }),
-            };
-            entries.insert(s.name.clone(), entry);
-        }
-        config["mcp"] = serde_json::Value::Object(entries);
-    }
-    config
 }
 
 /// Resolve the gateway credential by precedence: a real `BITROUTER_API_KEY`
@@ -844,7 +704,7 @@ pub fn resolve_gateway_auth(bitrouter_key: Option<String>, require_key: bool) ->
 }
 
 /// The Codex `-c` provider-override overlay. Mirrors the interactive
-/// `bitrouter launch` codex wiring so both facets route identically.
+/// `bro launch` codex wiring so both facets route identically.
 fn codex_overlay(base_url: &str, auth: &str, model: Option<&str>) -> RoutingOverlay {
     let mut env = Vec::new();
     let mut args = vec![
@@ -885,7 +745,7 @@ fn codex_overlay(base_url: &str, auth: &str, model: Option<&str>) -> RoutingOver
 
 /// `/v1`-suffixed base URL — the shape codex custom providers, opencode's
 /// openai-compatible provider, and pi's `baseUrl` all expect.
-fn v1_base_url(base_url: &str) -> String {
+pub(crate) fn v1_base_url(base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
     if trimmed.ends_with("/v1") {
         trimmed.to_string()
@@ -920,6 +780,81 @@ fn toml_string(value: &str) -> String {
 mod tests {
     use super::*;
 
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AdapterContract {
+        harness_id: String,
+        package: String,
+        version: String,
+        git_head: String,
+        provider_id: String,
+        protocol: String,
+        fallback_env: Vec<String>,
+        native_identity_headers: Vec<String>,
+    }
+
+    fn adapter_contracts() -> anyhow::Result<Vec<AdapterContract>> {
+        Ok(vec![
+            serde_json::from_str(include_str!(
+                "../tests/fixtures/acp_adapters/claude-agent-acp-0.75.1.json"
+            ))?,
+            serde_json::from_str(include_str!(
+                "../tests/fixtures/acp_adapters/codex-acp-1.10.0.json"
+            ))?,
+        ])
+    }
+
+    // ===== the registry/catalog split (AGENT_REGISTRY_SPEC §13) =====
+    //
+    // `ACP_CATALOG` is generated from `dist/registry/agents.json`, so a test
+    // comparing the two would only prove that `build.rs` ran. What is worth
+    // pinning is the invariant the split rests on: registry membership follows
+    // having an ACP adapter, and the harnesses held back are exactly the ones
+    // with nothing to route.
+
+    #[test]
+    fn registry_membership_follows_having_an_acp_adapter() {
+        // Non-vacuity: a `build.rs` that silently emitted nothing would
+        // otherwise satisfy everything below.
+        // Non-vacuity only — deliberately not a count, so retiring an agent
+        // stays a registry-only change.
+        assert!(
+            !ACP_CATALOG.is_empty(),
+            "the generated catalog is empty — did build.rs read dist/registry?"
+        );
+        for harness in ACP_CATALOG {
+            assert!(
+                harness.acp_command.is_some(),
+                "{}: a registry agent must have an ACP invocation",
+                harness.id
+            );
+        }
+        assert!(by_id("grok").is_none());
+        assert!(by_id("antigravity").is_none());
+    }
+
+    #[test]
+    fn config_file_routing_reaches_its_synthesis_through_the_catalog() {
+        // The four synthesized harnesses carry their shape as registry data,
+        // so the routing itself is the lookup — there is no id table left.
+        for id in ["opencode", "pi-acp", "hermes-acp", "openclaw"] {
+            let harness = by_id(id).expect("catalog entry");
+            let synthesis = harness
+                .config_synthesis()
+                .unwrap_or_else(|| panic!("{id} should route through a config file"));
+            assert!(
+                !synthesis.file.is_empty(),
+                "{id} synthesis names no config file"
+            );
+        }
+        assert!(
+            by_id("claude-acp")
+                .expect("catalog")
+                .config_synthesis()
+                .is_none()
+        );
+    }
+
     #[test]
     fn catalog_ids_are_unique() {
         let mut ids: Vec<_> = CATALOG.iter().map(|h| h.id).collect();
@@ -930,6 +865,160 @@ mod tests {
     }
 
     #[test]
+    fn maintained_acp_adapters_are_exactly_pinned() -> anyhow::Result<()> {
+        let claude = by_id("claude-acp")
+            .ok_or_else(|| anyhow::anyhow!("claude-acp missing from catalog"))?;
+        assert_eq!(
+            claude.acp_args,
+            &["-y", "@agentclientprotocol/claude-agent-acp@0.75.1"]
+        );
+        assert_eq!(
+            claude.project_url,
+            "https://github.com/agentclientprotocol/claude-agent-acp"
+        );
+        assert_eq!(claude.package_marker, "claude-agent-acp");
+
+        let codex =
+            by_id("codex-acp").ok_or_else(|| anyhow::anyhow!("codex-acp missing from catalog"))?;
+        assert_eq!(
+            codex.acp_args,
+            &["-y", "@agentclientprotocol/codex-acp@1.10.0"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn maintained_provider_contract_requires_the_exact_invocation_pin() -> anyhow::Result<()> {
+        let claude = by_id("claude-acp")
+            .ok_or_else(|| anyhow::anyhow!("claude-acp missing from catalog"))?;
+        assert!(claude.uses_maintained_adapter(
+            "npx",
+            &["@agentclientprotocol/claude-agent-acp@0.75.1".to_string()]
+        ));
+        assert!(!claude.uses_maintained_adapter(
+            "npx",
+            &["@agentclientprotocol/claude-agent-acp@0.69.0".to_string()]
+        ));
+        assert!(!claude.uses_maintained_adapter(
+            "npx",
+            &["@agentclientprotocol/claude-agent-acp@0.75.1-tampered".to_string()]
+        ));
+        assert!(!claude.uses_maintained_adapter(
+            "npx",
+            &["@zed-industries/claude-code-acp@latest".to_string()]
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn endpoint_plan_matches_the_pinned_adapter_contracts() -> anyhow::Result<()> {
+        for contract in adapter_contracts()? {
+            let harness = by_id(&contract.harness_id)
+                .ok_or_else(|| anyhow::anyhow!("missing harness {}", contract.harness_id))?;
+            let plan = harness
+                .endpoint_plan(
+                    "http://127.0.0.1:4356/",
+                    "brk_test",
+                    Some("logical/model"),
+                    "controller-test",
+                )
+                .ok_or_else(|| anyhow::anyhow!("missing endpoint plan"))?;
+
+            assert_eq!(plan.provider_id, contract.provider_id);
+            assert_eq!(plan.protocol.as_str(), contract.protocol);
+            assert_eq!(plan.model.as_deref(), Some("logical/model"));
+            assert_eq!(
+                plan.headers.get("authorization").map(String::as_str),
+                Some("Bearer brk_test")
+            );
+            assert_eq!(
+                plan.headers
+                    .get("x-bitrouter-controller-id")
+                    .map(String::as_str),
+                Some("controller-test")
+            );
+            assert_eq!(
+                plan.headers.get("x-bitrouter-harness").map(String::as_str),
+                Some(contract.harness_id.as_str())
+            );
+
+            let package_spec = format!("{}@{}", contract.package, contract.version);
+            assert!(harness.acp_args.contains(&package_spec.as_str()));
+            assert_eq!(contract.git_head.len(), 40);
+            assert!(!contract.native_identity_headers.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn endpoint_plan_renders_documented_adapter_fallbacks() -> anyhow::Result<()> {
+        for contract in adapter_contracts()? {
+            let harness = by_id(&contract.harness_id)
+                .ok_or_else(|| anyhow::anyhow!("missing harness {}", contract.harness_id))?;
+            let plan = harness
+                .endpoint_plan(
+                    "http://127.0.0.1:4356",
+                    "brk_test",
+                    Some("logical/model"),
+                    "controller-test",
+                )
+                .ok_or_else(|| anyhow::anyhow!("missing endpoint plan"))?;
+            let overlay = plan.fallback_overlay()?;
+            let env: std::collections::HashMap<_, _> = overlay.env.into_iter().collect();
+
+            for key in contract.fallback_env {
+                assert!(
+                    env.contains_key(&key),
+                    "{} missing {key}",
+                    contract.harness_id
+                );
+            }
+            assert!(
+                overlay.args.is_empty(),
+                "{} used ACP CLI args",
+                contract.harness_id
+            );
+
+            match contract.harness_id.as_str() {
+                "claude-acp" => {
+                    assert_eq!(
+                        env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+                        Some("http://127.0.0.1:4356")
+                    );
+                    let custom = env
+                        .get("ANTHROPIC_CUSTOM_HEADERS")
+                        .ok_or_else(|| anyhow::anyhow!("missing Claude custom headers"))?;
+                    assert!(custom.contains("x-bitrouter-controller-id: controller-test"));
+                    assert!(custom.contains("x-bitrouter-harness: claude-acp"));
+                    assert!(!custom.to_ascii_lowercase().contains("authorization"));
+                }
+                "codex-acp" => {
+                    assert_eq!(
+                        env.get("MODEL_PROVIDER").map(String::as_str),
+                        Some("bitrouter")
+                    );
+                    let config: serde_json::Value = serde_json::from_str(
+                        env.get("CODEX_CONFIG")
+                            .ok_or_else(|| anyhow::anyhow!("missing Codex config"))?,
+                    )?;
+                    assert_eq!(config["model_provider"], "bitrouter");
+                    assert_eq!(
+                        config["model_providers"]["bitrouter"]["base_url"],
+                        "http://127.0.0.1:4356/v1"
+                    );
+                    assert_eq!(
+                        config["model_providers"]["bitrouter"]["wire_api"],
+                        "responses"
+                    );
+                    assert_eq!(config["model"], "logical/model");
+                }
+                other => return Err(anyhow::anyhow!("unexpected contract {other}")),
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn by_interactive_binary_finds_the_launchable_harnesses() {
         assert_eq!(by_interactive_binary("claude").unwrap().id, "claude-acp");
         assert_eq!(by_interactive_binary("codex").unwrap().id, "codex-acp");
@@ -937,41 +1026,9 @@ mod tests {
         assert_eq!(by_interactive_binary("pi").unwrap().id, "pi-acp");
         assert_eq!(by_interactive_binary("hermes").unwrap().id, "hermes-acp");
         assert_eq!(by_interactive_binary("openclaw").unwrap().id, "openclaw");
-        assert_eq!(by_interactive_binary("grok").unwrap().id, "grok");
-        assert_eq!(by_interactive_binary("agy").unwrap().id, "antigravity");
+        assert!(by_interactive_binary("grok").is_none());
+        assert!(by_interactive_binary("agy").is_none());
         assert!(by_interactive_binary("gemini").is_none());
-    }
-
-    #[test]
-    fn own_auth_harnesses_never_redirect_and_forward_model_natively() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        for (id, flag) in [("grok", "-m"), ("antigravity", "--model")] {
-            let h = by_id(id).unwrap();
-            assert!(!h.env_args_routable(), "{id} launches with its own auth");
-            assert!(h.acp_command.is_none(), "{id} has no ACP adapter");
-            assert_eq!(
-                h.routing_overlay("http://x:1", "t", None),
-                RoutingOverlay::default()
-            );
-            // The launch overlay sets no env (no redirection) and
-            // forwards --model as the harness's native flag.
-            let o = h
-                .launch_overlay(
-                    "http://x:1",
-                    "t",
-                    Some("some-model"),
-                    &[],
-                    &[mcp()],
-                    dir.path(),
-                )
-                .expect("overlay");
-            assert!(o.env.is_empty(), "{id}: no redirection env");
-            assert_eq!(o.args, vec![flag, "some-model"], "{id}");
-            let bare = h
-                .launch_overlay("http://x:1", "t", None, &[], &[], dir.path())
-                .expect("overlay");
-            assert_eq!(bare, RoutingOverlay::default(), "{id}: bare launch");
-        }
     }
 
     #[test]
@@ -981,11 +1038,38 @@ mod tests {
             "npx",
             &[
                 "-y".to_string(),
-                "@zed-industries/claude-code-acp@latest".to_string(),
+                "@agentclientprotocol/claude-agent-acp@0.75.1".to_string(),
             ],
         )
         .expect("matches claude-acp");
         assert_eq!(h.id, "claude-acp");
+    }
+
+    #[test]
+    fn match_invocation_keeps_legacy_claude_adapter_configs_routable() -> anyhow::Result<()> {
+        let harness = match_invocation(
+            "npx",
+            &[
+                "-y".to_string(),
+                "@zed-industries/claude-code-acp@latest".to_string(),
+            ],
+        )
+        .ok_or_else(|| anyhow::anyhow!("legacy Claude adapter no longer catalog-matches"))?;
+        assert_eq!(harness.id, "claude-acp");
+        Ok(())
+    }
+
+    #[test]
+    fn endpoint_plan_debug_redacts_credentials() -> anyhow::Result<()> {
+        let harness =
+            by_id("codex-acp").ok_or_else(|| anyhow::anyhow!("codex-acp missing from catalog"))?;
+        let plan = harness
+            .endpoint_plan("http://127.0.0.1:4356", "brk_secret", None, "brc_test")
+            .ok_or_else(|| anyhow::anyhow!("Codex endpoint plan missing"))?;
+        let debug = format!("{plan:?}");
+        assert!(!debug.contains("brk_secret"), "credential leaked: {debug}");
+        assert!(debug.contains("[REDACTED]"));
+        Ok(())
     }
 
     #[test]
@@ -995,10 +1079,10 @@ mod tests {
 
     #[test]
     fn match_invocation_matches_globally_installed_binary_command() {
-        // A `command: claude-code-acp` (npm -g binary) must catalog-match the
-        // same as the `npx @zed-industries/claude-code-acp` package form.
+        // A `command: claude-agent-acp` (npm -g binary) must catalog-match the
+        // same as the pinned npx package form.
         assert_eq!(
-            match_invocation("claude-code-acp", &[]).unwrap().id,
+            match_invocation("claude-agent-acp", &[]).unwrap().id,
             "claude-acp"
         );
         assert_eq!(
@@ -1011,8 +1095,8 @@ mod tests {
     #[test]
     fn catalog_markers_are_mutually_non_substrings() {
         // A false-positive would mis-route one harness as another.
-        for a in CATALOG {
-            for b in CATALOG {
+        for a in CATALOG.iter() {
+            for b in CATALOG.iter() {
                 if a.id != b.id {
                     assert!(
                         !a.package_marker.contains(b.package_marker),
@@ -1425,7 +1509,7 @@ mod tests {
         );
     }
 
-    // ── Launch overlays (`bitrouter launch` facet with no gateways wired). ──
+    // ── Launch overlays (`bro launch` facet with no gateways wired). ──
 
     #[test]
     fn opencode_launch_overlay_routes_to_the_gateway_without_mcp() {
@@ -1511,30 +1595,10 @@ mod tests {
     }
 
     #[test]
-    fn own_auth_launch_overlay_never_redirects() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        for (id, flag) in [("grok", "-m"), ("antigravity", "--model")] {
-            let h = by_id(id).unwrap();
-            let o = h
-                .launch_overlay(
-                    "http://127.0.0.1:4356",
-                    "tok",
-                    Some("some-model"),
-                    &["x-ai/grok-4.5".to_string()],
-                    &[],
-                    dir.path(),
-                )
-                .expect("overlay");
-            assert!(o.env.is_empty(), "{id}: never redirected to the gateway");
-            assert_eq!(o.args, vec![flag, "some-model"], "{id}");
-        }
-    }
-
-    #[test]
     fn gateway_injection_is_the_only_difference_the_servers_make() {
         // One synthesis, one method: passing gateway servers adds their
         // injection and changes nothing else about the routing overlay.
-        for id in ["claude-acp", "codex-acp", "opencode", "hermes-acp", "grok"] {
+        for id in ["claude-acp", "codex-acp", "opencode", "hermes-acp"] {
             let h = by_id(id).unwrap();
             let a = tempfile::tempdir().expect("tempdir");
             let b = tempfile::tempdir().expect("tempdir");

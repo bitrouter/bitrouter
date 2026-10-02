@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use bitrouter_sdk::language_model::protocol::InboundAdapter;
 use bitrouter_sdk::language_model::protocol::chat_completions::ChatCompletionsAdapter;
@@ -13,20 +13,22 @@ use http::{HeaderName, HeaderValue};
 
 use crate::policy_table_router::PolicyTable;
 use crate::workflow_state::ir::{HarnessId, ProtocolKind, RouteRisk, WorkflowStateKind};
-use crate::workflow_state::predictive::{NextActionClass, NextStepRole, TaskFamily};
+use crate::workflow_state::predictive::{NextActionClass, NextStepRole, ProgressState, TaskFamily};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WorkflowTraceFixture {
     pub id: String,
     pub harness: HarnessId,
     pub protocol: ProtocolKind,
     pub headers: HeaderMap,
     pub raw_body: serde_json::Value,
+    pub canonical_prompt: Option<serde_json::Value>,
     pub prompt: Prompt,
     pub expected: ExpectedWorkflowState,
+    pub research_slices: std::collections::BTreeSet<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExpectedWorkflowState {
     pub state_kind: WorkflowStateKind,
     pub baseline_fingerprint: String,
@@ -35,13 +37,15 @@ pub struct ExpectedWorkflowState {
     pub prediction: Option<ExpectedPredictiveRoute>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExpectedPredictiveRoute {
     pub next_step_role: NextStepRole,
     pub next_action_class: NextActionClass,
     pub route_risk: RouteRisk,
     #[serde(default)]
     pub task_family: Option<TaskFamily>,
+    #[serde(default)]
+    pub progress_state: Option<ProgressState>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,6 +58,8 @@ struct WireFixture {
     raw_body: serde_json::Value,
     #[serde(default)]
     canonical_prompt: Option<serde_json::Value>,
+    #[serde(default)]
+    research_slices: std::collections::BTreeSet<String>,
     expected: ExpectedWorkflowState,
 }
 
@@ -90,8 +96,10 @@ impl WorkflowTraceFixture {
             protocol: wire.protocol,
             headers,
             raw_body: wire.raw_body,
+            canonical_prompt: wire.canonical_prompt,
             prompt,
             expected: wire.expected,
+            research_slices: wire.research_slices,
         })
     }
 

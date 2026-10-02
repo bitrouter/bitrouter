@@ -1,0 +1,19 @@
+# Keep Docker's build context free of local work products and credentials.
+.git
+.git/**
+target
+target/**
+**/target
+**/target/**
+.env
+.env.*
+**/.env
+**/.env.*
+.credentials
+.credentials/**
+**/.credentials
+**/.credentials/**
+*.pem
+*.key
+*.p12
+*.pfx

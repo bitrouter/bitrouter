@@ -1,0 +1,33 @@
+{
+  "env": [
+    [
+      "OPENCLAW_STATE_DIR",
+      "{root}/openclaw"
+    ],
+    [
+      "OPENCLAW_CONFIG_PATH",
+      "{root}/openclaw/openclaw.json"
+    ]
+  ],
+  "args": [
+    "tui",
+    "--local"
+  ],
+  "file": "openclaw.json",
+  "config": {
+    "gateway": {
+      "mode": "local"
+    },
+    "models": {
+      "mode": "merge",
+      "providers": {
+        "bitrouter": {
+          "baseUrl": "http://127.0.0.1:4356/v1",
+          "apiKey": "brk_test",
+          "api": "openai-completions",
+          "models": []
+        }
+      }
+    }
+  }
+}

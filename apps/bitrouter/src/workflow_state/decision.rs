@@ -10,6 +10,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::eval::types::{EvalExperimentRef, RouteDecisionMeasurement};
 use crate::workflow_state::ir::WorkflowIdentity;
 
 pub const POLICY_DECISION_JSONL_ENV: &str = "BITROUTER_POLICY_DECISION_JSONL";
@@ -94,6 +95,10 @@ pub struct PolicyDecisionRecord {
     pub prediction_reason_codes: Vec<String>,
     #[serde(default)]
     pub task_family_reason_codes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiment: Option<EvalExperimentRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_measurement: Option<RouteDecisionMeasurement>,
     #[serde(default)]
     pub observed_route_projection: Option<String>,
     #[serde(default)]
@@ -479,6 +484,8 @@ mod tests {
             prediction_confidence_kind: None,
             prediction_reason_codes: Vec::new(),
             task_family_reason_codes: Vec::new(),
+            experiment: None,
+            route_measurement: None,
             observed_route_projection: None,
             trajectory_episode_id: None,
             trajectory_sequence: None,

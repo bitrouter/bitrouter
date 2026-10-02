@@ -1,0 +1,103 @@
+{
+  "kind": "controlled_gateway_inventory_and_checkpoint_coverage_validation",
+  "recorded_at": "2026-09-08T23:11:50.867365+00:00",
+  "git_base_commit": "ad2bab71968e40752fe175433b23fd2098307c81",
+  "scope": "Acknowledged controller-scoped gateway inventory, immutable-prefix resource membership, and publication-time coverage fences. The complete TUI evolution loop remains unfinished.",
+  "data": "Controlled ACP events, isolated SQLite databases, local HTTP upstreams, and local control-socket tests. No historical-session judge accuracy or live routing benefit is measured.",
+  "checks": [
+    {
+      "command": "cargo nextest run --all-features --no-fail-fast",
+      "exit_code": 0,
+      "passed": 3312,
+      "failed": 0,
+      "skipped": 12,
+      "output_sha256": "f661d1e5ae0f8dca7c45a73584510831e34abeb4e6965af299733d153f1b4279"
+    },
+    {
+      "command": "cargo clippy --all-features --all-targets -- -D warnings",
+      "exit_code": 0,
+      "output_sha256": "031a49537991a07768651061b74479b9003d7b5f6f9a09d92064ef06bb46b517"
+    },
+    {
+      "command": "cargo test --all-features --doc",
+      "exit_code": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 1,
+      "output_sha256": "680432039e1f21c21927d310c8cd6e115f82e4e040cac90670040064c6075b3b"
+    },
+    {
+      "command": "cargo fmt -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "new_regression_evidence": [
+    "Priced gateway requests complete a stopped prefix; active prompts remain incomplete, and later work does not enter older prefixes.",
+    "Replay cannot execute again or replace metering after the capture connection closes.",
+    "Unresolved requests retain settlement but prevent session completeness; confidently bound other sessions are excluded.",
+    "Missing capture acknowledgement prevents new experiment enrollment and cannot be repaired retroactively.",
+    "Late settlement advances only the resource revision and requires terminal outcome before cost is complete.",
+    "Registration validates namespace, precedes gateway traffic, and detects a different serving runtime epoch.",
+    "Fork cost union includes inherited work once and excludes later parent work; cross-session completion references respect the prefix and deletion.",
+    "Learning publication rejects changed inventory even with an unchanged canonical head.",
+    "Local control IPC acknowledges the same serving inventory runtime."
+  ],
+  "source_files": {
+    "Cargo.lock": "sha256:7a3dada487bda898b19ba4c0f8b76c4795e25e31b4925d9b7854b97f824f0fdb",
+    "apps/bitrouter/Cargo.toml": "sha256:7bad249c0672fd4970cb4042bd20356db1e244520e4cb6fb7e40e08c26540c64",
+    "apps/bitrouter/examples/checkpoint_ts_simulation.rs": "sha256:45d32d25e8b83fe5942515baa81d8b69842aaf469aab1d1f7cff03e6fc16985d",
+    "apps/bitrouter/src/acp_cli.rs": "sha256:9f16fd7bf980b1e36c7064dc434e6c3de77fc9b94206349d47aea232c3621d11",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/assessment.rs": "sha256:da4cbf4a741aac48070ca1ba0d1ac1ef0bd566e5dd909fbb2e84a74befcf031f",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/mod.rs": "sha256:e93cf9390ec187a3c533e93c69934508e056caef0d8a9d440fa012af45ba3722",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/resource.rs": "sha256:acd09d4ec0d8988036de319b68a457c7be42c40c4249c3a6e92ce5b674721a45",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/resource/coverage.rs": "sha256:6bef038607a4cb279885cda36130714e9eb1ffa87eedd47a186727e648e8a23f",
+    "apps/bitrouter/src/acp_trajectory/checkpoint/types.rs": "sha256:cedfb4a2d588fed52bc9ab1d4eb23ddb4aad7f6d481f4fd1d54902e052217f65",
+    "apps/bitrouter/src/acp_trajectory/mod.rs": "sha256:e99bbfef46f81ba8d6a54fdee72744cc147fde418db43fcfab7ae947090c2e18",
+    "apps/bitrouter/src/assemble.rs": "sha256:c7a7e630e58b19ea3d6040f39ba18bc8aaa8959640315ec6e65b83597c45e5b0",
+    "apps/bitrouter/src/daemon.rs": "sha256:6178d05739481a82fbe7a3b088caf61a647cb308cc4c919fe94660ecd4a7669c",
+    "apps/bitrouter/src/db/migration/m20240101_000020_create_checkpoint_evolution.rs": "sha256:d4213d5509356b10fcd2df5aceb3c6162b64e8a794a7f313853482c3761f4747",
+    "apps/bitrouter/src/db/migration/mod.rs": "sha256:eb171fbec77d417fd9d7958bc8496d49e2639140b35314ffcbc29b26853457f1",
+    "apps/bitrouter/src/eval/settlement.rs": "sha256:49c95c0a771c413a37531420bddc535a36d9887801077fc825d138db101f67aa",
+    "apps/bitrouter/src/evolution/bandit.rs": "sha256:4a718c9b12b0e3ebf4ebc89ae5c4649cacac8128b8408f75e6c7d465455d37ac",
+    "apps/bitrouter/src/evolution/catalog.rs": "sha256:768e37af6daf90057ceb69b6c94e550cce2e1527eee221f8c3c9c55459af415e",
+    "apps/bitrouter/src/evolution/control.rs": "sha256:0cec052736b0df2c2884a179a79b5236c1ddf40b3e2b569144feb34e911d1ee8",
+    "apps/bitrouter/src/evolution/evidence.rs": "sha256:dbcff57ad7798242a3d2fc80919b5efe14dd124c084aee360b60c28454fcc9af",
+    "apps/bitrouter/src/evolution/inventory.rs": "sha256:aa5717006f19ee50f3d92035994fbe196b8627138b1b8d4c334188ecfc5e675e",
+    "apps/bitrouter/src/evolution/jobs.rs": "sha256:9a298a16a09b48f145f7c935b545a0d917677b2a4c2d1420baadabb6f549bac7",
+    "apps/bitrouter/src/evolution/jobs/tests.rs": "sha256:ddf529e52ff40a31f0dbaea925a77f4978f68aa174a4a58b77703c3a56865a87",
+    "apps/bitrouter/src/evolution/judge.rs": "sha256:471f89496e0202821fa501fff5e0238eb9f9f9b7aee43d5ca5af37aaee7539e2",
+    "apps/bitrouter/src/evolution/learning.rs": "sha256:2b2eeffc31966fbff0003ec4b56f828c7a0ce22fc846576e4b6a4da5de0aca36",
+    "apps/bitrouter/src/evolution/learning/tests.rs": "sha256:27d16350b5919edae29f7c83a83c40647e052630c0f797f6986436119dfa3e6d",
+    "apps/bitrouter/src/evolution/mod.rs": "sha256:4b1bdec2f9825d3a817054e38d28ac9a06bbc4e2f555485de308b56a45de8234",
+    "apps/bitrouter/src/evolution/rubric.rs": "sha256:dd276a7a5195cbc85b6a3e391414f7496a1c8c928991c318d379f8ae416bab46",
+    "apps/bitrouter/src/evolution/runtime.rs": "sha256:f26a504008e23c8e07ee88b1a33ee4601a9df6e4977128aa51ccb1281599065c",
+    "apps/bitrouter/src/evolution/runtime/tests.rs": "sha256:e5a5df7a52fde738657f733e3ab34a537e3e2bfc9b4b688b787408f38a73d691",
+    "apps/bitrouter/src/evolution/runtime/tests/execution_guards.rs": "sha256:35ecf51d64f4cf2589e090b34ff890be087c477b4462af5b53130a713ee3f3a9",
+    "apps/bitrouter/src/evolution/runtime/tests/resource_coverage.rs": "sha256:d4537e97e73f2e8441c1062f1dc0ad39619ce7eb71445c21e2091d347f256c62",
+    "apps/bitrouter/src/evolution/scoring.rs": "sha256:1af3b6bd0476b8444152d7ff0938d13110611a680dc68a769615e5bed4e47956",
+    "apps/bitrouter/src/evolution/service.rs": "sha256:5011c67a3f53aa03e315ac3d0d0e4f05147b4daadea8a2b0fdf9107abfa4efc3",
+    "apps/bitrouter/src/evolution/service/tests.rs": "sha256:35535ee8841a9906621446af8f996699c70d213bddbd8a05455e7edcbda3ac81",
+    "apps/bitrouter/src/evolution/store.rs": "sha256:090b0febb883b6ec0598866187f74b5a98822cea644017964fdc5d3df3cdf922",
+    "apps/bitrouter/src/evolution/tests.rs": "sha256:fe53a2beda7779641c3045315c198d958d40f09b4657bf27ad961d56946cd797",
+    "apps/bitrouter/src/lib.rs": "sha256:58ca0d42d3f2bd69d29886b72564c425d9dfc9b2d84c0ae36c10adb40d16f692",
+    "apps/bitrouter/src/main.rs": "sha256:b720a0e62939386fdb790ccb7a76c71e022a366653191fc5bbc923dcd857e7bd",
+    "apps/bitrouter/src/metering/recorder.rs": "sha256:fddd5964c0bc6bc15b19bd509f3ab3f0f9db52bf96f56275fd5329e2f84934ae",
+    "apps/bitrouter/src/policy_lock.rs": "sha256:82f3dc95970766c0813312dc5c861e37a03316d37eb099fb5ec2540db18e087d",
+    "apps/bitrouter/tests/daemon.rs": "sha256:cde4f2386c81328ae701e1bb1f1d0250909d64ad5926da7e3b29cc05f107d9ff",
+    "crates/bitrouter-sdk/src/config/routing_table.rs": "sha256:93410732f6ea5ecf768ad03b6e4d1cb4dcd9fe317096a324bfa866db2788e257",
+    "crates/bitrouter-sdk/src/language_model/server_tools/loop_controller.rs": "sha256:f5aa79106ddcf843af0ebc0e894c23547990ef6870ac51ddf45bdf8492b54488",
+    "crates/bitrouter-sdk/src/language_model/server_tools/stream.rs": "sha256:5e02c40e1cfa0c2b9a3ab1f1e687ce2f74b7cf353b9d577e28c9ffc2af2ab473"
+  },
+  "remaining_acceptance": [
+    "Blinded model reference review and comparator calibration on actual historical ACP trajectories; the available operator database still contains no ACP canonical tables.",
+    "Enacted adoption and rollback experiments, delayed or revised reward reliability, missingness and correlated feedback; the earlier synthetic harmful-promotion finding remains unresolved.",
+    "End-to-end maintained harness identity propagation and full session coverage acceptance beyond controller-scoped fixtures.",
+    "Judge overhead and net-cost reporting, automatic checkpoint scheduling, post-adoption monitoring and reusable experiment revisions.",
+    "Operator/TUI controls and full isolated capture-to-publication integration, including mixed reload states and backend portability."
+  ],
+  "operator_traffic_enrolled": false
+}

@@ -353,10 +353,37 @@ mod tests {
     use http::HeaderValue;
 
     use crate::workflow_state::extractors::ExtractorInput;
-    use crate::workflow_state::ir::{HarnessId, ProtocolKind, SessionConfidence};
-    use crate::workflow_state::session::{
-        MAX_TRACKED_PARENT_SESSIONS, WorkflowIdentityTracker, advance_epoch, resolve_session_signal,
+    use crate::workflow_state::ir::{
+        AgentRole, ContextTransition, HarnessId, ProtocolKind, SessionConfidence,
     };
+    use crate::workflow_state::session::{
+        MAX_TRACKED_PARENT_SESSIONS, WorkflowIdentityTracker, advance_epoch,
+        resolve_session_signal, resolve_workflow_identity,
+    };
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PureApiCase {
+        name: String,
+        protocol: String,
+        harness_hint: String,
+        headers: std::collections::BTreeMap<String, String>,
+        raw_body: serde_json::Value,
+        first_user_text: String,
+        expected: PureApiExpected,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PureApiExpected {
+        key: String,
+        confidence: String,
+        source: String,
+        agent_session_id: String,
+        parent_session_id: String,
+        identity_source: String,
+        fingerprint: String,
+    }
 
     fn prompt(text: &str) -> Prompt {
         Prompt {
@@ -466,6 +493,105 @@ mod tests {
             resolved.signal.source.as_deref(),
             Some("prompt.first_user_message_sha256")
         );
+    }
+
+    #[test]
+    fn pure_model_api_session_compatibility_matrix() -> anyhow::Result<()> {
+        let cases: Vec<PureApiCase> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/session_compatibility/pure_model_api_sessions.json"
+        ))?;
+
+        for case in cases {
+            let protocol = match case.protocol.as_str() {
+                "chat_completions" => ProtocolKind::ChatCompletions,
+                "messages" => ProtocolKind::Messages,
+                "responses" => ProtocolKind::Responses,
+                other => anyhow::bail!("{}: unknown protocol {other}", case.name),
+            };
+            let harness_hint = match case.harness_hint.as_str() {
+                "generic" => HarnessId::Generic,
+                "hermes" => HarnessId::Hermes,
+                other => anyhow::bail!("{}: unknown harness {other}", case.name),
+            };
+            let expected_confidence = match case.expected.confidence.as_str() {
+                "low" => SessionConfidence::Low,
+                "medium" => SessionConfidence::Medium,
+                "high" => SessionConfidence::High,
+                other => anyhow::bail!("{}: unknown confidence {other}", case.name),
+            };
+            let mut headers = HeaderMap::new();
+            for (name, value) in &case.headers {
+                headers.insert(
+                    http::header::HeaderName::from_bytes(name.as_bytes())?,
+                    HeaderValue::from_str(value)?,
+                );
+            }
+            let prompt = prompt(&case.first_user_text);
+            let input = ExtractorInput {
+                harness_hint: Some(harness_hint),
+                protocol_hint: protocol,
+                headers: &headers,
+                raw_body: &case.raw_body,
+                prompt: &prompt,
+            };
+
+            let signal = resolve_session_signal(&input).signal;
+            assert_eq!(
+                signal.key.as_deref(),
+                Some(case.expected.key.as_str()),
+                "{}: session key",
+                case.name
+            );
+            assert_eq!(
+                signal.confidence, expected_confidence,
+                "{}: session confidence",
+                case.name
+            );
+            assert_eq!(
+                signal.source.as_deref(),
+                Some(case.expected.source.as_str()),
+                "{}: session source",
+                case.name
+            );
+
+            let identity = resolve_workflow_identity(&input, &WorkflowIdentityTracker::default());
+            assert_eq!(
+                identity.agent_session_id.as_deref(),
+                Some(case.expected.agent_session_id.as_str()),
+                "{}: agent identity",
+                case.name
+            );
+            assert_eq!(
+                identity.parent_session_id.as_deref(),
+                Some(case.expected.parent_session_id.as_str()),
+                "{}: parent identity",
+                case.name
+            );
+            assert_eq!(identity.role, AgentRole::Unknown, "{}: role", case.name);
+            assert_eq!(identity.context_epoch, 0, "{}: epoch", case.name);
+            assert_eq!(
+                identity.transition,
+                ContextTransition::None,
+                "{}: transition",
+                case.name
+            );
+            assert_eq!(
+                identity.source, case.expected.identity_source,
+                "{}: identity source",
+                case.name
+            );
+            assert_eq!(
+                identity.confidence, expected_confidence,
+                "{}: identity confidence",
+                case.name
+            );
+            assert_eq!(
+                identity.fingerprint, case.expected.fingerprint,
+                "{}: identity fingerprint",
+                case.name
+            );
+        }
+        Ok(())
     }
 
     #[test]

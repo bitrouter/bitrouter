@@ -4,7 +4,7 @@
 //! - `POST /v1/messages` — Messages
 //! - `POST /v1/chat/completions` — Chat Completions
 //! - `POST /v1/responses` — Responses
-//! - `POST /v1beta/models/{model_action}` — Google `generateContent` /
+//! - `POST /v1beta/models/{*model_action}` — Google `generateContent` /
 //!   `streamGenerateContent`
 //!
 //! Each handler parses the inbound body with that protocol's adapter, runs the
@@ -19,7 +19,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, serve};
@@ -65,8 +65,10 @@ impl App {
     }
 
     /// Like [`App::serve`], but with a host-supplied router wrapper applied
-    /// after the SDK has mounted every route — used by `bitrouter-observe`
-    /// to install a `tower-http` `TraceLayer` at HTTP ingress.
+    /// after the SDK has mounted every route — used by
+    /// `bitrouter_telemetry::otel::http_layer` to open an OpenTelemetry SERVER
+    /// span at HTTP ingress. It is a genuine extension point rather than an
+    /// internal call: the renderer that uses it ships in another crate.
     pub async fn serve_with_router_wrapper<F>(&self, listen: &str, wrapper: F) -> Result<()>
     where
         F: Fn(Router) -> Router + Send + Sync + 'static,
@@ -101,9 +103,42 @@ impl App {
             .await
     }
 
+    /// Serve an already-bound listener with the normal router and shutdown drain.
+    ///
+    /// Hosts with multiple listeners can bind every required endpoint before
+    /// publishing readiness, without rebuilding the SDK's HTTP lifecycle.
+    pub async fn serve_listener_with_router_wrapper_and_shutdown<F, S>(
+        &self,
+        listener: tokio::net::TcpListener,
+        wrapper: F,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        F: Fn(Router) -> Router + Send + Sync + 'static,
+        S: Future<Output = ()> + Send + 'static,
+    {
+        self.serve_listener_inner(listener, Some(Arc::new(wrapper)), shutdown)
+            .await
+    }
+
     async fn serve_inner<S>(
         &self,
         listen: &str,
+        wrapper: Option<RouterWrapper>,
+        shutdown: S,
+    ) -> Result<()>
+    where
+        S: Future<Output = ()> + Send + 'static,
+    {
+        let listener = tokio::net::TcpListener::bind(listen)
+            .await
+            .map_err(|e| BitrouterError::internal(format!("bind {listen}: {e}")))?;
+        self.serve_listener_inner(listener, wrapper, shutdown).await
+    }
+
+    async fn serve_listener_inner<S>(
+        &self,
+        listener: tokio::net::TcpListener,
         wrapper: Option<RouterWrapper>,
         shutdown: S,
     ) -> Result<()>
@@ -129,10 +164,7 @@ impl App {
             router_wrapper: wrapper,
         };
         let router = build_router_with_options(state, options);
-        let listener = tokio::net::TcpListener::bind(listen)
-            .await
-            .map_err(|e| BitrouterError::internal(format!("bind {listen}: {e}")))?;
-        tracing::info!(%listen, "bitrouter listening");
+        tracing::info!(listen = ?listener.local_addr(), "bitrouter listening");
         // Graceful shutdown: on SIGINT/SIGTERM
         // stop accepting new connections and let in-flight requests finish.
         let drain_pipeline = pipeline.clone();
@@ -218,8 +250,8 @@ const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// A router-wrapper closure. The wrapper runs after the SDK has mounted
 /// every route and applied every built-in layer, so a host can wrap the
-/// whole router in additional middleware (e.g. a `tower-http`
-/// `TraceLayer` that creates the SERVER span at HTTP ingress).
+/// whole router in additional middleware (e.g. the layer that creates the
+/// SERVER span at HTTP ingress).
 ///
 /// Held behind an `Arc<dyn Fn>` so [`RouterOptions`] remains `Clone`.
 /// `Fn` (not `FnOnce`) lets the same options be applied more than once.
@@ -244,9 +276,9 @@ pub struct RouterOptions {
 
 impl RouterOptions {
     /// Install a router-wrapper closure that runs after the SDK has mounted
-    /// every route. Used to add an inbound HTTP `tower::Layer` (e.g. the
-    /// observe plugin's `tower-http::trace::TraceLayer`) without coupling
-    /// the SDK to OpenTelemetry or any other tracing backend.
+    /// every route. Used to add inbound HTTP middleware (e.g. the observe
+    /// plugin's ingress-span layer) without coupling the SDK to OpenTelemetry
+    /// or any other tracing backend.
     pub fn with_router_wrapper<F>(mut self, wrapper: F) -> Self
     where
         F: Fn(Router) -> Router + Send + Sync + 'static,
@@ -269,7 +301,7 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
         .route("/v1/messages", post(messages))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(responses))
-        .route("/v1beta/models/{model_action}", post(generate_content));
+        .route("/v1beta/models/{*model_action}", post(generate_content));
     if !options.omit_v1_models {
         router = router.route("/v1/models", get(list_models));
     }
@@ -309,8 +341,9 @@ async fn prometheus_metrics(State(state): State<AppState>) -> Response {
 
 /// `POST /mcp/{server}` — Model Context Protocol invocation.
 ///
-/// v1.0 implements the JSON-RPC request/response shape only; the Streamable
-/// HTTP SSE response variant is a documented follow-up. Spec refs:
+/// Implements legacy initialized sessions and the self-contained stateless
+/// `2026-07-28` lifecycle, including the Streamable HTTP SSE response variant.
+/// Spec refs:
 /// - JSON-RPC envelope: <https://modelcontextprotocol.io/specification/2025-06-18/basic>
 ///   ("Result responses MUST include the same ID as the request they
 ///   correspond to"). The MCP Streamable HTTP transport (Origin /
@@ -345,9 +378,9 @@ async fn mcp_invoke_inner(
         return BitrouterError::NotFound("mcp pipeline not configured".to_string()).into_response();
     };
 
-    // Validate Streamable HTTP transport headers per spec. `Origin` MUST be
-    // validated to defeat DNS-rebinding; an unsupported `MCP-Protocol-Version`
-    // MUST be rejected with 400.
+    // Validate the transport-level Origin before interpreting the message.
+    // Protocol-version failures need the JSON-RPC id and the structured
+    // `-32022` data payload, so they are handled after envelope validation.
     if let Err(e) = validate_mcp_transport_headers(&headers) {
         return e.into_response();
     }
@@ -373,10 +406,38 @@ async fn mcp_invoke_inner(
     if method.is_empty() {
         return mcp_error_response(inbound_id, -32600, "Invalid Request: missing 'method'");
     }
+    if let Some(version) = headers
+        .get("mcp-protocol-version")
+        .and_then(|value| value.to_str().ok())
+        && !MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
+    {
+        return mcp_error_response_with_data(
+            inbound_id,
+            -32022,
+            &format!("unsupported MCP protocol version `{version}`"),
+            serde_json::json!({
+                "requested": version,
+                "supported": MCP_SUPPORTED_PROTOCOL_VERSIONS,
+            }),
+        );
+    }
     let params = body
         .get("params")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let modern_request =
+        match validate_mcp_request_protocol(&headers, &method, &params, body.get("id").is_some()) {
+            Ok(modern) => modern,
+            Err((code, message, Some(data))) => {
+                return mcp_error_response_with_data(inbound_id, code, &message, data);
+            }
+            Err((code, message, None)) => return mcp_error_response(inbound_id, code, &message),
+        };
+    if modern_request
+        && let Err(message) = validate_mcp_standard_headers(&headers, &method, &params)
+    {
+        return mcp_error_response(inbound_id, -32020, &message);
+    }
 
     // MCP lifecycle methods are answered by the gateway itself — they negotiate
     // the client<->gateway session and MUST NOT be proxied to an upstream
@@ -384,9 +445,29 @@ async fn mcp_invoke_inner(
     // rejects everything else as "method not found"). Without this, every
     // spec-compliant client (Claude clients, opencode, the MCP SDK) fails its
     // opening `initialize` over Streamable HTTP and never reaches a tool call;
-    // only handshake-skipping callers (curl, `bitrouter tools`) worked before.
+    // only handshake-skipping callers (curl, `bro tools`) worked before.
     // See <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>.
     match method.as_str() {
+        "server/discover" => {
+            return Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": inbound_id,
+                "result": {
+                    "resultType": "complete",
+                    "supportedVersions": MCP_SUPPORTED_PROTOCOL_VERSIONS,
+                    "capabilities": mcp_gateway_capabilities(),
+                    "ttlMs": 0,
+                    "cacheScope": "private",
+                    "_meta": {
+                        "io.modelcontextprotocol/serverInfo": {
+                            "name": "bitrouter-mcp-gateway",
+                            "version": env!("CARGO_PKG_VERSION"),
+                        },
+                    },
+                },
+            }))
+            .into_response();
+        }
         "initialize" => {
             // Spec: echo the client's protocol version when we support it,
             // otherwise answer with our latest. `params.protocolVersion` is the
@@ -394,8 +475,8 @@ async fn mcp_invoke_inner(
             let protocol_version = params
                 .get("protocolVersion")
                 .and_then(|v| v.as_str())
-                .filter(|v| MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(v))
-                .unwrap_or(MCP_SUPPORTED_PROTOCOL_VERSIONS[0]);
+                .filter(|v| MCP_LEGACY_PROTOCOL_VERSIONS.contains(v))
+                .unwrap_or(MCP_LATEST_LEGACY_PROTOCOL_VERSION);
             return Json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": inbound_id,
@@ -428,11 +509,7 @@ async fn mcp_invoke_inner(
                     // `resources/directory/read` against a server that has not
                     // declared it, so `false` is the safe answer for a gateway
                     // that cannot know whether its members implement it.
-                    "capabilities": {
-                        "tools": {},
-                        "resources": {},
-                        "extensions": { "io.modelcontextprotocol/skills": {} },
-                    },
+                    "capabilities": mcp_gateway_capabilities(),
                     "serverInfo": {
                         "name": "bitrouter-mcp-gateway",
                         "version": env!("CARGO_PKG_VERSION"),
@@ -447,10 +524,12 @@ async fn mcp_invoke_inner(
             return axum::http::StatusCode::ACCEPTED.into_response();
         }
         "ping" => {
+            let mut result = serde_json::json!({});
+            shape_mcp_result_for_peer(&method, modern_request, &mut result);
             return Json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": inbound_id,
-                "result": {},
+                "result": result,
             }))
             .into_response();
         }
@@ -465,31 +544,64 @@ async fn mcp_invoke_inner(
     } else {
         CallerContext::anonymous()
     };
-    let request = match selector {
+    let client_context = modern_request
+        .then(|| downstream_mcp_client_context(&params))
+        .flatten();
+    let upstream_params = strip_downstream_request_context(params);
+    let mut request = match selector {
         mcp::ServerSelector::Direct(server) => {
-            mcp::McpRequest::direct(server, method, params, caller)
+            mcp::McpRequest::direct(server, method.clone(), upstream_params, caller)
         }
-        mcp::ServerSelector::Aggregate => mcp::McpRequest::aggregate(method, params, caller),
+        mcp::ServerSelector::Aggregate => {
+            mcp::McpRequest::aggregate(method.clone(), upstream_params, caller)
+        }
     }
     .with_headers(headers.clone());
+    if let Some(client_context) = client_context {
+        request = request.with_client_context(client_context);
+    }
+
+    // A modern tools/call must be checked against the schema BitRouter
+    // publishes on this same downstream route. Fetching through the pipeline
+    // deliberately runs auth before schema lookup, then the shared cache keeps
+    // the ordinary case cheap. The upstream hop will construct its own
+    // headers; validating here prevents a caller from presenting one value to
+    // downstream middleware while asking BitRouter to execute another.
+    if modern_request && method == "tools/call" {
+        let mut list_request = request.clone();
+        list_request.method = "tools/list".to_string();
+        list_request.params = serde_json::json!({});
+        let listed = match pipeline.execute(list_request).await {
+            Ok(response) => response,
+            Err(error) => return mcp_pipeline_error_response(inbound_id, &error),
+        };
+        if let Err(message) =
+            validate_mcp_tool_parameter_headers(&headers, &request.params, &listed.result)
+        {
+            return mcp_error_response(inbound_id, -32020, &message);
+        }
+    }
 
     // SSE branch per the MCP Streamable HTTP spec — if the client opts in via
     // `Accept: text/event-stream` we return the JSON-RPC frames as `data:`
     // events. JSON clients get the buffered JSON shape (the existing path).
     if accepts_event_stream(&headers) {
         return match pipeline.execute_streaming(request).await {
-            Ok(stream) => sse_response(inbound_id, stream),
+            Ok(stream) => sse_response(inbound_id, method, modern_request, stream),
             Err(e) => mcp_pipeline_error_response(inbound_id, &e),
         };
     }
 
     match pipeline.execute(request).await {
-        Ok(response) => Json(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": inbound_id,
-            "result": response.result,
-        }))
-        .into_response(),
+        Ok(mut response) => {
+            shape_mcp_result_for_peer(&method, modern_request, &mut response.result);
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": inbound_id,
+                "result": response.result,
+            }))
+            .into_response()
+        }
         Err(e) => mcp_pipeline_error_response(inbound_id, &e),
     }
 }
@@ -543,6 +655,8 @@ fn accepts_event_stream(headers: &HeaderMap) -> bool {
 /// never sits on an open connection waiting for nothing.
 fn sse_response(
     inbound_id: serde_json::Value,
+    method: String,
+    modern: bool,
     stream: futures::stream::BoxStream<'static, crate::error::Result<mcp::McpStreamPart>>,
 ) -> Response {
     use axum::response::sse::{Event, KeepAlive, Sse};
@@ -571,7 +685,8 @@ fn sse_response(
                 });
                 Ok::<_, Infallible>(Event::default().data(payload.to_string()))
             }
-            Ok(mcp::McpStreamPart::Final(response)) => {
+            Ok(mcp::McpStreamPart::Final(mut response)) => {
+                shape_mcp_result_for_peer(&method, modern, &mut response.result);
                 let payload = serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": &*inbound_id,
@@ -596,31 +711,494 @@ fn sse_response(
 
 /// MCP supported transport protocol versions. Update when adding spec revisions.
 /// See <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>.
-const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
+const MCP_MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
+const MCP_LATEST_LEGACY_PROTOCOL_VERSION: &str = "2025-11-25";
+const MCP_LEGACY_PROTOCOL_VERSIONS: &[&str] =
     &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
+    MCP_MODERN_PROTOCOL_VERSION,
+    MCP_LATEST_LEGACY_PROTOCOL_VERSION,
+    MCP_LEGACY_PROTOCOL_VERSIONS[1],
+    MCP_LEGACY_PROTOCOL_VERSIONS[2],
+    MCP_LEGACY_PROTOCOL_VERSIONS[3],
+];
+
+fn mcp_gateway_capabilities() -> serde_json::Value {
+    serde_json::json!({
+        "tools": {},
+        "resources": {},
+        "extensions": { "io.modelcontextprotocol/skills": {} },
+    })
+}
+
+/// Validate SEP-2575 per-request context and the Streamable HTTP protocol
+/// header. Returns whether this request uses the stateless 2026 lifecycle.
+fn validate_mcp_request_protocol(
+    headers: &HeaderMap,
+    method: &str,
+    params: &serde_json::Value,
+    has_id: bool,
+) -> std::result::Result<bool, (i64, String, Option<serde_json::Value>)> {
+    let header_version = headers
+        .get("mcp-protocol-version")
+        .and_then(|value| value.to_str().ok());
+
+    if method == "initialize" {
+        if let (Some(header), Some(body)) = (
+            header_version,
+            params
+                .get("protocolVersion")
+                .and_then(|value| value.as_str()),
+        ) && header != body
+        {
+            return Err((
+                -32600,
+                format!(
+                    "Invalid Request: MCP-Protocol-Version header ({header}) does not match initialize params.protocolVersion ({body})"
+                ),
+                None,
+            ));
+        }
+        return Ok(false);
+    }
+
+    // Notifications do not carry per-request context and receive no result.
+    if !has_id {
+        return Ok(header_version == Some(MCP_MODERN_PROTOCOL_VERSION));
+    }
+
+    let meta = params.get("_meta").and_then(serde_json::Value::as_object);
+    let meta_version = meta
+        .and_then(|value| value.get("io.modelcontextprotocol/protocolVersion"))
+        .and_then(serde_json::Value::as_str);
+    let modern = method == "server/discover"
+        || meta_version.is_some()
+        || header_version == Some(MCP_MODERN_PROTOCOL_VERSION);
+    if !modern {
+        return Ok(false);
+    }
+
+    let mut missing = Vec::new();
+    if meta_version.is_none() {
+        missing.push("io.modelcontextprotocol/protocolVersion");
+    }
+    if !meta
+        .and_then(|value| value.get("io.modelcontextprotocol/clientCapabilities"))
+        .is_some_and(serde_json::Value::is_object)
+    {
+        missing.push("io.modelcontextprotocol/clientCapabilities");
+    }
+    if !missing.is_empty() {
+        return Err((
+            -32602,
+            format!(
+                "Invalid params: request _meta is missing or has malformed required fields: {}",
+                missing.join(", ")
+            ),
+            None,
+        ));
+    }
+    let Some(header_version) = header_version else {
+        return Err((
+            -32020,
+            "request _meta protocolVersion requires MCP-Protocol-Version header".to_string(),
+            None,
+        ));
+    };
+    let meta_version = meta_version.unwrap_or(MCP_MODERN_PROTOCOL_VERSION);
+    if header_version != meta_version {
+        return Err((
+            -32020,
+            format!(
+                "MCP-Protocol-Version header ({header_version}) does not match request _meta protocolVersion ({meta_version})"
+            ),
+            None,
+        ));
+    }
+    if meta_version != MCP_MODERN_PROTOCOL_VERSION {
+        return Err((
+            -32022,
+            format!("protocol version `{meta_version}` does not support stateless requests"),
+            Some(serde_json::json!({
+                "requested": meta_version,
+                "supported": [MCP_MODERN_PROTOCOL_VERSION],
+            })),
+        ));
+    }
+    Ok(true)
+}
+
+/// Per-request identity belongs to the downstream hop. The rmcp client adds
+/// BitRouter's own protocol/client context for the upstream hop, so forwarding
+/// the caller's reserved fields would conflate two MCP peers.
+fn strip_downstream_request_context(mut params: serde_json::Value) -> serde_json::Value {
+    let Some(params_object) = params.as_object_mut() else {
+        return params;
+    };
+    let Some(meta) = params_object
+        .get_mut("_meta")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return params;
+    };
+    for key in [
+        "io.modelcontextprotocol/protocolVersion",
+        "io.modelcontextprotocol/clientInfo",
+        "io.modelcontextprotocol/clientCapabilities",
+    ] {
+        meta.remove(key);
+    }
+    if meta.is_empty() {
+        params_object.remove("_meta");
+    }
+    params
+}
+
+fn downstream_mcp_client_context(params: &serde_json::Value) -> Option<mcp::McpClientContext> {
+    let meta = params.get("_meta")?.as_object()?;
+    Some(mcp::McpClientContext {
+        protocol_version: meta
+            .get("io.modelcontextprotocol/protocolVersion")?
+            .as_str()?
+            .to_string(),
+        client_info: meta.get("io.modelcontextprotocol/clientInfo").cloned(),
+        client_capabilities: meta
+            .get("io.modelcontextprotocol/clientCapabilities")?
+            .clone(),
+    })
+}
+
+/// Validate the SEP-2243 standard routing headers introduced with
+/// `2026-07-28`. Tool-parameter headers are validated separately after the
+/// authenticated pipeline resolves the schema published on this route.
+fn validate_mcp_standard_headers(
+    headers: &HeaderMap,
+    method: &str,
+    params: &serde_json::Value,
+) -> std::result::Result<(), String> {
+    match headers
+        .get("mcp-method")
+        .and_then(|value| value.to_str().ok())
+    {
+        None => return Err("missing required Mcp-Method header".to_string()),
+        Some(value) if value != method => {
+            return Err(format!(
+                "Mcp-Method header `{value}` does not match body method `{method}`"
+            ));
+        }
+        Some(_) => {}
+    }
+    let name_key = if matches!(method, "tools/call" | "prompts/get") {
+        Some("name")
+    } else if matches!(
+        method,
+        "resources/read" | "resources/subscribe" | "resources/unsubscribe"
+    ) {
+        Some("uri")
+    } else if matches!(method, "tasks/get" | "tasks/update" | "tasks/cancel") {
+        Some("taskId")
+    } else {
+        None
+    };
+    let Some(expected) = name_key
+        .and_then(|key| params.get(key))
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(());
+    };
+    let raw = headers
+        .get("mcp-name")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| format!("missing required Mcp-Name header for `{method}`"))?;
+    let decoded = decode_mcp_header_value(raw)
+        .ok_or_else(|| "Mcp-Name header is not valid Base64".to_string())?;
+    if decoded != expected {
+        return Err(format!(
+            "Mcp-Name header `{decoded}` does not match body value `{expected}`"
+        ));
+    }
+    Ok(())
+}
+
+fn decode_mcp_header_value(value: &str) -> Option<String> {
+    use base64::{Engine, prelude::BASE64_STANDARD};
+
+    match value
+        .strip_prefix("=?base64?")
+        .and_then(|inner| inner.strip_suffix("?="))
+    {
+        Some(inner) => String::from_utf8(BASE64_STANDARD.decode(inner).ok()?).ok(),
+        None => Some(value.to_string()),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum McpParameterKind {
+    String,
+    Integer,
+    Boolean,
+}
+
+struct McpParameterHeader {
+    name: HeaderName,
+    display_name: String,
+    path: Vec<String>,
+    kind: McpParameterKind,
+}
+
+fn validate_mcp_tool_parameter_headers(
+    headers: &HeaderMap,
+    params: &serde_json::Value,
+    tools_result: &serde_json::Value,
+) -> std::result::Result<(), String> {
+    let Some(tool_name) = params.get("name").and_then(serde_json::Value::as_str) else {
+        return Ok(());
+    };
+    let Some(tool) = tools_result
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find(|tool| {
+                tool.get("name").and_then(serde_json::Value::as_str) == Some(tool_name)
+            })
+        })
+    else {
+        return Ok(());
+    };
+    let Some(schema) = tool.get("inputSchema") else {
+        return Ok(());
+    };
+    let bindings = collect_mcp_parameter_headers(schema).map_err(|error| {
+        format!("tool `{tool_name}` has invalid x-mcp-header metadata: {error}")
+    })?;
+    let null_arguments = serde_json::Value::Null;
+    let arguments = params.get("arguments").unwrap_or(&null_arguments);
+    for binding in bindings {
+        let value = value_at_property_path(arguments, &binding.path);
+        let raw = headers
+            .get(&binding.name)
+            .map(|header| header.to_str())
+            .transpose()
+            .map_err(|_| format!("{} contains invalid bytes", binding.display_name))?;
+        match value {
+            None | Some(serde_json::Value::Null) => {
+                if raw.is_some() {
+                    return Err(format!(
+                        "{} is present but its tool argument is absent or null",
+                        binding.display_name
+                    ));
+                }
+            }
+            Some(value) => {
+                let raw = raw.ok_or_else(|| {
+                    format!(
+                        "missing required {} for argument `{}`",
+                        binding.display_name,
+                        binding.path.join(".")
+                    )
+                })?;
+                let decoded = decode_mcp_header_value(raw)
+                    .ok_or_else(|| format!("{} is not valid Base64", binding.display_name))?;
+                if !mcp_parameter_value_matches(binding.kind, value, &decoded) {
+                    return Err(format!(
+                        "{} does not match argument `{}`",
+                        binding.display_name,
+                        binding.path.join(".")
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_mcp_parameter_headers(
+    schema: &serde_json::Value,
+) -> std::result::Result<Vec<McpParameterHeader>, String> {
+    fn count_annotations(value: &serde_json::Value) -> usize {
+        match value {
+            serde_json::Value::Object(object) => {
+                usize::from(object.contains_key("x-mcp-header"))
+                    + object.values().map(count_annotations).sum::<usize>()
+            }
+            serde_json::Value::Array(values) => values.iter().map(count_annotations).sum(),
+            _ => 0,
+        }
+    }
+
+    fn visit_properties(
+        schema: &serde_json::Value,
+        path: &mut Vec<String>,
+        seen_names: &mut std::collections::BTreeSet<String>,
+        bindings: &mut Vec<McpParameterHeader>,
+        visited: &mut usize,
+    ) -> std::result::Result<(), String> {
+        let Some(properties) = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+        else {
+            return Ok(());
+        };
+        for (property_name, property_schema) in properties {
+            path.push(property_name.clone());
+            if let Some(annotation) = property_schema.get("x-mcp-header") {
+                *visited += 1;
+                let annotation = annotation
+                    .as_str()
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| "annotation name must be a non-empty string".to_string())?;
+                let canonical = annotation.to_ascii_lowercase();
+                let wire_name = format!("mcp-param-{canonical}");
+                if !seen_names.insert(canonical) {
+                    return Err(format!(
+                        "duplicate case-insensitive annotation name `{annotation}`"
+                    ));
+                }
+                let display_name = format!("Mcp-Param-{annotation}");
+                let name = HeaderName::from_bytes(wire_name.as_bytes())
+                    .map_err(|_| format!("`{annotation}` is not a valid HTTP field-name token"))?;
+                let kind = match property_schema
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    Some("string") => McpParameterKind::String,
+                    Some("integer") => McpParameterKind::Integer,
+                    Some("boolean") => McpParameterKind::Boolean,
+                    _ => {
+                        return Err(format!(
+                            "annotation `{annotation}` is not on a string, integer, or boolean"
+                        ));
+                    }
+                };
+                bindings.push(McpParameterHeader {
+                    name,
+                    display_name,
+                    path: path.clone(),
+                    kind,
+                });
+            }
+            visit_properties(property_schema, path, seen_names, bindings, visited)?;
+            path.pop();
+        }
+        Ok(())
+    }
+
+    let total = count_annotations(schema);
+    let mut bindings = Vec::new();
+    let mut visited = 0;
+    visit_properties(
+        schema,
+        &mut Vec::new(),
+        &mut std::collections::BTreeSet::new(),
+        &mut bindings,
+        &mut visited,
+    )?;
+    if visited != total {
+        return Err(
+            "annotation is not reachable from the schema root through properties only".to_string(),
+        );
+    }
+    Ok(bindings)
+}
+
+fn value_at_property_path<'a>(
+    arguments: &'a serde_json::Value,
+    path: &[String],
+) -> Option<&'a serde_json::Value> {
+    path.iter().try_fold(arguments, |value, segment| {
+        value.as_object().and_then(|object| object.get(segment))
+    })
+}
+
+fn mcp_parameter_value_matches(
+    kind: McpParameterKind,
+    value: &serde_json::Value,
+    header: &str,
+) -> bool {
+    match kind {
+        McpParameterKind::String => value.as_str() == Some(header),
+        McpParameterKind::Boolean => match value.as_bool() {
+            Some(true) => header == "true",
+            Some(false) => header == "false",
+            None => false,
+        },
+        McpParameterKind::Integer => {
+            const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+            let Some(body) = value.as_f64().filter(|number| {
+                number.is_finite() && number.fract() == 0.0 && number.abs() <= MAX_SAFE_INTEGER
+            }) else {
+                return false;
+            };
+            header.parse::<f64>().is_ok_and(|candidate| {
+                candidate.is_finite()
+                    && candidate.fract() == 0.0
+                    && candidate.abs() <= MAX_SAFE_INTEGER
+                    && candidate == body
+            })
+        }
+    }
+}
+
+fn shape_mcp_result_for_peer(method: &str, modern: bool, result: &mut serde_json::Value) {
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    if modern {
+        object
+            .entry("resultType".to_string())
+            .or_insert_with(|| "complete".into());
+        if matches!(
+            method,
+            "tools/list"
+                | "resources/list"
+                | "resources/templates/list"
+                | "resources/read"
+                | "prompts/list"
+                | "skills/list"
+                | "skills/get"
+        ) {
+            object
+                .entry("ttlMs".to_string())
+                .or_insert_with(|| 0.into());
+            object
+                .entry("cacheScope".to_string())
+                .or_insert_with(|| "private".into());
+        }
+        let meta = object
+            .entry("_meta".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if !meta.is_object() {
+            *meta = serde_json::json!({});
+        }
+        if let Some(meta) = meta.as_object_mut() {
+            meta.insert(
+                "io.modelcontextprotocol/serverInfo".to_string(),
+                serde_json::json!({
+                    "name": "bitrouter-mcp-gateway",
+                    "version": env!("CARGO_PKG_VERSION"),
+                }),
+            );
+        }
+    } else if !matches!(method, "skills/list" | "skills/get") {
+        object.remove("resultType");
+        object.remove("ttlMs");
+        object.remove("cacheScope");
+    }
+}
 
 /// Validates the MCP Streamable HTTP transport headers per the spec at
 /// <https://modelcontextprotocol.io/specification/2025-06-18/basic/transports>.
 /// `Origin`: MUST be validated by the server to defeat DNS rebinding — we accept
 /// localhost / 127.0.0.1 / [::1] by default (the only safe default for a local
-/// daemon binding to loopback). `MCP-Protocol-Version`: if present, MUST be a
-/// version this server supports.
+/// daemon binding to loopback). Protocol-version validation happens after the
+/// JSON-RPC envelope is parsed so failures can carry the request id and the
+/// structured `UnsupportedProtocolVersion` data.
 fn validate_mcp_transport_headers(headers: &HeaderMap) -> Result<()> {
     if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok())
         && !is_safe_mcp_origin(origin)
     {
         return Err(BitrouterError::Forbidden(format!(
             "MCP Origin not allowed: '{origin}'. Local daemons accept only loopback origins."
-        )));
-    }
-    if let Some(version) = headers
-        .get("mcp-protocol-version")
-        .and_then(|v| v.to_str().ok())
-        && !MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&version)
-    {
-        return Err(BitrouterError::bad_request(format!(
-            "unsupported MCP-Protocol-Version '{version}' (supported: {})",
-            MCP_SUPPORTED_PROTOCOL_VERSIONS.join(", ")
         )));
     }
     Ok(())
@@ -651,6 +1229,25 @@ fn mcp_error_response(id: serde_json::Value, code: i64, message: &str) -> Respon
             "jsonrpc": "2.0",
             "id": id,
             "error": { "code": code, "message": message },
+        })),
+    )
+        .into_response()
+}
+
+/// Build a JSON-RPC protocol error whose machine-readable payload is required
+/// for version negotiation.
+fn mcp_error_response_with_data(
+    id: serde_json::Value,
+    code: i64,
+    message: &str,
+    data: serde_json::Value,
+) -> Response {
+    (
+        axum::http::StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": code, "message": message, "data": data },
         })),
     )
         .into_response()
@@ -705,8 +1302,9 @@ async fn responses(
     handle(state, headers, ApiProtocol::Responses, body, None).await
 }
 
-/// Generate Content encodes the model and the streaming verb in the path segment, e.g.
-/// `gemini-2.0-flash:generateContent` or `…:streamGenerateContent`.
+/// Generate Content encodes the model and streaming verb in the path. The
+/// catch-all also admits slash selectors such as `bitrouter/coding`; Axum
+/// decodes a percent-escaped slash before this handler validates the selector.
 async fn generate_content(
     State(state): State<AppState>,
     Path(model_action): Path<String>,
@@ -714,10 +1312,14 @@ async fn generate_content(
     Json(mut body): Json<serde_json::Value>,
 ) -> Response {
     let (model, action) = match model_action.rsplit_once(':') {
-        Some((m, a)) => (m.to_string(), a.to_string()),
-        None => {
+        Some((m, a))
+            if !m.is_empty() && matches!(a, "generateContent" | "streamGenerateContent") =>
+        {
+            (m.to_string(), a.to_string())
+        }
+        _ => {
             return BitrouterError::bad_request(
-                "google path must be 'models/{model}:generateContent'",
+                "google path must be 'models/{model}:generateContent' or 'models/{model}:streamGenerateContent'",
             )
             .into_response();
         }
@@ -767,19 +1369,20 @@ async fn handle(
             .into_response();
         }
     };
-    let prompt = match adapter.parse_request(body) {
+    let (prompt, original_model) = match adapter.parse_request(body) {
         Ok(mut p) => {
             if let Some(model) = model_override {
                 p.model = model;
             }
             p.model = sanitize_model_name(&p.model);
+            let original_model = p.model.clone();
             // Ingress-time prompt transforms (e.g. the bitrouter/fusion model
             // alias): the prompt body is freely mutable here, before it enters
             // the pipeline that exposes it read-only downstream.
             for transform in &state.prompt_transforms {
                 transform.apply_with_headers(&mut p, &headers);
             }
-            p
+            (p, original_model)
         }
         Err(e) => return e.into_response(),
     };
@@ -788,7 +1391,7 @@ async fn handle(
     // on, else a pre-auth anonymous placeholder for `AuthHook` to upgrade or
     // reject.
     //
-    // On the `skip_auth` path only, a credential `bitrouter launch` minted
+    // On the `skip_auth` path only, a credential `bro launch` minted
     // tags the caller with its session, so per-launch spend is answerable on
     // the zero-config install that cannot answer it any other way. This never
     // grants anything — see `caller::launch_tag` — and a real key falls
@@ -805,21 +1408,16 @@ async fn handle(
         CallerContext::anonymous()
     };
     let mut req = PipelineRequest::new(prompt.model.clone(), caller, prompt.clone());
-    req.request_id = request_id;
+    req.request_id = request_id.clone();
+    req.original_model = original_model;
     req.headers = headers;
     // Carry the inbound wire protocol so route resolution can prefer a native,
     // same-protocol upstream — a faithful round-trip instead of a lossy
     // cross-protocol translation.
     req.inbound_protocol = Some(inbound.clone());
 
-    if prompt.stream {
-        stream_response(
-            state.language_model.clone(),
-            req,
-            inbound.clone(),
-            &prompt.model,
-        )
-        .await
+    let mut response = if prompt.stream {
+        stream_response(state.language_model.clone(), req, inbound.clone()).await
     } else {
         // `execute_detached`, not `execute`: a non-streaming request must run to
         // completion and settle even if the client disconnects (axum drops this
@@ -831,23 +1429,35 @@ async fn handle(
             .execute_detached_prepared(req)
             .await
         {
-            Ok(prepared) => match adapter.render_response(
-                &prepared.response.result,
-                &prompt,
-                &prepared.response.request_id,
-            ) {
-                Ok(json) => match prepared.delivery.deliver().await {
-                    Ok(()) => Json(json).into_response(),
-                    Err(error) => error.into_response(),
-                },
-                Err(e) => match prepared.delivery.fail(e.clone()).await {
-                    Ok(()) => e.into_response(),
-                    Err(authorization_error) => authorization_error.into_response(),
-                },
-            },
+            Ok(prepared) => {
+                let mut response_prompt = prompt.clone();
+                response_prompt.model = prepared.model_id.clone();
+                match adapter.render_response(
+                    &prepared.response.result,
+                    &response_prompt,
+                    &prepared.response.request_id,
+                ) {
+                    Ok(json) => match prepared.delivery.deliver().await {
+                        Ok(()) => Json(json).into_response(),
+                        Err(error) => error.into_response(),
+                    },
+                    Err(e) => match prepared.delivery.fail(e.clone()).await {
+                        Ok(()) => e.into_response(),
+                        Err(authorization_error) => authorization_error.into_response(),
+                    },
+                }
+            }
             Err(e) => e.into_response(),
         }
+    };
+    // Every admitted pipeline result, including a pre-request rejection,
+    // exposes the caller-visible correlation ID.
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response
+            .headers_mut()
+            .insert(BITROUTER_REQUEST_ID_HEADER, value);
     }
+    response
 }
 
 fn add_inbound_protocol_hint(headers: &mut HeaderMap, inbound: &ApiProtocol) {
@@ -884,7 +1494,6 @@ async fn stream_response(
     pipeline: Arc<Pipeline>,
     req: PipelineRequest,
     inbound: ApiProtocol,
-    model: &str,
 ) -> Response {
     let adapter = match inbound_adapter_for(&inbound) {
         Some(a) => a,
@@ -896,17 +1505,19 @@ async fn stream_response(
             .into_response();
         }
     };
-    let mut encoder = adapter.stream_encoder(&req.request_id, model);
+    let request_id = req.request_id.clone();
     let keepalive = pipeline.keepalive_interval();
 
     // Route resolution and the upstream HTTP handshake happen before the SSE
     // response is constructed. Pre-stream failures therefore retain their real
     // HTTP status (notably upstream 429) instead of being trapped inside an
     // already-committed HTTP 200 event stream.
-    let mut parts = match pipeline.execute_stream_prepared(req).await {
-        Ok(parts) => parts,
+    let prepared = match pipeline.execute_stream_prepared(req).await {
+        Ok(prepared) => prepared,
         Err(error) => return error.into_response(),
     };
+    let mut encoder = adapter.stream_encoder(&request_id, &prepared.model_id);
+    let mut parts = prepared.parts;
 
     let frame_stream = async_stream::stream! {
         while let Some(item) = parts.next().await {
@@ -1163,18 +1774,125 @@ fn apply_error_headers(response: &mut Response, error: &BitrouterError) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PromptTransform;
     use crate::language_model::executor::{Executor, MockExecutor, MockResponse};
     use crate::language_model::routing::StaticRoutingTable;
     use crate::language_model::settlement::{RequiredFinalizationContext, RequiredFinalizer};
     use crate::language_model::types::{
         ApiProtocol, AuthScheme, ExecutionResult, Prompt, RoutingTarget,
     };
-    use crate::language_model::{PipelineBuilder, PipelineContext, StreamPartStream};
+    use crate::language_model::{
+        HookDecision, PipelineBuilder, PipelineContext, PreRequestHook, StreamPartStream,
+    };
     use async_trait::async_trait;
     use axum::body::to_bytes;
     use axum::http::{Request, header};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tower::ServiceExt;
+
+    fn annotated_tool_result(schema: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "tools": [{
+                "name": "deploy",
+                "inputSchema": schema
+            }]
+        })
+    }
+
+    #[test]
+    fn mcp_parameter_headers_validate_nested_primitive_arguments() {
+        let tools = annotated_tool_result(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "object",
+                    "properties": {
+                        "region": {"type": "string", "x-mcp-header": "Region"}
+                    }
+                },
+                "count": {"type": "integer", "x-mcp-header": "Count"},
+                "enabled": {"type": "boolean", "x-mcp-header": "Enabled"}
+            }
+        }));
+        let params = serde_json::json!({
+            "name": "deploy",
+            "arguments": {
+                "target": {"region": "us-east"},
+                "count": 42,
+                "enabled": true
+            }
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "mcp-param-region",
+            "=?base64?dXMtZWFzdA==?=".parse().unwrap(),
+        );
+        headers.insert("mcp-param-count", "42.0".parse().unwrap());
+        headers.insert("mcp-param-enabled", "true".parse().unwrap());
+
+        validate_mcp_tool_parameter_headers(&headers, &params, &tools)
+            .expect("matching parameter headers are valid");
+    }
+
+    #[test]
+    fn mcp_parameter_headers_reject_missing_mismatched_and_spurious_values() {
+        let tools = annotated_tool_result(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "tenant": {"type": "string", "x-mcp-header": "Tenant"}
+            }
+        }));
+        let params = serde_json::json!({
+            "name": "deploy",
+            "arguments": {"tenant": "alpha"}
+        });
+        let missing = validate_mcp_tool_parameter_headers(&HeaderMap::new(), &params, &tools)
+            .expect_err("body value requires a header");
+        assert!(missing.contains("missing required Mcp-Param-Tenant"));
+
+        let mut mismatched = HeaderMap::new();
+        mismatched.insert("mcp-param-tenant", "beta".parse().unwrap());
+        let mismatch = validate_mcp_tool_parameter_headers(&mismatched, &params, &tools)
+            .expect_err("header and body must match");
+        assert!(mismatch.contains("does not match"));
+
+        let params_without_tenant = serde_json::json!({
+            "name": "deploy",
+            "arguments": {"tenant": null}
+        });
+        let spurious =
+            validate_mcp_tool_parameter_headers(&mismatched, &params_without_tenant, &tools)
+                .expect_err("header must be absent for null arguments");
+        assert!(spurious.contains("absent or null"));
+    }
+
+    #[test]
+    fn mcp_parameter_header_annotations_must_be_reachable_and_unique() {
+        let unreachable = annotated_tool_result(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "values": {
+                    "type": "array",
+                    "items": {"type": "string", "x-mcp-header": "Value"}
+                }
+            }
+        }));
+        let params = serde_json::json!({"name": "deploy", "arguments": {}});
+        let error = validate_mcp_tool_parameter_headers(&HeaderMap::new(), &params, &unreachable)
+            .expect_err("array annotations are not statically reachable");
+        assert!(error.contains("properties only"));
+
+        let duplicate = annotated_tool_result(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "a": {"type": "string", "x-mcp-header": "Tenant"},
+                "b": {"type": "string", "x-mcp-header": "tenant"}
+            }
+        }));
+        let error = validate_mcp_tool_parameter_headers(&HeaderMap::new(), &params, &duplicate)
+            .expect_err("header annotation names are case-insensitively unique");
+        assert!(error.contains("duplicate case-insensitive"));
+    }
 
     struct CountingExecutor {
         calls: Arc<AtomicUsize>,
@@ -1184,6 +1902,28 @@ mod tests {
     struct RecoveringDrainFinalizer {
         attempts: Arc<AtomicUsize>,
         recovered: Arc<AtomicBool>,
+    }
+
+    struct RewriteModel(&'static str);
+
+    impl PromptTransform for RewriteModel {
+        fn apply(&self, prompt: &mut Prompt) {
+            prompt.model = self.0.to_string();
+        }
+    }
+
+    struct RecordModelIntent(Arc<std::sync::Mutex<Option<(String, String)>>>);
+
+    #[async_trait]
+    impl PreRequestHook for RecordModelIntent {
+        async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+            let observed = (ctx.original_model().to_string(), ctx.model().to_string());
+            match self.0.lock() {
+                Ok(mut slot) => *slot = Some(observed),
+                Err(poisoned) => *poisoned.into_inner() = Some(observed),
+            }
+            Ok(HookDecision::Allow)
+        }
     }
 
     #[async_trait]
@@ -1231,6 +1971,115 @@ mod tests {
         test_state_with_executor(Arc::new(MockExecutor::always_text("ok")))
     }
 
+    #[tokio::test]
+    async fn google_slash_selectors_and_actions_reach_the_pipeline()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let scripted = (0..2)
+            .flat_map(|_| {
+                [
+                    MockResponse::Generate(crate::language_model::GenerateResult {
+                        content: vec![crate::language_model::Content::Text {
+                            text: "ok".into(),
+                            provider_metadata: Default::default(),
+                        }],
+                        usage: None,
+                        finish_reason: Some(crate::language_model::FinishReason::Stop),
+                        response_id: Some("response-fixture".into()),
+                        stop_details: None,
+                        provider_metadata: Default::default(),
+                    }),
+                    MockResponse::Stream(vec![
+                        crate::language_model::StreamPart::TextDelta { text: "ok".into() },
+                        crate::language_model::StreamPart::Finish {
+                            reason: crate::language_model::FinishReason::Stop,
+                        },
+                    ]),
+                ]
+            })
+            .collect();
+        let table = StaticRoutingTable::new();
+        table.insert(
+            "gpt-5.5",
+            vec![RoutingTarget {
+                provider_name: "fixture".into(),
+                service_id: "gpt-5.5".into(),
+                api_base: "https://fixture.invalid".into(),
+                api_key: String::new(),
+                api_protocol: ApiProtocol::ChatCompletions,
+                chat_token_limit_field: None,
+                chat_supports_store: None,
+                chat_supports_stream_options: None,
+                reasoning_effort: None,
+                account_label: None,
+                api_key_override: None,
+                api_base_override: None,
+                auth_scheme: AuthScheme::Bearer,
+                headers: Vec::new(),
+            }],
+        );
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(table))
+            .executor(Arc::new(CountingExecutor {
+                calls: calls.clone(),
+                inner: MockExecutor::new(scripted),
+            }));
+        let app = build_router(AppState {
+            language_model: Arc::new(builder.build()?),
+            mcp: None,
+            skip_auth: true,
+            metrics_renderer: None,
+            prompt_transforms: vec![Arc::new(RewriteModel("gpt-5.5"))],
+        });
+        for selector in ["bitrouter/coding", "bitrouter%2Fcoding"] {
+            for action in ["generateContent", "streamGenerateContent"] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(format!("/v1beta/models/{selector}:{action}"))
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(
+                                r#"{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}"#,
+                            ))?,
+                    )
+                    .await?;
+                assert_eq!(response.status(), axum::http::StatusCode::OK);
+                assert!(
+                    !to_bytes(response.into_body(), MAX_BODY_BYTES)
+                        .await?
+                        .is_empty()
+                );
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        for invalid in [
+            "bitrouter/coding:unknown",
+            "bitrouter/coding",
+            ":generateContent",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/v1beta/models/{invalid}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from("{}"))?,
+                )
+                .await?;
+            assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            4,
+            "invalid action must not execute upstream"
+        );
+        Ok(())
+    }
+
     fn test_state_with_executor(executor: Arc<dyn Executor>) -> AppState {
         test_state_with_executor_and_server_tools(executor, false)
     }
@@ -1256,6 +2105,7 @@ mod tests {
                 api_key_override: None,
                 api_base_override: None,
                 auth_scheme: AuthScheme::XApiKey,
+                headers: Vec::new(),
             }],
         );
         let mut builder = PipelineBuilder::new();
@@ -1277,6 +2127,66 @@ mod tests {
             metrics_renderer: None,
             prompt_transforms: vec![],
         }
+    }
+
+    #[tokio::test]
+    async fn http_ingress_preserves_model_before_prompt_transforms() {
+        let table = StaticRoutingTable::new();
+        table.insert(
+            "gpt-5.5",
+            vec![RoutingTarget {
+                provider_name: "openai-codex".to_string(),
+                service_id: "gpt-5.5".to_string(),
+                api_base: "https://example.invalid".to_string(),
+                api_key: "test-key".to_string(),
+                api_protocol: ApiProtocol::Responses,
+                chat_token_limit_field: None,
+                chat_supports_store: None,
+                chat_supports_stream_options: None,
+                reasoning_effort: None,
+                account_label: None,
+                api_key_override: None,
+                api_base_override: None,
+                auth_scheme: AuthScheme::XApiKey,
+                headers: Vec::new(),
+            }],
+        );
+        let observed = Arc::new(std::sync::Mutex::new(None));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(table))
+            .executor(Arc::new(MockExecutor::always_text("ok")))
+            .pre_request_hook(RecordModelIntent(Arc::clone(&observed)));
+        let state = AppState {
+            language_model: Arc::new(builder.build().unwrap()),
+            mcp: None,
+            skip_auth: true,
+            metrics_renderer: None,
+            prompt_transforms: vec![Arc::new(RewriteModel("gpt-5.5"))],
+        };
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "model":"caller-model",
+                    "messages":[{"role":"user","content":"hello"}]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let _response = build_router(state).oneshot(request).await.unwrap();
+
+        let captured = match observed.lock() {
+            Ok(slot) => slot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        assert_eq!(
+            captured,
+            Some(("caller-model".to_string(), "gpt-5.5".to_string()))
+        );
     }
 
     async fn models_json(user_agent: Option<&str>) -> serde_json::Value {
@@ -1431,7 +2341,12 @@ mod tests {
             })
         })
         .boxed();
-        let response = sse_response(serde_json::json!(7), stream);
+        let response = sse_response(
+            serde_json::json!(7),
+            "tools/call".to_string(),
+            false,
+            stream,
+        );
 
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), 64 * 1024).await?;

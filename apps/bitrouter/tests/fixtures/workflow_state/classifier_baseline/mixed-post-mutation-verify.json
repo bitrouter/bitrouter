@@ -1,0 +1,21 @@
+{
+  "id": "classifier-mixed-post-mutation-verify-001",
+  "harness": "generic",
+  "protocol": "chat_completions",
+  "research_slices": ["mixed_language", "post_mutation"],
+  "raw_body": {
+    "model": "inbound",
+    "messages": [
+      {"role": "user", "content": "Update parser，然后 run the regression suite。"},
+      {"role": "assistant", "content": null, "tool_calls": [{"id": "edit-1", "type": "function", "function": {"name": "Edit", "arguments": "{\"file_path\":\"src/parser.rs\"}"}}]},
+      {"role": "tool", "tool_call_id": "edit-1", "content": "Patch applied successfully."}
+    ],
+    "tools": []
+  },
+  "expected": {
+    "state_kind": "edit",
+    "baseline_fingerprint": "after_Edit",
+    "confidence_min": 0.7,
+    "prediction": {"next_step_role": "verify", "next_action_class": "execute_or_test", "route_risk": "normal", "task_family": "code_generation", "progress_state": "progressing"}
+  }
+}

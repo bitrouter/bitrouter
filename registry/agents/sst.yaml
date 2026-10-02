@@ -1,0 +1,39 @@
+- id: opencode
+  name: opencode
+  description: sst's opencode via its native `opencode acp`
+  project_url: https://github.com/sst/opencode
+  package_marker: opencode
+  interactive_binary: opencode
+  acp:
+    protocol_version: 1
+  # opencode has no base-URL env var: routing, the default model, and MCP
+  # injection all ride one synthesized JSON config that OPENCODE_CONFIG points
+  # at. It keys its models by id, so the container is a map.
+  routing:
+    kind: config_file
+    file: opencode.json
+    skeleton: |
+      {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+          "bitrouter": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "BitRouter",
+            "options": { "baseURL": "{base_url_v1}", "apiKey": "{auth}" },
+            "models": {}
+          }
+        }
+      }
+    models:
+      at: /provider/bitrouter/models
+      shape: map_of_empty
+      order: catalog_then_model
+    default_model:
+      at: /model
+      format: provider_prefixed
+    mcp:
+      at: /mcp
+      entry: opencode_typed
+    env:
+      - name: OPENCODE_CONFIG
+        value: "{file}"

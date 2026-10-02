@@ -15,7 +15,7 @@ use uuid::Uuid;
 use super::store::EvalStore;
 use super::types::{
     EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalExperimentRef, EvalScope, EvalSubject, EvidenceItem,
-    canonical_digest, evidence_digest,
+    RouteDecisionMeasurement, canonical_digest, evidence_digest,
 };
 use crate::metering::{PricingTable, calculate_charge_micro_usd};
 use crate::workflow_state::predictive::TaskFamily;
@@ -87,6 +87,7 @@ pub struct PendingEvalDecision {
     pub baseline_tier: Option<String>,
     pub baseline_effort: Option<ReasoningEffort>,
     pub experiment: Option<EvalExperimentRef>,
+    pub route_measurement: Option<RouteDecisionMeasurement>,
     pub preset: Option<String>,
     pub holdout: bool,
     pub continuation_proposed_tier: Option<String>,
@@ -630,6 +631,7 @@ impl EvalSettlementRecorder {
                 baseline_effort: decision.baseline_effort,
                 policy_digest: decision.policy_digest.clone(),
                 experiment: decision.experiment.clone(),
+                route_measurement: decision.route_measurement.clone(),
             }],
             requested_dimensions: BTreeSet::from([
                 "cost.usd_micros".into(),
@@ -646,6 +648,9 @@ impl EvalSettlementRecorder {
 #[async_trait]
 impl SettlementRecorder for EvalSettlementRecorder {
     async fn record(&self, context: &mut SettlementContext) -> BitrouterResult<()> {
+        if context.has_event::<crate::evolution::runtime::CanonicalRequestReplayRejected>() {
+            return Ok(());
+        }
         let invocation = context.get_event::<EvalInvocation>().cloned();
         let pending = invocation
             .as_ref()
@@ -782,6 +787,7 @@ mod tests {
                             .into(),
                     challenger_propensity_ppm: 100_000,
                 }),
+                route_measurement: None,
                 preset: Some("auto:cost".into()),
                 holdout: false,
                 continuation_proposed_tier: Some("balanced".into()),
@@ -913,6 +919,7 @@ mod tests {
                 baseline_tier: Some("strong".into()),
                 baseline_effort: None,
                 experiment: None,
+                route_measurement: None,
                 preset: Some("auto:cost".into()),
                 holdout: false,
                 continuation_proposed_tier: None,
@@ -988,6 +995,7 @@ mod tests {
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
             experiment: None,
+            route_measurement: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,
@@ -1054,6 +1062,7 @@ mod tests {
             baseline_tier: Some("strong".into()),
             baseline_effort: None,
             experiment: None,
+            route_measurement: None,
             preset: Some("auto:cost".into()),
             holdout: false,
             continuation_proposed_tier: None,

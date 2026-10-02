@@ -28,18 +28,6 @@ models:
     capabilities:
       - reasoning
       - tools
-  - id: minimax/minimax-m2.5
-    provider_model_id: MiniMax-M2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.03
-        cache_write: 0.375
-      output_tokens:
-        text: 1.2
-    capabilities:
-      - reasoning
-      - tools
   - id: minimax/minimax-m3
     provider_model_id: MiniMax-M3
     pricing:

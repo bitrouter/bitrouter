@@ -5,14 +5,130 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [`GUARDRAILS_EXTENSION.md`](GUARDRAILS_EXTENSION.md) — Independent input checker
+  setup, migration boundaries, distribution and process-level validation.
+- [`GUARDRAILS_EXTENSION_ACCEPTANCE.md`](GUARDRAILS_EXTENSION_ACCEPTANCE.md) —
+  Local implementation, test/artifact evidence and remaining release gates.
+
+- [`ROUTER_EXTENSION_SPEC.md`](ROUTER_EXTENSION_SPEC.md) — **v0.7, compile-only
+  extensions implemented locally; public release pending.** Current router,
+  SDK author API, execution and migration contracts.
+- [`HOST_EXTENSION_DX_SPEC.md`](HOST_EXTENSION_DX_SPEC.md) — **v0.2, implementation
+  in this worktree; see acceptance evidence.** Shared foreground host startup, capability-owned
+  author types and inactive unused registrations, informed by Zed's extension design.
+- [`CONFIGURATION_STATE_CONTRACT_SPEC.md`](CONFIGURATION_STATE_CONTRACT_SPEC.md) —
+  **implemented and locally verified.** Whole-configuration saved/running/restart
+  evidence shared by local and remote status, CLI, and Code inspectors.
+- [`ROUTER_PRESET_MIGRATION_SPEC.md`](ROUTER_PRESET_MIGRATION_SPEC.md) —
+  **implemented and locally verified in PR #916.** Router/preset configuration
+  and identity migration sub-batch; not completion of the original M0–M1 batch.
 - [`CLI.md`](CLI.md) — full command reference, flags, and config resolution.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
-  skills over MCP, the observability TUI, the ACP TUI).
+  skills over MCP, the observability TUI, the ACP TUI, the ACP controller,
+  the agent registry).
+- [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) — **phases 0–4 implemented; phase 5
+  proposed.** One actions table so the CLI, Code, and typed remote-control
+  surfaces that answer the same question share one report type, one
+  implementation, and a guard test. Its historical origin-MCP analysis is
+  superseded in part. Written for
+  [#868](https://github.com/bitrouter/bitrouter/issues/868); stands alone
+  from #863 and #866.
+- [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — authoritative boundary
+  for ACP controller topology, harness-owned sessions, endpoint configuration,
+  native identity, and session-scoped routing.
+- [`ACP_EVOLUTION_SPEC.md`](ACP_EVOLUTION_SPEC.md) — **implemented; controlled
+  serving acceptance passed; historical calibration pending.** Recorded-evidence
+  rubric evaluation, checkpoint feedback, batched
+  Thompson sampling and session-sticky policy blocks. The
+  [experiment report](ACP_EVOLUTION_EXPERIMENTS.md) separates controlled results,
+  negative findings and remaining historical-data/product validation. The
+  [main integration validation](ACP_EVOLUTION_PR_VALIDATION.md) records the
+  `bro`/scrollback integration and final judge lease regression checks.
+- [`CODE_TUI_UX_SPEC.md`](CODE_TUI_UX_SPEC.md) — **implemented; locally verified.**
+  Replaces the seven-view Code dashboard with a conversation, contextual
+  pickers/inspectors, and agent/route/activity/attributed-cost status; defines
+  shared interaction behavior, ACP boundaries, and acceptance criteria.
+- [`CODE_SLASH_COMMAND_UX_SPEC.md`](CODE_SLASH_COMMAND_UX_SPEC.md) — **implemented
+  locally.** Makes `/` the command input, preserves drafts on cancel,
+  removes default action hotkeys, and adds configurable bindings under
+  `/hotkeys`.
+- [`BACKGROUND_AGENT_UX_SPEC.md`](BACKGROUND_AGENT_UX_SPEC.md) — **implemented;
+  locally verified.** Keeps foreground history in native scrollback,
+  makes background-agent awareness and routine commands a persistent bottom
+  control deck, and reserves alternate screen for full history or complex
+  detail while preserving supervisor and child-agent truth boundaries.
+- [`BACKGROUND_AGENT_IMPLEMENTATION.md`](BACKGROUND_AGENT_IMPLEMENTATION.md) —
+  implementation phases, ownership, and acceptance evidence for the control deck.
+- [`AGENT_INTERFACE_UNIFICATION_SPEC.md`](AGENT_INTERFACE_UNIFICATION_SPEC.md) —
+  **proposed for review.** Unifies the public agent UX around native
+  `claude`/`codex` shortcuts, the `code` TUI, headless `run`, and one raw
+  `acp serve` bridge; retires visible `spawn` and keeps sessions harness-owned.
+  Its origin-MCP proposal is superseded in part.
+- [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) — **implemented and
+  ready for review.** Replaces the OSS first-party origin MCP with
+  the `/bitrouter` Skill plus structured CLI for shell-capable local agents,
+  while retaining the MCP gateway, aggregate `/mcp` endpoint, server-side tool
+  loop, and Skills-over-MCP relay. Places any multi-tenant BitRouter control
+  origin in Cloud rather than this repository.
+- [`REMOTE_CONTROL_MVP_SPEC.md`](REMOTE_CONTROL_MVP_SPEC.md) — **implemented.**
+  Read-only remote status/models/route/requests and operations inspectors over an
+  authenticated, loopback-only HTTP control listener; ACP stays local.
+- [`REMOTE_ADMINISTRATION_SPEC.md`](REMOTE_ADMINISTRATION_SPEC.md) — **implemented.**
+  Expands remote inspection and adds explicitly authorized reload,
+  with shared action metadata, live/disk policy views, partial-failure reporting,
+  and recovery after a client disconnect. Remote agent execution stays deferred.
+- [`REMOTE_CLI_TUI_SUPPORT_SPEC.md`](REMOTE_CLI_TUI_SUPPORT_SPEC.md) — **Phase 2
+  RFD, deferred.** Remote ACP sessions over a versioned WebSocket transport,
+  constrained execution, and reconnect behavior.
+- [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md) — **the live one.** Why
+  the OTLP renderer ships as `crates/bitrouter-telemetry` while `bitrouter-sdk`
+  keeps only the contract it renders (`observe::schema`, `SpanAttributes`).
+  Start here; the two documents below are its history. Read its *The arguments
+  that are dead* section before reopening anything — the crate-count and
+  build-cache cases were measured, withdrawn, and are not what decided this.
+- [`OTEL_SDK_MIGRATION_SPEC.md`](OTEL_SDK_MIGRATION_SPEC.md) — **D1 superseded.**
+  Recorded why the exporter moved *into* `bitrouter-sdk` behind an `otel`
+  feature. That placement was reversed before it reached a release. Still the
+  best record of the hard constraint, the feature shape, and which names,
+  targets and config keys are load-bearing.
+- [`OTEL_TIERING_SPEC.md`](OTEL_TIERING_SPEC.md) — proposed splitting that
+  module into schema / emission / export tiers. **Phases 0–2 landed and stand**
+  (the committed span-schema artifact, the `tracing` bridge kept, the
+  OTel-native ingress span); its D1 was withdrawn on measured benefit and then
+  reopened on the positioning grounds it had itself reserved. Read its *cloud
+  question* section before reopening any of it.
 - `*_PLAN.md` — ordered execution plans derived from a spec, with per-task
   completion criteria. [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) is written to be
   driven by `/goal`.
+
+- [`CLI_TUI_PARITY_SPEC.md`](CLI_TUI_PARITY_SPEC.md) — **proposed, nothing
+  built.** Interrogates the goal "every headless CLI command has the same
+  interactive TUI command" and argues against it: 103 leaves rather than 29, a
+  quarter of them hostile in a session, no mature tool in the field achieving
+  parity, and a three-set topology rather than a subset with a gap. Proposes ~6
+  session commands dispatched through the same action ports the CLI uses, with
+  `ACTIONS` extended by `tui_command` / `effect` / `requires` and five guards.
+  Knowingly reverses [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §8.3 in a narrowed
+  form; read its §5 and §16 D1 before agreeing to anything.
+- [`CLI_TUI_PARITY_IMPL_SPEC.md`](CLI_TUI_PARITY_IMPL_SPEC.md) — **proposed,
+  nothing built.** The buildable form of the above: the Rust for the `ACTIONS`
+  extension, the resolver that replaces the TUI's string compares, five phases
+  with the files each touches, the guards as tests, and what each open decision
+  blocks. Written against the actions-table stack tip (#869 → #870 → #875),
+  not `main`; its Appendix A lists the research spec's `file:line` references
+  that have since moved.
+- [`CLI_TUI_PARITY_BUILD_SPEC.md`](CLI_TUI_PARITY_BUILD_SPEC.md) — **ready to
+  execute.** The impl spec re-cut for an autonomous agent under `/loop`: a
+  one-task-per-iteration protocol, a resumable ledger
+  ([`CLI_TUI_PARITY_PROGRESS.md`](CLI_TUI_PARITY_PROGRESS.md)), ten tasks with
+  the impl-spec sections each reads, all fifteen open decisions collapsed into
+  instructions, four stop conditions, and fifteen prohibitions. It carries no
+  design of its own — every type and function body stays in the impl spec.
+- [`CLI_TUI_PARITY_PROGRESS.md`](CLI_TUI_PARITY_PROGRESS.md) — the build
+  plan's ledger: which task the loop is on and what has landed. Mutable; the
+  only state the loop keeps.
 
 ## Where product docs live
 
@@ -27,3 +143,7 @@ The **product** documentation that used to live here now lives in the
   here as usual — the tables follow automatically.
 - On each release, an agent in `bitrouter-docs` drafts a docs update from the
   changelog for human review.
+
+- [Real Codex subscription ACP pilot](ACP_SUBSCRIPTION_PILOT.md): controlled tasks, frozen evidence, model-reference comparisons and observed follow-up issues.
+- [Rubric v2 fresh-task comparison](ACP_RUBRIC_V2_HOLDOUT.md): four additional subscription task families, revised responsibility semantics, preserved unknown validation and version-compatibility checks.
+- [TS goal audit](ACP_TS_GOAL_AUDIT.md): requirement-level evidence for the controlled reward pilot, learner experiments and serving implementation; separate limits on natural-history and live-benefit claims.

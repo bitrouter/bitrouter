@@ -626,6 +626,7 @@ mod tests {
                 assignment_id_digest: assignment_id.into(),
                 challenger_propensity_ppm: 500_000,
             }),
+            route_measurement: None,
         }
     }
 

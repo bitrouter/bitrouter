@@ -129,6 +129,8 @@ impl Default for TraceSanitizer {
             "content-type",
             "openai-beta",
             "originator",
+            "session-id",
+            "thread-id",
             "user-agent",
             "x-bitrouter-agent",
             "x-bitrouter-agent-role",
@@ -137,6 +139,8 @@ impl Default for TraceSanitizer {
             "x-bitrouter-cloud-request-id",
             "x-bitrouter-context-epoch",
             "x-bitrouter-context-transition",
+            "x-bitrouter-controller-id",
+            "x-bitrouter-acp-session-id",
             "x-bitrouter-exploration-target",
             "x-bitrouter-harness",
             "x-bitrouter-inbound-protocol",
@@ -155,6 +159,10 @@ impl Default for TraceSanitizer {
             "x-superpowers-skill",
             "x-request-id",
             "x-session-id",
+            "x-claude-code-session-id",
+            "x-claude-code-agent-id",
+            "x-claude-code-parent-agent-id",
+            "x-codex-turn-metadata",
         ]
         .into_iter()
         .map(String::from)
@@ -475,6 +483,42 @@ mod tests {
         let second = RealTraceCapture::new(TraceCaptureOptions::default());
 
         assert_ne!(first.next_id(), second.next_id());
+    }
+
+    #[test]
+    fn sanitizer_preserves_reviewed_acp_native_identity_and_drops_credentials() {
+        let headers = [
+            ("x-bitrouter-controller-id", "brc_test"),
+            ("x-bitrouter-acp-session-id", "acp-session"),
+            ("x-claude-code-session-id", "claude-root"),
+            ("x-claude-code-agent-id", "claude-child"),
+            ("x-claude-code-parent-agent-id", "claude-parent"),
+            ("session-id", "codex-root"),
+            ("thread-id", "codex-thread"),
+            ("x-codex-turn-metadata", r#"{"turn_id":"turn-1"}"#),
+            ("authorization", "Bearer must-not-survive"),
+            ("cookie", "must-not-survive"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect::<BTreeMap<_, _>>();
+
+        let sanitized = TraceSanitizer::default().sanitize_headers(&headers);
+
+        for expected in [
+            "x-bitrouter-controller-id",
+            "x-bitrouter-acp-session-id",
+            "x-claude-code-session-id",
+            "x-claude-code-agent-id",
+            "x-claude-code-parent-agent-id",
+            "session-id",
+            "thread-id",
+            "x-codex-turn-metadata",
+        ] {
+            assert_eq!(sanitized.get(expected), headers.get(expected), "{expected}");
+        }
+        assert!(!sanitized.contains_key("authorization"));
+        assert!(!sanitized.contains_key("cookie"));
     }
 
     #[tokio::test]

@@ -1,0 +1,46 @@
+{
+  "env": [
+    [
+      "OPENCODE_CONFIG",
+      "{root}/opencode.json"
+    ]
+  ],
+  "args": [],
+  "file": "opencode.json",
+  "config": {
+    "$schema": "https://opencode.ai/config.json",
+    "provider": {
+      "bitrouter": {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "BitRouter",
+        "options": {
+          "baseURL": "http://127.0.0.1:4356/v1",
+          "apiKey": "brk_test"
+        },
+        "models": {
+          "a/one": {},
+          "b/two": {}
+        }
+      }
+    },
+    "model": "bitrouter/a/one",
+    "mcp": {
+      "local_docs": {
+        "type": "local",
+        "command": [
+          "docs-mcp",
+          "--stdio"
+        ],
+        "enabled": true
+      },
+      "remote_context": {
+        "type": "remote",
+        "url": "http://127.0.0.1:4356/mcp",
+        "enabled": true,
+        "headers": {
+          "Authorization": "Bearer brk_test"
+        }
+      }
+    }
+  }
+}

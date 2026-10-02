@@ -119,27 +119,6 @@ models:
         cache_read: 0.003625
       output_tokens:
         text: 0.87
-  - id: google/gemini-3.1-flash-lite-preview
-    provider_model_id: google/gemini-3.1-flash-lite-preview
-    capabilities: [reasoning]
-    pricing:
-      input_tokens:
-        no_cache: 0.25
-        cache_read: 0.025
-      output_tokens:
-        text: 1.5
-  - id: google/gemini-3.1-pro-preview
-    provider_model_id: google/gemini-3.1-pro-preview
-    reasoning_effort: &gemini_pro_effort
-      levels: [low, medium, high]
-      default: high
-    capabilities: [reasoning]
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.2
-      output_tokens:
-        text: 12
   - id: google/gemini-3.5-flash
     provider_model_id: google/gemini-3.5-flash
     reasoning_effort: &gemini_flash_effort
@@ -152,14 +131,6 @@ models:
         cache_read: 0.15
       output_tokens:
         text: 9
-  - id: minimax/minimax-m2.5
-    provider_model_id: minimax/minimax-m2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.15
-        cache_read: 0.05
-      output_tokens:
-        text: 0.9
   - id: minimax/minimax-m2.7
     provider_model_id: minimax/minimax-m2.7
     pricing:
@@ -177,13 +148,6 @@ models:
         cache_read: 0.06
       output_tokens:
         text: 1.2
-  - id: moonshotai/kimi-k2.5
-    provider_model_id: moonshotai/kimi-k2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.375
-      output_tokens:
-        text: 2.025
   - id: moonshotai/kimi-k2.6
     provider_model_id: moonshotai/kimi-k2.6
     pricing:
@@ -341,14 +305,6 @@ models:
         cache_read: 0.11
       output_tokens:
         text: 2.2
-  - id: z-ai/glm-5
-    provider_model_id: z-ai/glm-5
-    pricing:
-      input_tokens:
-        no_cache: 0.6
-        cache_read: 0.12
-      output_tokens:
-        text: 1.92
   - id: z-ai/glm-5.1
     provider_model_id: z-ai/glm-5.1
     pricing:
@@ -505,6 +461,151 @@ models:
         cache_read: 0.015
       output_tokens:
         text: 0.25
+  - id: anthropic/claude-fable-5.1
+    provider_model_id: anthropic/claude-fable-5.1
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 0.25
+        cache_write: 12.5
+      output_tokens:
+        text: 50
+  - id: google/gemini-3.7-flash
+    provider_model_id: google/gemini-3.7-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.75
+        cache_read: 0.075
+      output_tokens:
+        text: 3.75
+  - id: google/gemini-3.8-flash
+    provider_model_id: google/gemini-3.8-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.75
+        cache_read: 0.075
+      output_tokens:
+        text: 3.75
+  - id: openai/gpt-6-astra
+    provider_model_id: openai/gpt-6-astra
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 1
+        cache_write: 12.5
+      output_tokens:
+        text: 50
+  - id: qwen/qwen3.8-flash
+    provider_model_id: qwen/qwen3.8-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.016
+        cache_write: 0.2
+      output_tokens:
+        text: 0.47
+  - id: deepseek/deepseek-v4.1-flash
+    provider_model_id: deepseek/deepseek-v4.1-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.65
+        cache_read: 0.13
+      output_tokens:
+        text: 1.45
+  - id: z-ai/glm-5.3-flashx
+    provider_model_id: z-ai/glm-5.3-flashx
+    pricing:
+      input_tokens:
+        no_cache: 0.37
+        cache_read: 0.075
+        cache_write: 0
+      output_tokens:
+        text: 1.25
+  - id: x-ai/grok-4.7
+    provider_model_id: x-ai/grok-4.7
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.5
+      output_tokens:
+        text: 6
+  - id: anthropic/claude-opus-5.5
+    provider_model_id: anthropic/claude-opus-5.5
+    pricing:
+      input_tokens:
+        no_cache: 4
+        cache_read: 0.2
+        cache_write: 5
+      output_tokens:
+        text: 20
+  - id: openai/gpt-6-luna
+    provider_model_id: openai/gpt-6-luna
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+        cache_write: 0.125
+      output_tokens:
+        text: 0.5
+  - id: openai/gpt-6-sol
+    provider_model_id: openai/gpt-6-sol
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+  - id: xiaomi/mimo-v2.6-flash
+    provider_model_id: xiaomi/mimo-v2.6-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.14
+        cache_read: 0.0028
+      output_tokens:
+        text: 0.28
+  - id: xiaomi/mimo-v2.6-pro
+    provider_model_id: xiaomi/mimo-v2.6-pro
+    pricing:
+      input_tokens:
+        no_cache: 0.435
+        cache_read: 0.0036
+      output_tokens:
+        text: 0.87
+  - id: xiaomi/mimo-v2.6-pro-ultraspeed
+    provider_model_id: xiaomi/mimo-v2.6-pro-ultraspeed
+    pricing:
+      input_tokens:
+        no_cache: 4.35
+        cache_read: 0.036
+      output_tokens:
+        text: 8.7
+  - id: anthropic/claude-sonnet-5.5
+    provider_model_id: anthropic/claude-sonnet-5.5
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+  - id: qwen/qwen3.7-flash
+    provider_model_id: qwen/qwen3.7-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.03
+        cache_read: 0.003
+        cache_write: 0.0375
+      output_tokens:
+        text: 0.13
+  - id: qwen/qwen3.8-omni-flash
+    provider_model_id: qwen/qwen3.8-omni-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.016
+      output_tokens:
+        text: 0.47
 status: active
 weight: 1
 community: false

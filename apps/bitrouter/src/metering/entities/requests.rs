@@ -13,9 +13,37 @@ pub struct Model {
     pub user_id: String,
     /// API key id that made the request.
     pub api_key_id: String,
-    /// The `bitrouter launch` session this request belongs to, when one minted
+    /// The `bro launch` session this request belongs to, when one minted
     /// the credential it arrived with. `None` for every other caller.
     pub launch_id: Option<String>,
+    /// Route namespace this request was attributed under — the value route
+    /// leases are keyed by, not the public API-key ID. Null on rows written
+    /// before it was recorded.
+    pub route_scope_id: Option<String>,
+    /// Recognized agent harness for this request.
+    pub agent_harness: Option<String>,
+    /// Caller-declared ACP controller correlation.
+    pub controller_instance_id: Option<String>,
+    /// Caller-declared ACP session correlation.
+    pub acp_session_id: Option<String>,
+    /// Native harness root-session identity.
+    pub native_root_session_id: Option<String>,
+    /// Native exact agent/thread identity.
+    pub native_agent_thread_id: Option<String>,
+    /// Native parent agent/thread identity.
+    pub native_parent_agent_thread_id: Option<String>,
+    /// Native harness turn identity.
+    pub native_turn_id: Option<String>,
+    /// Applied or matched ephemeral route lease identity.
+    pub route_lease_id: Option<String>,
+    /// Redaction-reviewed normalized identity evidence and conflicts.
+    pub session_identity_json: Option<String>,
+    /// Named router selected during Stage 0, when the request used one.
+    pub router_id: Option<String>,
+    /// Versioned digest of the non-secret router binding used by the request.
+    pub binding_digest: Option<String>,
+    /// Caller selector captured before ingress transforms.
+    pub original_selector: Option<String>,
     /// Resolved model id.
     pub model_id: String,
     /// Resolved provider id.
