@@ -42,7 +42,9 @@ production-harness integration. No completed subset narrows the original scope.
 
 ## Validation environment
 
-Local Rust: 1.95.0, aarch64-apple-darwin. Nextest is available. Builds use
+Initial local validation used Rust 1.95.0, aarch64-apple-darwin. Subsequent
+increments identify their compiler below; current CI uses stable Rust. Nextest
+is available. Builds use
 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0`
 to keep the workspace within available disk capacity; these change build
 artifacts, not test selection or runtime assertions.
@@ -1685,3 +1687,38 @@ Validation with Rust 1.95.0:
 - Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
 - The final independent review found no remaining P1/P2 issue in this queue
   increment. Full-stage and end-to-end acceptance remain open.
+
+## Rust 1.99 CI compatibility
+
+The first draft PR run used Rust 1.99 and exposed failures not covered by the
+earlier Rust 1.95 checks. Stable CI retains its strict warning policy; the
+workspace's minimum Rust version remains 1.93.
+
+- Upgrade only `async-trait` from 0.1.89 to 0.1.92. Its
+  [upstream fix](https://github.com/dtolnay/async-trait/releases/tag/0.1.92)
+  removes a redundant generated `must_use` attribute that caused 76 SDK clippy
+  errors. The updated macro uses the already locked `syn` 3.0.3; both dependencies
+  declare Rust 1.71 as their minimum version.
+- Replace deprecated `fetch_update` calls with equivalent weak compare/exchange
+  loops in preparation indexing, provider and core gate timing, and host reload
+  environment revisions. The loops preserve the old success/failure orderings,
+  saturating counters and rejection of exhausted preparation indices, without
+  depending on a newly stabilized atomic API.
+- Format four protocol references as rustdoc links. No protocol content changes.
+- An independent review of the complete source and dependency diff found no
+  actionable P1/P2 issue.
+
+Validation of this compatibility increment is recorded separately from C4's
+remaining steering, release and live tool-status work. It does not establish
+remote API or production-harness acceptance.
+
+- Rust 1.99 `cargo clippy --workspace --all-features --all-targets -- -D warnings`
+  passed.
+- Rust 1.99 `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features
+  --no-deps` passed; workspace doctests passed (5 passed, 1 ignored).
+- Rust 1.93 `cargo check --workspace --all-features` passed.
+- Rust 1.99 SDK checks with `RUSTFLAGS='-D warnings'` passed both without default
+  features and with only `config_file` enabled.
+- Rust 1.99 workspace all-feature nextest passed: 3862 passed, 22 skipped, in
+  305.174 seconds, using one test thread.
+- Formatting and diff checks passed.

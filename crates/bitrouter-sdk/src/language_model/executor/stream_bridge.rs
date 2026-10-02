@@ -1,5 +1,5 @@
 //! Complete Responses output and actual request provenance for the native SSE bridge.
-//! https://developers.openai.com/api/docs/guides/streaming-responses
+//! <https://developers.openai.com/api/docs/guides/streaming-responses>
 
 use super::*;
 

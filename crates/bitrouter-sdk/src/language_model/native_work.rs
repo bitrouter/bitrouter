@@ -104,11 +104,18 @@ impl NativeWorkRuntime {
 
     fn add_gate_time(&self, elapsed: Duration) {
         let nanos = elapsed.as_nanos().min(u128::from(u64::MAX)) as u64;
-        let _ = self
-            .gate_nanos
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prior| {
-                Some(prior.saturating_add(nanos))
-            });
+        let mut prior = self.gate_nanos.load(Ordering::Relaxed);
+        loop {
+            match self.gate_nanos.compare_exchange_weak(
+                prior,
+                prior.saturating_add(nanos),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => prior = current,
+            }
+        }
     }
 }
 

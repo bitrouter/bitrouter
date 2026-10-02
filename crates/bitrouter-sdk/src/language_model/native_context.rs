@@ -249,9 +249,9 @@ pub fn metadata_mut(content: &mut Content) -> &mut ProviderMetadata {
 }
 
 /// Provider-private data that cannot acquire provenance merely by being renderable.
-/// https://platform.claude.com/docs/en/build-with-claude/extended-thinking
-/// https://ai.google.dev/gemini-api/docs/thought-signatures
-/// https://developers.openai.com/api/docs/guides/reasoning
+/// <https://platform.claude.com/docs/en/build-with-claude/extended-thinking>
+/// <https://ai.google.dev/gemini-api/docs/thought-signatures>
+/// <https://developers.openai.com/api/docs/guides/reasoning>
 pub fn is_private(content: &Content) -> bool {
     let meta = metadata(content);
     meta.get("anthropic").is_some_and(|value| {
