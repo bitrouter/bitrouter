@@ -551,7 +551,7 @@ impl Pipeline {
         self.detached_executions.spawn(
             async move {
                 let result = pipeline
-                    .execute_prepared(req, run_server_tools, control.as_deref())
+                    .execute_prepared(req, run_server_tools, control)
                     .await;
                 // A dropped handler drops the prepared delivery permit here;
                 // upstream execution and settlement have nevertheless run on
@@ -605,15 +605,24 @@ impl Pipeline {
         &self,
         req: PipelineRequest,
         run_server_tools: bool,
-        control: Option<&dyn NativeExecutionControl>,
+        control: Option<Arc<dyn NativeExecutionControl>>,
     ) -> Result<PreparedPipelineResponse> {
         let PreparedEntry { mut ctx, chain } = self
             .prepare_entry(
                 req,
                 false,
-                control.map(NativeExecutionControl::model_selection),
+                control
+                    .as_deref()
+                    .map(NativeExecutionControl::model_selection),
             )
             .await?;
+
+        if let Some(control) = &control {
+            ctx.insert_extension(Arc::new(super::native_work::NativeWorkRuntime::new(
+                control.clone(),
+            )));
+        }
+        let control = control.as_deref();
 
         if control.is_some()
             && let Some(tokens) = ctx.prompt().params.max_tokens
@@ -1702,6 +1711,10 @@ impl Pipeline {
             }
             let private_context =
                 ctx.extension::<super::native_context::NativePrivateContextRuntime>();
+            let work = ctx.extension::<super::native_work::NativeWorkRuntime>();
+            if let Some(runtime) = &work {
+                runtime.begin_attempt(index)?;
+            }
             if let Some(runtime) = &private_context {
                 runtime.begin_attempt();
             }
@@ -1709,6 +1722,9 @@ impl Pipeline {
             let mut outcome = self.executor.execute(target, prompt, ctx).await;
             if let (Some(runtime), Ok(result)) = (&private_context, &mut outcome) {
                 runtime.seal_output(ctx, target, &mut result.result);
+            }
+            if let Some(runtime) = &work {
+                runtime.flush().await;
             }
             if let Some((control, route)) = attempt_control {
                 let mut report = NativeAttemptReport {
@@ -1722,7 +1738,11 @@ impl Pipeline {
                     actual_model: outcome.as_ref().ok().map(|result| result.model_id.clone()),
                     result: outcome.as_ref().ok().map(|result| result.result.clone()),
                     error: outcome.as_ref().err().map(ToString::to_string),
-                    elapsed_ms: crate::language_model::timing::elapsed_millis(started),
+                    elapsed_ms: super::timing::duration_millis(
+                        work.as_ref()
+                            .map(|runtime| runtime.work_duration(started.elapsed()))
+                            .unwrap_or_else(|| started.elapsed()),
+                    ),
                     token_cost: Default::default(),
                     private_context: private_context
                         .as_ref()

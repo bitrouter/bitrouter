@@ -5,6 +5,113 @@ use bitrouter::metering::store::MeteringStore;
 use bitrouter_sdk::language_model::native_accounting::{NativeCostBasis, NativeCostScope};
 use sea_orm::{ActiveModelTrait, Set};
 
+struct TimingHarness {
+    inner: crate::Harness,
+    entered: tokio::sync::Semaphore,
+    resume: tokio::sync::Semaphore,
+}
+
+#[async_trait]
+impl bitrouter_orchestrator::core::session::HarnessPort for TimingHarness {
+    async fn commit(
+        &self,
+        batch: bitrouter_orchestrator::core::checkpoint::CheckpointBatch,
+    ) -> std::result::Result<
+        bitrouter_orchestrator::core::checkpoint::CheckpointAck,
+        bitrouter_orchestrator::core::protocol::CoreError,
+    > {
+        let payload = batch.decode(&Limits::default())?;
+        if payload.events.iter().any(|event| {
+            event.kind == "provider.work.outcome"
+                && event.payload.pointer("/work/attempt_index") == Some(&json!(1))
+                && event.payload.pointer("/work/work_index") == Some(&json!(0))
+        }) {
+            self.entered.add_permits(1);
+            self.resume
+                .acquire()
+                .await
+                .map_err(|_| {
+                    bitrouter_orchestrator::core::protocol::CoreError::rejected(
+                        bitrouter_orchestrator::core::protocol::ErrorCode::CheckpointUnavailable,
+                        "fixture stopped",
+                    )
+                })?
+                .forget();
+        }
+        self.inner.commit(batch).await
+    }
+
+    async fn send(
+        &self,
+        message: bitrouter_orchestrator::core::protocol::ServerMessage,
+    ) -> std::result::Result<(), bitrouter_orchestrator::core::protocol::CoreError> {
+        self.inner.send(message).await
+    }
+}
+
+#[tokio::test]
+async fn provider_work_gate_wait_is_excluded_from_actual_metering_generation_time() -> Result<()> {
+    let fixture = Fixture::new(true, true).await?;
+    let db = fixture.assembled.db.clone();
+    let grant = OwnershipGrant {
+        session_id: "cost-session".into(),
+        harness_id: "cost-harness".into(),
+        core_instance_id: "cost-core".into(),
+        execution_epoch: 1,
+    };
+    let harness = Arc::new(TimingHarness {
+        inner: crate::Harness {
+            grant: grant.clone(),
+            store: Mutex::new(crate::Store::default()),
+        },
+        entered: tokio::sync::Semaphore::new(0),
+        resume: tokio::sync::Semaphore::new(0),
+    });
+    let session = bind_port(Arc::new(fixture.assembled.app), harness.clone(), grant).await?;
+    let mut task = crate::input("priced-task");
+    task.model = "resilient".into();
+    session
+        .start("input", session.head().await.state_revision, task)
+        .await?;
+    let driver = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(3), harness.entered.acquire())
+        .await??
+        .forget();
+    assert!(
+        fixture
+            .healthy
+            .received_requests()
+            .await
+            .context("healthy requests")?
+            .is_empty()
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    harness.resume.add_permits(1);
+    let done = driver.await??;
+    assert_eq!(
+        done.run.as_ref().context("run")?.status,
+        RunStatus::Completed
+    );
+    let row = requests::Entity::find()
+        .one(&db)
+        .await?
+        .context("settlement")?;
+    assert!(row.latency_ms >= 1200);
+    assert!(row.generation_time_ms < 1000);
+    let report = &done.root_turn().context("turn")?.steps[0].attempts[1]
+        .receipt
+        .as_ref()
+        .context("receipt")?
+        .report;
+    assert!(report.elapsed_ms < 1000);
+    assert!(done.run.as_ref().context("run")?.active_ms < 1000);
+    assert_eq!(row.estimated_charge_micro_usd, 255);
+    Ok(())
+}
+
 #[tokio::test]
 async fn monetary_claims_usage_free_rate_limit_is_unknown_despite_legacy_zero() -> Result<()> {
     let fixture = Fixture::new(false, true).await?;
@@ -68,7 +175,16 @@ async fn bind(app: Arc<bitrouter_sdk::App>) -> Result<(CoreSession, Arc<crate::H
         grant: grant.clone(),
         store: Mutex::new(crate::Store::default()),
     });
-    let session = CoreSession::bind(
+    let session = bind_port(app, harness.clone(), grant).await?;
+    Ok((session, harness))
+}
+
+async fn bind_port(
+    app: Arc<bitrouter_sdk::App>,
+    harness: Arc<dyn bitrouter_orchestrator::core::session::HarnessPort>,
+    grant: OwnershipGrant,
+) -> Result<CoreSession> {
+    Ok(CoreSession::bind(
         Bind {
             grant,
             durable_head: DurableHead::default(),
@@ -98,10 +214,9 @@ async fn bind(app: Arc<bitrouter_sdk::App>) -> Result<(CoreSession, Arc<crate::H
         },
         app,
         CallerContext::local(),
-        harness.clone(),
+        harness,
     )
-    .await?;
-    Ok((session, harness))
+    .await?)
 }
 
 #[tokio::test]

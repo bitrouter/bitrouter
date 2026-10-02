@@ -19,6 +19,10 @@ pub enum CostWorkKind {
     ContextValidation,
     ContextRebuild,
     WorkspaceTool,
+    AuthenticationPreparation,
+    Authentication,
+    AuthenticationRefresh,
+    HttpDispatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +161,31 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                     entry.elapsed_ms = Some(receipt.report.elapsed_ms);
                 }
                 ledger.record(attempt.attempt_id.clone(), entry)?;
+                for record in &attempt.provider_work {
+                    use bitrouter_sdk::language_model::native_work::NativeProviderWorkKind;
+                    let kind = match record.work.kind {
+                        NativeProviderWorkKind::AuthenticationPreparation => {
+                            CostWorkKind::AuthenticationPreparation
+                        }
+                        NativeProviderWorkKind::Authentication => CostWorkKind::Authentication,
+                        NativeProviderWorkKind::AuthenticationRefresh => {
+                            CostWorkKind::AuthenticationRefresh
+                        }
+                        NativeProviderWorkKind::HttpDispatch => CostWorkKind::HttpDispatch,
+                    };
+                    let mut entry = work(agent_id, turn, step, kind);
+                    if let Some(report) = &record.report {
+                        entry.state = CostWorkState::OutcomeRecorded;
+                        entry.elapsed_ms = Some(report.elapsed_ms);
+                    }
+                    ledger.record(
+                        format!(
+                            "{}/provider-work/{}",
+                            attempt.attempt_id, record.work.work_index
+                        ),
+                        entry,
+                    )?;
+                }
             }
         }
         for invocation in &turn.invocations {

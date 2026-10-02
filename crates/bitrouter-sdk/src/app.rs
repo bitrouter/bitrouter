@@ -385,6 +385,18 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
     async fn after_attempt(&self, report: crate::language_model::native::NativeAttemptReport) {
         self.inner.after_attempt(report).await
     }
+    async fn before_provider_work(
+        &self,
+        work: &crate::language_model::native_work::NativeProviderWork,
+    ) -> Result<()> {
+        self.inner.before_provider_work(work).await
+    }
+    async fn after_provider_work(
+        &self,
+        report: crate::language_model::native_work::NativeProviderWorkReport,
+    ) {
+        self.inner.after_provider_work(report).await
+    }
 }
 
 /// Common post-parse preparation for HTTP and in-process native requests.
