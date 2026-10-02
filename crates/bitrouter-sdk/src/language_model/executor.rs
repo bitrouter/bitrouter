@@ -29,6 +29,9 @@ use crate::language_model::types::{
 };
 
 mod input_count;
+mod stream_bridge;
+
+use stream_bridge::BridgeCapture;
 
 use super::native_continuation::{
     ContinuationFailure, NativeContinuationInput, NativeContinuationPlan,
@@ -47,6 +50,25 @@ fn native_continuation_plan(
                 .map_err(ContinuationFailure::error)
         })
         .transpose()
+}
+
+fn record_native_dispatch(
+    prompt: &Prompt,
+    target: &RoutingTarget,
+    ctx: &PipelineContext,
+) -> Result<()> {
+    if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
+        let plan = runtime
+            .continuation_plan(prompt, ctx.caller(), target)
+            .map_err(ContinuationFailure::error)?;
+        runtime.dispatched(
+            &plan
+                .execution_prompt(prompt)
+                .map_err(ContinuationFailure::error)?,
+        );
+        runtime.continuation_dispatched(&plan);
+    }
+    Ok(())
 }
 
 /// A boxed stream of canonical stream parts.
@@ -388,6 +410,7 @@ struct ProviderContinuationSubstitution {
     public_or_redacted: String,
 }
 
+#[derive(Clone)]
 struct UpstreamErrorScrubber {
     replacements: Vec<(String, String)>,
 }
@@ -1050,6 +1073,7 @@ impl HttpExecutor {
         target: &RoutingTarget,
         prompt: &Prompt,
         ctx: &PipelineContext,
+        stream: bool,
     ) -> Result<serde_json::Value> {
         let plan = native_continuation_plan(target, prompt, ctx)?;
         let mut upstream = match plan.as_ref() {
@@ -1059,7 +1083,7 @@ impl HttpExecutor {
             None => prompt.clone(),
         };
         upstream.model = target.service_id.clone();
-        upstream.stream = false;
+        upstream.stream = stream;
         let mut body = adapter.render_request_for_target(&upstream, target)?;
         if let Some(NativeContinuationPlan::Resume(binding)) = plan {
             if body
@@ -1338,7 +1362,10 @@ impl HttpExecutor {
     ) -> Result<ExecutionResult> {
         let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
-        let mut stream = self.execute_stream(target, prompt, ctx).await?;
+        let capture = Arc::new(BridgeCapture::default());
+        let mut stream = self
+            .execute_http_stream(target, prompt, ctx, Some(capture.clone()))
+            .await?;
         let mut content = Vec::new();
         let mut tool_indices = HashMap::<String, usize>::new();
         let mut usage = None;
@@ -1481,12 +1508,12 @@ impl HttpExecutor {
                 Content::Text { text, .. } | Content::Reasoning { text, .. } if text.is_empty()
             )
         });
-        let elapsed = started.elapsed().as_millis() as u64;
-        Ok(ExecutionResult {
-            provider_id: target.provider_name.clone(),
-            model_id: target.service_id.clone(),
-            account_label: target.account_label.clone(),
-            result: GenerateResult {
+        let result = capture.complete(
+            self,
+            target,
+            prompt,
+            ctx,
+            GenerateResult {
                 content,
                 usage,
                 finish_reason,
@@ -1494,6 +1521,13 @@ impl HttpExecutor {
                 stop_details: None,
                 provider_metadata: Default::default(),
             },
+        )?;
+        let elapsed = started.elapsed().as_millis() as u64;
+        Ok(ExecutionResult {
+            provider_id: target.provider_name.clone(),
+            model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            result,
             request_duration_ms: elapsed,
             upstream_duration_ms: Some(native_work::elapsed_work_millis(
                 ctx,
@@ -1658,7 +1692,13 @@ impl Executor for HttpExecutor {
             Self::check_response_format(prompt, adapter, target)
                 .map_err(|_| "response_format_unsupported")?;
             let body = self
-                .render_execution_request(adapter.as_ref(), target, prompt, ctx)
+                .render_execution_request(
+                    adapter.as_ref(),
+                    target,
+                    prompt,
+                    ctx,
+                    target.provider_name == "openai-codex",
+                )
                 .map_err(|_| "protocol_render_failed")?;
             self.prepare_managed_baseline(&body, target, ctx)?;
             Ok(())
@@ -1710,7 +1750,13 @@ impl Executor for HttpExecutor {
 
         Self::check_response_format(prompt, adapter, target)?;
 
-        let mut body = self.render_execution_request(adapter.as_ref(), target, prompt, ctx)?;
+        let mut body = self.render_execution_request(
+            adapter.as_ref(),
+            target,
+            prompt,
+            ctx,
+            target.provider_name == "openai-codex",
+        )?;
         let managed_expected = self.managed_expected_body(&body, target, ctx)?;
         if self.auth_appliers.lookup(&target.provider_name).is_some() {
             native_work::observe(
@@ -1776,19 +1822,7 @@ impl Executor for HttpExecutor {
                 ctx,
                 NativeProviderWorkKind::HttpDispatch,
                 async {
-                    if let Some(runtime) =
-                        ctx.extension::<super::native_context::NativePrivateContextRuntime>()
-                    {
-                        let plan = runtime
-                            .continuation_plan(prompt, ctx.caller(), target)
-                            .map_err(ContinuationFailure::error)?;
-                        runtime.dispatched(
-                            &plan
-                                .execution_prompt(prompt)
-                                .map_err(ContinuationFailure::error)?,
-                        );
-                        runtime.continuation_dispatched(&plan);
-                    }
+                    record_native_dispatch(prompt, target, ctx)?;
                     client.execute(request).await.map_err(|error| {
                         let error = if error.is_timeout() {
                             BitrouterError::UpstreamTimeout
@@ -1883,171 +1917,7 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<StreamPartStream> {
-        let (adapter, transport) = self
-            .dispatch
-            .lookup(&target.api_protocol)
-            .ok_or_else(|| Self::no_dispatch_error(target))?;
-
-        Self::check_response_format(prompt, adapter, target)?;
-
-        let mut upstream_prompt = prompt.clone();
-        upstream_prompt.model = target.service_id.clone();
-        upstream_prompt.stream = true;
-        let mut body = adapter.render_request_for_target(&upstream_prompt, target)?;
-        let managed_expected = self.managed_expected_body(&body, target, ctx)?;
-        if self.auth_appliers.lookup(&target.provider_name).is_some() {
-            native_work::observe(
-                ctx,
-                NativeProviderWorkKind::AuthenticationPreparation,
-                self.shape_request_body(&mut body, target),
-                |_| None,
-            )
-            .await?;
-        }
-        let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
-        let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
-        error_scrubber.capture_effective_target_key(target);
-        let url = transport.endpoint_url(target, true);
-        let trace_headers = ctx.take_outbound_trace_headers();
-
-        let (client, timeouts) = self.client_for(
-            target,
-            ctx.extension::<super::native::NativeManagedRequest>()
-                .is_some(),
-        );
-        let request_input = RequestBuildInput {
-            client: &client,
-            timeouts: &timeouts,
-            url: &url,
-            body: &body,
-            managed_expected: managed_expected.as_ref(),
-            target,
-            transport,
-            ctx,
-            trace_headers: trace_headers.as_ref(),
-        };
-        let mut attempted_auth_refresh = false;
-        let response = loop {
-            let applied = self
-                .build_authenticated_request(&request_input)
-                .await
-                .map_err(|error| error_scrubber.scrub_error(error))?;
-            let (request, _) = applied.into_parts();
-            error_scrubber.capture_request_credentials(&request, target);
-            let rejected_authorization = request
-                .headers()
-                .get(reqwest::header::AUTHORIZATION)
-                .cloned();
-            let response = native_work::observe(
-                ctx,
-                NativeProviderWorkKind::HttpDispatch,
-                async {
-                    client.execute(request).await.map_err(|error| {
-                        let error = if error.is_timeout() {
-                            BitrouterError::UpstreamTimeout
-                        } else {
-                            BitrouterError::Upstream {
-                                status: 502,
-                                message: format!(
-                                    "stream request to {} failed: {error}",
-                                    target.provider_name
-                                ),
-                            }
-                        };
-                        error_scrubber.scrub_error(error)
-                    })
-                },
-                |response| Some(response.status().as_u16()),
-            )
-            .await?;
-
-            let status = response.status();
-            let retry_after =
-                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
-            if status.is_success() {
-                break response;
-            }
-            let text = response.text().await.map_err(|error| {
-                error_scrubber.scrub_error(upstream_body_error(
-                    "reading upstream stream error body",
-                    error,
-                ))
-            })?;
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                && !attempted_auth_refresh
-                && self
-                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref(), ctx)
-                    .await
-                    .map_err(|error| error_scrubber.scrub_error(error))?
-            {
-                attempted_auth_refresh = true;
-                continue;
-            }
-            let scrubbed = error_scrubber.scrub_body(&text);
-            return Err(classify_upstream_error(
-                status.as_u16(),
-                &scrubbed,
-                retry_after,
-            ));
-        };
-
-        // Parse the upstream SSE byte stream into canonical stream parts via
-        // the protocol's stateful decoder.
-        let mut decoder = adapter.stream_decoder();
-        let byte_stream = response.bytes_stream();
-
-        let stream = async_stream::stream! {
-            use eventsource_stream::Eventsource;
-            let mut events = byte_stream.eventsource();
-            while let Some(event) = events.next().await {
-                match event {
-                    Ok(ev) => {
-                        let sse = SseEvent {
-                            event: if ev.event.is_empty() { None } else { Some(ev.event) },
-                            data: ev.data,
-                        };
-                        match decoder.decode(&sse) {
-                            Ok(parts) => {
-                                for p in parts {
-                                    yield Ok(p);
-                                }
-                            }
-                            Err(e) => {
-                                yield Err(error_scrubber.scrub_error(
-                                    classify_stream_decoder_error(e)
-                                ));
-                                return;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // A read-timeout that fires mid-stream arrives here as a
-                        // transport error — recover the reqwest timeout signal so
-                        // it maps to UpstreamTimeout (504), not a blanket 502.
-                        let is_timeout = matches!(
-                            &e,
-                            eventsource_stream::EventStreamError::Transport(re) if re.is_timeout()
-                        );
-                        yield Err(error_scrubber.scrub_error(
-                            stream_transport_error(is_timeout, &e)
-                        ));
-                        return;
-                    }
-                }
-            }
-            match decoder.finish() {
-                Ok(parts) => {
-                    for p in parts {
-                        yield Ok(p);
-                    }
-                }
-                Err(e) => yield Err(error_scrubber.scrub_error(
-                    classify_stream_decoder_error(e)
-                )),
-            }
-        };
-
-        Ok(Box::pin(stream))
+        self.execute_http_stream(target, prompt, ctx, None).await
     }
 }
 

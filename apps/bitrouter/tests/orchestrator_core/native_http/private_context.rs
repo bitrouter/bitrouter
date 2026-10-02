@@ -7,6 +7,8 @@
 use super::*;
 #[path = "private_context/continuation.rs"]
 mod continuation;
+#[path = "private_context/stream_bridge.rs"]
+mod stream_bridge;
 use bitrouter_sdk::language_model::native_context::{
     ORIGIN_FIELD, ORIGIN_NAMESPACE, PrivateContextEvidence, is_private, metadata_mut,
 };
