@@ -47,12 +47,12 @@
 <text class="model" x="46.0" y="325.0">gpt-6-sol</text>
 <text class="routes" x="286.0" y="325.0" text-anchor="end">8</text>
 <rect x="38.0" y="336.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="38.0" y="336.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="46.0" y="351.0">gpt-5.4-mini</text>
-<text class="routes" x="286.0" y="351.0" text-anchor="end">7</text>
+<rect x="38.0" y="336.0" width="85.6" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="46.0" y="351.0">gpt-6.1-sol</text>
+<text class="routes" x="286.0" y="351.0" text-anchor="end">8</text>
 <rect x="38.0" y="362.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="38.0" y="362.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="46.0" y="377.0">gpt-6.1-sol</text>
+<text class="model" x="46.0" y="377.0">gpt-5.4-mini</text>
 <text class="routes" x="286.0" y="377.0" text-anchor="end">7</text>
 <rect x="38.0" y="388.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="38.0" y="388.0" width="10.7" height="22.0" rx="4" fill="#30363d"/>
@@ -94,32 +94,32 @@
 <text class="model" x="338.0" y="169.0">qwen3.7-plus</text>
 <text class="routes" x="578.0" y="169.0" text-anchor="end">7</text>
 <rect x="330.0" y="180.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="330.0" y="180.0" width="64.2" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="195.0">qwen3.5-122b-a10b</text>
-<text class="routes" x="578.0" y="195.0" text-anchor="end">6</text>
+<rect x="330.0" y="180.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="338.0" y="195.0">qwen3.8-flash</text>
+<text class="routes" x="578.0" y="195.0" text-anchor="end">7</text>
 <rect x="330.0" y="206.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="330.0" y="206.0" width="64.2" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="221.0">qwen3.5-27b</text>
-<text class="routes" x="578.0" y="221.0" text-anchor="end">6</text>
+<rect x="330.0" y="206.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
+<text class="model" x="338.0" y="221.0">qwen3.8-max</text>
+<text class="routes" x="578.0" y="221.0" text-anchor="end">7</text>
 <rect x="330.0" y="232.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="330.0" y="232.0" width="64.2" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="247.0">qwen3.6-27b</text>
+<text class="model" x="338.0" y="247.0">qwen3.5-122b-a10b</text>
 <text class="routes" x="578.0" y="247.0" text-anchor="end">6</text>
 <rect x="330.0" y="258.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="330.0" y="258.0" width="64.2" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="273.0">qwen3.6-35b-a3b</text>
+<text class="model" x="338.0" y="273.0">qwen3.5-27b</text>
 <text class="routes" x="578.0" y="273.0" text-anchor="end">6</text>
 <rect x="330.0" y="284.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="330.0" y="284.0" width="64.2" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="299.0">qwen3.8-27b</text>
+<text class="model" x="338.0" y="299.0">qwen3.6-27b</text>
 <text class="routes" x="578.0" y="299.0" text-anchor="end">6</text>
 <rect x="330.0" y="310.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="330.0" y="310.0" width="64.2" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="325.0">qwen3.8-flash</text>
+<text class="model" x="338.0" y="325.0">qwen3.6-35b-a3b</text>
 <text class="routes" x="578.0" y="325.0" text-anchor="end">6</text>
 <rect x="330.0" y="336.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="330.0" y="336.0" width="64.2" height="22.0" rx="4" fill="#30363d"/>
-<text class="model" x="338.0" y="351.0">qwen3.8-max</text>
+<text class="model" x="338.0" y="351.0">qwen3.8-27b</text>
 <text class="routes" x="578.0" y="351.0" text-anchor="end">6</text>
 <rect x="330.0" y="362.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
 <rect x="330.0" y="362.0" width="53.5" height="22.0" rx="4" fill="#30363d"/>
@@ -355,5 +355,5 @@
 <rect x="914.0" y="846.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="922.0" y="861.0">grok-4.7</text>
 <text class="routes" x="1162.0" y="861.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="954.0">77 models · 47 providers · 566 model→provider routes · 12 providers billed by subscription</text>
+<text class="caption" x="28.0" y="954.0">77 models · 47 providers · 569 model→provider routes · 12 providers billed by subscription</text>
 </svg>
