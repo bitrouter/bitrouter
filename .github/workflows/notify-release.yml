@@ -1,14 +1,23 @@
-# Notify the bitrouter-docs site the moment a release is published.
-# Fires a repository_dispatch (event_type: bitrouter-release) that the docs
-# repo's sync-changelog.yml + on-bitrouter-release.yml already listen for —
-# turning "changelog synced by the daily cron" into "synced within seconds of
-# the release". The docs side fetches the release body itself from this public
-# repo, so the payload only carries the tag (+ product, for forward-compat with
-# bitrouter-cloud).
+# Notify the downstream repositories the moment a release is published.
 #
-# Reuses the existing DOCS_DISPATCH_TOKEN secret (the same fine-grained PAT that
-# notify-docs.yml uses to dispatch on bitrouter/bitrouter-docs).
-name: Notify docs of release
+# Two audiences, one event:
+#
+#   - bitrouter-docs, whose sync-changelog.yml + on-bitrouter-release.yml turn
+#     "changelog synced by the daily cron" into "synced within seconds".
+#   - the three harness plugins, whose on-bitrouter-release.yml checks whether
+#     a gateway release moved anything they depend on. Each of them also polls
+#     weekly, so this dispatch is the fast path and not the only one — if a
+#     token expires, they notice on their own schedule rather than silently
+#     falling behind.
+#
+# Both payloads carry only the tag; each side fetches the release body itself
+# from this public repository. `product` is there for forward-compatibility
+# with bitrouter-cloud.
+#
+# Two tokens, not one. DOCS_DISPATCH_TOKEN reaches bitrouter-docs and
+# PLUGIN_DISPATCH_TOKEN reaches the plugins, each scoped to only the
+# repositories it needs, so neither pipeline's compromise reaches the other's.
+name: Notify downstream of release
 on:
   release:
     types: [published]   # fires for stable AND prereleases
@@ -16,12 +25,39 @@ permissions: {}
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    strategy:
+      # Every downstream is told, even when one of them is unreachable —
+      # a revoked token for the docs should not cost the plugins their
+      # notification.
+      fail-fast: false
+      matrix:
+        include:
+          - repo: bitrouter/bitrouter-docs
+            token_name: DOCS_DISPATCH_TOKEN
+          - repo: bitrouter/bitrouter-dsh
+            token_name: PLUGIN_DISPATCH_TOKEN
+          - repo: bitrouter/bitrouter-pi
+            token_name: PLUGIN_DISPATCH_TOKEN
+          - repo: bitrouter/bitrouter-opencode
+            token_name: PLUGIN_DISPATCH_TOKEN
+    name: ${{ matrix.repo }}
     steps:
-      - name: Dispatch bitrouter-release to bitrouter-docs
+      - name: Dispatch bitrouter-release
+        env:
+          TOKEN: ${{ secrets[matrix.token_name] }}
+          REPO: ${{ matrix.repo }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::warning::${{ matrix.token_name }} is not set — ${REPO} was not notified of ${TAG}."
+            echo "It polls on its own schedule, so this delays the check rather than losing it."
+            exit 0
+          fi
           curl -fsSL -X POST \
-            -H "Authorization: Bearer ${{ secrets.DOCS_DISPATCH_TOKEN }}" \
+            -H "Authorization: Bearer $TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/bitrouter/bitrouter-docs/dispatches \
-            -d "$(jq -n --arg tag '${{ github.event.release.tag_name }}' \
+            "https://api.github.com/repos/${REPO}/dispatches" \
+            -d "$(jq -n --arg tag "$TAG" \
                   '{event_type:"bitrouter-release", client_payload:{tag:$tag, product:"oss"}}')"
+          echo "notified ${REPO} of ${TAG}"
