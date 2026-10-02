@@ -17,13 +17,13 @@ impl CoreSession {
         harness: Arc<dyn HarnessPort>,
     ) -> Result<Self, CoreError> {
         let handoff = Instant::now();
-        let mut state = restore_snapshot(&request, capabilities)?;
         if !request.previous_owner_stopped {
             return Err(reject(
                 ErrorCode::RecoveryRequired,
                 "previous scheduler and provider I/O are not reconciled",
             ));
         }
+        let mut state = restore_snapshot(&request, capabilities, harness.as_ref()).await?;
         let workspace_changed =
             state.manifest.workspace_revision != request.binding.manifest.workspace_revision;
         state.manifest = request.binding.manifest.clone();
@@ -130,9 +130,10 @@ fn committed_restore_error(mut error: CoreError) -> CoreError {
     error
 }
 
-fn restore_snapshot(
+async fn restore_snapshot(
     request: &Restore,
     capabilities: &Capabilities,
+    harness: &dyn HarnessPort,
 ) -> Result<SessionSnapshot, CoreError> {
     let binding = &request.binding;
     binding.grant.validate()?;
@@ -169,17 +170,9 @@ fn restore_snapshot(
     let mut head = None::<DurableHead>;
     let mut owner = None::<String>;
     let mut identities = BTreeSet::new();
-    let mut final_payload = None;
-    let mut releases = BTreeMap::new();
-    let mut activity_history = None;
+    let mut payloads = Vec::new();
     for batch in std::iter::once(checkpoint).chain(&request.journal_tail) {
         let payload = batch.decode(&binding.limits)?;
-        release::validate_history(&payload, &mut releases)?;
-        recovery_time::validate_history(
-            &payload,
-            CheckpointAck::for_batch(batch, &payload).head(),
-            &mut activity_history,
-        )?;
         if batch.identity.session_id != binding.grant.session_id {
             return Err(reject(
                 ErrorCode::UnauthorizedScope,
@@ -212,7 +205,7 @@ fn restore_snapshot(
         }
         head = Some(CheckpointAck::for_batch(batch, &payload).head());
         owner = Some(batch.identity.core_instance_id.clone());
-        final_payload = Some(payload);
+        payloads.push((batch, payload));
     }
     if head.as_ref() != Some(&binding.durable_head) {
         return Err(reject(
@@ -227,6 +220,21 @@ fn restore_snapshot(
             ErrorCode::StaleEpoch,
             "a different owner requires a new epoch",
         ));
+    }
+    // Establish the authenticated chain/head before artifact I/O. A rejected
+    // cross-session batch must not cause a read through the current host port.
+    let mut final_payload = None;
+    let mut releases = BTreeMap::new();
+    let mut activity_history = None;
+    for (batch, mut payload) in payloads {
+        archive::hydrate(&mut payload, harness, &binding.limits).await?;
+        release::validate_history(&payload, &mut releases)?;
+        recovery_time::validate_history(
+            &payload,
+            CheckpointAck::for_batch(batch, &payload).head(),
+            &mut activity_history,
+        )?;
+        final_payload = Some(payload);
     }
     let payload = final_payload
         .ok_or_else(|| reject(ErrorCode::CheckpointConflict, "empty restore chain"))?;
@@ -656,7 +664,7 @@ fn ensure_artifacts(
     Ok(())
 }
 
-fn artifact_map(
+pub(super) fn artifact_map(
     references: impl IntoIterator<Item = ArtifactRef>,
 ) -> Result<BTreeMap<String, ArtifactRef>, CoreError> {
     let mut artifacts = BTreeMap::new();
@@ -700,6 +708,7 @@ pub(super) fn artifacts(
                     .chain(
                         call.recovery_observation
                             .iter()
+                            .filter(|_| state.recovery_archive.is_none())
                             .flat_map(|observation| &observation.evidence),
                     )
                     .chain(
@@ -710,10 +719,12 @@ pub(super) fn artifacts(
                     .chain(
                         call.prior_recovery_observations
                             .iter()
+                            .filter(|_| state.recovery_archive.is_none())
                             .flat_map(|observation| &observation.evidence),
                     )
             })
             .cloned()
+            .chain(state.recovery_archive.iter().cloned())
             .chain(
                 state
                     .signals

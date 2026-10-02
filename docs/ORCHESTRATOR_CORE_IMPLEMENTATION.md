@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue, targeted steering, live tool observations, active-time admission/cleanup, settled ownership release, authenticated cumulative activity handoff and frozen tool payload bounds implemented; cleanup capacity reservations and remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload bounds, cleanup projection and recovery archives implemented; capacity-exhaustion handling and the remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -2167,3 +2167,76 @@ Validation and review for this increment:
 - Independent read-only re-review found no remaining P1/P2 for this increment.
   Aggregate cleanup reservation and historical oversized-evidence migration
   remain open requirements, not covered by that review conclusion.
+
+## C4 cleanup projection and recovery archives (in progress)
+
+Admission now checks a conservative cancellation projection in addition to the
+actual candidate. It applies both the host and caller-lowered checkpoint/wire
+bounds, including base64 and envelope overhead. The projection accounts for
+frozen tool result/status bodies, operation receipts, canonical pairing,
+context-source copies, child conclusions, runtime wait results, terminal
+records and ownership release. The real pairing implementation is shared with
+the projection; fabricated projection values never enter committed state or
+authorize execution. Near-full historical snapshots that cannot fit cleanup
+are rejected before a new restore checkpoint.
+
+Review exposed a recovery-specific flaw in the first projection: appending a
+handoff while reserving another handoff regenerated the same obligation.
+Repeated running observations also retained additional evidence copies. The
+current implementation can move complete recovery histories to one immutable
+`application/vnd.bitrouter.recovery+json` artifact. Its content-addressed root
+occupies a reserved, fixed-size checkpoint slot. Once enabled for a session,
+subsequent checkpoints keep the representation. No result, observation or
+operation receipt is discarded. The scheduler retains the complete state;
+restoration hydrates the archive before applying the existing history and
+lifecycle validations. Full historical operation receipts remain inline.
+
+The archive binds schema, session/run identities, invocation/attempt identities,
+observation revisions and exact dependency references. Chunk staging precedes
+the checkpoint ACK; the harness must validate and retain the root's transitive
+dependencies atomically with the checkpoint. `HarnessPort::read_artifact` is
+required and returns bounded ranges. Missing or corrupt roots/dependencies
+reject recovery. Same-owner retransmission reconstructs the same archive from
+the retained candidate and resubmits the original batch. Restore validates the
+ownership chain and durable head before artifact I/O.
+
+`RestorationActivity::started_at()` exposes entry to restoration. When installing
+the lifecycle observer, the harness replays locally captured stops from that
+instant, including stops during archive reads. The final lifecycle drain is
+unchanged. Archive write admission and restoration use the same total bound:
+the smaller of the manifest artifact quota and host unacknowledged-byte limit.
+This is a bounded full-hydration implementation; it does not establish unlimited
+archive retention or streaming replay of arbitrarily large historical state.
+
+Initial validation passed all 279 orchestrator tests. The saturation regression
+then additionally passed sixteen running recoveries, direct-root availability,
+complete evidence retention, missing root/dependency rejection, irreversible
+phase validation, both restore ACK-loss outcomes, and a stop captured during a
+1.1-second archive-read wait. Workspace validation and final review are pending.
+
+Remaining A20/C4 work is explicit: durable capacity-failure cancellation and
+stopping new work, reserved artifact/storage capacity at exhaustion, byte
+admission for unknown provider/preparation outputs, oversized legacy-result
+migration, wider child/wait saturation cases and the remaining fault matrix.
+This increment does not establish the full cleanup invariant across those
+paths. C5/C6, A01–A23 and final independent acceptance remain required.
+
+Validation of this increment with Rust 1.99.0:
+
+- Workspace/all-feature nextest: 3935 passed, 22 skipped, in 237.087 seconds
+  with four test threads. One native continuation/child-context test was slow
+  (101.677 seconds) and passed.
+- Strict workspace/all-target/all-feature clippy passed in 1m 19s. Strict
+  workspace rustdoc passed in 39.75 seconds. Doctests: 5 passed, 1 ignored.
+- Rust 1.93.0 workspace/all-feature check passed in 34.16 seconds; formatting
+  and diff checks passed.
+- The initial workspace compile identified two application test fixtures
+  missing the newly required artifact-read method. They were corrected before
+  the complete passing run.
+- Final independent read-only review found no remaining P1/P2 within this
+  increment. A dedicated same-owner archived-pending retransmission integration
+  remains part of the fault matrix; current evidence for that branch is the
+  deterministic pending-state implementation and chunk-idempotency contract test.
+
+The preceding tool-payload commit `8f4edc12` completed remote CI successfully
+(run `37058260630`). New-commit CI remains a separate gate.

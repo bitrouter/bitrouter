@@ -19,6 +19,19 @@ impl RestorationActivity {
         }
     }
 
+    /// Entry to the restore operation, before validation and artifact reads.
+    /// On registration, replay locally captured stops at or after this instant
+    /// before waiting for any restoration checkpoint acknowledgement.
+    pub async fn started_at(&self) -> Result<Instant, CoreError> {
+        let shared = self.shared.upgrade().ok_or_else(closed)?;
+        shared
+            .live
+            .lock()
+            .await
+            .restoration_started
+            .ok_or_else(closed)
+    }
+
     pub async fn require_quiescent(&self) -> Result<(), CoreError> {
         let shared = self.shared.upgrade().ok_or_else(closed)?;
         let live = shared.live.lock().await;

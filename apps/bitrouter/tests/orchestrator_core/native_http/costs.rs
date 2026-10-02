@@ -13,6 +13,15 @@ struct TimingHarness {
 
 #[async_trait]
 impl bitrouter_orchestrator::core::session::HarnessPort for TimingHarness {
+    async fn read_artifact(
+        &self,
+        reference: &bitrouter_orchestrator::core::protocol::ArtifactRef,
+        offset: u64,
+        max_bytes: u64,
+    ) -> std::result::Result<Vec<u8>, bitrouter_orchestrator::core::protocol::CoreError> {
+        self.inner.read_artifact(reference, offset, max_bytes).await
+    }
+
     async fn commit(
         &self,
         batch: bitrouter_orchestrator::core::checkpoint::CheckpointBatch,
