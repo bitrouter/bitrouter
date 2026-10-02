@@ -14,6 +14,7 @@ use crate::core::session::{AgentStatus, AgentTurn, ModelStep, SessionSnapshot};
 pub enum CostWorkKind {
     /// Includes App transforms, routing preparation and bound request checks.
     Preparation,
+    PreparationCallback,
     ProviderAttempt,
     InputCount,
     ContextValidation,
@@ -129,6 +130,26 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                     entry.state = CostWorkState::OutcomeRecorded;
                 }
                 ledger.record(format!("{}/preparation", step.step_id), entry)?;
+            }
+            for record in &step.preparation_work {
+                let mut entry = work(agent_id, turn, step, CostWorkKind::PreparationCallback);
+                entry.request_id = Some(record.work.request_id.clone());
+                if let Some(report) = &record.report {
+                    entry.state = CostWorkState::OutcomeRecorded;
+                    entry.elapsed_ms = Some(report.elapsed_ms);
+                }
+                let scope = if record.work.kind == bitrouter_sdk::language_model::native_preparation::NativePreparationWorkKind::PromptTransform {
+                    "app"
+                } else {
+                    "pipeline"
+                };
+                ledger.record(
+                    format!(
+                        "{}/preparation/{scope}/{}",
+                        step.step_id, record.work.work_index
+                    ),
+                    entry,
+                )?;
             }
             for count in &step.input_counts {
                 let mut entry = work(agent_id, turn, step, CostWorkKind::InputCount);

@@ -70,6 +70,7 @@ pub mod native;
 pub mod native_accounting;
 pub mod native_context;
 pub mod native_continuation;
+pub mod native_preparation;
 pub mod native_work;
 pub mod pipeline;
 pub mod protocol;

@@ -38,6 +38,7 @@ use super::routing::{
 };
 use super::signals::{self, MaterialRequest, SignalState};
 
+mod preparation_work;
 mod provider_work;
 
 /// Implemented by the authenticated durable harness connection, including an
@@ -84,6 +85,13 @@ pub struct ProviderWorkRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreparationWorkRecord {
+    pub work: bitrouter_sdk::language_model::native_preparation::NativePreparationWork,
+    pub report:
+        Option<bitrouter_sdk::language_model::native_preparation::NativePreparationWorkReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputCountRecord {
     pub route_index: u32,
     pub report: Option<NativeInputCountReport>,
@@ -123,6 +131,10 @@ pub struct ModelStep {
     pub reconstructed_from: Option<String>,
     #[serde(default)]
     pub context_validation: Option<ContextValidationRecord>,
+    /// Configured App/pipeline callbacks; empty legacy entries do not establish
+    /// that preparation performed no work or incurred no expense.
+    #[serde(default)]
+    pub preparation_work: Vec<PreparationWorkRecord>,
     pub attempts: Vec<AttemptRecord>,
     pub settled: bool,
 }
@@ -1977,6 +1989,7 @@ impl CoreSession {
                 rebuild: None,
                 reconstructed_from: None,
                 context_validation: None,
+                preparation_work: Vec::new(),
                 attempts: Vec::new(),
                 settled: false,
             });
@@ -2691,6 +2704,17 @@ impl CoreSession {
         step_id: &str,
         activity_id: String,
     ) -> Result<(), CoreError> {
+        self.ensure_dispatch_with_budget(agent_id, step_id, activity_id, false)
+            .await
+    }
+
+    async fn ensure_dispatch_with_budget(
+        &self,
+        agent_id: &str,
+        step_id: &str,
+        activity_id: String,
+        requires_remaining_attempt: bool,
+    ) -> Result<(), CoreError> {
         let _admission = self.shared.commits.lock().await;
         let mut live = self.shared.live.lock().await;
         if !live.gate.can_dispatch()
@@ -2713,10 +2737,11 @@ impl CoreSession {
         }
         if live.state.run.as_ref().is_some_and(|run| {
             live.activity.elapsed_ms() >= run.limits.active_seconds.saturating_mul(1000)
+                || (requires_remaining_attempt && run.model_attempts >= run.limits.model_attempts)
         }) {
             return Err(reject(
                 ErrorCode::LimitExceeded,
-                "active wall-time budget exhausted",
+                "dispatch resource budget exhausted",
             ));
         }
         validate_step_source(&live.state, agent_id, step_id)?;
@@ -2914,6 +2939,20 @@ struct StepControl {
 
 #[async_trait]
 impl NativeExecutionControl for StepControl {
+    async fn before_preparation_work(
+        &self,
+        work: &bitrouter_sdk::language_model::native_preparation::NativePreparationWork,
+    ) -> bitrouter_sdk::Result<()> {
+        self.admit_preparation_work(work).await
+    }
+
+    async fn after_preparation_work(
+        &self,
+        report: bitrouter_sdk::language_model::native_preparation::NativePreparationWorkReport,
+    ) -> bitrouter_sdk::Result<()> {
+        self.record_preparation_work(report).await
+    }
+
     fn model_selection(&self) -> NativeModelSelection {
         self.model_selection
     }
@@ -2932,6 +2971,7 @@ impl NativeExecutionControl for StepControl {
                     validate_step_source(state, &self.agent_id, &step_id)?;
                     let step = current_step(state, &self.agent_id, &step_id)?;
                     validate_context_validation(step)?;
+                    preparation_work::validate_preparation(step, &plan.request_id)?;
                     step.context.validate_prepared(&plan.prompt)?;
                     if step.plan.is_some()
                         || step.count_plan.as_ref().is_some_and(|prior| prior != plan)
@@ -3202,6 +3242,10 @@ impl NativeExecutionControl for StepControl {
                 }
                 let step = current_step(state, &self.agent_id, &step_id)?;
                 if rejection.is_none() {
+                    rejection =
+                        preparation_work::validate_preparation(step, &plan.request_id).err();
+                }
+                if rejection.is_none() {
                     rejection = validate_context_validation(step).err();
                 }
                 if rejection.is_none() {
@@ -3439,6 +3483,7 @@ impl NativeExecutionControl for StepControl {
                     rebuild: None,
                     reconstructed_from: Some(step_id.clone()),
                     context_validation: None,
+                    preparation_work: Vec::new(),
                     attempts: Vec::new(),
                     settled: false,
                 });

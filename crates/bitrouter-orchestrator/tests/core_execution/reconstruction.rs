@@ -207,6 +207,17 @@ async fn explicit_optional_history_rebuild_is_committed_recounted_and_auditable(
     assert_eq!(turn.steps.len(), 3);
     let rejected = &turn.steps[1];
     let rebuilt = &turn.steps[2];
+    assert!(!rejected.preparation_work.is_empty());
+    assert!(
+        rejected
+            .preparation_work
+            .iter()
+            .all(|record| record.report.is_some())
+    );
+    assert!(
+        rebuilt.preparation_work.is_empty(),
+        "reconstruction must not rerun preparation or model selection"
+    );
     use bitrouter_orchestrator::core::accounting::work::{CostWorkKind, CostWorkState};
     let ledger = &state.cost_work[&turn.run_id];
     assert_eq!(
