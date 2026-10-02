@@ -136,6 +136,7 @@ testing = []
 rustix = { workspace = true, features = ["process"], optional = true }
 
 [dev-dependencies]
+wiremock = "0.6"
 tokio = { workspace = true, features = [
     "sync",
     "rt",

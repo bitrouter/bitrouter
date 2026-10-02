@@ -135,6 +135,7 @@ fn private_output_never_promotes_unproven_mutated_or_stale_attempts() {
         let usage = output.usage.clone();
         if case != "custom_executor" {
             runtime.succeeded(
+                context().prompt(),
                 &target(),
                 (case != "missing_authority").then(authority),
                 &output,
@@ -149,7 +150,7 @@ fn private_output_never_promotes_unproven_mutated_or_stale_attempts() {
         if case == "new_attempt" {
             runtime.begin_attempt();
         }
-        runtime.seal_output(&context(), &mut output);
+        runtime.seal_output(&context(), &target(), &mut output);
         assert_eq!(output.usage, usage);
         assert_eq!(output.response_id.as_deref(), Some("fixture-response"));
         assert!(
@@ -189,5 +190,75 @@ fn private_message_commitment_ignores_all_markers_but_binds_all_other_content()
         provider_metadata: Default::default(),
     });
     assert_ne!(message_commitment(&parts)?, original);
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_continuation_binds_the_actual_http_prompt_and_redacts_unverified_output()
+-> Result<()> {
+    use crate::language_model::executor::{Executor, HttpExecutor};
+    use crate::language_model::native::NativeManagedRequest;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/responses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id":"resp_native_private", "status":"completed", "store":true,
+            "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}],
+            "usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}
+        }))).mount(&upstream).await;
+    let mut route = target();
+    route.api_protocol = ApiProtocol::Responses;
+    route.api_base = upstream.uri();
+    let runtime = Arc::new(NativePrivateContextRuntime::new(Some(Arc::new(
+        FailAfterWrite,
+    ))));
+    let mut ctx = context();
+    ctx.insert_extension(runtime.clone());
+    ctx.insert_extension(Arc::new(NativeManagedRequest));
+    // A custom wrapper can change the explicit prompt while retaining ctx. The
+    // built-in HTTP execution must not certify ctx's untransmitted prefix.
+    let mut dispatched = ctx.prompt().clone();
+    dispatched.messages = vec![Message::text(Role::User, "different actual input")];
+    let mut output = HttpExecutor::with_defaults()?
+        .execute(&route, &dispatched, &ctx)
+        .await?
+        .result;
+    runtime.seal_output(&ctx, &route, &mut output);
+    assert_eq!(
+        runtime.continuation_observation().output,
+        NativeContinuationOutput::Unverified {
+            reason: ContinuationFailure::BindingChanged
+        }
+    );
+    assert!(output.response_id.is_none());
+    assert!(runtime.response_terminal_valid());
+    assert_eq!(
+        output.usage.as_ref().map(|usage| usage.prompt_tokens),
+        Some(10)
+    );
+    let requests = upstream
+        .received_requests()
+        .await
+        .ok_or_else(|| BitrouterError::internal("missing requests"))?;
+    assert_eq!(requests.len(), 1);
+    assert!(String::from_utf8_lossy(&requests[0].body).contains("different actual input"));
+    // No authenticated source, including a stream bridge/custom executor, must
+    // still erase the provider ID without claiming a proven continuation.
+    runtime.begin_attempt();
+    output.response_id = Some("resp_custom_private".into());
+    runtime.seal_output(&ctx, &route, &mut output);
+    assert!(output.response_id.is_none());
+    assert_eq!(
+        runtime.continuation_observation().output,
+        NativeContinuationOutput::Unverified {
+            reason: ContinuationFailure::AttemptUnverified
+        }
+    );
+    assert!(runtime.response_terminal_valid());
+    runtime.begin_attempt();
+    runtime.seal_output(&ctx, &route, &mut output);
+    assert!(!runtime.response_terminal_valid());
     Ok(())
 }

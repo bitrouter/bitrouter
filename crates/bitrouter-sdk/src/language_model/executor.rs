@@ -30,6 +30,24 @@ use crate::language_model::types::{
 
 mod input_count;
 
+use super::native_continuation::{
+    ContinuationFailure, NativeContinuationInput, NativeContinuationPlan,
+};
+
+fn native_continuation_plan(
+    target: &RoutingTarget,
+    prompt: &Prompt,
+    ctx: &PipelineContext,
+) -> Result<Option<NativeContinuationPlan>> {
+    ctx.extension::<super::native_context::NativePrivateContextRuntime>()
+        .map(|runtime| {
+            runtime
+                .continuation_plan(prompt, ctx.caller(), target)
+                .map_err(ContinuationFailure::error)
+        })
+        .transpose()
+}
+
 /// A boxed stream of canonical stream parts.
 pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>;
 
@@ -41,6 +59,15 @@ pub type StreamPartStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send
 /// upstream call. Custom executors that don't need propagation can ignore it.
 #[async_trait]
 pub trait Executor: Send + Sync {
+    /// Pure local assessment, distinct from actual generation dispatch evidence.
+    fn native_continuation(
+        &self,
+        _target: &RoutingTarget,
+        _prompt: &Prompt,
+        _ctx: &PipelineContext,
+    ) -> NativeContinuationInput {
+        NativeContinuationInput::Unknown
+    }
     /// Pure local assessment before counting or admission. Implementations must
     /// not perform provider/auth I/O, consume a response or modify the request.
     fn native_protocol_validation(
@@ -578,6 +605,44 @@ fn apply_provider_continuation(
     target: &RoutingTarget,
     ctx: &PipelineContext,
 ) -> Result<Option<ProviderContinuationSubstitution>> {
+    if let Some(plan) = native_continuation_plan(target, ctx.prompt(), ctx)? {
+        if ctx.extension::<ProviderContinuation>().is_some()
+            || ctx.extension::<SuppressProviderContinuation>().is_some()
+        {
+            return Err(ContinuationFailure::BindingChanged.error());
+        }
+        match plan {
+            NativeContinuationPlan::Resume(binding) => {
+                if target.api_protocol != ApiProtocol::Responses
+                    || body
+                        .get("previous_response_id")
+                        .and_then(serde_json::Value::as_str)
+                        != Some(binding.response_id())
+                    || body
+                        .get("reasoning")
+                        .and_then(|reasoning| reasoning.get("effort"))
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null)
+                        != serde_json::to_value(ctx.prompt().params.reasoning_effort)
+                            .map_err(|_| ContinuationFailure::BindingChanged.error())?
+                {
+                    return Err(ContinuationFailure::BindingChanged.error());
+                }
+                return Ok(Some(ProviderContinuationSubstitution {
+                    native: binding.response_id().to_owned(),
+                    public_or_redacted: "[redacted provider continuation]".into(),
+                }));
+            }
+            NativeContinuationPlan::FullHistory(_) => {
+                if body
+                    .get("previous_response_id")
+                    .is_some_and(|value| !value.is_null())
+                {
+                    return Err(ContinuationFailure::BindingChanged.error());
+                }
+            }
+        }
+    }
     if ctx.extension::<SuppressProviderContinuation>().is_some() {
         if target.api_protocol != ApiProtocol::Responses {
             return Err(BitrouterError::internal(
@@ -632,6 +697,11 @@ fn validate_continuation_authority(
     ctx: &PipelineContext,
     actual: Option<&ContinuationAuthority>,
 ) -> Result<()> {
+    if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
+        runtime
+            .validate_continuation_authority(ctx, target, actual)
+            .map_err(ContinuationFailure::error)?;
+    }
     if target.api_protocol == ApiProtocol::Responses
         && ctx.extension::<RequireContinuationAuthority>().is_some()
         && actual.is_none()
@@ -969,6 +1039,37 @@ impl HttpExecutor {
         Ok(())
     }
 
+    fn render_execution_request(
+        &self,
+        adapter: &dyn OutboundAdapter,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> Result<serde_json::Value> {
+        let plan = native_continuation_plan(target, prompt, ctx)?;
+        let mut upstream = match plan.as_ref() {
+            Some(plan) => plan
+                .execution_prompt(prompt)
+                .map_err(ContinuationFailure::error)?,
+            None => prompt.clone(),
+        };
+        upstream.model = target.service_id.clone();
+        upstream.stream = false;
+        let mut body = adapter.render_request_for_target(&upstream, target)?;
+        if let Some(NativeContinuationPlan::Resume(binding)) = plan {
+            if body
+                .get("previous_response_id")
+                .is_some_and(|value| !value.is_null())
+            {
+                return Err(ContinuationFailure::BindingChanged.error());
+            }
+            body.as_object_mut()
+                .ok_or_else(|| ContinuationFailure::BindingChanged.error())?
+                .insert("previous_response_id".into(), binding.response_id().into());
+        }
+        Ok(body)
+    }
+
     fn managed_expected_body(
         &self,
         rendered: &serde_json::Value,
@@ -1005,6 +1106,10 @@ impl HttpExecutor {
             .is_some_and(|value| !value.is_null())
             && ctx.extension::<ProviderContinuation>().is_none()
             && ctx.extension::<SuppressProviderContinuation>().is_none()
+            && !matches!(
+                native_continuation_plan(target, ctx.prompt(), ctx),
+                Ok(Some(NativeContinuationPlan::Resume(_)))
+            )
         {
             return Err("provider_continuation_unbound");
         }
@@ -1472,6 +1577,20 @@ fn forward_inbound_anthropic_beta(
 
 #[async_trait]
 impl Executor for HttpExecutor {
+    fn native_continuation(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> NativeContinuationInput {
+        match ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
+            Some(runtime) => match runtime.continuation_plan(prompt, ctx.caller(), target) {
+                Ok(plan) => plan.observation(),
+                Err(reason) => NativeContinuationInput::Rejected { reason },
+            },
+            None => NativeContinuationInput::Unknown,
+        }
+    }
     fn native_protocol_validation(
         &self,
         target: &RoutingTarget,
@@ -1490,14 +1609,22 @@ impl Executor for HttpExecutor {
                 .dispatch
                 .lookup(&target.api_protocol)
                 .ok_or("outbound_adapter_unavailable")?;
-            adapter.validate_managed_prompt(prompt)?;
+            let plan = ctx
+                .extension::<super::native_context::NativePrivateContextRuntime>()
+                .map(|runtime| runtime.continuation_plan(prompt, ctx.caller(), target))
+                .transpose()
+                .map_err(ContinuationFailure::reason)?;
+            let effective = match plan.as_ref() {
+                Some(plan) => plan
+                    .execution_prompt(prompt)
+                    .map_err(ContinuationFailure::reason)?,
+                None => prompt.clone(),
+            };
+            adapter.validate_managed_prompt(&effective)?;
             Self::check_response_format(prompt, adapter, target)
                 .map_err(|_| "response_format_unsupported")?;
-            let mut upstream = prompt.clone();
-            upstream.model = target.service_id.clone();
-            upstream.stream = false;
-            let body = adapter
-                .render_request_for_target(&upstream, target)
+            let body = self
+                .render_execution_request(adapter.as_ref(), target, prompt, ctx)
                 .map_err(|_| "protocol_render_failed")?;
             self.prepare_managed_baseline(&body, target, ctx)?;
             Ok(())
@@ -1549,10 +1676,7 @@ impl Executor for HttpExecutor {
 
         Self::check_response_format(prompt, adapter, target)?;
 
-        let mut upstream_prompt = prompt.clone();
-        upstream_prompt.model = target.service_id.clone();
-        upstream_prompt.stream = false;
-        let mut body = adapter.render_request_for_target(&upstream_prompt, target)?;
+        let mut body = self.render_execution_request(adapter.as_ref(), target, prompt, ctx)?;
         let managed_expected = self.managed_expected_body(&body, target, ctx)?;
         self.shape_request_body(&mut body, target).await?;
         let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
@@ -1579,12 +1703,27 @@ impl Executor for HttpExecutor {
         };
         let started = Instant::now();
         let mut attempted_auth_refresh = false;
-        let (text, successful_authority) = loop {
+        let requested_effort = serde_json::to_value(prompt.params.reasoning_effort)
+            .map_err(|_| ContinuationFailure::BindingChanged.error())?;
+        let (text, successful_authority, storage_allowed, effort_bound) = loop {
             let applied = self
                 .build_authenticated_request(&request_input)
                 .await
                 .map_err(|error| error_scrubber.scrub_error(error))?;
             let (request, authority) = applied.into_parts();
+            let wire: Option<serde_json::Value> = request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .and_then(|bytes| serde_json::from_slice(bytes).ok());
+            let storage_allowed = wire
+                .as_ref()
+                .is_some_and(|body| body.get("store") != Some(&serde_json::Value::Bool(false)));
+            let effort_bound = wire.as_ref().is_some_and(|body| {
+                body.get("reasoning")
+                    .and_then(|reasoning| reasoning.get("effort"))
+                    .unwrap_or(&serde_json::Value::Null)
+                    == &requested_effort
+            });
             error_scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
                 .headers()
@@ -1593,7 +1732,15 @@ impl Executor for HttpExecutor {
             if let Some(runtime) =
                 ctx.extension::<super::native_context::NativePrivateContextRuntime>()
             {
-                runtime.dispatched(prompt);
+                let plan = runtime
+                    .continuation_plan(prompt, ctx.caller(), target)
+                    .map_err(ContinuationFailure::error)?;
+                runtime.dispatched(
+                    &plan
+                        .execution_prompt(prompt)
+                        .map_err(ContinuationFailure::error)?,
+                );
+                runtime.continuation_dispatched(&plan);
             }
             let response = client.execute(request).await.map_err(|error| {
                 let error = if error.is_timeout() {
@@ -1615,7 +1762,7 @@ impl Executor for HttpExecutor {
             })?;
 
             if status.is_success() {
-                break (text, authority);
+                break (text, authority, storage_allowed, effort_bound);
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !attempted_auth_refresh
@@ -1645,12 +1792,20 @@ impl Executor for HttpExecutor {
             validate_nonstream_responses_terminal(&json)
                 .map_err(|error| error_scrubber.scrub_error(error))?;
         }
-        let result = parse_upstream_success(adapter.as_ref(), json)
+        let stored_response = target.api_protocol == ApiProtocol::Responses
+            && storage_allowed
+            && json.get("store") == Some(&serde_json::Value::Bool(true));
+        let replayable = super::protocol::responses::output_replayable(&json);
+        let mut result = parse_upstream_success(adapter.as_ref(), json)
             .map_err(|error| error_scrubber.scrub_error(error))?;
         let elapsed = started.elapsed().as_millis() as u64;
         if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>()
         {
-            runtime.succeeded(target, successful_authority, &result);
+            if target.api_protocol == ApiProtocol::Responses && !replayable {
+                super::native_continuation::mark_required_state(&mut result.content);
+            }
+            runtime.succeeded(prompt, target, successful_authority, &result);
+            runtime.stored_response(stored_response, replayable, effort_bound);
         }
 
         Ok(ExecutionResult {

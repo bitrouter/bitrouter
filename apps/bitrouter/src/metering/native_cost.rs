@@ -110,6 +110,7 @@ mod tests {
     fn report() -> NativeAttemptReport {
         NativeAttemptReport {
             private_context: Default::default(),
+            continuation: Default::default(),
             request_id: "request".into(),
             attempt_index: 0,
             route: NativeRoute {
@@ -120,6 +121,7 @@ mod tests {
                 output_token_limit_supported: Some(true),
                 input_count: None,
                 protocol_validation: Default::default(),
+                continuation: Default::default(),
             },
             actual_provider: Some("execution-provider".into()),
             actual_model: Some("served-model".into()),

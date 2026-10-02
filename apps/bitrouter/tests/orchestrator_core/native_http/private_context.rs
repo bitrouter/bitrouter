@@ -5,6 +5,8 @@
 //! https://developers.openai.com/api/docs/guides/reasoning
 
 use super::*;
+#[path = "private_context/continuation.rs"]
+mod continuation;
 use bitrouter_sdk::language_model::native_context::{
     ORIGIN_FIELD, ORIGIN_NAMESPACE, PrivateContextEvidence, is_private, metadata_mut,
 };

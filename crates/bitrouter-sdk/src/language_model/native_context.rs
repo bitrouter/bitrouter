@@ -7,6 +7,11 @@ use sha2::{Digest, Sha256};
 
 use super::auth::ContinuationAuthority;
 use super::context::PipelineContext;
+use super::native_continuation::{
+    ContinuationFailure, FullHistoryReason, NativeContinuationBinding,
+    NativeContinuationObservation, NativeContinuationOutput, NativeContinuationPlan,
+    NativeContinuationSource, clear_continuations, has_continuation, requires_stored_state,
+};
 use super::types::{Content, GenerateResult, Prompt, ProviderMetadata, RoutingTarget};
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
@@ -100,6 +105,52 @@ pub struct NativePrivateContextObservation {
 /// Host-owned installation-key policy. Validation is local and read-only;
 /// it must not resolve credentials, perform provider I/O or mutate the prompt.
 pub trait NativePrivateContextPolicy: Send + Sync {
+    /// Authenticate stored Responses artifacts before preparation/checker egress.
+    fn validate_continuation_history(
+        &self,
+        prompt: &Prompt,
+        _caller: &CallerContext,
+    ) -> std::result::Result<(), ContinuationFailure> {
+        if has_continuation(prompt) {
+            Err(ContinuationFailure::PolicyUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Select a provider execution view locally, without changing canonical history.
+    fn continuation_plan(
+        &self,
+        prompt: &Prompt,
+        caller: &CallerContext,
+        _target: &RoutingTarget,
+    ) -> std::result::Result<NativeContinuationPlan, ContinuationFailure> {
+        self.validate_continuation_history(prompt, caller)?;
+        Ok(NativeContinuationPlan::FullHistory(
+            FullHistoryReason::NoHandle,
+        ))
+    }
+
+    /// Recheck actual final authentication before generation or count dispatch.
+    fn validate_continuation_authority(
+        &self,
+        _binding: &NativeContinuationBinding,
+        _caller: &CallerContext,
+        _target: &RoutingTarget,
+        _authority: &ContinuationAuthority,
+    ) -> std::result::Result<(), ContinuationFailure> {
+        Err(ContinuationFailure::PolicyUnavailable)
+    }
+
+    /// Attach an encrypted handle to the output, preserving output/usage on error.
+    fn seal_continuation(
+        &self,
+        _source: NativeContinuationSource<'_>,
+        _content: &mut [Content],
+    ) -> std::result::Result<(), ContinuationFailure> {
+        Err(ContinuationFailure::PolicyUnavailable)
+    }
+
     /// Validate owner, role, proof and complete message integrity before any
     /// external checker or route preparation can observe private history.
     fn validate_history(
@@ -213,6 +264,7 @@ pub fn is_private(content: &Content) -> bool {
         || meta
             .get("openai")
             .is_some_and(|value| value.get("reasoningItem").is_some())
+        || requires_stored_state(content)
 }
 
 /// Proof-bearing parts still require integrity validation when a caller removes
@@ -268,6 +320,7 @@ pub fn message_commitment(
 ) -> std::result::Result<Vec<u8>, PrivateContextFailure> {
     let mut clean = content.to_vec();
     clear_origins(&mut clean);
+    clear_continuations(&mut clean);
     serde_json::to_vec(&clean)
         .map(|bytes| Sha256::digest(bytes).to_vec())
         .map_err(|_| PrivateContextFailure::ContentUnavailable)
@@ -278,14 +331,20 @@ fn private_count(content: &[Content]) -> u64 {
 }
 
 struct SuccessfulSource {
+    prompt: Prompt,
     target: RoutingTarget,
     authority: Option<ContinuationAuthority>,
     result: Vec<u8>,
+    stored_response: bool,
+    replayable: bool,
+    effort_bound: bool,
 }
 
 #[derive(Default)]
 struct AttemptState {
     observation: NativePrivateContextObservation,
+    continuation: NativeContinuationObservation,
+    response_terminal_valid: bool,
     source: Option<SuccessfulSource>,
 }
 
@@ -313,6 +372,59 @@ impl NativePrivateContextRuntime {
 
     pub(crate) fn begin_attempt(&self) {
         *self.state() = AttemptState::default();
+    }
+
+    pub(crate) fn continuation_plan(
+        &self,
+        prompt: &Prompt,
+        caller: &CallerContext,
+        target: &RoutingTarget,
+    ) -> std::result::Result<NativeContinuationPlan, ContinuationFailure> {
+        let plan = match self.policy.as_deref() {
+            Some(policy) => policy.continuation_plan(prompt, caller, target),
+            None if has_continuation(prompt) => Err(ContinuationFailure::PolicyUnavailable),
+            None => Ok(NativeContinuationPlan::FullHistory(
+                FullHistoryReason::NoHandle,
+            )),
+        }?;
+        // Include state requirements outside an older anchor or imported from
+        // another branch; the latest artifact alone cannot prove replayability.
+        plan.execution_prompt(prompt)?;
+        Ok(plan)
+    }
+
+    pub(crate) fn validate_continuation_authority(
+        &self,
+        ctx: &PipelineContext,
+        target: &RoutingTarget,
+        actual: Option<&ContinuationAuthority>,
+    ) -> std::result::Result<(), ContinuationFailure> {
+        if let NativeContinuationPlan::Resume(binding) =
+            self.continuation_plan(ctx.prompt(), ctx.caller(), target)?
+        {
+            self.policy
+                .as_deref()
+                .ok_or(ContinuationFailure::PolicyUnavailable)?
+                .validate_continuation_authority(
+                    &binding,
+                    ctx.caller(),
+                    target,
+                    actual.ok_or(ContinuationFailure::AuthorityUnavailable)?,
+                )?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn continuation_dispatched(&self, plan: &NativeContinuationPlan) {
+        self.state().continuation.input = plan.observation();
+    }
+
+    pub(crate) fn continuation_observation(&self) -> NativeContinuationObservation {
+        self.state().continuation.clone()
+    }
+
+    pub(crate) fn response_terminal_valid(&self) -> bool {
+        self.state().response_terminal_valid
     }
 
     fn has_private(prompt: &Prompt) -> bool {
@@ -389,6 +501,7 @@ impl NativePrivateContextRuntime {
 
     pub(crate) fn succeeded(
         &self,
+        prompt: &Prompt,
         target: &RoutingTarget,
         authority: Option<ContinuationAuthority>,
         result: &GenerateResult,
@@ -396,19 +509,37 @@ impl NativePrivateContextRuntime {
         self.state().source = serde_json::to_vec(result)
             .ok()
             .map(|bytes| SuccessfulSource {
+                prompt: prompt.clone(),
                 target: target.clone(),
                 authority,
                 result: Sha256::digest(bytes).to_vec(),
+                stored_response: false,
+                replayable: false,
+                effort_bound: false,
             });
     }
 
-    pub(crate) fn seal_output(&self, ctx: &PipelineContext, result: &mut GenerateResult) {
+    pub(crate) fn stored_response(&self, stored: bool, replayable: bool, effort_bound: bool) {
+        if let Some(source) = self.state().source.as_mut() {
+            source.stored_response = stored;
+            source.replayable = replayable;
+            source.effort_bound = effort_bound;
+        }
+    }
+
+    pub(crate) fn seal_output(
+        &self,
+        ctx: &PipelineContext,
+        target: &RoutingTarget,
+        result: &mut GenerateResult,
+    ) {
         let source = self.state().source.take();
         let authentic = source.as_ref().is_some_and(|source| {
             serde_json::to_vec(result)
                 .is_ok_and(|bytes| Sha256::digest(bytes).as_slice() == source.result)
         });
         clear_origins(&mut result.content);
+        clear_continuations(&mut result.content);
         // Canonical correlation IDs are generated once, before both the durable
         // receipt and history observe them. They are not provider-assigned IDs.
         for part in &mut result.content {
@@ -430,19 +561,17 @@ impl NativePrivateContextRuntime {
                 if !authentic {
                     return Err(PrivateContextFailure::AttemptUnverified);
                 }
-                let source = source.ok_or(PrivateContextFailure::AttemptUnverified)?;
+                let source = source
+                    .as_ref()
+                    .ok_or(PrivateContextFailure::AttemptUnverified)?;
                 let authority = source
                     .authority
+                    .as_ref()
                     .ok_or(PrivateContextFailure::AuthorityUnavailable)?;
                 self.policy
                     .as_deref()
                     .ok_or(PrivateContextFailure::PolicyUnavailable)?
-                    .seal(
-                        &mut result.content,
-                        ctx.caller(),
-                        &source.target,
-                        &authority,
-                    )
+                    .seal(&mut result.content, ctx.caller(), &source.target, authority)
             })()
         };
         self.state().observation.output = match outcome {
@@ -453,6 +582,70 @@ impl NativePrivateContextRuntime {
                 PrivateContextEvidence::Unverified { reason }
             }
         };
+        self.state().continuation.output = match source.as_ref() {
+            Some(source) if source.target.api_protocol != super::types::ApiProtocol::Responses => {
+                NativeContinuationOutput::NotSupported
+            }
+            Some(source) if !source.stored_response => NativeContinuationOutput::NotStored,
+            Some(source) => {
+                let sealed = (|| {
+                    if !authentic {
+                        return Err(ContinuationFailure::AttemptUnverified);
+                    }
+                    if !source.effort_bound || source.prompt != *ctx.prompt() {
+                        return Err(ContinuationFailure::BindingChanged);
+                    }
+                    let authority = source
+                        .authority
+                        .as_ref()
+                        .ok_or(ContinuationFailure::AuthorityUnavailable)?;
+                    let policy = self
+                        .policy
+                        .as_deref()
+                        .ok_or(ContinuationFailure::PolicyUnavailable)?;
+                    let plan =
+                        self.continuation_plan(ctx.prompt(), ctx.caller(), &source.target)?;
+                    policy.seal_continuation(
+                        NativeContinuationSource {
+                            prompt: ctx.prompt(),
+                            caller: ctx.caller(),
+                            target: &source.target,
+                            authority,
+                            response_id: result
+                                .response_id
+                                .as_deref()
+                                .filter(|id| !id.is_empty())
+                                .ok_or(ContinuationFailure::ContentUnavailable)?,
+                            replayable: source.replayable && plan.replayable(),
+                        },
+                        &mut result.content,
+                    )
+                })();
+                match sealed {
+                    Ok(()) => NativeContinuationOutput::Issued,
+                    Err(reason) => {
+                        clear_continuations(&mut result.content);
+                        NativeContinuationOutput::Unverified { reason }
+                    }
+                }
+            }
+            None => NativeContinuationOutput::Unverified {
+                reason: ContinuationFailure::AttemptUnverified,
+            },
+        };
+        // Managed callers receive only the encrypted artifact. Even unverified
+        // custom or stream-bridge output must not expose raw handles in receipts.
+        if target.api_protocol == super::types::ApiProtocol::Responses {
+            self.state().response_terminal_valid = result
+                .response_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+                && matches!(
+                    result.finish_reason,
+                    Some(super::types::FinishReason::Stop | super::types::FinishReason::Length)
+                );
+            result.response_id = None;
+        }
     }
 
     pub(crate) fn observation(&self) -> NativePrivateContextObservation {
@@ -464,9 +657,20 @@ impl NativePrivateContextRuntime {
 /// preparation hook. The pipeline also calls it before every external checker.
 pub fn validate_managed_history(ctx: &PipelineContext) -> Result<()> {
     match ctx.extension::<NativePrivateContextRuntime>() {
-        Some(runtime) => runtime
-            .validate_history(ctx)
-            .map_err(PrivateContextFailure::error),
+        Some(runtime) => {
+            runtime
+                .validate_history(ctx)
+                .map_err(PrivateContextFailure::error)?;
+            match runtime.policy.as_deref() {
+                Some(policy) => policy
+                    .validate_continuation_history(ctx.prompt(), ctx.caller())
+                    .map_err(ContinuationFailure::error),
+                None if has_continuation(ctx.prompt()) => {
+                    Err(ContinuationFailure::PolicyUnavailable.error())
+                }
+                None => Ok(()),
+            }
+        }
         None => Ok(()),
     }
 }

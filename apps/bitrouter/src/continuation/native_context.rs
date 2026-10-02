@@ -1,5 +1,7 @@
 //! Installation-authenticated origins for provider-private managed history.
 
+mod continuation;
+
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use bitrouter_sdk::caller::CallerContext;
@@ -201,6 +203,43 @@ fn decode(key: &ContinuationKey, token: &str) -> PolicyResult<Origin> {
 }
 
 impl NativePrivateContextPolicy for PrivateContextPolicy {
+    fn validate_continuation_history(
+        &self,
+        prompt: &Prompt,
+        caller: &CallerContext,
+    ) -> continuation::PolicyResult<()> {
+        continuation::validate_history(self, prompt, caller)
+    }
+
+    fn continuation_plan(
+        &self,
+        prompt: &Prompt,
+        caller: &CallerContext,
+        target: &RoutingTarget,
+    ) -> continuation::PolicyResult<
+        bitrouter_sdk::language_model::native_continuation::NativeContinuationPlan,
+    > {
+        continuation::plan(self, prompt, caller, target)
+    }
+
+    fn validate_continuation_authority(
+        &self,
+        binding: &bitrouter_sdk::language_model::native_continuation::NativeContinuationBinding,
+        caller: &CallerContext,
+        target: &RoutingTarget,
+        authority: &ContinuationAuthority,
+    ) -> continuation::PolicyResult<()> {
+        continuation::validate_authority(self, binding, caller, target, authority)
+    }
+
+    fn seal_continuation(
+        &self,
+        source: bitrouter_sdk::language_model::native_continuation::NativeContinuationSource<'_>,
+        content: &mut [Content],
+    ) -> continuation::PolicyResult<()> {
+        continuation::seal(self, source, content)
+    }
+
     fn validate_history(&self, prompt: &Prompt, caller: &CallerContext) -> PolicyResult<()> {
         self.validate(prompt, caller, None, None)
     }

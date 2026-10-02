@@ -671,15 +671,25 @@ impl Pipeline {
         };
         match exec_outcome {
             Ok((result, provider_terminal_exposed)) => {
+                // Managed execution retains terminal validity privately after
+                // removing the raw Responses ID from output and receipts.
+                let response_id_valid = ctx
+                    .extension::<super::native_context::NativePrivateContextRuntime>()
+                    .map_or_else(
+                        || {
+                            result
+                                .result
+                                .response_id
+                                .as_deref()
+                                .is_some_and(|id| !id.is_empty())
+                        },
+                        |runtime| runtime.response_terminal_valid(),
+                    );
                 let native_responses_terminal_invalid = provider_terminal_exposed
                     && ctx.successful_target().is_some_and(|target| {
                         target.api_protocol == crate::language_model::ApiProtocol::Responses
                     })
-                    && (result
-                        .result
-                        .response_id
-                        .as_deref()
-                        .is_none_or(str::is_empty)
+                    && (!response_id_valid
                         || !matches!(
                             result.result.finish_reason.as_ref(),
                             Some(
@@ -704,11 +714,7 @@ impl Pipeline {
                     && ctx.successful_target().is_some_and(|target| {
                         target.api_protocol == crate::language_model::ApiProtocol::Responses
                     })
-                    && result
-                        .result
-                        .response_id
-                        .as_deref()
-                        .is_some_and(|id| !id.is_empty())
+                    && response_id_valid
                     && matches!(
                         result.result.finish_reason.as_ref(),
                         Some(
@@ -808,6 +814,7 @@ impl Pipeline {
         for rebuild_round in 0..=1 {
             for (route, target) in routes.iter_mut().zip(chain) {
                 route.input_count = None;
+                route.continuation = self.executor.native_continuation(target, ctx.prompt(), ctx);
                 route.protocol_validation =
                     self.executor
                         .native_protocol_validation(target, ctx.prompt(), ctx);
@@ -1697,7 +1704,7 @@ impl Pipeline {
             let started = Instant::now();
             let mut outcome = self.executor.execute(target, prompt, ctx).await;
             if let (Some(runtime), Ok(result)) = (&private_context, &mut outcome) {
-                runtime.seal_output(ctx, &mut result.result);
+                runtime.seal_output(ctx, target, &mut result.result);
             }
             if let Some((control, route)) = attempt_control {
                 let mut report = NativeAttemptReport {
@@ -1716,6 +1723,10 @@ impl Pipeline {
                     private_context: private_context
                         .as_ref()
                         .map(|runtime| runtime.observation())
+                        .unwrap_or_default(),
+                    continuation: private_context
+                        .as_ref()
+                        .map(|runtime| runtime.continuation_observation())
                         .unwrap_or_default(),
                     cache: super::native_accounting::NativeCacheObservation::capture(
                         &route.protocol,
