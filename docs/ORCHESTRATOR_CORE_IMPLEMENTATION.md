@@ -866,3 +866,72 @@ fixed. This review does not cover completion of the remaining C3–C6 work.
   doctests, formatting and diff checks passed.
 - The earlier 3760-test pass preceded the stable scope changes and is not the
   final-tree acceptance result; intermediate compile failures were corrected.
+
+## C3 managed private-history origin binding
+
+The production App installs an SDK private-history policy using the existing
+persistent installation key. A managed successful HTTP attempt seals supported
+Anthropic signed/redacted thinking and Gemini thought signatures with an opaque
+`provider_metadata.bitrouter.nativePrivateOrigin` token. It binds the authenticated
+owner, provider, service model, protocol, effective endpoint, account label,
+actual successful credential/scope authority, complete assistant message and
+part position. Every origin marker is excluded together when committing that
+message; other content and metadata remain covered. Supported Gemini text and
+media parts now preserve their signatures as well as reasoning and function
+calls. The marker is not a provider wire field or a second history store.
+
+The App validates proof, owner and message integrity immediately after
+authentication and before other preparation/checker work. The SDK repeats local
+validation before request checkers, including context reconstruction. Candidate
+preflight checks source identity without credential or provider I/O; final
+request validation checks actual authenticated authority on every retry. A
+remaining origin marker cannot bypass integrity checks by having its provider
+namespace removed. Completely removing both private classification and proof
+cannot be detected by this stateless message scheme alone; core's independent
+frozen-history checks still prevent preparation hooks from doing that to required
+history.
+
+Opaque Anthropic redacted thinking is excluded from readable checker input and
+counted separately in `excluded_private_fragments`. Readable reasoning and text
+still enter the checker. Managed generation and count clients disable automatic
+redirects, and authentication cannot rewrite their expected final URL. Ordinary
+compatibility requests keep their existing redirect policy.
+
+A private SDK attempt slot captures the successful HTTP target, final authority
+and parsed-result commitment. Count work, failed attempts, custom executor
+results and mutated results cannot supply that provenance. Sealing happens before
+both the attempt report and returned result are produced. Missing client tool-call
+IDs are assigned once before sealing and remain internal correlation identities.
+If proof creation fails, output and usage survive, all old/partial markers are
+removed, and the receipt explicitly records unverified evidence.
+
+`NativeAttemptReport.private_context` separately describes input and output as
+`unknown`, `not_present`, `verified` or `unverified`. Input evidence starts only
+at generation dispatch; old receipts default to unknown. These source bindings
+do not prove cache reuse, context equivalence or provider acceptance. Core stores
+the sealed message and the same receipt. A source-target mismatch can use the
+existing one-shot reconstruction path only for explicitly discardable whole old
+messages; mandatory history is retained and rejected if no route can serve it.
+
+This segment is limited to supported non-streaming provider-private parts and
+existing in-process core execution. Full Responses continuation adjustment,
+OAuth principal support, child/reuse/fallback conformance, complete accounting,
+C4–C6, A01–A23 acceptance, final audit and PR/CI remain open.
+
+Independent stage review found dropped Gemini signatures on ordinary text/media
+and a missing thought flag on signed media; both were fixed and covered by the
+production HTTP fixture. Orphan markers still require integrity validation.
+Review found no remaining blocker for this segment and confirmed reconstruction
+still requires authorized settled messages and versioned required material.
+
+- Focused SDK/production-App/core regressions: 8 passed, followed by the new
+  key-unavailable real-output/usage/settlement regression in the workspace run.
+- Workspace nextest: 3772 passed, 22 skipped, in 213.866 seconds.
+- Final count-URL normalization uses parsed URL equality, matching generation;
+  the eight real core input-count integration tests were rerun and passed after
+  that last adjustment. The workspace run above preceded that small adjustment.
+- Strict all-target/all-feature workspace clippy, all-feature workspace doctests
+  (5 passed, 1 ignored), formatting and diff checks passed on the adjusted code.
+- The initial broad build lost its output directory before tests could start;
+  a missing coverage field in the regex-checker test fixture was also corrected.
+  Neither earlier failed check is included as passing evidence.

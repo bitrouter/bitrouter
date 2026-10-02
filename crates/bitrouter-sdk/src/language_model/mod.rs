@@ -68,6 +68,7 @@ pub mod executor;
 pub mod hooks;
 pub mod native;
 pub mod native_accounting;
+pub mod native_context;
 pub mod pipeline;
 pub mod protocol;
 pub mod request_checks;

@@ -1,5 +1,7 @@
 //! Encrypted provider continuation registry and pipeline integration.
 
+pub mod native_context;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

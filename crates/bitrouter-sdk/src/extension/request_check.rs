@@ -51,8 +51,8 @@ pub enum ContentFragmentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestCheckCoverageScope {
-    /// Textual fragments on the entry request only. Media payloads, server-tool
-    /// turns, and other nested requests are outside the scope.
+    /// Readable text on the entry request only. Media, opaque provider-private
+    /// payloads, server-tool turns, and nested requests are outside the scope.
     EntryRequestText,
 }
 
@@ -60,7 +60,7 @@ pub enum RequestCheckCoverageScope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestCheckCoverageStatus {
-    /// Every entry-request text fragment fit within the byte and count bounds.
+    /// Every readable entry-request text fragment fit within byte/count bounds.
     CompleteWithinScope,
     /// Entry-request text exceeded a byte or fragment bound; no checker was
     /// invoked.
@@ -78,6 +78,9 @@ pub struct RequestCheckCoverage {
     pub text_fragments: u64,
     /// Entry-request media fragments intentionally excluded from payloads.
     pub excluded_media_fragments: u64,
+    /// Opaque provider-private fragments excluded from readable checker input.
+    #[serde(default)]
+    pub excluded_private_fragments: u64,
     /// Completeness within the fixed scope.
     pub status: RequestCheckCoverageStatus,
 }

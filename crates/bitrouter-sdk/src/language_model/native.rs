@@ -269,6 +269,9 @@ pub struct NativeAttemptReport {
     /// Explicit raw provider cache counters with their serving-protocol provenance.
     #[serde(default)]
     pub cache: super::native_accounting::NativeCacheObservation,
+    /// Authenticated private-history evidence from the actual provider attempt.
+    #[serde(default)]
+    pub private_context: super::native_context::NativePrivateContextObservation,
 }
 
 /// Per-request durable controls supplied by a native embedding runtime.

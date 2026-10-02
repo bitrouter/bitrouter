@@ -157,7 +157,11 @@ impl HttpExecutor {
         let managed_expected = self.managed_expected_body(&body, target, ctx)?;
         apply_provider_continuation(&mut body, target, ctx)?;
         let url = transport.endpoint_url(target, false);
-        let (client, timeouts) = self.client_for(target);
+        let (client, timeouts) = self.client_for(
+            target,
+            ctx.extension::<crate::language_model::native::NativeManagedRequest>()
+                .is_some(),
+        );
         let generation = self
             .build_authenticated_request(&RequestBuildInput {
                 client: &client,
@@ -195,6 +199,11 @@ impl HttpExecutor {
         let mut request = transport.authorise(request, target).await?;
         super::apply_provider_headers(&mut request, target, ctx, false);
         super::inject_outbound_request_id(&mut request, ctx)?;
+        let expected_count_url = reqwest::Url::parse(&count_url)
+            .map_err(|_| invalid("input counting endpoint is invalid"))?;
+        if request.url() != &expected_count_url {
+            return Err(invalid("input counting authentication changed endpoint"));
+        }
         if semantic_headers(&generation) != semantic_headers(&request) {
             return Err(invalid(
                 "input counting authentication or semantic headers changed",

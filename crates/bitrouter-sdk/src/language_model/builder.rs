@@ -39,6 +39,7 @@ pub struct PipelineBuilder {
     fallback_backoff: Vec<Duration>,
     request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
     native_cost_estimator: Option<Arc<dyn super::native_accounting::NativeCostEstimator>>,
+    native_private_context: Option<Arc<dyn super::native_context::NativePrivateContextPolicy>>,
 }
 
 impl PipelineBuilder {
@@ -63,6 +64,7 @@ impl PipelineBuilder {
             fallback_backoff: Vec::new(),
             request_checker_runner: None,
             native_cost_estimator: None,
+            native_private_context: None,
         }
     }
 
@@ -85,6 +87,17 @@ impl PipelineBuilder {
         estimator: Arc<dyn super::native_accounting::NativeCostEstimator>,
     ) -> &mut Self {
         self.native_cost_estimator = Some(estimator);
+        self
+    }
+
+    /// Install host authentication for provider-private managed history. Hosts
+    /// must also call `validate_managed_history` immediately after authenticating
+    /// the caller and before any preparation hook capable of external I/O.
+    pub fn native_private_context(
+        &mut self,
+        policy: Arc<dyn super::native_context::NativePrivateContextPolicy>,
+    ) -> &mut Self {
+        self.native_private_context = Some(policy);
         self
     }
 
@@ -252,6 +265,7 @@ impl PipelineBuilder {
             detached_executions: tokio_util::task::TaskTracker::new(),
             request_checker_runner: self.request_checker_runner,
             native_cost_estimator: self.native_cost_estimator,
+            native_private_context: self.native_private_context,
         })
     }
 }
