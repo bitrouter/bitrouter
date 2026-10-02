@@ -1353,3 +1353,37 @@ Validation with Rust 1.95.0:
   strengthened malformed-output assertion and failed; the rebuilt focused run
   passed all 14 then-current tests. A test-only boolean simplification resolved
   the initial strict-clippy finding. Failed runs are not passing evidence.
+
+## C3 material fetch cost ownership
+
+Material requests now retain their initiating run, agent and turn in an optional
+`origin`. Fetching happens before model-step admission, so its `material_fetch`
+cost entry has no step or SDK billing request ID. Existing step-bound entries
+retain their serialized string IDs; a missing legacy material origin stays
+unknown. The material request ID keys the work record, not a provider bill.
+
+The existing `material.requested` and `material.resolved` checkpoints atomically
+record the work intent and outcome. A shared pending fetch has one owner even
+when another child or a later root run consumes its result. Late results and
+their durable events stay attributed to the original run and agent after
+cancellation or turn replacement. Both successful and unavailable resolutions
+remain unknown monetary expenditure; neither harness wait time nor ACK latency
+is fabricated as operation duration. Rejected stale-version content leaves the
+original intent unresolved and cannot enter a model prompt.
+
+Five new integration tests cover result ACK visibility and replay, an ACK lost
+after the harness committed the result, cancelled-run reuse, shared child
+fetches, and unavailable/stale requests followed by a new version. The existing
+request ACK test now checks the absence of visible work before admission. These
+tests verify checkpoint evidence and the current in-process session; they do not
+establish crash restoration or a harness monetary evidence source. Auxiliary
+callback coverage, remaining C3 requirements, C4–C6, full A01–A23 acceptance,
+final audit, PR and CI remain open.
+
+Independent read-only review found no P1/P2 blocker in this segment. Validation
+with Rust 1.95.0 passed:
+
+- Material-focused nextest: 13 passed, including the five new regressions.
+- Workspace all-feature nextest: 3819 passed, 22 skipped, in 286.399 seconds.
+- Strict all-target/all-feature workspace clippy passed without warnings.
+- Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.

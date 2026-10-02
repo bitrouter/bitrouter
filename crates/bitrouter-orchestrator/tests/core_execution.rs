@@ -2,6 +2,8 @@
 mod accounting;
 #[path = "core_execution/input_count.rs"]
 mod input_count;
+#[path = "core_execution/material_work.rs"]
+mod material_work;
 #[path = "core_execution/provider_work.rs"]
 mod provider_work;
 #[path = "core_execution/reconstruction.rs"]
@@ -1136,7 +1138,7 @@ fn output(content: Vec<Content>) -> MockResponse {
 
 async fn setup(
     responses: Vec<MockResponse>,
-    harness: Arc<Harness>,
+    harness: Arc<dyn HarnessPort>,
     fallback: bool,
 ) -> Result<(CoreSession, Arc<RecordingExecutor>, Arc<AtomicUsize>), Box<dyn std::error::Error>> {
     let table = StaticRoutingTable::new();
@@ -1609,6 +1611,9 @@ async fn required_material_waits_for_request_ack_and_validated_resolution() -> T
         .forget();
     assert!(harness.material_requests.lock().await.is_empty());
     assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    let pending = session.snapshot().await;
+    let run_id = pending.run.as_ref().ok_or("run")?.run_id.clone();
+    assert!(pending.cost_work[&run_id].work.is_empty());
     harness.resume.add_permits(1);
     let waiting = driving.await??;
     assert_eq!(
@@ -1616,6 +1621,17 @@ async fn required_material_waits_for_request_ack_and_validated_resolution() -> T
         Some(RunStatus::Waiting)
     );
     let request = harness.material_requests.lock().await[0].clone();
+    let fetch = &waiting.cost_work[&run_id].work[&request.0];
+    assert_eq!(
+        fetch.kind,
+        bitrouter_orchestrator::core::accounting::work::CostWorkKind::MaterialFetch
+    );
+    assert_eq!(
+        fetch.state,
+        bitrouter_orchestrator::core::accounting::work::CostWorkState::IntentRecorded
+    );
+    assert!(fetch.step_id.is_none());
+    assert!(fetch.request_id.is_none());
     session.drive().await?;
     assert_eq!(harness.material_requests.lock().await.len(), 1);
     let mut wrong = reference.clone();

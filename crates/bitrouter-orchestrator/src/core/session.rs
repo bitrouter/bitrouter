@@ -604,19 +604,20 @@ impl CoreSession {
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
             return Ok(receipt);
         }
-        if !self
-            .shared
-            .live
-            .lock()
-            .await
-            .sent_materials
-            .contains(request_id)
-        {
-            return Err(reject(
-                ErrorCode::UnauthorizedScope,
-                "material result has no dispatched request",
-            ));
-        }
+        let origin = {
+            let live = self.shared.live.lock().await;
+            if !live.sent_materials.contains(request_id) {
+                return Err(reject(
+                    ErrorCode::UnauthorizedScope,
+                    "material result has no dispatched request",
+                ));
+            }
+            live.state
+                .signals
+                .requests
+                .get(request_id)
+                .and_then(|request| request.origin.clone())
+        };
         let bytes = serde_json::to_vec(&(&material, &unavailable_reason))
             .map_err(json_error)?
             .len() as u64;
@@ -626,26 +627,31 @@ impl CoreSession {
                 "material response exceeds input bound",
             ));
         }
-        self.transition("material.resolved", |state, head| {
-            state.signals.resolve(
-                request_id,
-                material.as_ref(),
-                unavailable_reason.as_deref(),
-                &state.manifest,
-            )?;
-            let receipt = OperationReceipt {
-                operation_id: operation_id.into(),
-                request_sha256: fingerprint,
-                disposition: OperationDisposition::Applied,
-                assigned_ids: BTreeMap::from([("request_id".into(), request_id.into())]),
-                state_revision: head.state_revision + 1,
-                error: None,
-            };
-            state
-                .operations
-                .insert(operation_id.into(), receipt.clone());
-            encode(&receipt)
-        })
+        self.transition_scoped(
+            origin.as_ref().map(|origin| origin.agent_id.as_str()),
+            origin.as_ref().map(|origin| origin.run_id.as_str()),
+            "material.resolved",
+            |state, head, _| {
+                state.signals.resolve(
+                    request_id,
+                    material.as_ref(),
+                    unavailable_reason.as_deref(),
+                    &state.manifest,
+                )?;
+                let receipt = OperationReceipt {
+                    operation_id: operation_id.into(),
+                    request_sha256: fingerprint,
+                    disposition: OperationDisposition::Applied,
+                    assigned_ids: BTreeMap::from([("request_id".into(), request_id.into())]),
+                    state_revision: head.state_revision + 1,
+                    error: None,
+                };
+                state
+                    .operations
+                    .insert(operation_id.into(), receipt.clone());
+                encode(&receipt)
+            },
+        )
         .await?;
         self.operation(operation_id)
             .await
@@ -1268,19 +1274,45 @@ impl CoreSession {
             })
         });
         if needs_request || turn.status != AgentStatus::WaitingMaterial {
-            self.transition_for(Some(agent_id),"material.requested",|state,_| {
-                if state.signals.revision != snapshot.signals.revision || !matches!(agent_turn(state,agent_id)?.status,AgentStatus::Runnable|AgentStatus::WaitingMaterial) {
-                    return Err(reject(ErrorCode::Busy,"material inventory or agent boundary changed"));
+            self.transition_for(Some(agent_id), "material.requested", |state, _| {
+                let current = agent_turn(state, agent_id)?;
+                if current.agent_turn_id != turn.agent_turn_id
+                    || current.run_id != turn.run_id
+                    || !matches!(current.status, AgentStatus::Runnable | AgentStatus::WaitingMaterial)
+                    || state.signals.revision != snapshot.signals.revision
+                {
+                    return Err(reject(
+                        ErrorCode::Busy,
+                        "material inventory or agent boundary changed",
+                    ));
                 }
+                let origin = signals::MaterialRequestOrigin {
+                    run_id: turn.run_id.clone(),
+                    agent_id: agent_id.into(),
+                    agent_turn_id: turn.agent_turn_id.clone(),
+                };
                 for material in &missing {
-                    if !state.signals.requests.values().any(|request| !request.resolved && signals::same_reference(&request.reference,material)) {
-                        let request_id=id("material_request");
-                        state.signals.requests.insert(request_id.clone(),MaterialRequest {request_id,signal_revision:state.signals.revision,reference:material.clone(),resolved:false,unavailable_reason:None});
+                    if !state.signals.requests.values().any(|request| {
+                        !request.resolved && signals::same_reference(&request.reference, material)
+                    }) {
+                        let request_id = id("material_request");
+                        state.signals.requests.insert(
+                            request_id.clone(),
+                            MaterialRequest {
+                                request_id,
+                                origin: Some(origin.clone()),
+                                signal_revision: state.signals.revision,
+                                reference: material.clone(),
+                                resolved: false,
+                                unavailable_reason: None,
+                            },
+                        );
                     }
                 }
-                agent_turn(state,agent_id)?.status=AgentStatus::WaitingMaterial;
+                agent_turn(state, agent_id)?.status = AgentStatus::WaitingMaterial;
                 Ok(json!({"material_ids":missing.iter().map(|material| &material.material_id).collect::<Vec<_>>()}))
-            }).await?;
+            })
+            .await?;
         }
         for material in &missing {
             let (message, disconnected) = {
