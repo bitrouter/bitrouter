@@ -8,6 +8,8 @@ mod material_work;
 mod preparation_work;
 #[path = "core_execution/provider_work.rs"]
 mod provider_work;
+#[path = "core_execution/reconnect.rs"]
+mod reconnect;
 #[path = "core_execution/reconstruction.rs"]
 mod reconstruction;
 #[path = "core_execution/recovery.rs"]
@@ -1174,6 +1176,14 @@ async fn bind_app(
     app: Arc<App>,
     harness: Arc<dyn HarnessPort>,
 ) -> Result<CoreSession, Box<dyn std::error::Error>> {
+    bind_app_with_limits(app, harness, Limits::default()).await
+}
+
+async fn bind_app_with_limits(
+    app: Arc<App>,
+    harness: Arc<dyn HarnessPort>,
+    limits: Limits,
+) -> Result<CoreSession, Box<dyn std::error::Error>> {
     let tools = vec![HarnessTool {
         name: "read".into(),
         description: "Read a file".into(),
@@ -1208,7 +1218,7 @@ async fn bind_app(
             durable_head: DurableHead::default(),
             checkpoint: None,
             manifest,
-            limits: Limits::default(),
+            limits,
         },
         &caps,
         app,

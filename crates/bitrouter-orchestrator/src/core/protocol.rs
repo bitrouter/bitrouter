@@ -498,6 +498,26 @@ pub struct Restore {
     pub previous_owner_stopped: bool,
 }
 
+/// Authenticated evidence for an already admitted attempt. Importing it cannot
+/// create an execution intent, apply model output, or authorize any tool call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderAttemptEvidence {
+    pub run_id: String,
+    pub attempt_id: String,
+    pub report: bitrouter_sdk::language_model::native::NativeAttemptReport,
+    /// Original run's measured cumulative active time, if known. A provider's
+    /// elapsed duration alone cannot establish a concurrent run's active time.
+    pub active_ms: Option<u64>,
+}
+
+/// Bounded volatile observations for harness reconciliation, not durable ACKs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PendingProviderEvidence {
+    pub reports: Vec<ProviderAttemptEvidence>,
+    pub overflowed: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClientMessage {
@@ -538,6 +558,8 @@ pub enum Command {
     ToolResult(ToolResult),
     #[serde(rename = "tool.status")]
     ToolStatus(ToolObservation),
+    #[serde(rename = "model.evidence")]
+    ProviderEvidence(Box<ProviderAttemptEvidence>),
     #[serde(rename = "material.result")]
     Material {
         request_id: String,
@@ -579,7 +601,9 @@ impl ClientMessage {
             CoreError::rejected(ErrorCode::UnsupportedCapability, error.to_string())
         })?;
         let bound = match self.command {
-            Command::Bind(_) | Command::Restore(_) => limits.unacknowledged_bytes,
+            Command::Bind(_) | Command::Restore(_) | Command::ProviderEvidence(_) => {
+                limits.unacknowledged_bytes
+            }
             _ => limits.input_bytes,
         };
         if encoded.len() as u64 > bound {

@@ -9,6 +9,13 @@ use serde::{Deserialize, Serialize};
 use crate::core::protocol::{CoreError, ErrorCode};
 use crate::core::session::{AgentStatus, AgentTurn, ModelStep, SessionSnapshot};
 
+/// Frozen, credential-free admission retained after the original turn retires.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderAttemptSource {
+    pub attempt_index: u32,
+    pub route: bitrouter_sdk::language_model::native::NativeRoute,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CostWorkKind {
@@ -54,6 +61,11 @@ pub struct CostWork {
     /// Total expenditure remains unknown even when a token estimate is known.
     /// A successful operation, including a denied tool, is not a billing receipt.
     pub unknown_cost_reason: String,
+    #[serde(default)]
+    pub provider_source: Option<ProviderAttemptSource>,
+    /// Exact report commitment allows duplicate/conflict checks after retirement.
+    #[serde(default)]
+    pub outcome_sha256: Option<String>,
 }
 
 /// Present only for runs tracked from admission. Missing legacy run entries do
@@ -77,8 +89,19 @@ impl RunCostWork {
                 && prior.agent_turn_id == next.agent_turn_id
                 && prior.step_id == next.step_id
                 && prior.kind == next.kind
+                && (prior.provider_source.is_none()
+                    || prior.provider_source == next.provider_source)
                 && (prior.request_id.is_none() || prior.request_id == next.request_id);
-            let same_outcome = prior.state != CostWorkState::OutcomeRecorded || prior == &next;
+            // Old snapshots can acquire commitments from still-retained frozen
+            // steps, but existing commitments and monetary evidence cannot change.
+            let mut comparable = prior.clone();
+            if comparable.provider_source.is_none() {
+                comparable.provider_source = next.provider_source.clone();
+            }
+            if comparable.outcome_sha256.is_none() {
+                comparable.outcome_sha256 = next.outcome_sha256.clone();
+            }
+            let same_outcome = prior.state != CostWorkState::OutcomeRecorded || comparable == next;
             if !same_identity || !same_outcome {
                 return Err(CoreError::rejected(
                     ErrorCode::CheckpointConflict,
@@ -106,6 +129,8 @@ fn work(agent_id: &str, turn: &AgentTurn, step: &ModelStep, kind: CostWorkKind) 
         elapsed_ms: None,
         token_estimate: None,
         unknown_cost_reason: "cost_not_reported".into(),
+        provider_source: None,
+        outcome_sha256: None,
     }
 }
 
@@ -179,10 +204,19 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
             }
             for attempt in &step.attempts {
                 let mut entry = work(agent_id, turn, step, CostWorkKind::ProviderAttempt);
+                entry.provider_source = step.plan.as_ref().and_then(|plan| {
+                    plan.routes
+                        .get(attempt.index as usize)
+                        .map(|route| ProviderAttemptSource {
+                            attempt_index: attempt.index,
+                            route: route.clone(),
+                        })
+                });
                 if let Some(receipt) = &attempt.receipt {
                     entry.state = CostWorkState::OutcomeRecorded;
                     entry.token_estimate = Some(receipt.report.token_cost.clone());
                     entry.elapsed_ms = Some(receipt.report.elapsed_ms);
+                    entry.outcome_sha256 = Some(report_digest(&receipt.report)?);
                 }
                 ledger.record(attempt.attempt_id.clone(), entry)?;
                 for record in &attempt.provider_work {
@@ -230,6 +264,8 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                     elapsed_ms: None,
                     token_estimate: None,
                     unknown_cost_reason: "harness_cost_not_reported".into(),
+                    provider_source: None,
+                    outcome_sha256: None,
                 },
             )?;
         }
@@ -259,10 +295,25 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                 elapsed_ms: None,
                 token_estimate: None,
                 unknown_cost_reason: "harness_cost_not_reported".into(),
+                provider_source: None,
+                outcome_sha256: None,
             },
         )?;
     }
     Ok(())
+}
+
+pub(crate) fn report_digest(
+    report: &bitrouter_sdk::language_model::native::NativeAttemptReport,
+) -> Result<String, CoreError> {
+    serde_json::to_vec(report)
+        .map(|bytes| crate::core::checkpoint::sha256(&bytes))
+        .map_err(|_| {
+            CoreError::rejected(
+                ErrorCode::CheckpointConflict,
+                "attempt report cannot be encoded",
+            )
+        })
 }
 
 /// Pure context reconstruction still needs a durable intent before local work.

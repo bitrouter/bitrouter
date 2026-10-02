@@ -343,6 +343,10 @@ struct TransformCheckedControl {
 
 #[async_trait::async_trait]
 impl crate::language_model::native::NativeExecutionControl for TransformCheckedControl {
+    async fn provider_cancelled(&self) {
+        self.inner.provider_cancelled().await;
+    }
+
     async fn before_preparation_work(
         &self,
         work: &crate::language_model::native_preparation::NativePreparationWork,

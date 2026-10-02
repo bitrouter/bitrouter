@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration and tool reconciliation implemented; live reconnect, late provider evidence and queue/steering remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect and late provider evidence implemented; root queue/steering/release and remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -1534,9 +1534,10 @@ unstarted calls when the binding's workspace revision changes, including older
 snapshots without the new invocation field. Agent cancellation is separately
 retained in `cancellation_requested` at all cancellation entry points.
 
-This is the replacement-process path. Live same-owner transport/head reconnect,
-late provider evidence import, durable root queue/steering/release, the remaining
-crash/concurrency matrix, and C5/C6 remain open. No remote endpoint is introduced
+This is the replacement-process path. Live same-owner transport/head reconnect
+and late provider evidence are covered by the following increment. Durable root
+queue/steering/release, the remaining crash/concurrency matrix, and C5/C6 remain
+open. No remote endpoint is introduced
 by this change; full A01–A23 acceptance, final independent audit, PR and CI are
 still required.
 
@@ -1558,3 +1559,67 @@ Validation with Rust 1.95.0:
 - Independent review's three findings were fixed and re-reviewed with no
   remaining P1/P2 finding for this restoration increment. Full C4 and the final
   requirements audit remain open.
+
+## C4 same-owner reconnect and late provider evidence
+
+`CoreSession::reconnect(grant, durable_head)` reconciles the existing process
+after its authenticated host reconnects the harness port. The exact ownership
+grant must remain unchanged; another owner or process uses `restore`. The old
+driver and every retained SDK execution control must finish before reconnect can
+succeed. `Busy` includes detached SDK finalization after the driver is dropped.
+Controlled provider execution now observes its original disconnection token;
+cancellation still flows through attempt reporting and SDK settlement and never
+proves that an upstream operation was free or had no effect.
+
+The harness head must match the acknowledged local head or the exact retained
+pending batch. Reconnect adopts an already durable batch or resubmits its original
+identity and bytes. No replacement input or provider attempt is generated to
+resolve ACK loss. A complete committed model result can pass through ordinary
+output admission without a second provider call or settlement. Incomplete steps
+close as interrupted before any late evidence is imported. The next attempt has
+new step/attempt identities while existing budgets and cost exposure remain.
+
+`session.reconnected` persists the maximum of recorded and still-retained active
+time before reconstructing the activity timer. This includes preparation/count/
+validation work that finished after disconnect without an outcome checkpoint.
+Adopting a pending new root input starts its own timer. Material requests and tool
+cancellation may repeat with their original identities. An uncertain tool execute
+delivery without a definite result returns `RecoveryRequired` and needs explicit
+authenticated restoration/tool reconciliation; it is never blindly repeated.
+Detached delivery errors can close only their originating connection generation.
+
+`pending_provider_evidence()` exports a bounded, unacknowledged buffer for an
+authenticated harness to preserve before replacement. `provider_evidence(op_id,
+ProviderAttemptEvidence)` imports the corresponding `model.evidence` operation.
+Evidence contains the original run and attempt IDs, a complete `NativeAttemptReport`,
+and optional measured cumulative active time for the original run. The retained
+cost inventory freezes route/index/request provenance and exact outcome digests,
+including after the original turn retires. Imports reject foreign or conflicting
+reports and retain original cost ownership without charging a newer run. They
+never apply assistant output, execute tool calls, or repeat SDK settlement.
+
+Volatile reports and the pending checkpoint envelope share the unacknowledged
+byte bound. Overflow is explicit and blocks live reconnect until the harness
+performs replacement reconciliation; unknown costs are not converted to zero.
+Legacy archived attempts without frozen admission cannot authorize a new report.
+Evidence is visible as committed state only after its matching durable ACK.
+
+Independent review found and verified repairs for active-time loss, stranded
+delivery markers and stale detached sends. The reconnect regressions cover exact
+ACK retransmission/adoption, committed-output reuse, bounded late output without
+tool execution, buffer overflow, old-run evidence after root replacement,
+disconnected preparation time, abandoned drivers, SDK settlement, material retry,
+uncertain tool delivery and cancellation retry. Remote endpoints, root queue/
+steering/release, production harness conformance and the final A01–A23 audit remain
+pending.
+
+Validation with Rust 1.95.0:
+
+- Eleven new integration tests plus two existing reconnect/ACK regressions:
+  13 passed in the focused selection. The cancellation test covers both a live
+  driver and a previously abandoned driver with detached SDK finalization.
+- Workspace all-feature nextest: 3849 passed, 22 skipped, in 306.369 seconds.
+- Strict all-target/all-feature workspace clippy passed with `-D warnings`.
+- Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
+- Independent follow-up review confirmed all three findings were fixed and
+  found no remaining P1/P2 issue in this increment.

@@ -1785,7 +1785,18 @@ impl Pipeline {
                 runtime.begin_attempt();
             }
             let started = Instant::now();
-            let mut outcome = self.executor.execute(target, prompt, ctx).await;
+            let mut outcome = match attempt_control {
+                Some((control, _)) => tokio::select! {
+                    // A prior cancellation must not poll a new executor future.
+                    // Accepted work may still have unknown provider-side usage.
+                    biased;
+                    _ = control.provider_cancelled() => Err(BitrouterError::internal(
+                        "managed provider execution cancelled by durable authority",
+                    )),
+                    outcome = self.executor.execute(target, prompt, ctx) => outcome,
+                },
+                None => self.executor.execute(target, prompt, ctx).await,
+            };
             if let (Some(runtime), Ok(result)) = (&private_context, &mut outcome) {
                 runtime.seal_output(ctx, target, &mut result.result);
             }

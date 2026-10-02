@@ -27,61 +27,7 @@ impl CoreSession {
             state.manifest.workspace_revision != request.binding.manifest.workspace_revision;
         state.manifest = request.binding.manifest.clone();
         let sent_tools = reconcile_tools(&mut state, &request, workspace_changed)?;
-        let mut outputs = Vec::new();
-        let cancelled = state
-            .run
-            .as_ref()
-            .is_some_and(|run| run.cancellation.is_some());
-        for agent in state.agents.values_mut() {
-            let Some(turn) = &mut agent.turn else {
-                continue;
-            };
-            if let Some(step) = turn.steps.last_mut().filter(|step| !step.settled) {
-                if turn.status.terminal() {
-                    step.interrupted = true;
-                    step.settled = true;
-                    continue;
-                }
-                let output = step
-                    .attempts
-                    .last()
-                    .and_then(|attempt| attempt.receipt.as_ref())
-                    .and_then(|receipt| {
-                        receipt
-                            .report
-                            .result
-                            .as_ref()
-                            .map(|result| (receipt.report.request_id.clone(), result.clone()))
-                    });
-                if let Some((request_id, output)) = output {
-                    // Replay the ordinary output admission transition, never the
-                    // provider request. A complete receipt is durable evidence.
-                    outputs.push((
-                        agent.agent_id.clone(),
-                        step.step_id.clone(),
-                        request_id,
-                        output,
-                    ));
-                    if turn.status != AgentStatus::RecoveryRequired {
-                        turn.status = if cancelled || turn.cancellation_requested {
-                            AgentStatus::Cancelling
-                        } else {
-                            AgentStatus::ModelRunning
-                        };
-                    }
-                } else {
-                    step.interrupted = true;
-                    step.settled = true;
-                    if turn.status != AgentStatus::RecoveryRequired {
-                        turn.status = if cancelled || turn.cancellation_requested {
-                            AgentStatus::Cancelling
-                        } else {
-                            AgentStatus::Runnable
-                        };
-                    }
-                }
-            }
-        }
+        let outputs = resume_model_steps(&mut state);
         let binding = request.binding;
         let active_ms = state.run.as_ref().map_or(0, |run| run.active_ms);
         let session = Self {
@@ -95,11 +41,16 @@ impl CoreSession {
                     )?,
                     pending: None,
                     sent_tools,
+                    unresolved_tool_deliveries: BTreeSet::new(),
                     cancelled_tools: BTreeSet::new(),
                     sent_materials: BTreeSet::new(),
                     provisional_blocks: BTreeSet::new(),
                     disconnected: CancellationToken::new(),
+                    connection_generation: 0,
                     activity: Activity::restored(active_ms),
+                    model_controls: Vec::new(),
+                    provider_evidence: Default::default(),
+                    reconnecting: false,
                 }),
                 commits: Mutex::new(()),
                 driver: Mutex::new(()),
@@ -696,4 +647,85 @@ pub(super) fn artifacts(
                     .filter_map(|material| material.artifact.clone()),
             ),
     )
+}
+
+pub(super) fn resume_model_steps(
+    state: &mut SessionSnapshot,
+) -> Vec<(
+    String,
+    String,
+    String,
+    bitrouter_sdk::language_model::types::GenerateResult,
+)> {
+    let mut outputs = Vec::new();
+    let cancelled = state
+        .run
+        .as_ref()
+        .is_some_and(|run| run.cancellation.is_some());
+    for agent in state.agents.values_mut() {
+        let Some(turn) = &mut agent.turn else {
+            continue;
+        };
+        let unresolved_tools = turn.invocations.iter().any(|call| {
+            call.result
+                .as_ref()
+                .is_none_or(|result| result.status == ToolOutcome::EffectUnknown)
+        });
+        if let Some(step) = turn.steps.last_mut().filter(|step| !step.settled) {
+            if turn.status.terminal() {
+                step.interrupted = true;
+                step.settled = true;
+                continue;
+            }
+            // An abandoned driver can have durably marked this model step as
+            // requiring recovery. Verified quiescence resolves that blocker;
+            // it does not resolve any separate uncertain workspace effect.
+            if turn.status == AgentStatus::RecoveryRequired && !unresolved_tools {
+                turn.status = if cancelled || turn.cancellation_requested {
+                    AgentStatus::Cancelling
+                } else {
+                    AgentStatus::ModelRunning
+                };
+            }
+            let output = step
+                .attempts
+                .last()
+                .and_then(|attempt| attempt.receipt.as_ref())
+                .and_then(|receipt| {
+                    receipt
+                        .report
+                        .result
+                        .as_ref()
+                        .map(|result| (receipt.report.request_id.clone(), result.clone()))
+                });
+            if let Some((request_id, output)) = output {
+                // Replay the ordinary output admission transition, never the
+                // provider request. A complete receipt is durable evidence.
+                outputs.push((
+                    agent.agent_id.clone(),
+                    step.step_id.clone(),
+                    request_id,
+                    output,
+                ));
+                if turn.status != AgentStatus::RecoveryRequired {
+                    turn.status = if cancelled || turn.cancellation_requested {
+                        AgentStatus::Cancelling
+                    } else {
+                        AgentStatus::ModelRunning
+                    };
+                }
+            } else {
+                step.interrupted = true;
+                step.settled = true;
+                if turn.status != AgentStatus::RecoveryRequired {
+                    turn.status = if cancelled || turn.cancellation_requested {
+                        AgentStatus::Cancelling
+                    } else {
+                        AgentStatus::Runnable
+                    };
+                }
+            }
+        }
+    }
+    outputs
 }
