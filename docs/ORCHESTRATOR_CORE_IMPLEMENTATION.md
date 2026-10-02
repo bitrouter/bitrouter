@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared plans, worker allocation, capacity, reconstruction, hook revalidation, token/cache evidence, native continuation, durable cost work, settlement evidence and internal HTTP retry admission below; full protocol coverage and monetary accounting acceptance remain open |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -1387,3 +1387,94 @@ with Rust 1.95.0 passed:
 - Workspace all-feature nextest: 3819 passed, 22 skipped, in 286.399 seconds.
 - Strict all-target/all-feature workspace clippy passed without warnings.
 - Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
+
+## C3 preparation callback admission
+
+Managed App transforms and pipeline preparation now share the SDK request ID
+before the first transform runs. Each transform, pre-resolution hook,
+router-preparation hook, pre-request hook, named-router checker, model selector,
+router lookup and route hook has an acknowledged intent and outcome. The
+pipeline uses its existing callback order and implementations. Ordinary HTTP and
+unmanaged native calls have no preparation runtime and retain their existing
+behavior. Context reconstruction still uses its frozen validation contract and
+does not repeat preparation or model selection.
+
+Core records ordered `preparation_work` on the original model step and projects
+each callback into the run's retained cost inventory. Every intent rechecks
+source, run limits and turn identity; after its ACK, the live gate checks
+cancellation and current permissions again before invoking the callback. An
+already running callback can finish after cancellation, but its outcome must be
+acknowledged before another callback can start. There are at most 256 callbacks
+per step. App and pipeline callback indices have separate sequences; a pipeline
+callback cannot be followed by a new App transform. Input counting and final
+plan admission verify the same request identity and successful acknowledged
+preparation.
+
+Callback reports preserve actual duration and a controlled SDK failure category,
+without checker diagnostics, implementation names or input text. Active time
+tracks running callbacks and excludes both intent and outcome ACK waits. Work
+remains monetary `unknown`; callback completion is neither a zero bill nor proof
+of a model invocation. SDK cost lookup now includes request IDs established by
+preparation, even when a checker fails before a provider attempt or frozen plan.
+Harness material IDs remain excluded. Aggregate preparation and its callback
+records are overlapping coverage, not additive monetary charges.
+
+The current deterministic routing path adds no classifier or summarization model
+call. This callback observation contract does not authorize hidden model/tool
+dispatch inside trusted callbacks or automatically meter such nested work. Any
+future model-based preparation must enter managed model admission and consume
+the same run budget. Full recovery, remote parity and production-harness
+conformance remain required in C4–C6; the complete acceptance audit is still open.
+
+Independent review identified an ACK-time budget race: a different agent could
+reserve the final model attempt while a preparation intent waited for its ACK.
+The post-ACK preparation gate now checks remaining attempts under the same lock
+as source validation and dispatch activation. A deterministic two-agent
+regression queues the child's attempt behind the root's held ACK, then verifies
+that the root callback does not run. The normal already-reserved model-attempt
+path retains its prior dispatch semantics. Follow-up review found no remaining
+P1/P2 blocker. Reconstruction coverage also verifies that the rebuilt step has
+no second preparation sequence.
+
+Validation with Rust 1.95.0:
+
+- Workspace all-feature nextest: 3825 passed, 22 skipped, in 318.086 seconds.
+- Final preparation regressions: all six passed in 5.479 seconds. This final
+  run includes an equivalent borrowed-slice test assertion used to satisfy
+  strict clippy; production code is unchanged from the workspace run.
+- Strict all-target/all-feature workspace clippy passed without warnings.
+- Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
+- Earlier, all 113 then-current core execution tests passed; the subsequent
+  ten-test preparation/reconstruction selection also passed after the final
+  budget race and request-identity validation changes. An initial obsolete
+  single-entry preparation assertion was updated to cover callback exposure;
+  its failing run is not passing evidence.
+
+## C3 exit evidence and remaining stage boundaries
+
+This is an implementation-stage exit, not a declaration that A01–A23 or the
+requested end-to-end system is complete. Independent scope review checked the
+specification against the current routing, allocation, reconstruction and cost
+implementation. Optional classifiers/learning, all provider output types and
+full beta compatibility are not added prerequisites for C3. Unknown monetary
+evidence remains an explicit supported state, not an exact spending cap.
+
+| Requirement within C3 | Current implementation and executable evidence |
+| --- | --- |
+| Continue, reuse and fresh allocation with explicit overrides (A05/A07) | `core/allocation.rs`; `core_execution` tests for stable idle delegation, ambiguous fresh allocation, explicit spawn, follow-up, workspace provenance and activation after changed signals |
+| Immutable required context and feasible prepared input (A07/A08) | `core/routing.rs`, `core/signals.rs`, `core/reconstruction.rs`; capacity, input-count, required-material, stale-version and reconstruction regressions, including frozen revalidation and no repeated selection |
+| Decision → application → actual outcome identity (A09) | `ModelStep` decisions/applications/attempt receipts and allocation joins; fallback, worker reuse and reconstructed-plan assertions in `core_execution` and `orchestrator_core` |
+| Declared provider constraints and continuation support (A09/A22) | Production App/SDK loopback fixtures in `native_http/protocol_matrix.rs` and `native_http/private_context/`; four-by-four ordinary protocol comparison, authenticated private state, suffix/count parity, actual fallback and complete SSE bridge terminal/EOF evidence |
+| Cost provenance and auxiliary work ownership (A21) | `core_execution/accounting.rs`, `provider_work.rs`, `material_work.rs`, `preparation_work.rs` and `native_http/costs.rs`; retained unknown exposure, estimate/reported/reconciled separation, ACK barriers, internal retries, failed preparation and late original-run settlement |
+
+The table identifies supported in-process behavior and current local fixtures.
+It does not turn ordinary HTTP protocol comparison into managed remote parity,
+serialized snapshots into restored sessions, or loopback providers into live
+provider/harness acceptance. Those distinctions remain part of final acceptance.
+
+The next stage is C4: validate and restore committed snapshots/journal heads,
+reconcile uncertain provider and tool work with epoch fencing, preserve root
+queues/steering/cancellation, and exercise the crash/ACK-loss matrix. C5 adds the
+authenticated harness channel and managed Responses mapping over those same
+operations. C6 must supply the production harness, independent client, real-task
+and pressure evidence. Final A01–A23 audit, PR and CI remain required.

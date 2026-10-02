@@ -700,8 +700,15 @@ async fn preparation_rejection_keeps_unknown_cost_without_provider_attempt() -> 
     assert_eq!(run.status, RunStatus::Failed);
     assert_eq!(run.model_attempts, 0);
     let ledger = &state.cost_work[&run.run_id];
-    assert_eq!(ledger.work.len(), 1);
-    let preparation = ledger.work.values().next().ok_or("preparation")?;
+    assert!(ledger.work.values().all(|work| matches!(
+        work.kind,
+        CostWorkKind::Preparation | CostWorkKind::PreparationCallback
+    )));
+    let preparation = ledger
+        .work
+        .values()
+        .find(|work| work.kind == CostWorkKind::Preparation)
+        .ok_or("preparation")?;
     assert_eq!(preparation.kind, CostWorkKind::Preparation);
     assert_eq!(preparation.state, CostWorkState::OutcomeRecorded);
     assert_eq!(preparation.unknown_cost_reason, "cost_not_reported");

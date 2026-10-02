@@ -11,6 +11,10 @@ use futures::{FutureExt, StreamExt};
 use futures_core::Stream;
 use tracing::Instrument;
 
+use super::native_preparation::{
+    NativePreparationRuntime, NativePreparationWorkKind, observe_pipeline,
+    runtime as preparation_runtime,
+};
 use crate::error::{BitrouterError, Result};
 use crate::extension::request_check::{Decision, Input};
 use crate::language_model::context::PipelineContext;
@@ -607,15 +611,8 @@ impl Pipeline {
         run_server_tools: bool,
         control: Option<Arc<dyn NativeExecutionControl>>,
     ) -> Result<PreparedPipelineResponse> {
-        let PreparedEntry { mut ctx, chain } = self
-            .prepare_entry(
-                req,
-                false,
-                control
-                    .as_deref()
-                    .map(NativeExecutionControl::model_selection),
-            )
-            .await?;
+        let PreparedEntry { mut ctx, chain } =
+            self.prepare_entry(req, false, control.clone()).await?;
 
         if let Some(control) = &control {
             ctx.insert_extension(Arc::new(super::native_work::NativeWorkRuntime::new(
@@ -1218,9 +1215,15 @@ impl Pipeline {
         &self,
         req: PipelineRequest,
         streamed: bool,
-        selection: Option<NativeModelSelection>,
+        control: Option<Arc<dyn NativeExecutionControl>>,
     ) -> Result<PreparedEntry> {
+        let selection = control
+            .as_deref()
+            .map(NativeExecutionControl::model_selection);
         let mut ctx = PipelineContext::new(req);
+        if let Some(control) = control {
+            ctx.insert_extension(Arc::new(NativePreparationRuntime::new(control)));
+        }
         if selection.is_some() {
             ctx.insert_extension(Arc::new(super::native::NativeManagedRequest));
             ctx.insert_extension(Arc::new(
@@ -1231,7 +1234,11 @@ impl Pipeline {
         }
         self.observe_start(&ctx).await;
 
-        match self.prepare_entry_stages(&mut ctx, selection).await {
+        let prepared = self.prepare_entry_stages(&mut ctx, selection).await;
+        if let Some(runtime) = preparation_runtime(&ctx) {
+            runtime.finish();
+        }
+        match prepared {
             Ok(chain) => {
                 self.observe_after(Phase::Route, &ctx).await;
                 log_request_received(&ctx, chain.first(), streamed);
@@ -1336,7 +1343,14 @@ impl Pipeline {
 
     async fn run_pre_resolution(&self, ctx: &mut PipelineContext) -> Result<()> {
         for hook in &self.pre_resolution_hooks {
-            match hook.check(ctx).await? {
+            match observe_pipeline(
+                preparation_runtime(ctx),
+                ctx.request_id().into(),
+                NativePreparationWorkKind::PreResolutionHook,
+                hook.check(ctx),
+            )
+            .await?
+            {
                 HookDecision::Allow => continue,
                 HookDecision::Deny(reason) => return Err(reason.into()),
             }
@@ -1349,13 +1363,23 @@ impl Pipeline {
         ctx: &mut PipelineContext,
         checked_selector: Option<&str>,
     ) -> Result<()> {
-        self.run_admitted_hooks(ctx, &self.pre_request_hooks, checked_selector)
-            .await
+        self.run_admitted_hooks(
+            ctx,
+            &self.pre_request_hooks,
+            checked_selector,
+            NativePreparationWorkKind::PreRequestHook,
+        )
+        .await
     }
 
     async fn run_router_preparation(&self, ctx: &mut PipelineContext) -> Result<()> {
-        self.run_admitted_hooks(ctx, &self.router_preparation_hooks, None)
-            .await
+        self.run_admitted_hooks(
+            ctx,
+            &self.router_preparation_hooks,
+            None,
+            NativePreparationWorkKind::RouterPreparationHook,
+        )
+        .await
     }
 
     async fn run_admitted_hooks(
@@ -1363,9 +1387,16 @@ impl Pipeline {
         ctx: &mut PipelineContext,
         hooks: &[Arc<dyn PreRequestHook>],
         checked_selector: Option<&str>,
+        kind: NativePreparationWorkKind,
     ) -> Result<()> {
         for hook in hooks {
-            let decision = hook.check(ctx).await?;
+            let decision = observe_pipeline(
+                preparation_runtime(ctx),
+                ctx.request_id().into(),
+                kind,
+                hook.check(ctx),
+            )
+            .await?;
             match decision {
                 HookDecision::Allow => {
                     if checked_selector.is_some_and(|selector| ctx.model() != selector) {
@@ -1382,7 +1413,13 @@ impl Pipeline {
 
     async fn resolve_binding(&self, ctx: &mut PipelineContext) -> Result<ResolvedRequestBinding> {
         let resolved_selector = ctx.model().to_owned();
-        let mut resolution = self.routing_table.resolve_model(ctx.model()).await?;
+        let mut resolution = observe_pipeline(
+            preparation_runtime(ctx),
+            ctx.request_id().into(),
+            NativePreparationWorkKind::RouterLookup,
+            self.routing_table.resolve_model(ctx.model()),
+        )
+        .await?;
         if resolution.request_checks.len() > MAX_REQUEST_CHECKS_PER_ROUTER {
             return Err(BitrouterError::internal(
                 "named router exceeds the maximum of 16 request checks",
@@ -1414,7 +1451,13 @@ impl Pipeline {
         mut binding: ResolvedRequestBinding,
     ) -> Result<ResolvedRequestBinding> {
         if ctx.model() != binding.resolved_selector {
-            let effective = self.routing_table.resolve_model(ctx.model()).await?;
+            let effective = observe_pipeline(
+                preparation_runtime(ctx),
+                ctx.request_id().into(),
+                NativePreparationWorkKind::RouterLookup,
+                self.routing_table.resolve_model(ctx.model()),
+            )
+            .await?;
             if binding.request_checks.is_empty() && !effective.request_checks.is_empty() {
                 return Err(BitrouterError::internal(
                     "a selector rewrite cannot introduce request checks after the ingress binding is frozen",
@@ -1463,35 +1506,44 @@ impl Pipeline {
                 .map_err(|_| BitrouterError::BadRequest {
                     message: "request exceeds the configured checker input limit".to_string(),
                 })?;
-            let result = runner
-                .check(binding.clone(), Input { content, coverage })
-                .await
-                .and_then(|result| {
-                    result.decision.validate().map_err(|_| CheckerFailure {
-                        kind: CheckerFailureKind::InvalidResponse,
-                        detail: Some("invalid_decision".to_owned()),
-                    })?;
-                    Ok(result)
-                });
-            match result {
-                Ok(CheckerResult {
-                    decision: Decision::Allow,
-                    revision: _,
-                }) => {}
-                Ok(CheckerResult {
-                    decision: Decision::Deny { reason_code: _ },
-                    revision: _,
-                }) => {
-                    return Err(BitrouterError::Forbidden(
-                        "request denied by configured checker".to_string(),
-                    ));
-                }
-                Err(_) => {
-                    return Err(BitrouterError::internal(
-                        "configured request checker failed closed",
-                    ));
-                }
-            }
+            observe_pipeline(
+                preparation_runtime(ctx),
+                ctx.request_id().into(),
+                NativePreparationWorkKind::RequestCheck,
+                async {
+                    let result = runner
+                        .check(binding.clone(), Input { content, coverage })
+                        .await
+                        .and_then(|result| {
+                            result.decision.validate().map_err(|_| CheckerFailure {
+                                kind: CheckerFailureKind::InvalidResponse,
+                                detail: Some("invalid_decision".to_owned()),
+                            })?;
+                            Ok(result)
+                        });
+                    match result {
+                        Ok(CheckerResult {
+                            decision: Decision::Allow,
+                            revision: _,
+                        }) => {}
+                        Ok(CheckerResult {
+                            decision: Decision::Deny { reason_code: _ },
+                            revision: _,
+                        }) => {
+                            return Err(BitrouterError::Forbidden(
+                                "request denied by configured checker".to_string(),
+                            ));
+                        }
+                        Err(_) => {
+                            return Err(BitrouterError::internal(
+                                "configured request checker failed closed",
+                            ));
+                        }
+                    }
+                    Ok(())
+                },
+            )
+            .await?;
         }
         Ok(())
     }
@@ -1582,9 +1634,13 @@ impl Pipeline {
             && let Some(policy) = resolution.policy.as_deref()
         {
             for selector in &self.model_selectors {
-                selector
-                    .select_variant(policy, resolution.variant.as_deref(), ctx)
-                    .await?;
+                observe_pipeline(
+                    preparation_runtime(ctx),
+                    ctx.request_id().into(),
+                    NativePreparationWorkKind::ModelSelection,
+                    selector.select_variant(policy, resolution.variant.as_deref(), ctx),
+                )
+                .await?;
             }
         }
 
@@ -1600,10 +1656,14 @@ impl Pipeline {
         // Carry the inbound protocol so the table can prefer a native,
         // same-protocol upstream for each chosen target.
         prefs.inbound_protocol = ctx.inbound_protocol();
-        let mut chain = self
-            .routing_table
-            .route_resolved(ctx.model(), &prefs, ctx.caller())
-            .await?;
+        let mut chain = observe_pipeline(
+            preparation_runtime(ctx),
+            ctx.request_id().into(),
+            NativePreparationWorkKind::RouterLookup,
+            self.routing_table
+                .route_resolved(ctx.model(), &prefs, ctx.caller()),
+        )
+        .await?;
         let fixed_routes = (selection == Some(NativeModelSelection::Fixed)).then(|| {
             chain
                 .iter()
@@ -1612,7 +1672,13 @@ impl Pipeline {
         });
         let selected_model = ctx.model().to_owned();
         for hook in &self.route_hooks {
-            hook.resolve(&mut chain, ctx).await?;
+            observe_pipeline(
+                preparation_runtime(ctx),
+                ctx.request_id().into(),
+                NativePreparationWorkKind::RouteHook,
+                hook.resolve(&mut chain, ctx),
+            )
+            .await?;
         }
         if selection.is_some()
             && ctx

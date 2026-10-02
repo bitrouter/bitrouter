@@ -45,7 +45,12 @@ pub(crate) fn request_ids(ledger: &RunCostWork) -> BTreeSet<String> {
     ledger
         .work
         .values()
-        .filter(|work| work.kind == CostWorkKind::ProviderAttempt)
+        .filter(|work| {
+            matches!(
+                work.kind,
+                CostWorkKind::ProviderAttempt | CostWorkKind::PreparationCallback
+            )
+        })
         .filter_map(|work| work.request_id.clone())
         .collect()
 }

@@ -191,8 +191,31 @@ impl App {
             == crate::language_model::types::ReasoningEffortSource::Caller)
             .then_some(prompt.params.reasoning_effort)
             .flatten();
-        let (mut prompt, original_model) =
-            prepare_model_prompt(prompt, &headers, &self.prompt_transforms);
+        let mut prompt = prompt;
+        prompt.model = requested_model.clone();
+        let mut request = PipelineRequest::new(requested_model.clone(), caller, prompt);
+        for (index, transform) in self.prompt_transforms.iter().enumerate() {
+            use crate::language_model::native_preparation::{
+                NativePreparationWork, NativePreparationWorkKind, observe,
+            };
+            let work_index = u32::try_from(index).map_err(|_| {
+                crate::error::BitrouterError::internal("prompt transform index exhausted")
+            })?;
+            observe(
+                control.as_ref(),
+                NativePreparationWork {
+                    request_id: request.request_id.clone(),
+                    kind: NativePreparationWorkKind::PromptTransform,
+                    work_index,
+                },
+                async {
+                    transform.apply_with_headers(&mut request.prompt, &headers);
+                    Ok(())
+                },
+            )
+            .await?;
+        }
+        let prompt = &mut request.prompt;
         if (control.model_selection() == crate::language_model::native::NativeModelSelection::Fixed
             && prompt.model != requested_model)
             || requested_effort.is_some_and(|effort| prompt.params.reasoning_effort != Some(effort))
@@ -205,8 +228,7 @@ impl App {
             prompt.params.reasoning_effort_source =
                 crate::language_model::types::ReasoningEffortSource::Caller;
         }
-        let mut request = PipelineRequest::new(prompt.model.clone(), caller, prompt);
-        request.original_model = original_model;
+        request.model = prompt.model.clone();
         let control = Arc::new(TransformCheckedControl {
             inner: control,
             transforms: self.prompt_transforms.clone(),
@@ -321,6 +343,18 @@ struct TransformCheckedControl {
 
 #[async_trait::async_trait]
 impl crate::language_model::native::NativeExecutionControl for TransformCheckedControl {
+    async fn before_preparation_work(
+        &self,
+        work: &crate::language_model::native_preparation::NativePreparationWork,
+    ) -> Result<()> {
+        self.inner.before_preparation_work(work).await
+    }
+    async fn after_preparation_work(
+        &self,
+        report: crate::language_model::native_preparation::NativePreparationWorkReport,
+    ) -> Result<()> {
+        self.inner.after_preparation_work(report).await
+    }
     fn model_selection(&self) -> crate::language_model::native::NativeModelSelection {
         self.inner.model_selection()
     }

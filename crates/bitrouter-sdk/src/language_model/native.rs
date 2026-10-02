@@ -290,6 +290,23 @@ pub struct NativeAttemptReport {
 /// Per-request durable controls supplied by a native embedding runtime.
 #[async_trait]
 pub trait NativeExecutionControl: Send + Sync {
+    /// Commit callback intent and recheck live source, cancellation and limits.
+    async fn before_preparation_work(
+        &self,
+        _work: &super::native_preparation::NativePreparationWork,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Record success/failure even after cancellation; a failed ACK stops the
+    /// next preparation callback and all dependent model execution.
+    async fn after_preparation_work(
+        &self,
+        _report: super::native_preparation::NativePreparationWorkReport,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Fixed selection still resolves aliases and provider fallback, but skips
     /// effective-model policy. Explicit effort remains caller-owned in either mode.
     fn model_selection(&self) -> NativeModelSelection {
