@@ -1722,3 +1722,13 @@ remote API or production-harness acceptance.
 - Rust 1.99 workspace all-feature nextest passed: 3862 passed, 22 skipped, in
   305.174 seconds, using one test thread.
 - Formatting and diff checks passed.
+
+The subsequent CI run passed compilation and macOS tests, but its Ubuntu
+workspace test job exceeded the five-second final completion watchdog in
+`implicit_assignment_cycles_reject_before_acceptance`. That check executes five
+agent turns with durable checkpoints; its cycle-rejection and unchanged-head
+assertions had already passed. The watchdog is now 30 seconds, with all graph
+and completion assertions retained. Independent review found no removed timing
+requirement or correctness coverage. The targeted regression passed, then Rust
+1.99 workspace all-feature nextest with four test threads passed: 3862 passed,
+22 skipped, in 79.701 seconds. Strict clippy, formatting and diff checks passed.
