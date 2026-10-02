@@ -238,18 +238,9 @@ pub struct Administration {
     pub routing: Arc<ConfigRoutingTable>,
     pub policy: Arc<PolicyRuntime>,
     pub observe: Arc<dyn ObserveStatusProvider>,
-    /// Daemon-owned request-check runtime. Absent only for limited embeddings
-    /// that cannot answer process-local checker or receipt inspection.
-    pub request_checks: Option<Arc<crate::request_checks::RequestCheckRuntime>>,
 }
 
 impl Administration {
-    fn request_checks(&self) -> Result<&Arc<crate::request_checks::RequestCheckRuntime>> {
-        self.request_checks
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("request checks are unavailable on this daemon"))
-    }
-
     pub fn providers(&self) -> ProvidersReport {
         providers(&self.routing.snapshot_config(), "live")
     }
@@ -269,55 +260,6 @@ impl Administration {
             PolicyView::Disk => disk_policy(&self.source).await?,
         };
         report.selected(input.name.as_deref())
-    }
-
-    pub fn checks(
-        &self,
-        config_state: Option<crate::reload::ConfigurationState>,
-    ) -> Result<crate::actions::checks::ChecksReport> {
-        let runtime = self.request_checks()?;
-        let retention = runtime.receipts().list(0);
-        Ok(crate::actions::checks::ChecksReport {
-            resolved_via: "running".into(),
-            config_state,
-            receipt_retention: crate::actions::checks::ReceiptRetention {
-                incarnation_id: retention.incarnation_id,
-                capacity: retention.capacity,
-                completed_ttl_secs: retention.completed_ttl_secs,
-                health: retention.health,
-            },
-            checkers: runtime.configured(),
-        })
-    }
-
-    pub async fn checks_probe(
-        &self,
-        checker: &str,
-    ) -> Result<crate::actions::checks::CheckerProbeReport> {
-        validate_identifier(checker)?;
-        Ok(crate::actions::checks::CheckerProbeReport::new(
-            self.request_checks()?.probe(checker).await,
-        ))
-    }
-
-    pub fn check_receipts(
-        &self,
-        limit: usize,
-    ) -> Result<bitrouter_sdk::language_model::receipts::RequestReceiptList> {
-        crate::actions::checks::validate_receipt_limit(limit)?;
-        Ok(self.request_checks()?.receipts().list(limit))
-    }
-
-    pub fn check_receipt(
-        &self,
-        request_id: &str,
-        incarnation: Option<&str>,
-    ) -> Result<bitrouter_sdk::language_model::receipts::RequestReceiptLookup> {
-        crate::actions::checks::validate_receipt_lookup(request_id, incarnation)?;
-        Ok(self
-            .request_checks()?
-            .receipts()
-            .get(request_id, incarnation))
     }
 }
 

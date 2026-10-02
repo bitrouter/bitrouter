@@ -241,6 +241,27 @@ pub enum AgentLeaseIntent {
     Attach,
 }
 
+/// Code launcher actions for the currently selected supervised run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentDeckCommand {
+    Open,
+    Reply,
+    New,
+    Attach,
+    Peek,
+    ReviewPermission,
+    Takeover,
+    Cancel,
+    Stop,
+    MarkReviewed,
+    Detach,
+    Filter,
+    ToggleStopped,
+    Search,
+    Copy,
+    Export,
+}
+
 /// Typed work for the application/supervisor client. No variant performs work
 /// inside this crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -386,6 +407,8 @@ impl AgentEffect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentAction {
     Event(Event),
+    #[cfg(test)]
+    TestLegacyKey(KeyCode),
     LeaseAcquired {
         run_id: String,
         intent: AgentLeaseIntent,
@@ -542,6 +565,159 @@ pub struct AgentDeckState {
 }
 
 impl AgentDeckState {
+    /// Invoke a named Code action through the same guarded paths as the deck.
+    pub fn command(
+        &mut self,
+        command: AgentDeckCommand,
+        foreground_permission_pending: bool,
+    ) -> Vec<AgentEffect> {
+        match command {
+            AgentDeckCommand::Open => {
+                if self.is_collapsed() {
+                    self.toggle();
+                }
+                Vec::new()
+            }
+            AgentDeckCommand::Reply => self.begin_reply(foreground_permission_pending),
+            AgentDeckCommand::New => {
+                if self.mutations_blocked(foreground_permission_pending) {
+                    return Vec::new();
+                }
+                let target = self
+                    .default_new_run_target()
+                    .or_else(|| self.snapshot.new_run_target.clone())
+                    .unwrap_or_else(|| NewAgentRunTarget {
+                        agent: String::new(),
+                        directory: String::new(),
+                        route: None,
+                        conflict: None,
+                    });
+                self.set_new_run_target(target);
+                self.new_run_focus = NewRunFocus::Prompt;
+                self.surface = AgentSurface::NewRun;
+                Vec::new()
+            }
+            AgentDeckCommand::Attach => self.begin_attach(foreground_permission_pending),
+            AgentDeckCommand::Peek => {
+                if self.selected_run().is_some() {
+                    self.surface = AgentSurface::Peek;
+                }
+                Vec::new()
+            }
+            AgentDeckCommand::ReviewPermission => {
+                if let AgentSurface::Inspector(inspector) = &mut self.surface {
+                    if foreground_permission_pending {
+                        self.notice = Some("Resolve the foreground permission first".to_string());
+                    } else if matches!(&inspector.run.attention, AgentAttention::Permission(_)) {
+                        inspector.permission_focused = true;
+                        inspector.permission_selected = None;
+                        inspector.permission_scroll = 0;
+                    }
+                    Vec::new()
+                } else {
+                    self.begin_permission(foreground_permission_pending)
+                }
+            }
+            AgentDeckCommand::Takeover => {
+                self.begin_takeover(foreground_permission_pending);
+                Vec::new()
+            }
+            AgentDeckCommand::Cancel => {
+                self.begin_confirmation(AgentLeaseIntent::Cancel, foreground_permission_pending)
+            }
+            AgentDeckCommand::Stop => {
+                self.begin_confirmation(AgentLeaseIntent::Stop, foreground_permission_pending)
+            }
+            AgentDeckCommand::MarkReviewed => self.begin_confirmation(
+                AgentLeaseIntent::MarkReviewed,
+                foreground_permission_pending,
+            ),
+            AgentDeckCommand::Detach => self.f5(),
+            AgentDeckCommand::Filter => {
+                self.filtering = true;
+                Vec::new()
+            }
+            AgentDeckCommand::ToggleStopped => {
+                self.show_stopped = !self.show_stopped;
+                self.ensure_selection();
+                Vec::new()
+            }
+            AgentDeckCommand::Search => {
+                if let AgentSurface::Inspector(inspector) = &mut self.surface {
+                    inspector.searching = true;
+                }
+                Vec::new()
+            }
+            AgentDeckCommand::Copy => match &self.surface {
+                AgentSurface::Inspector(inspector) => vec![AgentEffect::Copy {
+                    text: inspector.content(),
+                }],
+                _ => Vec::new(),
+            },
+            AgentDeckCommand::Export => match &self.surface {
+                AgentSurface::Inspector(inspector) => vec![AgentEffect::Export {
+                    run_id: inspector.run.run_id.clone(),
+                    content: inspector.content(),
+                }],
+                _ => Vec::new(),
+            },
+        }
+    }
+
+    /// Explain why a launcher row cannot currently act on the selected run.
+    pub fn command_unavailable(
+        &self,
+        command: AgentDeckCommand,
+        foreground_permission_pending: bool,
+    ) -> Option<&'static str> {
+        if matches!(command, AgentDeckCommand::Open) {
+            return None;
+        }
+        if matches!(command, AgentDeckCommand::Detach) {
+            return (!self.is_inspector()).then_some("No attached run to detach");
+        }
+        if matches!(
+            command,
+            AgentDeckCommand::Filter | AgentDeckCommand::ToggleStopped
+        ) {
+            return (!matches!(self.surface, AgentSurface::List))
+                .then_some("Open the background run list first");
+        }
+        if matches!(
+            command,
+            AgentDeckCommand::Search | AgentDeckCommand::Copy | AgentDeckCommand::Export
+        ) {
+            return (!self.is_inspector()).then_some("Attach a run inspector first");
+        }
+        if foreground_permission_pending
+            && matches!(
+                command,
+                AgentDeckCommand::Reply
+                    | AgentDeckCommand::New
+                    | AgentDeckCommand::Attach
+                    | AgentDeckCommand::Takeover
+                    | AgentDeckCommand::Cancel
+                    | AgentDeckCommand::Stop
+                    | AgentDeckCommand::MarkReviewed
+                    | AgentDeckCommand::ReviewPermission
+            )
+        {
+            return Some("Resolve the foreground permission first");
+        }
+        if matches!(command, AgentDeckCommand::New) {
+            return None;
+        }
+        let Some(run) = self.selected_run() else {
+            return Some("Select a background run first");
+        };
+        if matches!(command, AgentDeckCommand::ReviewPermission)
+            && !matches!(run.attention, AgentAttention::Permission(_))
+        {
+            return Some("Selected run has no permission to review");
+        }
+        None
+    }
+
     pub fn new(mode: AgentDeckMode, client_id: impl Into<String>) -> Self {
         let surface = match mode {
             AgentDeckMode::Inline => AgentSurface::Collapsed,
@@ -612,6 +788,59 @@ impl AgentDeckState {
 
     pub fn is_inspector(&self) -> bool {
         matches!(self.surface, AgentSurface::Inspector(_))
+    }
+
+    /// Whether Code may consume a leading slash for its command launcher.
+    /// Text fields keep literal slashes away from their first byte unchanged.
+    pub fn slash_opens_commands(&self) -> bool {
+        match &self.surface {
+            AgentSurface::Reply { run_id } => self
+                .reply_drafts
+                .get(run_id)
+                .is_none_or(|draft| draft.cursor_byte() == 0),
+            AgentSurface::NewRun => match self.new_run_focus {
+                NewRunFocus::Agent => self.new_run_target_editors.agent.cursor_byte() == 0,
+                NewRunFocus::Directory => self.new_run_target_editors.directory.cursor_byte() == 0,
+                NewRunFocus::Route => self.new_run_target_editors.route.cursor_byte() == 0,
+                NewRunFocus::Prompt => self.new_run_draft.cursor_byte() == 0,
+            },
+            AgentSurface::List => !self.filtering,
+            AgentSurface::Inspector(inspector) => !inspector.searching,
+            AgentSurface::Peek
+            | AgentSurface::Permission { .. }
+            | AgentSurface::Confirm { .. }
+            | AgentSurface::TakeoverConfirm { .. }
+            | AgentSurface::ExitConfirm { .. } => true,
+            AgentSurface::Collapsed => false,
+        }
+    }
+
+    /// Whether the current inline deck focus is an editable text field.
+    pub fn slash_targets_text(&self) -> bool {
+        matches!(
+            self.surface,
+            AgentSurface::Reply { .. } | AgentSurface::NewRun
+        )
+    }
+
+    /// Insert the escape form `//` as one literal slash in the focused field.
+    pub fn insert_literal_slash(&mut self) {
+        match &self.surface {
+            AgentSurface::Reply { run_id } => {
+                self.reply_drafts
+                    .entry(run_id.clone())
+                    .or_default()
+                    .paste("/");
+            }
+            AgentSurface::NewRun => {
+                if self.new_run_focus == NewRunFocus::Prompt {
+                    self.new_run_draft.paste("/");
+                } else {
+                    self.paste_new_run_target("/");
+                }
+            }
+            _ => {}
+        }
     }
 
     pub fn is_collapsed(&self) -> bool {
@@ -855,6 +1084,48 @@ impl AgentDeckState {
     ) -> Vec<AgentEffect> {
         match action {
             AgentAction::Event(event) => self.event(event, foreground_permission_pending),
+            #[cfg(test)]
+            AgentAction::TestLegacyKey(code) => {
+                let command = match (&self.surface, code) {
+                    (AgentSurface::Collapsed, KeyCode::F(5)) => Some(AgentDeckCommand::Open),
+                    (AgentSurface::List, KeyCode::F(5)) => Some(AgentDeckCommand::Detach),
+                    (AgentSurface::List, KeyCode::Char('x' | 'X')) => {
+                        Some(AgentDeckCommand::ToggleStopped)
+                    }
+                    (AgentSurface::List, KeyCode::Char('/')) => Some(AgentDeckCommand::Filter),
+                    (AgentSurface::List, KeyCode::Char(' ')) => Some(AgentDeckCommand::Peek),
+                    (AgentSurface::List | AgentSurface::Peek, KeyCode::Char('r' | 'R')) => {
+                        Some(AgentDeckCommand::Reply)
+                    }
+                    (AgentSurface::List, KeyCode::Char('n' | 'N')) => Some(AgentDeckCommand::New),
+                    (AgentSurface::List | AgentSurface::Peek, KeyCode::Char('c' | 'C')) => {
+                        Some(AgentDeckCommand::Cancel)
+                    }
+                    (AgentSurface::List | AgentSurface::Peek, KeyCode::Char('m' | 'M')) => {
+                        Some(AgentDeckCommand::MarkReviewed)
+                    }
+                    (AgentSurface::List | AgentSurface::Peek, KeyCode::Char('s' | 'S')) => {
+                        Some(AgentDeckCommand::Stop)
+                    }
+                    (AgentSurface::List | AgentSurface::Peek, KeyCode::Char('t' | 'T')) => {
+                        Some(AgentDeckCommand::Takeover)
+                    }
+                    (AgentSurface::Peek, KeyCode::F(2)) => Some(AgentDeckCommand::ReviewPermission),
+                    (AgentSurface::Inspector(_), KeyCode::F(2)) => {
+                        Some(AgentDeckCommand::ReviewPermission)
+                    }
+                    (AgentSurface::Inspector(_), KeyCode::F(5)) => Some(AgentDeckCommand::Detach),
+                    _ => None,
+                };
+                if let Some(command) = command {
+                    self.command(command, foreground_permission_pending)
+                } else {
+                    self.event(
+                        Event::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+                        foreground_permission_pending,
+                    )
+                }
+            }
             AgentAction::LeaseAcquired {
                 run_id,
                 intent,
@@ -965,7 +1236,7 @@ impl AgentDeckState {
         let Some(key) = pressed(&event) else {
             return Vec::new();
         };
-        if key.code == KeyCode::F(5) {
+        if key.code == KeyCode::F(5) && self.mode == AgentDeckMode::Standalone {
             return self.f5();
         }
         if matches!(self.surface, AgentSurface::Inspector(_)) {
@@ -1032,6 +1303,30 @@ impl AgentDeckState {
     }
 
     fn list_key(&mut self, key: KeyEvent, foreground_permission_pending: bool) -> Vec<AgentEffect> {
+        if self.mode == AgentDeckMode::Inline
+            && matches!(
+                key.code,
+                KeyCode::Char(
+                    '/' | 'x'
+                        | 'X'
+                        | ' '
+                        | 'r'
+                        | 'R'
+                        | 'n'
+                        | 'N'
+                        | 'c'
+                        | 'C'
+                        | 'm'
+                        | 'M'
+                        | 's'
+                        | 'S'
+                        | 't'
+                        | 'T'
+                )
+            )
+        {
+            return Vec::new();
+        }
         match key.code {
             KeyCode::Char('c')
                 if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1103,6 +1398,15 @@ impl AgentDeckState {
     }
 
     fn peek_key(&mut self, key: KeyEvent, foreground_permission_pending: bool) -> Vec<AgentEffect> {
+        if self.mode == AgentDeckMode::Inline
+            && matches!(
+                key.code,
+                KeyCode::Char(' ' | 'r' | 'R' | 'c' | 'C' | 'm' | 'M' | 's' | 'S' | 't' | 'T')
+                    | KeyCode::F(2)
+            )
+        {
+            return Vec::new();
+        }
         match key.code {
             KeyCode::Char(' ') | KeyCode::Esc => self.surface = AgentSurface::List,
             KeyCode::Char('r') | KeyCode::Char('R') => {
@@ -1275,7 +1579,7 @@ impl AgentDeckState {
     ) -> Vec<AgentEffect> {
         if foreground_permission_pending {
             self.surface = AgentSurface::Peek;
-            self.notice = Some("Foreground permission waiting · F2 returns to it".to_string());
+            self.notice = Some("Foreground permission waiting · / to review it".to_string());
             return Vec::new();
         }
         let Some(permission) = self.permission_for(run_id, permission_id).cloned() else {
@@ -1497,6 +1801,7 @@ impl AgentDeckState {
         key: KeyEvent,
         foreground_permission_pending: bool,
     ) -> Vec<AgentEffect> {
+        let standalone = self.mode == AgentDeckMode::Standalone;
         let AgentSurface::Inspector(inspector) = &mut self.surface else {
             return Vec::new();
         };
@@ -1505,7 +1810,7 @@ impl AgentDeckState {
             inspector.permission_selected = None;
             inspector.permission_scroll = 0;
             self.notice = Some(
-                "Foreground permission waiting · background selection cleared · F5 return"
+                "Foreground permission waiting · background selection cleared · / to return"
                     .to_string(),
             );
             return Vec::new();
@@ -1619,29 +1924,32 @@ impl AgentDeckState {
             }
             KeyCode::Home => inspector.scroll = 0,
             KeyCode::End => inspector.scroll = inspector.last_content_line(),
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('f') if standalone && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 inspector.searching = true;
             }
-            KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('y') if standalone && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 return vec![AgentEffect::Copy {
                     text: inspector.content(),
                 }];
             }
-            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('e') if standalone && key.modifiers.contains(KeyModifiers::CONTROL) => {
                 return vec![AgentEffect::Export {
                     run_id: inspector.run.run_id.clone(),
                     content: inspector.content(),
                 }];
             }
-            KeyCode::F(2) if foreground_permission_pending => {
-                self.notice = Some("Foreground permission waiting · F5 return".to_string());
+            KeyCode::F(2) if standalone && foreground_permission_pending => {
+                self.notice = Some("Foreground permission waiting · / to return".to_string());
             }
-            KeyCode::F(2) if matches!(inspector.run.attention, AgentAttention::Permission(_)) => {
+            KeyCode::F(2)
+                if standalone
+                    && matches!(inspector.run.attention, AgentAttention::Permission(_)) =>
+            {
                 inspector.permission_focused = true;
                 inspector.permission_selected = None;
                 inspector.permission_scroll = 0;
             }
-            KeyCode::F(5) => return self.f5(),
+            KeyCode::F(5) if standalone => return self.f5(),
             _ => {}
         }
         Vec::new()
@@ -1669,10 +1977,6 @@ impl AgentDeckState {
         }
         if key.code == KeyCode::Esc {
             self.abandon_pending_acquisition(false);
-            return Vec::new();
-        }
-        if key.code == KeyCode::F(5) && self.mode == AgentDeckMode::Inline {
-            self.abandon_pending_acquisition(true);
             return Vec::new();
         }
         if self.pending_allows_reply_editing() {
@@ -2349,20 +2653,20 @@ impl AgentDeckState {
         let width = usize::from(area.width);
         let text = if width < 68 {
             format!(
-                "BG !{} · ●{} · ◌{} · F5",
+                "BG !{} · ●{} · ◌{} · /",
                 summary.needs_input, summary.ready, summary.working
             )
         } else if summary.total == 0 {
-            "BG no background agents · F5 Agents".to_string()
+            "BG no background agents · / Agents".to_string()
         } else if let Some((label, attention)) = summary.urgent {
             let additional = summary.needs_input.saturating_sub(1);
             format!(
-                "BG ! {label} {attention} · +{additional} attention · {} ready · {} working · F5 Agents",
+                "BG ! {label} {attention} · +{additional} attention · {} ready · {} working · / Agents",
                 summary.ready, summary.working
             )
         } else {
             format!(
-                "BG {} ready · {} working · F5 Agents",
+                "BG {} ready · {} working · / Agents",
                 summary.ready, summary.working
             )
         };
@@ -2801,6 +3105,25 @@ impl AgentDeckState {
     }
 
     fn help(&self) -> &'static str {
+        if self.mode == AgentDeckMode::Inline {
+            return match self.surface {
+                AgentSurface::List => "↑↓ Select · Enter Attach · / Commands · Esc Collapse",
+                AgentSurface::Peek => "/ Commands · Enter Attach · Esc Back",
+                AgentSurface::Reply { .. } => {
+                    "Enter Send to named background · / Commands · Esc keep draft"
+                }
+                AgentSurface::NewRun => {
+                    "Tab Target field · Enter Dispatch · / Commands · Esc keep draft"
+                }
+                AgentSurface::Permission { .. } => {
+                    "↑↓ or number selects · Enter confirms · Esc close"
+                }
+                AgentSurface::Confirm { .. } => "Enter Confirm · Esc return",
+                AgentSurface::TakeoverConfirm { .. } => "↑↓ select · Enter confirms · Esc return",
+                AgentSurface::ExitConfirm { .. } => "↑↓ select · Enter applies · Esc return",
+                AgentSurface::Collapsed | AgentSurface::Inspector(_) => "",
+            };
+        }
         match self.surface {
             AgentSurface::List => {
                 "↑↓ Select · / Filter · Space Peek · R Reply · T Takeover · Enter Attach · N New · F5 Collapse"
@@ -2841,7 +3164,7 @@ impl AgentDeckState {
         .areas(area);
         if foreground_permission_pending {
             frame.render_widget(
-                Paragraph::new("Foreground permission waiting · F5 return")
+                Paragraph::new("Foreground permission waiting · / to return")
                     .style(Style::default().fg(Color::Yellow)),
                 banner,
             );
@@ -2952,6 +3275,8 @@ impl AgentDeckState {
         frame.render_widget(
             Paragraph::new(if inspector.permission_focused {
                 "↑↓ select · PgUp/PgDn scroll · Enter confirms exact option · Esc closes"
+            } else if self.mode == AgentDeckMode::Inline {
+                "/ Commands (permission, search, copy, export, detach) · ↑↓ Scroll"
             } else {
                 "F2 Permission · ↑↓ Scroll · Ctrl-F Search · Ctrl-Y Copy · Ctrl-E Export · F5 Detach"
             })
@@ -3401,16 +3726,10 @@ impl Drop for AgentDeckView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEvent, KeyEventState};
     use ratatui::backend::TestBackend;
 
     fn press(code: KeyCode) -> AgentAction {
-        AgentAction::Event(Event::Key(KeyEvent {
-            code,
-            modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::NONE,
-        }))
+        AgentAction::TestLegacyKey(code)
     }
 
     fn run(id: &str, label: &str) -> AgentRunView {
@@ -3430,6 +3749,25 @@ mod tests {
             }),
         });
         state
+    }
+
+    #[test]
+    fn inline_deck_has_no_default_letter_action_but_named_reply_works() {
+        let mut state = state_with(vec![run("r1", "review")]);
+        let _ = state.command(AgentDeckCommand::Open, false);
+        let raw = AgentAction::Event(Event::Key(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::NONE,
+        )));
+        assert!(state.step(raw, false).is_empty());
+        assert!(matches!(state.surface, AgentSurface::List));
+        assert!(matches!(
+            state.command(AgentDeckCommand::Reply, false).as_slice(),
+            [AgentEffect::AcquireLease {
+                intent: AgentLeaseIntent::Reply,
+                ..
+            }]
+        ));
     }
 
     fn grid(backend: &TestBackend) -> String {
@@ -4117,13 +4455,7 @@ mod tests {
         assert!(first_history_match(&content, "hello").is_some());
         assert_eq!(history_match_count(&content, "hello"), 1);
         assert!(matches!(
-            state.step(
-                AgentAction::Event(Event::Key(KeyEvent::new(
-                    KeyCode::Char('y'),
-                    KeyModifiers::CONTROL,
-                ))),
-                false,
-            )
+            state.command(AgentDeckCommand::Copy, false)
             .as_slice(),
             [AgentEffect::Copy { text }] if text.contains("hello")
         ));

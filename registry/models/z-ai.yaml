@@ -71,3 +71,12 @@
   max_input_tokens: 1048576
   max_output_tokens: 131072
   release_date: 2026-09-18
+- id: z-ai/glm-5.3-prime
+  name: 'Z.ai: GLM 5.3 Prime'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 131072
+  release_date: 2026-09-23

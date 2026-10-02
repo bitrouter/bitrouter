@@ -404,7 +404,7 @@ async fn report_over(socket: &Path, source: Option<&ConfigSource>) -> anyhow::Re
             spend,
         )
         .with_router_views(saved_routers, running_routers, router_restart_required)
-        .with_config_state(config_state)
+        .with_config_state(config_state.map(|state| *state))
         .with_local_versions(
             daemon_version,
             handoff_protocol,

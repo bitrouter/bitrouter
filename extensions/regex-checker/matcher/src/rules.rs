@@ -8,6 +8,21 @@
 
 use regex::{Regex, RegexBuilder};
 
+/// Flatten ordered text fragments exactly as the legacy input hook did: each
+/// fragment is followed by one newline, including the final fragment.
+///
+/// The newline is a real match boundary. For example, fragments `"for"` and
+/// `"bidden"` produce `"for\nbidden\n"`; a rule that intends to span that
+/// boundary must account for the newline explicitly.
+pub fn flatten_fragments<'a>(fragments: impl IntoIterator<Item = &'a str>) -> String {
+    let mut flattened = String::new();
+    for fragment in fragments {
+        flattened.push_str(fragment);
+        flattened.push('\n');
+    }
+    flattened
+}
+
 /// Compiled-size ceiling for an operator-supplied guardrail pattern. The
 /// `regex` crate is already backtracking-free (no classic ReDoS), but a
 /// pathological counted-repetition pattern could still balloon the compiled
@@ -217,6 +232,21 @@ mod tests {
     fn block_rule_detected() {
         assert_eq!(rules().first_block("this is FORBIDDEN"), Some("badword"));
         assert_eq!(rules().first_block("this is fine"), None);
+    }
+
+    #[test]
+    fn fragments_preserve_order_and_newline_boundaries() -> Result<(), regex::Error> {
+        assert_eq!(
+            flatten_fragments(["system", "user", "tool result"]),
+            "system\nuser\ntool result\n"
+        );
+        let rules = RuleSet::from_rules([
+            GuardrailRule::new("ordered", r"system\nuser\ntool result\n", Action::Block)?,
+            GuardrailRule::new("no-boundary", "systemuser", Action::Block)?,
+        ]);
+        let flattened = flatten_fragments(["system", "user", "tool result"]);
+        assert_eq!(rules.first_block(&flattened), Some("ordered"));
+        Ok(())
     }
 
     #[test]

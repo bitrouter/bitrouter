@@ -374,8 +374,8 @@ no error anywhere, and semver license does not help them debug that.
 #### The guard is the load-bearing half, and it is not about telemetry
 
 `config.plugins` is an unvalidated `HashMap<String, Value>`, so it swallows
-**every** unknown key. That is a live defect today, independent of any rename
-and sharper elsewhere:
+**every** unknown key at the parser level. The original failure motivating the
+unknown-key warning was independent of telemetry and sharper elsewhere:
 
 ```yaml
 plugins:
@@ -383,10 +383,13 @@ plugins:
     custom_patterns: [...]
 ```
 
-`assemble.rs` falls through to `GuardrailConfig::default()` and the operator's
-declared block/redact patterns silently never apply. `dist/schema/bitrouter.config.schema.json`
-does not catch it either — `plugins` is `additionalProperties: true`, as
-permissive as the map.
+Before extraction, this typo fell through to `GuardrailConfig::default()` and
+the declared patterns never applied. The typo remains an unknown-plugin warning;
+the exact removed plural key `plugins.bitrouter-guardrails` now blocks default-host
+activation with a migration diagnostic, without loading a matcher. See
+[the guardrails migration guide](GUARDRAILS_EXTENSION.md). The generic JSON Schema
+still uses `additionalProperties: true` for plugins; host activation owns this
+product-specific migration check.
 
 So D6 ships an unknown-key warning **first**, at `bro config validate`
 *and* at daemon startup — startup matters more, since `validate` is opt-in and

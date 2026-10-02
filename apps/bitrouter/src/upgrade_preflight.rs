@@ -42,10 +42,23 @@ fn sqlite_path(url: &str, home: &Path) -> Result<PathBuf> {
 }
 
 async fn read_only(path: &Path) -> Result<DatabaseConnection> {
-    let url = format!("sqlite://{}?mode=ro", path.display());
+    let url = sqlite_url(path, "ro");
     Database::connect(&url)
         .await
         .context("opening SQLite database read-only")
+}
+
+fn sqlite_url(path: &Path, mode: &str) -> String {
+    let path = path.to_string_lossy();
+    #[cfg(windows)]
+    let path = path.strip_prefix(r"\\?\").unwrap_or(&path);
+    #[cfg(windows)]
+    let path = path.replace('\\', "/");
+    let encoded = path
+        .replace('%', "%25")
+        .replace('?', "%3F")
+        .replace('#', "%23");
+    format!("sqlite://{encoded}?mode={mode}")
 }
 
 async fn applied(db: &DatabaseConnection) -> Result<Vec<String>> {
@@ -140,7 +153,7 @@ impl Preflight {
         let copy = temp.path().join("snapshot.db");
         snapshot(&live, &copy).await?;
         drop(live);
-        let copy_url = format!("sqlite://{}?mode=rw", copy.display());
+        let copy_url = sqlite_url(&copy, "rw");
         let candidate = crate::db::connect(&copy_url).await?;
         crate::db::run_migrations(&candidate)
             .await
@@ -209,8 +222,11 @@ mod tests {
         assert!(result.is_err());
         assert!(
             result
+                .as_ref()
                 .err()
-                .is_some_and(|error| error.to_string().contains("database_ahead_of_binary"))
+                .is_some_and(|error| error.to_string().contains("database_ahead_of_binary")),
+            "unexpected preflight error: {:?}",
+            result.as_ref().err().map(|error| format!("{error:#}"))
         );
         let live = read_only(&path).await?;
         assert!(

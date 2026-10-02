@@ -9,13 +9,20 @@
 //! ([`language_model`](AppBuilder::language_model), [`mcp`](AppBuilder::mcp)).
 //! A pipeline is built only for protocols that have something configured.
 //!
-//! # Plugins vs hooks
+//! # Legacy custom-host assembly
 //!
-//! The [`Plugin`] trait is an **optional** convenience: it packages a related
-//! set of hooks plus any SQL [`crate::plugin::MigrationItem`]s and installs
-//! them through [`AppBuilder::plugin`]. The atomic unit is still a single
-//! hook — every plugin can be re-created by calling the relevant
-//! sub-builder's hook methods one by one without ever touching [`Plugin`].
+//! [`Plugin`] and [`AppBuilder::plugin`] retain the legacy convenience for
+//! trusted custom hosts to install hooks and SQL [`crate::plugin::MigrationItem`]s.
+//! These APIs assemble a host; they are not the restricted extension author API.
+//! New request-check extensions register a callback through
+//! [`crate::extension::ExtensionApi::request_check`], using
+//! `bitrouter::assemble::build_app_with_extensions` in the product host crate.
+//! Router bindings determine which registered checks process requests.
+//!
+//! The current alpha SDK retains the legacy API without changing its global
+//! hook or migration behavior. Removal requires an explicitly announced breaking
+//! SDK release with migration notes; no removal date is scheduled. Individual
+//! hooks and migration facilities remain available for custom-host assembly.
 //!
 //! ```no_run
 //! use std::sync::Arc;
@@ -23,11 +30,12 @@
 //! use bitrouter_sdk::language_model::{HttpExecutor, StaticRoutingTable};
 //!
 //! # fn run() -> bitrouter_sdk::Result<()> {
+//! let executor = Arc::new(HttpExecutor::with_defaults()?);
 //! let app = App::builder()
 //!     .skip_auth(true)
 //!     .language_model(|lm| {
 //!         lm.routing_table(Arc::new(StaticRoutingTable::new()))
-//!           .executor(Arc::new(HttpExecutor::with_defaults().unwrap()));
+//!           .executor(executor);
 //!     })
 //!     .build()?;
 //! # let _ = app; Ok(()) }
@@ -41,14 +49,20 @@ use crate::mcp;
 use crate::metrics::MetricsRenderer;
 use crate::plugin::{MigrationItem, PluginId};
 
-/// An optional convenience packaging: registers a related set of hooks +
-/// migrations into a builder in one call. `Plugin` is **not** a strong,
-/// indivisible unit and **not** the only way to register hooks.
+/// Legacy custom-host assembly convenience for registering hooks and migrations.
+///
+/// Retained for the current alpha SDK API; removal requires an explicitly
+/// announced breaking SDK release with migration notes. New request-check
+/// extensions use [`crate::extension::ExtensionApi`] instead. This trait can
+/// install global hooks and migrations and is not equivalent to router-bound
+/// capability registration. Hooks remain individually registerable by hosts.
 pub trait Plugin {
     /// The plugin's identity (for config mapping and logs).
     fn id(&self) -> &PluginId;
 
-    /// Database migrations carried by this plugin. Empty = no database.
+    /// Database migrations carried by this legacy host package. Empty = no database.
+    /// Migration ownership stays with the custom host; the restricted extension
+    /// API does not expose this facility.
     fn migrations(&self) -> Vec<MigrationItem> {
         Vec::new()
     }
@@ -150,9 +164,10 @@ impl App {
     }
 }
 
-/// Configures an [`App`]. Each protocol is configured through its own
-/// sub-builder; `plugin()` is a convenience that drives those sub-builders for
-/// you.
+/// Configures an [`App`] for a trusted host. Each protocol has its own
+/// sub-builder; [`Self::plugin`] retains the legacy host packaging convenience.
+/// New request-check extension authors use the restricted `ExtensionApi` in the
+/// `bitrouter` host crate rather than receive this builder.
 pub struct AppBuilder {
     language_model: PipelineBuilder,
     mcp: mcp::PipelineBuilder,
@@ -233,8 +248,13 @@ impl AppBuilder {
         self
     }
 
-    /// Install a `Plugin` convenience package. Equivalent to calling its hook
-    /// registrations one by one.
+    /// Install a legacy [`Plugin`] host package, including its migrations.
+    ///
+    /// Retains global hook registration semantics in the current alpha SDK.
+    /// New request-check extensions use [`crate::extension::ExtensionApi`];
+    /// this method does not apply router bindings to legacy hooks. Removal
+    /// requires an explicitly announced breaking SDK release with migration
+    /// notes.
     pub fn plugin(mut self, plugin: impl Plugin) -> Self {
         self.migrations.extend(plugin.migrations());
         plugin.install(&mut self);

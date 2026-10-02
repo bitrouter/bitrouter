@@ -85,6 +85,8 @@ models:
     provider_model_id: mimo-v2.6-flash
   - id: xiaomi/mimo-v2.6-pro
     provider_model_id: mimo-v2.6-pro
+  - id: openai/gpt-6-luna
+    provider_model_id: gpt-6-luna
 status: active
 auto_sync:
   feed: models_dev

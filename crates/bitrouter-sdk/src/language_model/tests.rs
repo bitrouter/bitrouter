@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::event::PipelineEvent;
+use crate::extension::request_check::{ContentRole, Decision, Input};
 use crate::language_model::executor::MockResponse;
 use crate::language_model::routing::{PromptOverrides, RouterRequestIdentity};
 use crate::language_model::*;
@@ -458,89 +459,6 @@ impl RoutingTable for PresetAwareRoutingTable {
     }
 }
 
-struct CheckedRoutingTable;
-
-#[async_trait]
-impl RoutingTable for CheckedRoutingTable {
-    async fn resolve_model(&self, model: &str) -> Result<ModelResolution> {
-        if model != "@checked" {
-            return Ok(ModelResolution::passthrough(model));
-        }
-        Ok(ModelResolution {
-            clean_model: "test-model".to_owned(),
-            prefs: RoutingPrefs::default(),
-            overrides: PromptOverrides::default(),
-            policy: None,
-            variant: None,
-            router: Some(RouterRequestIdentity {
-                router_id: "checked".to_owned(),
-                original_selector: model.to_owned(),
-                binding_digest: "router-v1:checked".to_owned(),
-            }),
-            request_checks: vec![request_checks::RequestCheckBinding {
-                checker_id: "fixture".to_owned(),
-                binding_digest: "checker-v1:fixture".to_owned(),
-                max_input_bytes: 4096,
-                timeout_ms: 1000,
-            }],
-        })
-    }
-
-    async fn route_chain(
-        &self,
-        model: &str,
-        _prefs: &RoutingPrefs,
-        _caller: &CallerContext,
-    ) -> Result<Vec<RoutingTarget>> {
-        let mut selected = target("fixture");
-        selected.service_id = model.to_owned();
-        Ok(vec![selected])
-    }
-
-    fn list_models(&self) -> Vec<ModelInfo> {
-        Vec::new()
-    }
-
-    fn model_info(&self, _model: &str) -> Option<ModelInfo> {
-        None
-    }
-
-    async fn reload(&self) -> Result<()> {
-        Ok(())
-    }
-}
-
-struct PendingRequestChecker {
-    entered: Arc<tokio::sync::Notify>,
-}
-
-#[async_trait]
-impl request_checks::RequestCheckerRunner for PendingRequestChecker {
-    async fn check(
-        &self,
-        _invocation: request_checks::CheckerInvocation,
-        _reporter: receipts::RequestCheckReporter,
-    ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
-        self.entered.notify_one();
-        futures::future::pending().await
-    }
-}
-
-struct AllowingRequestChecker;
-
-#[async_trait]
-impl request_checks::RequestCheckerRunner for AllowingRequestChecker {
-    async fn check(
-        &self,
-        _invocation: request_checks::CheckerInvocation,
-        _reporter: receipts::RequestCheckReporter,
-    ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
-        Ok(request_checks::CheckerDecision::Allow {
-            implementation_version: Some("fixture-v1".to_owned()),
-        })
-    }
-}
-
 struct ConvergenceRoutingTable;
 
 #[async_trait]
@@ -717,6 +635,7 @@ impl PreRequestHook for EffectiveDefaultsHook {
 enum CheckerOutcome {
     Allow,
     Deny,
+    Malformed,
     Error,
 }
 
@@ -730,21 +649,19 @@ struct RecordingOriginalChecker {
 impl request_checks::RequestCheckerRunner for RecordingOriginalChecker {
     async fn check(
         &self,
-        invocation: request_checks::CheckerInvocation,
-        _reporter: receipts::RequestCheckReporter,
-    ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
-        let saw_candidate_default = invocation.content.iter().any(|fragment| {
-            fragment.role == request_checks::ContentRole::System
+        binding: request_checks::RequestCheckBinding,
+        input: Input,
+    ) -> std::result::Result<request_checks::CheckerResult, request_checks::CheckerFailure> {
+        let saw_candidate_default = input.content.iter().any(|fragment| {
+            fragment.role == ContentRole::System
                 && fragment.text.as_deref() == Some("candidate default")
         });
-        let saw_checked_default = invocation.content.iter().any(|fragment| {
-            fragment.role == request_checks::ContentRole::System
+        let saw_checked_default = input.content.iter().any(|fragment| {
+            fragment.role == ContentRole::System
                 && fragment.text.as_deref() == Some("checked-a default")
         });
-        if invocation.router_id != "checked-a"
-            || invocation.router_binding_digest != "router-v1:checked-a"
-            || invocation.checker.checker_id != "original-checker"
-            || invocation.checker.binding_digest != "checker-v1:original"
+        if binding.checker_id != "original-checker"
+            || binding.binding_digest != "checker-v1:original"
             || !saw_candidate_default
             || saw_checked_default
             || self.selector_calls.load(Ordering::SeqCst) != 0
@@ -756,12 +673,21 @@ impl request_checks::RequestCheckerRunner for RecordingOriginalChecker {
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
         match self.outcome {
-            CheckerOutcome::Allow => Ok(request_checks::CheckerDecision::Allow {
-                implementation_version: Some("fixture-v1".to_owned()),
+            CheckerOutcome::Allow => Ok(request_checks::CheckerResult {
+                decision: Decision::Allow,
+                revision: "fixture-v1".to_owned(),
             }),
-            CheckerOutcome::Deny => Ok(request_checks::CheckerDecision::Deny {
-                reason_code: Some("blocked".to_owned()),
-                implementation_version: Some("fixture-v1".to_owned()),
+            CheckerOutcome::Deny => Ok(request_checks::CheckerResult {
+                decision: Decision::Deny {
+                    reason_code: "blocked".to_owned(),
+                },
+                revision: "fixture-v1".to_owned(),
+            }),
+            CheckerOutcome::Malformed => Ok(request_checks::CheckerResult {
+                decision: Decision::Deny {
+                    reason_code: "x".repeat(65),
+                },
+                revision: "fixture-v1".to_owned(),
             }),
             CheckerOutcome::Error => Err(request_checks::CheckerFailure {
                 kind: request_checks::CheckerFailureKind::InvalidResponse,
@@ -1103,20 +1029,6 @@ fn pipeline_with(
     Arc::new(b.build().expect("pipeline builds"))
 }
 
-fn checked_pipeline(
-    executor: Arc<dyn Executor>,
-    runner: Arc<dyn request_checks::RequestCheckerRunner>,
-    store: receipts::RequestReceiptStore,
-) -> Result<Arc<Pipeline>> {
-    let mut builder = PipelineBuilder::new();
-    builder
-        .routing_table(Arc::new(CheckedRoutingTable))
-        .executor(executor)
-        .request_checker_runner(runner)
-        .request_receipt_store(store);
-    builder.build().map(Arc::new)
-}
-
 struct RetryUpstreamRequestErrors;
 
 impl FallbackPolicy for RetryUpstreamRequestErrors {
@@ -1232,6 +1144,7 @@ async fn checked_preparation_contract(streamed: bool) -> Result<()> {
     for outcome in [
         CheckerOutcome::Allow,
         CheckerOutcome::Deny,
+        CheckerOutcome::Malformed,
         CheckerOutcome::Error,
     ] {
         let local_policy_calls = Arc::new(AtomicUsize::new(0));
@@ -1240,14 +1153,10 @@ async fn checked_preparation_contract(streamed: bool) -> Result<()> {
         let executor_calls = Arc::new(AtomicUsize::new(0));
         let executor: Arc<dyn Executor> = match outcome {
             CheckerOutcome::Allow => convergence_executor(streamed),
-            CheckerOutcome::Deny | CheckerOutcome::Error => {
+            CheckerOutcome::Deny | CheckerOutcome::Malformed | CheckerOutcome::Error => {
                 Arc::new(NeverCalledExecutor(executor_calls.clone()))
             }
         };
-        let store = receipts::RequestReceiptStore::with_incarnation(
-            receipts::RequestReceiptStoreConfig::default(),
-            "checked-preparation",
-        );
         let mut builder = PipelineBuilder::new();
         builder
             .routing_table(Arc::new(ConvergenceRoutingTable))
@@ -1262,7 +1171,6 @@ async fn checked_preparation_contract(streamed: bool) -> Result<()> {
                 calls: checker_calls.clone(),
                 selector_calls: selector_calls.clone(),
             }))
-            .request_receipt_store(store)
             .model_selector(Arc::new(CandidateModelSelector(selector_calls.clone())));
         let result =
             run_convergence_request(Arc::new(builder.build()?), "@checked-a", streamed).await;
@@ -1274,7 +1182,7 @@ async fn checked_preparation_contract(streamed: bool) -> Result<()> {
                 assert!(result.is_ok());
                 assert_eq!(selector_calls.load(Ordering::SeqCst), 1);
             }
-            CheckerOutcome::Deny | CheckerOutcome::Error => {
+            CheckerOutcome::Deny | CheckerOutcome::Malformed | CheckerOutcome::Error => {
                 assert!(result.is_err());
                 assert_eq!(selector_calls.load(Ordering::SeqCst), 0);
                 assert_eq!(executor_calls.load(Ordering::SeqCst), 0);
@@ -1290,12 +1198,13 @@ struct CountingAllowingRequestChecker(Arc<AtomicUsize>);
 impl request_checks::RequestCheckerRunner for CountingAllowingRequestChecker {
     async fn check(
         &self,
-        _invocation: request_checks::CheckerInvocation,
-        _reporter: receipts::RequestCheckReporter,
-    ) -> std::result::Result<request_checks::CheckerDecision, request_checks::CheckerFailure> {
+        _binding: request_checks::RequestCheckBinding,
+        _input: Input,
+    ) -> std::result::Result<request_checks::CheckerResult, request_checks::CheckerFailure> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(request_checks::CheckerDecision::Allow {
-            implementation_version: None,
+        Ok(request_checks::CheckerResult {
+            decision: Decision::Allow,
+            revision: "fixture-v1".to_owned(),
         })
     }
 }
@@ -1309,10 +1218,6 @@ async fn checked_ordinary_mutation_contract(streamed: bool) -> Result<()> {
         let checker_calls = Arc::new(AtomicUsize::new(0));
         let selector_calls = Arc::new(AtomicUsize::new(0));
         let executor_calls = Arc::new(AtomicUsize::new(0));
-        let store = receipts::RequestReceiptStore::with_incarnation(
-            receipts::RequestReceiptStoreConfig::default(),
-            "checked-ordinary-mutation",
-        );
         let mut builder = PipelineBuilder::new();
         builder
             .routing_table(Arc::new(ConvergenceRoutingTable))
@@ -1324,7 +1229,6 @@ async fn checked_ordinary_mutation_contract(streamed: bool) -> Result<()> {
             .request_checker_runner(Arc::new(CountingAllowingRequestChecker(
                 checker_calls.clone(),
             )))
-            .request_receipt_store(store)
             .model_selector(Arc::new(CandidateModelSelector(selector_calls.clone())));
         let result =
             run_convergence_request(Arc::new(builder.build()?), "@checked-a", streamed).await;
@@ -1351,49 +1255,6 @@ async fn checked_ordinary_mutation_contract(streamed: bool) -> Result<()> {
 }
 
 // ===== tests =====
-
-#[tokio::test]
-async fn cancelled_pending_checker_finalizes_receipt_without_executor_dispatch() -> Result<()> {
-    let entered = Arc::new(tokio::sync::Notify::new());
-    let executor_calls = Arc::new(AtomicUsize::new(0));
-    let store = receipts::RequestReceiptStore::with_incarnation(
-        receipts::RequestReceiptStoreConfig::default(),
-        "test-incarnation",
-    );
-    let pipeline = checked_pipeline(
-        Arc::new(NeverCalledExecutor(executor_calls.clone())),
-        Arc::new(PendingRequestChecker {
-            entered: entered.clone(),
-        }),
-        store.clone(),
-    )?;
-    let mut checked_request = request_for_model("@checked");
-    checked_request.request_id = "cancelled-check".to_owned();
-    let task = tokio::spawn(async move { pipeline.execute(checked_request).await });
-    entered.notified().await;
-    task.abort();
-    let _ = task.await;
-
-    let receipts::RequestReceiptLookup::Found { receipt, .. } =
-        store.get("cancelled-check", Some("test-incarnation"))
-    else {
-        return Err(BitrouterError::internal(
-            "cancelled receipt was not retained",
-        ));
-    };
-    assert_eq!(
-        receipt.outcome,
-        Some(receipts::RequestReceiptOutcome::Cancelled)
-    );
-    assert_eq!(receipt.delivery, receipts::RequestDeliveryStatus::Unknown);
-    assert!(receipt.checks.first().is_some_and(|check| {
-        check.status == receipts::RequestCheckStatus::Interrupted
-            && check.started_at_unix_ms.is_some()
-            && check.finished_at_unix_ms.is_some()
-    }));
-    assert_eq!(executor_calls.load(Ordering::SeqCst), 0);
-    Ok(())
-}
 
 #[tokio::test]
 async fn unguarded_bare_and_legacy_rewrites_converge_nonstream() -> Result<()> {
@@ -1423,182 +1284,6 @@ async fn checked_ordinary_mutation_stops_nonstream() -> Result<()> {
 #[tokio::test]
 async fn checked_ordinary_mutation_stops_stream() -> Result<()> {
     checked_ordinary_mutation_contract(true).await
-}
-
-#[tokio::test]
-async fn failed_receipts_identify_route_upstream_and_delivery_stages() -> Result<()> {
-    let route_store = receipts::RequestReceiptStore::with_incarnation(
-        receipts::RequestReceiptStoreConfig::default(),
-        "route-stage-incarnation",
-    );
-    let mut route_builder = PipelineBuilder::new();
-    route_builder
-        .routing_table(Arc::new(CheckedRoutingTable))
-        .executor(Arc::new(MockExecutor::always_text("unused")))
-        .route_hook(FailingRouteHook)
-        .request_checker_runner(Arc::new(AllowingRequestChecker))
-        .request_receipt_store(route_store.clone());
-    let route_pipeline = route_builder.build()?;
-    let mut route_request = request_for_model("@checked");
-    route_request.request_id = "route-stage".to_owned();
-    assert!(route_pipeline.execute(route_request).await.is_err());
-    let receipts::RequestReceiptLookup::Found {
-        receipt: route_receipt,
-        ..
-    } = route_store.get("route-stage", None)
-    else {
-        return Err(BitrouterError::internal("route receipt was not retained"));
-    };
-    assert_eq!(
-        route_receipt.failure_stage,
-        Some(receipts::RequestFailureStage::Route)
-    );
-
-    let upstream_store = receipts::RequestReceiptStore::with_incarnation(
-        receipts::RequestReceiptStoreConfig::default(),
-        "upstream-stage-incarnation",
-    );
-    let upstream_pipeline = checked_pipeline(
-        Arc::new(StreamErrorExecutor {
-            error: BitrouterError::Upstream {
-                status: 500,
-                message: "failed request".to_owned(),
-            },
-        }),
-        Arc::new(AllowingRequestChecker),
-        upstream_store.clone(),
-    )?;
-    let mut upstream_request = request_for_model("@checked");
-    upstream_request.request_id = "upstream-stage".to_owned();
-    assert!(upstream_pipeline.execute(upstream_request).await.is_err());
-    let receipts::RequestReceiptLookup::Found {
-        receipt: upstream_receipt,
-        ..
-    } = upstream_store.get("upstream-stage", None)
-    else {
-        return Err(BitrouterError::internal(
-            "upstream receipt was not retained",
-        ));
-    };
-    assert_eq!(
-        upstream_receipt.failure_stage,
-        Some(receipts::RequestFailureStage::Upstream)
-    );
-
-    let delivery_store = receipts::RequestReceiptStore::with_incarnation(
-        receipts::RequestReceiptStoreConfig::default(),
-        "delivery-stage-incarnation",
-    );
-    let finalized = Arc::new(AtomicUsize::new(0));
-    let mut delivery_builder = PipelineBuilder::new();
-    delivery_builder
-        .routing_table(Arc::new(CheckedRoutingTable))
-        .executor(Arc::new(MockExecutor::always_text("completed")))
-        .required_finalizer(FailingRequiredFinalizer(finalized.clone()))
-        .request_checker_runner(Arc::new(AllowingRequestChecker))
-        .request_receipt_store(delivery_store.clone());
-    let delivery_pipeline = delivery_builder.build()?;
-    let mut delivery_request = request_for_model("@checked");
-    delivery_request.request_id = "delivery-stage".to_owned();
-    assert!(delivery_pipeline.execute(delivery_request).await.is_err());
-    let receipts::RequestReceiptLookup::Found {
-        receipt: delivery_receipt,
-        ..
-    } = delivery_store.get("delivery-stage", None)
-    else {
-        return Err(BitrouterError::internal(
-            "delivery receipt was not retained",
-        ));
-    };
-    assert_eq!(
-        delivery_receipt.failure_stage,
-        Some(receipts::RequestFailureStage::Delivery)
-    );
-    assert_eq!(finalized.load(Ordering::SeqCst), 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn stream_disconnect_and_error_finalize_truthful_receipts() -> Result<()> {
-    let disconnect_store = receipts::RequestReceiptStore::with_incarnation(
-        receipts::RequestReceiptStoreConfig::default(),
-        "disconnect-incarnation",
-    );
-    let disconnect_pipeline = checked_pipeline(
-        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
-            StreamPart::TextDelta {
-                text: "partial".to_owned(),
-            },
-            StreamPart::Finish {
-                reason: FinishReason::Stop,
-            },
-        ])])),
-        Arc::new(AllowingRequestChecker),
-        disconnect_store.clone(),
-    )?;
-    let mut disconnect_request = request_for_model("@checked");
-    disconnect_request.request_id = "stream-disconnected".to_owned();
-    disconnect_request.prompt.stream = true;
-    let stream = disconnect_pipeline
-        .clone()
-        .execute_stream(disconnect_request)
-        .await?;
-    drop(stream);
-    disconnect_pipeline.drain_pending_settlements().await;
-    let receipts::RequestReceiptLookup::Found {
-        receipt: disconnected,
-        ..
-    } = disconnect_store.get("stream-disconnected", None)
-    else {
-        return Err(BitrouterError::internal(
-            "disconnect receipt was not retained",
-        ));
-    };
-    assert_eq!(
-        disconnected.outcome,
-        Some(receipts::RequestReceiptOutcome::ClientDisconnected)
-    );
-    assert_eq!(
-        disconnected.delivery,
-        receipts::RequestDeliveryStatus::Disconnected
-    );
-
-    let error_store = receipts::RequestReceiptStore::with_incarnation(
-        receipts::RequestReceiptStoreConfig::default(),
-        "error-incarnation",
-    );
-    let error_pipeline = checked_pipeline(
-        Arc::new(StreamErrorExecutor {
-            error: BitrouterError::Upstream {
-                status: 500,
-                message: "failed stream".to_owned(),
-            },
-        }),
-        Arc::new(AllowingRequestChecker),
-        error_store.clone(),
-    )?;
-    let mut error_request = request_for_model("@checked");
-    error_request.request_id = "stream-failed".to_owned();
-    error_request.prompt.stream = true;
-    let parts = collect_stream(error_pipeline.clone().execute_stream(error_request).await?).await;
-    assert!(parts.iter().any(|part| part.is_err()));
-    error_pipeline.drain_pending_settlements().await;
-    let receipts::RequestReceiptLookup::Found {
-        receipt: failed, ..
-    } = error_store.get("stream-failed", None)
-    else {
-        return Err(BitrouterError::internal("failed receipt was not retained"));
-    };
-    assert_eq!(
-        failed.outcome,
-        Some(receipts::RequestReceiptOutcome::Failed)
-    );
-    assert_eq!(failed.delivery, receipts::RequestDeliveryStatus::Failed);
-    assert_eq!(
-        failed.failure_stage,
-        Some(receipts::RequestFailureStage::Upstream)
-    );
-    Ok(())
 }
 
 #[tokio::test]

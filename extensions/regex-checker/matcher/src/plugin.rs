@@ -1,6 +1,16 @@
-//! [`GuardrailsPlugin`] — a [`Plugin`] convenience package that wires the
-//! guardrail hooks onto the `language_model` pipeline in one call, for both the
-//! OSS binary and any downstream host.
+//! [`GuardrailsPlugin`] — legacy [`Plugin`] assembly for trusted custom hosts.
+//!
+//! The default OSS binary no longer installs this package. New router-bound
+//! input checks register [`crate::checker::callback`] through
+//! `bitrouter::extension::ExtensionApi`; they do not require the `sdk` feature.
+//! This compatibility API retains its existing global/per-request rule deposits
+//! and stream block/redact behavior. Input-only request checks cannot replace
+//! those output or global protection guarantees, and these hooks do not inherit
+//! the router binding or bounded diagnostics of native request checks.
+//!
+//! The current alpha SDK API retains this path. Removal requires an explicitly
+//! announced breaking SDK release with migration notes; no removal date is
+//! scheduled. Keep a compatible custom host when those semantics are required.
 //!
 //! - [`GuardrailsPlugin::with_static`] — a fixed, process-global rule set. It
 //!   installs a [`DepositRulesHook`] (which inserts the shared rule set into
@@ -18,7 +28,11 @@ use bitrouter_sdk::{AppBuilder, Plugin, PluginId};
 use crate::hooks::{DepositRulesHook, GuardrailPreHook, GuardrailStreamHook};
 use crate::rules::RuleSet;
 
-/// A [`Plugin`] that registers the upstream + downstream guardrail hooks.
+/// Legacy custom-host package for upstream and downstream guardrail hooks.
+///
+/// Retained for the current alpha SDK API; removal requires an explicitly
+/// announced breaking SDK release with migration notes. Unlike new router-bound
+/// request-check registration, installation activates global hooks immediately.
 pub struct GuardrailsPlugin {
     id: PluginId,
     static_rules: Option<Arc<RuleSet>>,

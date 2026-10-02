@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.33](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.32...v1.0.0-alpha.33)
+
+
+### ⛰️ Features
+
+- *(code)* Make slash launcher the primary control ([#935](https://github.com/bitrouter/bitrouter/pull/935)) - ([343d8f9](https://github.com/bitrouter/bitrouter/commit/343d8f984838d0eee3699910ad9a4a5cc4012f1b))
+- *(extensions)* [**breaking**] Add native request-check host ([#923](https://github.com/bitrouter/bitrouter/pull/923)) - ([750d618](https://github.com/bitrouter/bitrouter/commit/750d618ad4235adefaaa33e4d864ef61169440fd))
+
+### ⚙️ Miscellaneous Tasks
+
+- Sync registry catalog ([#937](https://github.com/bitrouter/bitrouter/pull/937)) - ([27574c5](https://github.com/bitrouter/bitrouter/commit/27574c5fea312035cacea5ad2db6a5081bc007ec))
+
+
 ## [1.0.0-alpha.32](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.31...v1.0.0-alpha.32)
 
 

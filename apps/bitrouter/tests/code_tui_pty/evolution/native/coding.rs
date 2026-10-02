@@ -200,7 +200,7 @@ fn finish_coding_turn(code: &mut CodeFixture, before: &PtyCheckpoint) -> Result<
         if screen.contains("Turn completed") && screen.contains("NATIVE_CODE_DONE") {
             return Ok(());
         }
-        code.pty.send(b"\x1b[12~")?;
+        code.pty.send(b"/review permission\r")?;
         let options = code.pty.wait_for_text("Enter confirms selection")?;
         ensure!(
             (options.contains("[1] Yes") || options.contains("[1] Allow"))

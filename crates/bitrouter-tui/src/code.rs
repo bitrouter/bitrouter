@@ -24,8 +24,8 @@ use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::agents::{
-    AgentAction, AgentDeckSnapshot, AgentDeckState, AgentEffect, AgentHistoryEvent,
-    AgentHistorySnapshot, NewAgentRunChoices,
+    AgentAction, AgentDeckCommand, AgentDeckSnapshot, AgentDeckState, AgentEffect,
+    AgentHistoryEvent, AgentHistorySnapshot, NewAgentRunChoices,
 };
 use crate::cost;
 use crate::editor::{Edit, Editor};
@@ -60,7 +60,7 @@ impl Default for CodeStatus {
 }
 
 /// Identity of a command row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandOwner {
     /// BitRouter-owned operation.
     BitRouter,
@@ -105,8 +105,29 @@ pub enum CommandTarget {
     },
     /// Explicitly resume a paused next-turn queue.
     ResumeQueue,
+    /// Focus the oldest foreground permission request.
+    ReviewPermission,
+    /// Open the current foreground queue or recovery list.
+    ReviewQueue,
+    /// Inspect the selected retained foreground entry.
+    InspectDetail,
+    /// Open the retained foreground transcript.
+    Transcript,
+    /// Copy the selected retained foreground detail.
+    CopyDetail,
+    /// Search within the currently open foreground inspector.
+    SearchDetail,
+    /// Open the configured external editor for the foreground draft.
+    ExternalEditor,
+    /// Show the effective Code keymap.
+    Hotkeys,
     /// Open the background-agent command center.
     BackgroundAgents,
+    /// Invoke a named action on the selected supervised background run.
+    AgentDeck {
+        action: AgentDeckCommand,
+        run_id: Option<String>,
+    },
     /// Detach the supervisor-owned foreground run and leave Code.
     DetachAndExit,
     /// Send an agent command as prompt text without local re-resolution.
@@ -136,7 +157,108 @@ pub struct Command {
     pub unavailable: Option<String>,
 }
 
+/// One user-configured shortcut to a stable BitRouter Code action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeHotkey {
+    /// A decoded key press (not release or repeat).
+    pub key: KeyEvent,
+    /// Stable action id displayed by `/hotkeys`.
+    pub action: String,
+    /// Human-readable chord from the user's config.
+    pub chord: String,
+}
+
+impl CodeHotkey {
+    /// Parse a configured chord such as `F2`, `Ctrl-P`, or `Alt-R`.
+    pub fn parse(chord: &str, action: impl Into<String>) -> Result<Self, String> {
+        let parts = chord.split('-').collect::<Vec<_>>();
+        let Some(last) = parts.last() else {
+            return Err("Empty hotkey chord".to_string());
+        };
+        let mut modifiers = KeyModifiers::NONE;
+        for part in &parts[..parts.len().saturating_sub(1)] {
+            match part.to_ascii_lowercase().as_str() {
+                "ctrl" | "control" => modifiers.insert(KeyModifiers::CONTROL),
+                "alt" | "option" => modifiers.insert(KeyModifiers::ALT),
+                "shift" => modifiers.insert(KeyModifiers::SHIFT),
+                _ => return Err(format!("Unknown hotkey modifier: {part}")),
+            }
+        }
+        let code = match last.to_ascii_lowercase().as_str() {
+            "enter" | "esc" | "escape" | "tab" | "backspace" | "space" | "up" | "down" | "left"
+            | "right" | "home" | "end" | "pageup" | "pagedown" => {
+                return Err(format!(
+                    "{last} is reserved for editing, navigation, or safety"
+                ));
+            }
+            value if value.starts_with('f') => {
+                let number = value[1..]
+                    .parse::<u8>()
+                    .map_err(|_| format!("Invalid function key: {last}"))?;
+                if !(1..=12).contains(&number) {
+                    return Err(format!("Function key is outside F1–F12: {last}"));
+                }
+                KeyCode::F(number)
+            }
+            value if value.len() == 1 => {
+                let Some(character) = value.chars().next() else {
+                    return Err("Empty hotkey key".to_string());
+                };
+                if modifiers.is_empty() || character == '/' {
+                    return Err("Printable keys and / are reserved for command input".to_string());
+                }
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(character, 'c' | 'd' | 'h' | 'i' | 'j' | 'l' | 'm')
+                {
+                    return Err(format!(
+                        "Ctrl-{character} is reserved for terminal safety or editing"
+                    ));
+                }
+                KeyCode::Char(character)
+            }
+            _ => return Err(format!("Unknown hotkey key: {last}")),
+        };
+        Ok(Self {
+            key: KeyEvent::new(code, modifiers),
+            action: action.into(),
+            chord: chord.to_string(),
+        })
+    }
+}
+
 impl Command {
+    fn hotkey_id(&self) -> Option<String> {
+        if self.owner != CommandOwner::BitRouter {
+            return None;
+        }
+        let id = match &self.target {
+            CommandTarget::LocalAction { action, .. } => format!("action:{action}"),
+            CommandTarget::Report { id } => format!("report:{id}"),
+            CommandTarget::ChooseAgent => "choose_agent".to_string(),
+            CommandTarget::NewSession => "new".to_string(),
+            CommandTarget::OpenSession => "open_session".to_string(),
+            CommandTarget::Settings => "settings".to_string(),
+            CommandTarget::ResumeQueue => "resume_queue".to_string(),
+            CommandTarget::ReviewPermission => "review_permission".to_string(),
+            CommandTarget::ReviewQueue => "review_queue".to_string(),
+            CommandTarget::InspectDetail => "inspect_detail".to_string(),
+            CommandTarget::Transcript => "transcript".to_string(),
+            CommandTarget::CopyDetail => "copy_detail".to_string(),
+            CommandTarget::SearchDetail => "search_detail".to_string(),
+            CommandTarget::ExternalEditor => "external_editor".to_string(),
+            CommandTarget::Hotkeys => "hotkeys".to_string(),
+            CommandTarget::BackgroundAgents => "background_agents".to_string(),
+            CommandTarget::AgentDeck { action, .. } => {
+                format!("agents.{}", agent_deck_action_id(*action))
+            }
+            CommandTarget::DetachAndExit => "detach_and_exit".to_string(),
+            CommandTarget::AgentPrompt { .. } | CommandTarget::PromptTemplate { .. } => {
+                return None;
+            }
+        };
+        Some(id)
+    }
+
     /// Construct an enabled command row.
     pub fn new(
         label: impl Into<String>,
@@ -158,6 +280,63 @@ impl Command {
         self.unavailable = Some(reason.into());
         self
     }
+}
+
+fn agent_deck_action_id(action: AgentDeckCommand) -> &'static str {
+    match action {
+        AgentDeckCommand::Open => "open",
+        AgentDeckCommand::Reply => "reply",
+        AgentDeckCommand::New => "new",
+        AgentDeckCommand::Attach => "attach",
+        AgentDeckCommand::Peek => "peek",
+        AgentDeckCommand::ReviewPermission => "permission",
+        AgentDeckCommand::Takeover => "takeover",
+        AgentDeckCommand::Cancel => "cancel",
+        AgentDeckCommand::Stop => "stop",
+        AgentDeckCommand::MarkReviewed => "mark_reviewed",
+        AgentDeckCommand::Detach => "detach",
+        AgentDeckCommand::Filter => "filter",
+        AgentDeckCommand::ToggleStopped => "toggle_stopped",
+        AgentDeckCommand::Search => "search",
+        AgentDeckCommand::Copy => "copy",
+        AgentDeckCommand::Export => "export",
+    }
+}
+
+fn known_code_hotkey_action(id: &str) -> bool {
+    matches!(
+        id,
+        "choose_agent"
+            | "new"
+            | "open_session"
+            | "settings"
+            | "resume_queue"
+            | "review_permission"
+            | "review_queue"
+            | "inspect_detail"
+            | "transcript"
+            | "copy_detail"
+            | "search_detail"
+            | "external_editor"
+            | "hotkeys"
+            | "background_agents"
+            | "detach_and_exit"
+            | "agents.reply"
+            | "agents.new"
+            | "agents.attach"
+            | "agents.peek"
+            | "agents.permission"
+            | "agents.takeover"
+            | "agents.cancel"
+            | "agents.stop"
+            | "agents.mark_reviewed"
+            | "agents.detach"
+            | "agents.filter"
+            | "agents.toggle_stopped"
+            | "agents.search"
+            | "agents.copy"
+            | "agents.export"
+    )
 }
 
 /// A single application-owned selector row.
@@ -286,6 +465,10 @@ pub enum CodeAction {
     TurnSettled(TurnOutcome),
     /// External editor returned a recoverable replacement or error.
     ExternalEditorFinished(Result<String, String>),
+    #[cfg(test)]
+    TestCommand(CommandTarget),
+    #[cfg(test)]
+    TestOpenPalette,
 }
 
 /// Application work emitted by the pure reducer.
@@ -385,10 +568,25 @@ enum Surface {
     Conversation,
     Palette(ChoiceList),
     Selector(ChoiceList),
+    CommandDecision {
+        decision: CommandDecision,
+        selected: Option<usize>,
+        return_to: Box<Surface>,
+    },
     Inspector(OpenInspector),
     Permission,
-    Queue { selected: usize },
-    Recovery { selected: usize },
+    Queue {
+        selected: usize,
+    },
+    Recovery {
+        selected: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CommandDecision {
+    QueueAgent(String),
+    InsertTemplate(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,12 +598,15 @@ struct ChoiceList {
     choices: Vec<Choice>,
     matches: Vec<usize>,
     selected: Option<usize>,
+    owner_choice: bool,
+    agent_run_anchor: Option<String>,
     allow_custom: bool,
     custom_label: String,
     /// The transient surface to restore when this list closes. A boxed surface
     /// permits the operations root inspector to open a palette without
     /// collapsing back to the conversation.
     return_to: Option<Box<Surface>>,
+    close_launcher_on_accept: bool,
 }
 
 /// One selector that started an asynchronous route or settings mutation.
@@ -470,10 +671,14 @@ pub struct CodeState {
     turn: TurnState,
     pending_prompt: Option<PendingPrompt>,
     commands: Vec<Command>,
+    hotkeys: Vec<CodeHotkey>,
+    hotkey_source: Option<String>,
+    hotkey_diagnostic: Option<String>,
     typed_commands: Vec<crate::machine::Command>,
     prompt_commands: Vec<crate::machine::PromptCommand>,
     selectors: Vec<Selector>,
     pending_selector_mutation: Option<PendingSelectorMutation>,
+    pending_launcher_return: Option<Surface>,
     permissions: VecDeque<PendingPermission>,
     permission_selected: Option<usize>,
     permission_return: Option<Surface>,
@@ -510,10 +715,14 @@ impl CodeState {
             turn: TurnState::Ready,
             pending_prompt: None,
             commands: Vec::new(),
+            hotkeys: Vec::new(),
+            hotkey_source: None,
+            hotkey_diagnostic: None,
             typed_commands: Vec::new(),
             prompt_commands: Vec::new(),
             selectors: Vec::new(),
             pending_selector_mutation: None,
+            pending_launcher_return: None,
             permissions: VecDeque::new(),
             permission_selected: None,
             permission_return: None,
@@ -541,7 +750,9 @@ impl CodeState {
     /// Replace application-mapped supervisor rows. Returns whether the
     /// collapsed strip changed meaningfully.
     pub fn replace_agent_snapshot(&mut self, snapshot: AgentDeckSnapshot) -> bool {
-        self.agents.replace_snapshot(snapshot)
+        let changed = self.agents.replace_snapshot(snapshot);
+        self.refresh_open_palettes();
+        changed
     }
 
     /// Bind agent effects to the authenticated supervisor client identity.
@@ -636,6 +847,39 @@ impl CodeState {
         self.refresh_open_palettes();
     }
 
+    /// Install the user's complete Code keymap after command inventory setup.
+    /// A rejected file leaves the default empty keymap in effect.
+    pub fn set_hotkeys(
+        &mut self,
+        source: impl Into<String>,
+        bindings: Vec<CodeHotkey>,
+    ) -> Result<(), String> {
+        let commands = self.palette_commands();
+        let mut seen = std::collections::HashSet::new();
+        for binding in &bindings {
+            if !seen.insert((binding.key.code, binding.key.modifiers)) {
+                return Err(format!("Duplicate Code hotkey: {}", binding.chord));
+            }
+            if !known_code_hotkey_action(&binding.action)
+                && !commands
+                    .iter()
+                    .any(|command| command.hotkey_id().as_deref() == Some(binding.action.as_str()))
+            {
+                return Err(format!("Unknown Code hotkey action: {}", binding.action));
+            }
+        }
+        self.hotkey_source = Some(source.into());
+        self.hotkey_diagnostic = None;
+        self.hotkeys = bindings;
+        Ok(())
+    }
+
+    /// Report an invalid user keymap without interrupting the Code session.
+    pub fn set_hotkey_diagnostic(&mut self, diagnostic: impl Into<String>) {
+        self.hotkeys.clear();
+        self.hotkey_diagnostic = Some(diagnostic.into());
+    }
+
     /// Set the canonical typed-slash resolver data.
     ///
     /// The application already constructs these rows for its existing command
@@ -707,6 +951,7 @@ impl CodeState {
 
     /// Open a supplied selector, or record an honest unavailable notice.
     pub fn open_selector(&mut self, id: &str) -> bool {
+        let launcher_return = self.pending_launcher_return.take();
         let Some(selector) = self.selectors.iter().find(|selector| selector.id == id) else {
             self.notice = Some(format!("{id} is unavailable in this session"));
             return false;
@@ -717,8 +962,16 @@ impl CodeState {
             .cloned()
             .map(Choice::Selector)
             .collect::<Vec<_>>();
-        let return_to = self.transient_return_target();
-        self.surface = Surface::Selector(ChoiceList::selector(selector, choices, return_to));
+        let close_launcher_on_accept = launcher_return.is_some();
+        let return_to = launcher_return
+            .map(Box::new)
+            .or_else(|| self.transient_return_target());
+        self.surface = Surface::Selector(ChoiceList::selector(
+            selector,
+            choices,
+            return_to,
+            close_launcher_on_accept,
+        ));
         true
     }
 
@@ -726,7 +979,7 @@ impl CodeState {
     pub fn open_inspector(&mut self, inspector: Inspector) {
         if !self.permissions.is_empty() {
             self.notice =
-                Some("Permission needed · F2 to review before opening details".to_string());
+                Some("Permission needed · / to review before opening details".to_string());
             return;
         }
         let return_to = self.transient_return_target();
@@ -860,7 +1113,7 @@ impl CodeState {
 
     /// Queue a permission request by identity.
     ///
-    /// Permission arrival never focuses an option. F2 does, which prevents
+    /// Permission arrival never focuses an option. A selected command does, preventing
     /// buffered composer input from becoming consent.
     pub fn receive_permission(&mut self, prompt: Prompt) -> Vec<CodeEffect> {
         self.receive_permission_with_optional_context(prompt, None)
@@ -868,7 +1121,7 @@ impl CodeState {
 
     /// Queue a permission with the raw structured tool context the agent sent.
     ///
-    /// The compact permission surface shows a bounded summary and F4 opens the
+    /// The compact permission surface shows a bounded summary; / opens its detail action.
     /// complete retained context. The request identity remains the Prompt id;
     /// this auxiliary context never replaces or synthesizes an option.
     pub fn receive_permission_with_context(
@@ -911,7 +1164,7 @@ impl CodeState {
             None
         } else {
             Some(format!(
-                "Permission needed · F2 focuses oldest pending request ({})",
+                "Permission needed · / to review oldest pending request ({})",
                 self.permissions.len()
             ))
         };
@@ -938,7 +1191,7 @@ impl CodeState {
         self.permissions
             .push_back(PendingPermission { prompt, context });
         self.notice = Some(format!(
-            "Permission needed · F2 focuses oldest pending request ({})",
+            "Permission needed · / to review oldest pending request ({})",
             self.permissions.len()
         ));
         self.refresh_open_palettes();
@@ -951,6 +1204,16 @@ impl CodeState {
     pub fn step(&mut self, action: CodeAction) -> Vec<CodeEffect> {
         match action {
             CodeAction::Event(event) => self.event(&event),
+            #[cfg(test)]
+            CodeAction::TestCommand(target) => self.effect_for_target(target),
+            #[cfg(test)]
+            CodeAction::TestOpenPalette => {
+                self.open_palette(true, String::new());
+                if let Surface::Palette(list) = &mut self.surface {
+                    list.first();
+                }
+                Vec::new()
+            }
             CodeAction::TurnStarted => {
                 if let Some(pending) = self.pending_prompt.take() {
                     let prompt = pending.prompt;
@@ -992,7 +1255,52 @@ impl CodeState {
             self.viewport = Size::new(*width, *height);
             return Vec::new();
         }
-        if self.agents.is_inspector() {
+        if let Some(key) = pressed(event)
+            && let Some(binding) = self.hotkeys.iter().find(|binding| {
+                binding.key.code == key.code && binding.key.modifiers == key.modifiers
+            })
+        {
+            let action = binding.action.clone();
+            let Some(command) = self
+                .palette_commands()
+                .into_iter()
+                .find(|command| command.hotkey_id().as_deref() == Some(action.as_str()))
+            else {
+                self.notice = Some(format!("Action unavailable in this Code context: {action}"));
+                return Vec::new();
+            };
+            if let Some(reason) = command.unavailable.clone() {
+                self.notice = Some(reason);
+                return Vec::new();
+            }
+            if matches!(self.surface, Surface::Palette(_)) {
+                self.close_choice();
+            }
+            return self.accept_command(command);
+        }
+        if pressed(event).is_some_and(|key| {
+            key.code == KeyCode::Char('/')
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && match &self.surface {
+                    Surface::Conversation
+                        if self.agents.is_expanded() || self.agents.is_inspector() =>
+                    {
+                        self.agents.slash_opens_commands()
+                    }
+                    Surface::Conversation => self.operations_only || self.editor.cursor_byte() == 0,
+                    Surface::Inspector(inspector) => !inspector.searching,
+                    Surface::Permission | Surface::Queue { .. } | Surface::Recovery { .. } => true,
+                    Surface::Palette(_)
+                    | Surface::Selector(_)
+                    | Surface::CommandDecision { .. } => false,
+                }
+        }) {
+            self.open_palette(true, String::new());
+            return Vec::new();
+        }
+        if self.agents.is_inspector() && matches!(self.surface, Surface::Conversation) {
             return self
                 .agents
                 .step(
@@ -1003,30 +1311,9 @@ impl CodeState {
                 .map(CodeEffect::Agent)
                 .collect();
         }
-        if let Some(key) = pressed(event)
-            && key.code == KeyCode::F(2)
-            && !self.permissions.is_empty()
-        {
-            if !matches!(&self.surface, Surface::Permission) {
-                let from_permission_context = matches!(
-                    &self.surface,
-                    Surface::Inspector(OpenInspector {
-                        return_to_permission: true,
-                        ..
-                    })
-                );
-                if !from_permission_context {
-                    self.permission_return = Some(self.surface.clone());
-                }
-                self.permission_selected = None;
-                self.surface = Surface::Permission;
-            }
-            return Vec::new();
-        }
         if !self.operations_only
             && matches!(self.surface, Surface::Conversation)
-            && (self.agents.is_expanded()
-                || pressed(event).is_some_and(|key| key.code == KeyCode::F(5)))
+            && self.agents.is_expanded()
         {
             return self
                 .agents
@@ -1044,6 +1331,7 @@ impl CodeState {
         match self.surface {
             Surface::Conversation => self.conversation_event(event),
             Surface::Palette(_) | Surface::Selector(_) => self.choice_event(event),
+            Surface::CommandDecision { .. } => self.command_decision_event(event),
             Surface::Inspector(_) => self.inspector_event(event),
             Surface::Permission => self.permission_event(event),
             Surface::Queue { .. } => self.queue_event(event),
@@ -1056,18 +1344,6 @@ impl CodeState {
             let Some(key) = pressed(event) else {
                 return Vec::new();
             };
-            if control(key, 'p') {
-                self.open_palette(false, String::new());
-                return Vec::new();
-            }
-            if control(key, 'o') {
-                if let Some(root) = self.operations_root.clone() {
-                    self.open_inspector(root);
-                } else {
-                    self.notice = Some("Target status is still loading".to_string());
-                }
-                return Vec::new();
-            }
             if key.code == KeyCode::Esc
                 || control(key, 'c')
                 || (key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::CONTROL))
@@ -1091,32 +1367,6 @@ impl CodeState {
             return Vec::new();
         }
 
-        if key.code == KeyCode::F(3) && self.has_queue_work() {
-            self.surface = if self.recovery.is_empty() {
-                Surface::Queue { selected: 0 }
-            } else {
-                Surface::Recovery { selected: 0 }
-            };
-            return Vec::new();
-        }
-        if control(key, 'o') {
-            self.inspect_transcript();
-            return Vec::new();
-        }
-        if key.code == KeyCode::F(4) {
-            self.inspect_anchor();
-            return Vec::new();
-        }
-        if control(key, 'p') {
-            self.open_palette(false, String::new());
-            return Vec::new();
-        }
-        if control(key, 'y') {
-            return self.copy_anchor();
-        }
-        if control(key, 'g') && self.turn == TurnState::Ready && self.permissions.is_empty() {
-            return vec![CodeEffect::ExternalEditor];
-        }
         match key.code {
             KeyCode::Esc if self.turn == TurnState::Working => return self.cancel(),
             KeyCode::Esc if self.turn == TurnState::Submitting => {
@@ -1177,14 +1427,6 @@ impl CodeState {
         match self.editor.apply(*key) {
             Edit::Changed => {
                 self.clear_stale_command();
-                if self.editor.text().starts_with('/') {
-                    let query = self
-                        .editor
-                        .text()
-                        .strip_prefix('/')
-                        .map_or_else(String::new, ToString::to_string);
-                    self.open_palette(true, query);
-                }
                 Vec::new()
             }
             Edit::Submitted
@@ -1199,7 +1441,7 @@ impl CodeState {
                 self.notice = Some("Wait for the current transition to settle".to_string());
                 Vec::new()
             }
-            Edit::OpenExternalEditor => vec![CodeEffect::ExternalEditor],
+            Edit::OpenExternalEditor => Vec::new(),
             Edit::ExitRequested => {
                 self.notice = Some("Clear the draft or use Ctrl-C before leaving".to_string());
                 Vec::new()
@@ -1214,8 +1456,8 @@ impl CodeState {
             if let Surface::Palette(list) | Surface::Selector(list) = &mut self.surface {
                 list.query
                     .push_str(&text.replace("\r\n", "\n").replace('\r', "\n"));
+                list.owner_choice = false;
                 list.filter();
-                list.sync_slash_draft(&mut self.editor);
             }
             // A pasted newline is data, not confirmation of an operator action.
             return Vec::new();
@@ -1225,6 +1467,30 @@ impl CodeState {
         };
         if key.code == KeyCode::Esc || control(key, 'c') {
             self.close_choice();
+            return Vec::new();
+        }
+        if key.code == KeyCode::Char('/')
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && matches!(
+                &self.surface,
+                Surface::Palette(ChoiceList {
+                    kind: ChoiceListKind::Palette { slash: true },
+                    query,
+                    return_to: None,
+                    ..
+                }) if query.is_empty()
+                    && !self.operations_only
+                    && (!self.agents.is_expanded() || self.agents.slash_targets_text())
+            )
+        {
+            self.close_choice();
+            if self.agents.slash_targets_text() {
+                self.agents.insert_literal_slash();
+            } else {
+                self.editor.paste("/");
+            }
             return Vec::new();
         }
         let mut accepted = None;
@@ -1238,15 +1504,24 @@ impl CodeState {
                 KeyCode::End => list.last(),
                 KeyCode::Backspace => {
                     list.query.pop();
+                    list.owner_choice = false;
                     list.filter();
-                    list.sync_slash_draft(&mut self.editor);
                 }
-                KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Char(character)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
                     list.query.push(character);
+                    list.owner_choice = false;
                     list.filter();
-                    list.sync_slash_draft(&mut self.editor);
                 }
-                KeyCode::Enter => accepted = list.accepted(),
+                KeyCode::Enter => {
+                    if list.require_owner_choice() {
+                        return Vec::new();
+                    }
+                    accepted = list.accepted();
+                }
                 _ => {}
             }
         }
@@ -1254,7 +1529,17 @@ impl CodeState {
             Some(Accepted::Choice(choice, kind)) => self.accept_choice(choice, kind),
             Some(Accepted::Custom { selector, value }) => {
                 self.remember_selector_mutation(&selector);
+                let from_launcher = matches!(
+                    &self.surface,
+                    Surface::Selector(ChoiceList {
+                        close_launcher_on_accept: true,
+                        ..
+                    })
+                );
                 self.close_choice();
+                if from_launcher {
+                    self.close_choice();
+                }
                 vec![CodeEffect::Select {
                     selector,
                     id: value,
@@ -1276,7 +1561,17 @@ impl CodeState {
                     return Vec::new();
                 };
                 self.remember_selector_mutation(&id);
+                let from_launcher = matches!(
+                    &self.surface,
+                    Surface::Selector(ChoiceList {
+                        close_launcher_on_accept: true,
+                        ..
+                    })
+                );
                 self.close_choice();
+                if from_launcher {
+                    self.close_choice();
+                }
                 vec![CodeEffect::Select {
                     selector: id,
                     id: row.id,
@@ -1288,6 +1583,19 @@ impl CodeState {
                     self.notice = Some(reason);
                     return Vec::new();
                 }
+                let opens_selector = match &command.target {
+                    CommandTarget::ChooseAgent
+                    | CommandTarget::OpenSession
+                    | CommandTarget::Settings => true,
+                    CommandTarget::Report { id } => id == "route" || id == "policy_show",
+                    CommandTarget::LocalAction { action, args } => {
+                        action == "route_set" && args.is_empty()
+                    }
+                    _ => false,
+                };
+                if opens_selector {
+                    self.pending_launcher_return = Some(self.surface.clone());
+                }
                 self.close_choice();
                 self.accept_command(command)
             }
@@ -1298,27 +1606,89 @@ impl CodeState {
         match command.target.clone() {
             CommandTarget::PromptTemplate { prompt } => {
                 let expanded = prompt.replace("$ARGUMENTS", "");
-                self.editor.set_text(expanded.clone());
-                self.selected_command = Some((
-                    expanded.clone(),
-                    CommandTarget::PromptTemplate { prompt: expanded },
-                    command.owner,
-                ));
+                self.surface = Surface::CommandDecision {
+                    decision: CommandDecision::InsertTemplate(expanded),
+                    selected: None,
+                    return_to: Box::new(self.surface.clone()),
+                };
                 Vec::new()
             }
             CommandTarget::AgentPrompt { prompt } => {
-                self.editor.set_text(prompt.clone());
-                self.selected_command = Some((prompt, command.target, command.owner));
                 if self.turn == TurnState::Ready {
-                    self.submit_current()
+                    self.begin_agent_command(prompt)
                 } else {
-                    self.notice =
-                        Some("Enter queues this agent command for the next turn".to_string());
+                    self.surface = Surface::CommandDecision {
+                        decision: CommandDecision::QueueAgent(prompt),
+                        selected: None,
+                        return_to: Box::new(self.surface.clone()),
+                    };
                     Vec::new()
                 }
             }
             target => self.effect_for_target(target),
         }
+    }
+
+    fn begin_agent_command(&mut self, prompt: String) -> Vec<CodeEffect> {
+        if self.operations_only || !self.session_active {
+            self.notice = Some("Choose an active agent before sending its command".to_string());
+            return Vec::new();
+        }
+        self.pending_prompt = Some(PendingPrompt {
+            prompt: prompt.clone(),
+            agent_command: true,
+            from_queue: false,
+        });
+        self.turn = TurnState::Submitting;
+        self.refresh_open_palettes();
+        vec![CodeEffect::AgentPrompt { prompt }]
+    }
+
+    fn command_decision_event(&mut self, event: &Event) -> Vec<CodeEffect> {
+        let Some(key) = pressed(event) else {
+            return Vec::new();
+        };
+        let Surface::CommandDecision {
+            decision,
+            selected,
+            return_to,
+        } = &mut self.surface
+        else {
+            return Vec::new();
+        };
+        if key.code == KeyCode::Esc || control(key, 'c') {
+            self.surface = *return_to.clone();
+            return Vec::new();
+        }
+        match key.code {
+            KeyCode::Up | KeyCode::Down => *selected = Some(0),
+            KeyCode::Enter if selected.is_some() => {
+                let decision = decision.clone();
+                self.surface = *return_to.clone();
+                match decision {
+                    CommandDecision::QueueAgent(prompt) => {
+                        let item = QueuedPrompt {
+                            prompt: prompt.clone(),
+                            owner: Some(CommandOwner::Agent),
+                            target: Some(CommandTarget::AgentPrompt { prompt }),
+                        };
+                        if self.turn == TurnState::Submitting {
+                            self.pending_followups.push_back(item);
+                        } else {
+                            self.queue.push_back(item);
+                        }
+                        self.notice = Some(format!("Queued agent command ({})", self.queue_len()));
+                    }
+                    CommandDecision::InsertTemplate(prompt) => {
+                        self.editor.set_text(prompt);
+                        self.selected_command = None;
+                        self.notice = Some("Template placed in draft for review".to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+        Vec::new()
     }
 
     fn remember_selector_mutation(&mut self, selector: &str) {
@@ -1332,6 +1702,7 @@ impl CodeState {
             }),
             Surface::Conversation
             | Surface::Palette(_)
+            | Surface::CommandDecision { .. }
             | Surface::Inspector(_)
             | Surface::Permission
             | Surface::Queue { .. }
@@ -1350,9 +1721,94 @@ impl CodeState {
             CommandTarget::Settings => vec![CodeEffect::Settings],
             CommandTarget::Report { id } => vec![CodeEffect::Report { id }],
             CommandTarget::ResumeQueue => self.resume_queue(),
+            CommandTarget::ReviewPermission => {
+                let effects = if self.agents.is_inspector() {
+                    self.agents
+                        .command(AgentDeckCommand::Detach, true)
+                        .into_iter()
+                        .map(CodeEffect::Agent)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                self.focus_oldest_permission();
+                effects
+            }
+            CommandTarget::ReviewQueue => {
+                self.surface = if self.recovery.is_empty() {
+                    Surface::Queue { selected: 0 }
+                } else {
+                    Surface::Recovery { selected: 0 }
+                };
+                Vec::new()
+            }
+            CommandTarget::InspectDetail => {
+                if matches!(self.surface, Surface::Permission) {
+                    self.inspect_permission_context();
+                } else if matches!(self.surface, Surface::Inspector(ref inspector) if inspector.tracks_transcript)
+                {
+                    self.inspect_selected_transcript_entry();
+                } else {
+                    self.inspect_anchor();
+                }
+                Vec::new()
+            }
+            CommandTarget::Transcript => {
+                self.inspect_transcript();
+                Vec::new()
+            }
+            CommandTarget::CopyDetail => {
+                if let Surface::Inspector(inspector) = &self.surface {
+                    vec![CodeEffect::Copy {
+                        text: inspector.inspector.content.clone(),
+                    }]
+                } else {
+                    self.copy_anchor()
+                }
+            }
+            CommandTarget::SearchDetail => {
+                if let Surface::Inspector(inspector) = &mut self.surface {
+                    inspector.searching = true;
+                }
+                Vec::new()
+            }
+            CommandTarget::ExternalEditor => vec![CodeEffect::ExternalEditor],
+            CommandTarget::Hotkeys => {
+                self.open_inspector(Inspector::new("Code hotkeys", self.hotkeys_report()));
+                Vec::new()
+            }
             CommandTarget::BackgroundAgents => {
+                if matches!(self.surface, Surface::Permission) {
+                    self.permission_selected = None;
+                    self.surface = Surface::Conversation;
+                    self.notice = Some(
+                        "Foreground permission waiting · background actions are read-only"
+                            .to_string(),
+                    );
+                }
                 self.agents.toggle();
                 Vec::new()
+            }
+            CommandTarget::AgentDeck { action, run_id } => {
+                if run_id.as_deref() != self.agents.selected_run_id()
+                    && !matches!(
+                        action,
+                        AgentDeckCommand::New
+                            | AgentDeckCommand::Open
+                            | AgentDeckCommand::Filter
+                            | AgentDeckCommand::ToggleStopped
+                    )
+                {
+                    self.notice = Some(
+                        "Selected background run changed; choose the action again".to_string(),
+                    );
+                    return Vec::new();
+                }
+                self.agents
+                    .command(action, !self.permissions.is_empty())
+                    .into_iter()
+                    .map(CodeEffect::Agent)
+                    .collect()
             }
             CommandTarget::DetachAndExit => vec![CodeEffect::DetachAndExit],
             CommandTarget::AgentPrompt { prompt } => self.begin_prompt(prompt, true),
@@ -1363,23 +1819,65 @@ impl CodeState {
         }
     }
 
+    fn hotkeys_report(&self) -> String {
+        let mut lines = vec![
+            format!(
+                "Config: {}",
+                self.hotkey_source
+                    .as_deref()
+                    .unwrap_or("No user keymap loaded")
+            ),
+            "Press / to browse all Code actions.".to_string(),
+            "JSON format: {\"F2\": \"review_permission\"}".to_string(),
+        ];
+        if let Some(diagnostic) = &self.hotkey_diagnostic {
+            lines.push(format!("Keymap error: {diagnostic}"));
+        }
+        lines.push(String::new());
+        lines.push("Bindings".to_string());
+        let commands = self.palette_commands();
+        if self.hotkeys.is_empty() {
+            lines.push("  None".to_string());
+        } else {
+            for binding in &self.hotkeys {
+                let command = commands.iter().find(|command| {
+                    command.hotkey_id().as_deref() == Some(binding.action.as_str())
+                });
+                let label =
+                    command.map_or(binding.action.as_str(), |command| command.label.as_str());
+                let status = match command {
+                    Some(Command {
+                        unavailable: Some(reason),
+                        ..
+                    }) => format!(" · unavailable: {reason}"),
+                    None => " · unavailable in this context".to_string(),
+                    _ => String::new(),
+                };
+                lines.push(format!(
+                    "  {} → {} ({}){}",
+                    binding.chord, label, binding.action, status
+                ));
+            }
+        }
+        lines.push(String::new());
+        lines.push("Unbound commands".to_string());
+        for command in &commands {
+            let Some(id) = command.hotkey_id() else {
+                continue;
+            };
+            if !self.hotkeys.iter().any(|binding| binding.action == id) {
+                lines.push(format!("  {} ({id})", command.label));
+            }
+        }
+        lines.join("\n")
+    }
+
     fn permission_event(&mut self, event: &Event) -> Vec<CodeEffect> {
         let Some(key) = pressed(event) else {
             return Vec::new();
         };
         if control(key, 'c') {
             return self.cancel();
-        }
-        if key.code == KeyCode::F(5) && self.agents.has_background_runs() {
-            self.permission_selected = None;
-            if self.agents.is_collapsed() {
-                self.agents.toggle();
-            }
-            self.surface = Surface::Conversation;
-            self.notice = Some(
-                "Foreground permission waiting · background actions are read-only".to_string(),
-            );
-            return Vec::new();
         }
         if !supported_viewport(self.viewport)
             && (key.code == KeyCode::Enter || matches!(key.code, KeyCode::Char('1'..='9')))
@@ -1388,10 +1886,6 @@ impl CodeState {
                 "Approval disabled until every offered choice fits at 40×16 or larger".to_string(),
             );
             self.permission_selected = None;
-            return Vec::new();
-        }
-        if key.code == KeyCode::F(4) {
-            self.inspect_permission_context();
             return Vec::new();
         }
 
@@ -1480,13 +1974,28 @@ impl CodeState {
             .unwrap_or(Surface::Conversation);
     }
 
+    fn focus_oldest_permission(&mut self) {
+        if self.permissions.is_empty() || matches!(self.surface, Surface::Permission) {
+            return;
+        }
+        let from_permission_context = matches!(
+            &self.surface,
+            Surface::Inspector(OpenInspector {
+                return_to_permission: true,
+                ..
+            })
+        );
+        if !from_permission_context {
+            self.permission_return = Some(self.surface.clone());
+        }
+        self.permission_selected = None;
+        self.surface = Surface::Permission;
+    }
+
     fn queue_event(&mut self, event: &Event) -> Vec<CodeEffect> {
         let Some(key) = pressed(event) else {
             return Vec::new();
         };
-        if key.code == KeyCode::Char('r') {
-            return self.resume_queue();
-        }
         let Surface::Queue { selected } = &mut self.surface else {
             return Vec::new();
         };
@@ -1523,7 +2032,7 @@ impl CodeState {
                     *selected = (*selected).min(self.queue.len().saturating_sub(1));
                 }
             }
-            KeyCode::Enter | KeyCode::Char('e') => {
+            KeyCode::Enter => {
                 if !self.editor.text().is_empty() {
                     self.notice =
                         Some("Clear the composer before editing a queued draft".to_string());
@@ -1612,15 +2121,8 @@ impl CodeState {
         let Some(key) = pressed(event) else {
             return Vec::new();
         };
-        if control(key, 'p') {
-            let return_to = self.surface.clone();
-            self.open_palette_returning_to(false, String::new(), Some(Box::new(return_to)));
-            return Vec::new();
-        }
         let mut close = false;
-        let mut copy = None;
         let mut move_entry = None;
-        let mut inspect_entry = false;
         if let Surface::Inspector(inspector) = &mut self.surface {
             if control(key, 'c') {
                 close = true;
@@ -1630,16 +2132,10 @@ impl CodeState {
                 } else {
                     close = true;
                 }
-            } else if control(key, 'f') {
-                inspector.searching = true;
-            } else if control(key, 'y') {
-                copy = Some(inspector.inspector.content.clone());
             } else if inspector.tracks_transcript && key.code == KeyCode::Char('[') {
                 move_entry = Some(-1);
             } else if inspector.tracks_transcript && key.code == KeyCode::Char(']') {
                 move_entry = Some(1);
-            } else if inspector.tracks_transcript && key.code == KeyCode::F(4) {
-                inspect_entry = true;
             } else if inspector.searching {
                 match key.code {
                     KeyCode::Enter => inspector.searching = false,
@@ -1683,9 +2179,6 @@ impl CodeState {
         if let Some(delta) = move_entry {
             self.move_transcript_entry(delta);
         }
-        if inspect_entry {
-            self.inspect_selected_transcript_entry();
-        }
         if close {
             let (return_to_permission, return_to) = match &self.surface {
                 Surface::Inspector(inspector) => {
@@ -1699,10 +2192,7 @@ impl CodeState {
                 self.surface = return_to.map_or(Surface::Conversation, |surface| *surface);
             }
         }
-        match copy {
-            Some(text) => vec![CodeEffect::Copy { text }],
-            None => Vec::new(),
-        }
+        Vec::new()
     }
 
     fn submit_current(&mut self) -> Vec<CodeEffect> {
@@ -2078,26 +2568,30 @@ impl CodeState {
         query: String,
         return_to: Option<Box<Surface>>,
     ) {
+        if matches!(self.surface, Surface::Permission) {
+            self.permission_selected = None;
+        }
         let choices = self
-            .palette_commands(slash)
+            .palette_commands()
             .into_iter()
             .map(Choice::Command)
             .collect::<Vec<_>>();
         let mut list = ChoiceList {
             kind: ChoiceListKind::Palette { slash },
-            title: if slash {
-                "Slash commands".to_string()
-            } else {
-                "Commands".to_string()
-            },
+            title: "Commands".to_string(),
             detail: "Arrow keys move · Enter accepts · Esc restores draft".to_string(),
             query,
             choices,
             matches: Vec::new(),
             selected: None,
+            owner_choice: false,
+            agent_run_anchor: (self.agents.is_expanded() || self.agents.is_inspector())
+                .then(|| self.agents.selected_run_id().map(ToString::to_string))
+                .flatten(),
             allow_custom: false,
             custom_label: String::new(),
             return_to,
+            close_launcher_on_accept: false,
         };
         list.filter();
         self.surface = Surface::Palette(list);
@@ -2139,23 +2633,75 @@ impl CodeState {
         }
     }
 
-    fn palette_commands(&self, slash: bool) -> Vec<Command> {
+    fn palette_commands(&self) -> Vec<Command> {
         let mut commands = self
             .commands
             .iter()
             .filter(|command| {
-                (!slash || command.label.starts_with('/'))
-                    && (!self.operations_only
-                        || !matches!(
-                            &command.target,
-                            CommandTarget::AgentPrompt { .. }
-                                | CommandTarget::PromptTemplate { .. }
-                        ))
+                (!self.operations_only && !self.agents.is_expanded() && !self.agents.is_inspector())
+                    || !matches!(
+                        &command.target,
+                        CommandTarget::AgentPrompt { .. } | CommandTarget::PromptTemplate { .. }
+                    )
             })
             .cloned()
             .map(|command| self.command_with_local_availability(command))
             .collect::<Vec<_>>();
-        if !slash && matches!(self.queue_state, QueueRunState::Paused(_)) {
+        commands.push(self.command_with_local_availability(Command::new(
+            "/hotkeys",
+            "Show configured Code action hotkeys and unbound commands",
+            CommandOwner::BitRouter,
+            CommandTarget::Hotkeys,
+        )));
+        if !self.operations_only {
+            for command in [
+                Command::new(
+                    "Review permission",
+                    "Focus the oldest pending foreground permission",
+                    CommandOwner::BitRouter,
+                    CommandTarget::ReviewPermission,
+                ),
+                Command::new(
+                    "Review queue",
+                    "Inspect queued or recoverable foreground prompts",
+                    CommandOwner::BitRouter,
+                    CommandTarget::ReviewQueue,
+                ),
+                Command::new(
+                    "Inspect detail",
+                    "Inspect the selected retained foreground entry",
+                    CommandOwner::BitRouter,
+                    CommandTarget::InspectDetail,
+                ),
+                Command::new(
+                    "Open transcript",
+                    "Browse the retained foreground transcript",
+                    CommandOwner::BitRouter,
+                    CommandTarget::Transcript,
+                ),
+                Command::new(
+                    "Copy detail",
+                    "Copy the selected retained foreground detail",
+                    CommandOwner::BitRouter,
+                    CommandTarget::CopyDetail,
+                ),
+                Command::new(
+                    "Search detail",
+                    "Search within the currently open inspector",
+                    CommandOwner::BitRouter,
+                    CommandTarget::SearchDetail,
+                ),
+                Command::new(
+                    "Open external editor",
+                    "Edit the foreground draft in the configured editor",
+                    CommandOwner::BitRouter,
+                    CommandTarget::ExternalEditor,
+                ),
+            ] {
+                commands.push(self.command_with_local_availability(command));
+            }
+        }
+        if matches!(self.queue_state, QueueRunState::Paused(_)) {
             let resume = self.command_with_local_availability(Command::new(
                 "Resume queue",
                 "Resume FIFO dispatch after reviewing paused work",
@@ -2164,7 +2710,11 @@ impl CodeState {
             ));
             commands.insert(0, resume);
         }
-        if !self.operations_only && self.journal.commands_received() {
+        if !self.operations_only
+            && !self.agents.is_expanded()
+            && !self.agents.is_inspector()
+            && self.journal.commands_received()
+        {
             commands.extend(self.journal.commands().iter().map(|command| {
                 let label = if command.name.starts_with('/') {
                     command.name.clone()
@@ -2178,7 +2728,8 @@ impl CodeState {
                     CommandTarget::AgentPrompt { prompt: label },
                 )
             }));
-        } else if !self.operations_only && !slash {
+        } else if !self.operations_only && !self.agents.is_expanded() && !self.agents.is_inspector()
+        {
             commands.push(
                 Command::new(
                     "Agent commands",
@@ -2191,7 +2742,7 @@ impl CodeState {
                 .unavailable("Agent command list has not arrived"),
             );
         }
-        if !slash && !self.operations_only {
+        if !self.operations_only {
             commands.push(self.command_with_local_availability(Command::new(
                 "Background agents",
                 "Expand the supervised background-agent command center",
@@ -2204,24 +2755,57 @@ impl CodeState {
                 CommandOwner::BitRouter,
                 CommandTarget::DetachAndExit,
             )));
+            if self.agents.is_expanded() || self.agents.is_inspector() {
+                let run = self.agents.selected_run_id().unwrap_or("no selected run");
+                for (label, action) in [
+                    ("Reply to run", AgentDeckCommand::Reply),
+                    ("New background run", AgentDeckCommand::New),
+                    ("Attach run", AgentDeckCommand::Attach),
+                    ("Peek run", AgentDeckCommand::Peek),
+                    ("Review run permission", AgentDeckCommand::ReviewPermission),
+                    ("Take over run", AgentDeckCommand::Takeover),
+                    ("Cancel run", AgentDeckCommand::Cancel),
+                    ("Stop run", AgentDeckCommand::Stop),
+                    ("Mark run reviewed", AgentDeckCommand::MarkReviewed),
+                    ("Detach from run", AgentDeckCommand::Detach),
+                    ("Filter background runs", AgentDeckCommand::Filter),
+                    ("Toggle stopped runs", AgentDeckCommand::ToggleStopped),
+                    ("Search run detail", AgentDeckCommand::Search),
+                    ("Copy run detail", AgentDeckCommand::Copy),
+                    ("Export run detail", AgentDeckCommand::Export),
+                ] {
+                    commands.push(self.command_with_local_availability(Command::new(
+                        label,
+                        format!("Selected background run: {run}"),
+                        CommandOwner::BitRouter,
+                        CommandTarget::AgentDeck {
+                            action,
+                            run_id: self.agents.selected_run_id().map(ToString::to_string),
+                        },
+                    )));
+                }
+            }
+        }
+        if !self.permissions.is_empty()
+            && let Some(index) = commands
+                .iter()
+                .position(|command| matches!(command.target, CommandTarget::ReviewPermission))
+        {
+            let command = commands.remove(index);
+            commands.insert(0, command);
         }
         commands
     }
 
     fn refresh_open_palettes(&mut self) {
         let full = self
-            .palette_commands(false)
+            .palette_commands()
             .into_iter()
             .map(Choice::Command)
             .collect::<Vec<_>>();
-        let slash = self
-            .palette_commands(true)
-            .into_iter()
-            .map(Choice::Command)
-            .collect::<Vec<_>>();
-        refresh_palette_surface(&mut self.surface, &full, &slash);
+        refresh_palette_surface(&mut self.surface, &full);
         if let Some(surface) = &mut self.permission_return {
-            refresh_palette_surface(surface, &full, &slash);
+            refresh_palette_surface(surface, &full);
         }
     }
 
@@ -2229,6 +2813,10 @@ impl CodeState {
         if command.unavailable.is_some() {
             return command;
         }
+        let source_surface = match &self.surface {
+            Surface::Palette(list) => list.return_to.as_deref().unwrap_or(&self.surface),
+            surface => surface,
+        };
         let unavailable = match &command.target {
             CommandTarget::ChooseAgent | CommandTarget::NewSession => {
                 self.session_replacement_reason()
@@ -2251,7 +2839,35 @@ impl CodeState {
                     })
             }),
             CommandTarget::ResumeQueue => self.resume_queue_reason(),
+            CommandTarget::ReviewPermission => self
+                .permissions
+                .is_empty()
+                .then_some("No foreground permission is pending".to_string()),
+            CommandTarget::ReviewQueue => {
+                (!self.has_queue_work()).then_some("No queued or recoverable prompts".to_string())
+            }
+            CommandTarget::InspectDetail | CommandTarget::CopyDetail => {
+                (self.journal.entries().next().is_none()
+                    && !matches!(source_surface, Surface::Inspector(_) | Surface::Permission))
+                .then_some("No retained entry to inspect".to_string())
+            }
+            CommandTarget::SearchDetail => (!matches!(source_surface, Surface::Inspector(_)))
+                .then_some("Open a detail inspector before searching".to_string()),
+            CommandTarget::Transcript => self
+                .journal
+                .entries()
+                .next()
+                .is_none()
+                .then_some("No transcript to inspect".to_string()),
+            CommandTarget::ExternalEditor => (self.turn != TurnState::Ready
+                || !self.permissions.is_empty())
+            .then_some("Editor is available only at idle without a pending permission".to_string()),
+            CommandTarget::Hotkeys => None,
             CommandTarget::BackgroundAgents => None,
+            CommandTarget::AgentDeck { action, .. } => self
+                .agents
+                .command_unavailable(*action, !self.permissions.is_empty())
+                .map(ToString::to_string),
             CommandTarget::DetachAndExit => (!self.session_active)
                 .then_some("Choose an agent before detaching this session".to_string())
                 .or_else(|| {
@@ -2450,7 +3066,7 @@ impl CodeState {
     fn inspect_selected_transcript_entry(&mut self) {
         if !self.permissions.is_empty() {
             self.notice =
-                Some("Permission needed · F2 to review before opening details".to_string());
+                Some("Permission needed · / to review before opening details".to_string());
             return;
         }
         let target = match &self.surface {
@@ -2539,6 +3155,7 @@ impl ChoiceList {
         selector: &Selector,
         choices: Vec<Choice>,
         return_to: Option<Box<Surface>>,
+        close_launcher_on_accept: bool,
     ) -> Self {
         let mut list = Self {
             kind: ChoiceListKind::Selector {
@@ -2550,9 +3167,12 @@ impl ChoiceList {
             choices,
             matches: Vec::new(),
             selected: None,
+            owner_choice: false,
+            agent_run_anchor: None,
             allow_custom: selector.allow_custom,
             custom_label: selector.custom_label.clone(),
             return_to,
+            close_launcher_on_accept,
         };
         list.filter();
         list
@@ -2567,7 +3187,43 @@ impl ChoiceList {
             .filter(|(_, choice)| choice.searchable().to_lowercase().contains(&query))
             .map(|(index, _)| index)
             .collect();
-        self.selected = (!self.matches.is_empty()).then_some(0);
+        self.selected = (!self.matches.is_empty()
+            && !(self.query.is_empty() && matches!(self.kind, ChoiceListKind::Palette { .. })))
+        .then_some(0);
+    }
+
+    fn require_owner_choice(&mut self) -> bool {
+        if !matches!(self.kind, ChoiceListKind::Palette { .. })
+            || self.owner_choice
+            || self.query.trim().is_empty()
+        {
+            return false;
+        }
+        let query = self.query.trim().trim_start_matches('/');
+        let exact = self
+            .matches
+            .iter()
+            .copied()
+            .filter(|index| {
+                matches!(self.choices.get(*index), Some(Choice::Command(command))
+                    if command.label.trim_start_matches('/').eq_ignore_ascii_case(query))
+            })
+            .collect::<Vec<_>>();
+        let owners = exact
+            .iter()
+            .filter_map(|index| match self.choices.get(*index) {
+                Some(Choice::Command(command)) => Some(command.owner),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        if owners.len() < 2 {
+            return false;
+        }
+        self.matches = exact;
+        self.selected = None;
+        self.owner_choice = true;
+        self.detail = "Choose the command owner with ↑↓, then Enter".to_string();
+        true
     }
 
     fn replace_choices(&mut self, choices: Vec<Choice>) {
@@ -2577,6 +3233,7 @@ impl ChoiceList {
             .and_then(|index| self.choices.get(*index))
             .cloned();
         self.choices = choices;
+        self.owner_choice = false;
         self.filter();
         if let Some(selected) = selected {
             self.selected = self.matches.iter().position(|index| {
@@ -2589,6 +3246,7 @@ impl ChoiceList {
 
     fn move_by(&mut self, delta: isize) {
         let Some(selected) = self.selected else {
+            self.selected = (!self.matches.is_empty()).then_some(0);
             return;
         };
         self.selected = Some(
@@ -2628,22 +3286,37 @@ impl ChoiceList {
         }
         None
     }
-
-    fn sync_slash_draft(&self, editor: &mut Editor) {
-        if matches!(self.kind, ChoiceListKind::Palette { slash: true }) {
-            editor.set_text(format!("/{}", self.query));
-        }
-    }
 }
 
-fn refresh_palette_surface(surface: &mut Surface, full: &[Choice], slash: &[Choice]) {
+fn refresh_palette_surface(surface: &mut Surface, full: &[Choice]) {
     if let Surface::Palette(list) = surface {
         let choices = match list.kind {
-            ChoiceListKind::Palette { slash: true } => slash,
-            ChoiceListKind::Palette { slash: false } => full,
+            ChoiceListKind::Palette { .. } => full,
             ChoiceListKind::Selector { .. } => return,
         };
-        list.replace_choices(choices.to_vec());
+        let mut choices = choices.to_vec();
+        if let Some(anchor) = &list.agent_run_anchor {
+            for choice in &mut choices {
+                let Choice::Command(command) = choice else {
+                    continue;
+                };
+                if let CommandTarget::AgentDeck { action, run_id } = &mut command.target
+                    && !matches!(
+                        action,
+                        AgentDeckCommand::New
+                            | AgentDeckCommand::Open
+                            | AgentDeckCommand::Filter
+                            | AgentDeckCommand::ToggleStopped
+                    )
+                    && run_id.as_deref() != Some(anchor.as_str())
+                {
+                    *run_id = Some(anchor.clone());
+                    command.unavailable =
+                        Some("Selected background run changed; close and reopen /".to_string());
+                }
+            }
+        }
+        list.replace_choices(choices);
     }
 }
 
@@ -2702,6 +3375,7 @@ fn surface_returns_to_permission(surface: &Surface) -> bool {
             .return_to
             .as_deref()
             .is_some_and(surface_returns_to_permission),
+        Surface::CommandDecision { return_to, .. } => surface_returns_to_permission(return_to),
         Surface::Conversation | Surface::Queue { .. } | Surface::Recovery { .. } => false,
     }
 }
@@ -2835,7 +3509,21 @@ impl CodeView {
         } else {
             self.writer.size()
         };
-        if matches!(state.surface, Surface::Inspector(_)) || state.agents.is_inspector() {
+        let returning_to_inspector = matches!(
+            &state.surface,
+            Surface::Palette(ChoiceList {
+                return_to: Some(return_to),
+                ..
+            }) if matches!(return_to.as_ref(), Surface::Inspector(_))
+        ) || matches!(
+            &state.surface,
+            Surface::CommandDecision { return_to, .. }
+                if matches!(return_to.as_ref(), Surface::Inspector(_))
+        );
+        if matches!(state.surface, Surface::Inspector(_))
+            || state.agents.is_inspector()
+            || returning_to_inspector
+        {
             return self.draw_detached(state);
         }
         self.close_detached()?;
@@ -3063,7 +3751,7 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
             },
             |pending| {
                 format!(
-                    "Resize terminal to at least 40×16. Permission {} · {}\nF2 Review · Esc Deny · Ctrl-C Cancel turn\nApproval is disabled until every offered choice fits.",
+                    "Resize terminal to at least 40×16. Permission {} · {}\n/ Review · Esc Deny · Ctrl-C Cancel turn\nApproval is disabled until every offered choice fits.",
                     safe_one_line(pending.prompt.id()),
                     safe_one_line(pending.prompt.title())
                 )
@@ -3105,13 +3793,16 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
             Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
         match &state.surface {
             Surface::Conversation => frame.render_widget(
-                Paragraph::new("Ctrl-P opens target actions · Ctrl-O refreshes status")
+                Paragraph::new("/ Commands · Ctrl-C Exit")
                     .style(Style::default().fg(Color::DarkGray)),
                 content,
             ),
             Surface::Palette(list) | Surface::Selector(list) => {
                 render_choice_list(frame, content, list)
             }
+            Surface::CommandDecision {
+                decision, selected, ..
+            } => render_command_decision(frame, content, decision, *selected),
             Surface::Queue { selected } => render_queue_editor(frame, content, state, *selected),
             Surface::Recovery { selected } => {
                 render_recovery_editor(frame, content, state, *selected)
@@ -3119,8 +3810,7 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
             Surface::Permission | Surface::Inspector(_) => {}
         }
         frame.render_widget(
-            Paragraph::new("Ctrl-P Commands · Ctrl-O Status details · Ctrl-C Exit")
-                .style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new("/ Commands · Ctrl-C Exit").style(Style::default().fg(Color::DarkGray)),
             hint_area,
         );
         return None;
@@ -3142,7 +3832,7 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
         Surface::Conversation => {
             if state.operations_only {
                 frame.render_widget(
-                    Paragraph::new("Ctrl-P opens the available target actions.")
+                    Paragraph::new("/ opens the available target actions.")
                         .style(Style::default().fg(Color::DarkGray)),
                     content,
                 );
@@ -3178,6 +3868,9 @@ fn render_dock(frame: &mut Frame<'_>, state: &CodeState, terminal_size: Size) ->
         Surface::Palette(list) | Surface::Selector(list) => {
             render_choice_list(frame, content, list)
         }
+        Surface::CommandDecision {
+            decision, selected, ..
+        } => render_command_decision(frame, content, decision, *selected),
         Surface::Permission => render_permission(frame, content, state),
         Surface::Queue { selected } => render_queue_editor(frame, content, state, *selected),
         Surface::Recovery { selected } => render_recovery_editor(frame, content, state, *selected),
@@ -3202,15 +3895,44 @@ fn render_detached_frame(frame: &mut Frame<'_>, state: &CodeState) {
         state
             .agents
             .render_inspector(frame, !state.permissions.is_empty());
+        if let Surface::Palette(list) = &state.surface {
+            let area = centered(frame.area(), 80, 70, 38, 10);
+            frame.render_widget(Clear, area);
+            render_choice_list(frame, area, list);
+        }
         return;
     }
-    if let Surface::Inspector(inspector) = &state.surface {
+    let inspector = match &state.surface {
+        Surface::Inspector(inspector) => Some(inspector),
+        Surface::Palette(list) => match list.return_to.as_deref() {
+            Some(Surface::Inspector(inspector)) => Some(inspector),
+            _ => None,
+        },
+        Surface::CommandDecision { return_to, .. } => match return_to.as_ref() {
+            Surface::Inspector(inspector) => Some(inspector),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(inspector) = inspector {
         render_inspector(frame, frame.area(), inspector);
+        if let Surface::Palette(list) = &state.surface {
+            let area = centered(frame.area(), 80, 70, 38, 10);
+            frame.render_widget(Clear, area);
+            render_choice_list(frame, area, list);
+        } else if let Surface::CommandDecision {
+            decision, selected, ..
+        } = &state.surface
+        {
+            let area = centered(frame.area(), 80, 40, 38, 5);
+            frame.render_widget(Clear, area);
+            render_command_decision(frame, area, decision, *selected);
+        }
         if !state.permissions.is_empty() {
             let notice = Rect::new(frame.area().x, frame.area().y, frame.area().width, 1);
             frame.render_widget(
                 Paragraph::new(format!(
-                    "Permission needed · F2 to review ({})",
+                    "Permission needed · / to review ({})",
                     state.permissions.len()
                 ))
                 .style(Style::default().fg(Color::Yellow)),
@@ -3437,7 +4159,7 @@ fn render_operations_base(frame: &mut Frame<'_>, area: Rect, state: &CodeState) 
         body,
     );
     frame.render_widget(
-        Paragraph::new("Ctrl-P commands · Esc close").style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new("/ Commands · Esc close").style(Style::default().fg(Color::DarkGray)),
         hint_area,
     );
 }
@@ -3449,6 +4171,14 @@ fn render_surface(frame: &mut Frame<'_>, state: &CodeState) {
         Surface::Palette(list) | Surface::Selector(list) => {
             render_choice_list(frame, centered(frame.area(), 86, 70, 12, 20), list)
         }
+        Surface::CommandDecision {
+            decision, selected, ..
+        } => render_command_decision(
+            frame,
+            centered(frame.area(), 82, 60, 8, 14),
+            decision,
+            *selected,
+        ),
         Surface::Inspector(inspector) => {
             render_inspector(frame, centered(frame.area(), 96, 90, 14, 22), inspector)
         }
@@ -3620,12 +4350,12 @@ fn compact_tool_lines(
         lines.truncate(limit);
         let summary = match call.status {
             ToolCallStatus::Completed => {
-                format!("  [{hidden} more rows · F4 inspects full tool output]")
+                format!("  [{hidden} more rows · / Inspect detail]")
             }
             ToolCallStatus::Failed => {
-                format!("  [{hidden} more diagnostic rows · F4 inspects full tool output]")
+                format!("  [{hidden} more diagnostic rows · / Inspect detail]")
             }
-            _ => format!("  [{hidden} more rows · F4 inspects full tool output]"),
+            _ => format!("  [{hidden} more rows · / Inspect detail]"),
         };
         lines.push(Line::styled(summary, Style::default().fg(Color::DarkGray)));
     }
@@ -3637,7 +4367,10 @@ fn render_queue_summary(frame: &mut Frame<'_>, area: Rect, state: &CodeState) {
     let rail = Style::default().fg(Color::DarkGray);
     let mut lines = vec![Line::from(vec![
         Span::styled("┋ ", rail),
-        Span::styled("Queued next · F3 edit", rail.add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Queued next · / Review queue",
+            rail.add_modifier(Modifier::BOLD),
+        ),
     ])];
     lines.extend(
         state
@@ -3923,15 +4656,15 @@ fn line_width(line: &Line<'_>) -> usize {
 
 fn hint(state: &CodeState) -> String {
     if state.operations_only {
-        return "Ctrl-P commands · Esc close".to_string();
+        return "/ Commands · Esc close".to_string();
     }
     match state.turn {
         TurnState::Submitting | TurnState::Working => {
             if state.permissions.is_empty() {
-                "Enter queue next · Esc interrupt · Ctrl-P commands · F3 queue".to_string()
+                "Enter queue next · Esc interrupt · / Commands".to_string()
             } else {
                 format!(
-                    "F2 permission ({}) · Enter queue next · Esc interrupt · Ctrl-P commands",
+                    "Permission ({}) · / to review · Enter queue next · Esc interrupt",
                     state.permissions.len()
                 )
             }
@@ -3939,15 +4672,12 @@ fn hint(state: &CodeState) -> String {
         TurnState::Cancelling => "Cancelling · wait for the agent to settle".to_string(),
         TurnState::Ready => {
             if let QueueRunState::Paused(reason) = &state.queue_state {
-                return format!("Queue paused: {} · F3 review/resume", safe_one_line(reason));
+                return format!("Queue paused: {} · / to review", safe_one_line(reason));
             }
             if state.permissions.is_empty() {
-                "Ctrl-P commands · Ctrl-O details · F2 permissions · F3 queue".to_string()
+                "/ Commands".to_string()
             } else {
-                format!(
-                    "F2 permission ({}) · Ctrl-P commands · Ctrl-O details",
-                    state.permissions.len()
-                )
+                format!("Permission ({}) · / to review", state.permissions.len())
             }
         }
     }
@@ -3961,6 +4691,32 @@ fn choice_detail_lines(list: &ChoiceList, width: u16) -> Vec<Line<'static>> {
         .lines()
         .flat_map(|line| wrap(&Line::from(line.to_owned()), width.max(1)))
         .collect()
+}
+
+fn render_command_decision(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    decision: &CommandDecision,
+    selected: Option<usize>,
+) {
+    let (title, action) = match decision {
+        CommandDecision::QueueAgent(prompt) => (
+            format!("Queue agent command: {}", safe_one_line(prompt)),
+            "Queue command",
+        ),
+        CommandDecision::InsertTemplate(_) => (
+            "Place template in draft? Existing text will be replaced.".to_string(),
+            "Replace draft",
+        ),
+    };
+    let marker = if selected.is_some() { "▶" } else { " " };
+    frame.render_widget(
+        Paragraph::new(format!(
+            "{title}\n{marker} {action}\n↑↓ Select · Enter confirm · Esc keep draft"
+        ))
+        .wrap(Wrap { trim: true }),
+        area,
+    );
 }
 
 fn render_choice_list(frame: &mut Frame<'_>, viewport: Rect, list: &ChoiceList) {
@@ -4099,9 +4855,9 @@ fn render_inspector(frame: &mut Frame<'_>, viewport: Rect, inspector: &OpenInspe
     );
     frame.render_widget(
         Paragraph::new(if inspector.tracks_transcript {
-            "[/] entries · F4 inspect · Ctrl-F search · Ctrl-Y copy · Esc/Ctrl-C close"
+            "[/] entries · / Commands (inspect, search, copy) · Esc close"
         } else {
-            "Ctrl-P commands · Ctrl-F search · Ctrl-Y copy · Esc/Ctrl-C close"
+            "/ Commands (search, copy) · Esc close"
         })
         .style(Style::default().fg(Color::DarkGray)),
         footer,
@@ -4140,7 +4896,7 @@ fn render_permission(frame: &mut Frame<'_>, viewport: Rect, state: &CodeState) {
         ));
         header.push(Line::styled(
             truncate_cells(
-                "F4 inspects complete command, diff, and location context",
+                "/ Inspect detail for complete command, diff, and location context",
                 width,
             ),
             Style::default().fg(Color::DarkGray),
@@ -4519,10 +5275,28 @@ mod tests {
     use super::*;
 
     fn press(code: KeyCode) -> CodeAction {
+        match code {
+            KeyCode::F(2) => CodeAction::TestCommand(CommandTarget::ReviewPermission),
+            KeyCode::F(3) => CodeAction::TestCommand(CommandTarget::ReviewQueue),
+            KeyCode::F(4) => CodeAction::TestCommand(CommandTarget::InspectDetail),
+            KeyCode::F(5) => CodeAction::TestCommand(CommandTarget::BackgroundAgents),
+            _ => CodeAction::Event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE))),
+        }
+    }
+
+    fn raw(code: KeyCode) -> CodeAction {
         CodeAction::Event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
     }
 
     fn ctrl(character: char) -> CodeAction {
+        match character {
+            'p' => return CodeAction::TestOpenPalette,
+            'o' => return CodeAction::TestCommand(CommandTarget::Transcript),
+            'y' => return CodeAction::TestCommand(CommandTarget::CopyDetail),
+            'g' => return CodeAction::TestCommand(CommandTarget::ExternalEditor),
+            'f' => return CodeAction::TestCommand(CommandTarget::SearchDetail),
+            _ => {}
+        }
         CodeAction::Event(Event::Key(KeyEvent::new(
             KeyCode::Char(character),
             KeyModifiers::CONTROL,
@@ -4531,6 +5305,244 @@ mod tests {
 
     fn paste(text: &str) -> CodeAction {
         CodeAction::Event(Event::Paste(text.to_string()))
+    }
+
+    #[test]
+    fn slash_launcher_restores_the_exact_draft_on_escape() {
+        let mut state = active_state();
+        state.editor.set_text("🧪 first\nsecond / path");
+        let _ = state
+            .editor
+            .apply(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+        let before = format!("{:?}", state.editor);
+        assert!(state.step(raw(KeyCode::Char('/'))).is_empty());
+        assert!(matches!(state.surface, Surface::Palette(_)));
+        let _ = state.step(raw(KeyCode::Char('n')));
+        assert_eq!(format!("{:?}", state.editor), before);
+        assert!(state.step(raw(KeyCode::Esc)).is_empty());
+        assert!(matches!(state.surface, Surface::Conversation));
+        assert_eq!(format!("{:?}", state.editor), before);
+    }
+
+    #[test]
+    fn literal_slash_and_paste_do_not_open_commands() {
+        let mut state = active_state();
+        let _ = state.step(raw(KeyCode::Char('/')));
+        let _ = state.step(raw(KeyCode::Char('/')));
+        assert!(matches!(state.surface, Surface::Conversation));
+        assert_eq!(state.editor.text(), "/");
+        let _ = state.step(paste("/status\nnot a command"));
+        assert!(matches!(state.surface, Surface::Conversation));
+        assert_eq!(state.editor.text(), "//status\nnot a command");
+    }
+
+    #[test]
+    fn permission_requires_slash_selection_without_a_default_f_key() {
+        let mut state = active_state();
+        let _ = state.receive_permission(question("slash-permission"));
+        assert!(state.step(raw(KeyCode::F(2))).is_empty());
+        assert!(matches!(state.surface, Surface::Conversation));
+        let _ = state.step(raw(KeyCode::Char('/')));
+        for character in "review permission".chars() {
+            let _ = state.step(raw(KeyCode::Char(character)));
+        }
+        assert!(state.step(raw(KeyCode::Enter)).is_empty());
+        assert!(matches!(state.surface, Surface::Permission));
+        assert!(state.permission_selected.is_none());
+        assert!(state.step(raw(KeyCode::Enter)).is_empty());
+        assert_eq!(state.permissions.len(), 1);
+    }
+
+    #[test]
+    fn configured_hotkey_uses_the_same_guarded_permission_action() -> Result<(), String> {
+        let mut state = active_state();
+        let binding = CodeHotkey::parse("F2", "review_permission")?;
+        state.set_hotkeys("test keymap", vec![binding])?;
+        assert!(
+            state
+                .hotkeys_report()
+                .contains("unavailable: No foreground permission")
+        );
+        let _ = state.receive_permission(question("bound-permission"));
+        assert!(state.step(raw(KeyCode::F(2))).is_empty());
+        assert!(matches!(state.surface, Surface::Permission));
+        assert!(state.permission_selected.is_none());
+        assert!(state.hotkeys_report().contains("F2 → Review permission"));
+        Ok(())
+    }
+
+    #[test]
+    fn new_session_command_keeps_an_unsent_draft() {
+        let mut state = active_state();
+        state.set_commands(vec![Command::new(
+            "/new",
+            "Fresh native session",
+            CommandOwner::BitRouter,
+            CommandTarget::NewSession,
+        )]);
+        state.editor.set_text("unsent 🧪 draft");
+        let _ = state
+            .editor
+            .apply(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+        let before = format!("{:?}", state.editor);
+        let _ = state.step(raw(KeyCode::Char('/')));
+        for character in "new".chars() {
+            let _ = state.step(raw(KeyCode::Char(character)));
+        }
+        assert!(matches!(
+            state.step(raw(KeyCode::Enter)).as_slice(),
+            [CodeEffect::NewSession]
+        ));
+        assert_eq!(format!("{:?}", state.editor), before);
+    }
+
+    #[test]
+    fn agent_command_from_launcher_sends_separately_from_the_human_draft() {
+        let mut state = active_state();
+        state.set_commands(vec![Command::new(
+            "/agent-check",
+            "Ask the active agent for status",
+            CommandOwner::Agent,
+            CommandTarget::AgentPrompt {
+                prompt: "/agent-check".to_string(),
+            },
+        )]);
+        state.editor.set_text("human draft");
+        let _ = state
+            .editor
+            .apply(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+        let before = format!("{:?}", state.editor);
+        let _ = state.step(raw(KeyCode::Char('/')));
+        for character in "agent-check".chars() {
+            let _ = state.step(raw(KeyCode::Char(character)));
+        }
+        assert!(matches!(
+            state.step(raw(KeyCode::Enter)).as_slice(),
+            [CodeEffect::AgentPrompt { prompt }] if prompt == "/agent-check"
+        ));
+        assert_eq!(format!("{:?}", state.editor), before);
+    }
+
+    #[test]
+    fn template_requires_explicit_replacement_of_an_existing_draft() {
+        let mut state = active_state();
+        state.set_commands(vec![Command::new(
+            "/template",
+            "Insert a saved prompt",
+            CommandOwner::PromptTemplate,
+            CommandTarget::PromptTemplate {
+                prompt: "expanded prompt".to_string(),
+            },
+        )]);
+        state.editor.set_text("keep this draft");
+        let _ = state
+            .editor
+            .apply(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+        let _ = state.step(raw(KeyCode::Char('/')));
+        for character in "template".chars() {
+            let _ = state.step(raw(KeyCode::Char(character)));
+        }
+        let _ = state.step(raw(KeyCode::Enter));
+        assert!(matches!(state.surface, Surface::CommandDecision { .. }));
+        assert_eq!(state.editor.text(), "keep this draft");
+        let _ = state.step(raw(KeyCode::Enter));
+        assert_eq!(state.editor.text(), "keep this draft");
+        let _ = state.step(raw(KeyCode::Down));
+        let _ = state.step(raw(KeyCode::Enter));
+        assert_eq!(state.editor.text(), "expanded prompt");
+    }
+
+    #[test]
+    fn slash_from_inspector_restores_its_scroll_and_renders_over_it() -> io::Result<()> {
+        let mut state = active_state();
+        state.open_inspector(Inspector::new("Detail", "one\ntwo\nthree\nfour"));
+        let _ = state.step(raw(KeyCode::Down));
+        let before = match &state.surface {
+            Surface::Inspector(inspector) => inspector.scroll,
+            _ => 0,
+        };
+        let _ = state.step(raw(KeyCode::Char('/')));
+        let mut terminal = Terminal::new(TestBackend::new(80, 24))?;
+        terminal.draw(|frame| render_detached_frame(frame, &state))?;
+        assert!(grid(terminal.backend()).contains("Commands"));
+        let _ = state.step(raw(KeyCode::Esc));
+        assert!(
+            matches!(&state.surface, Surface::Inspector(inspector) if inspector.scroll == before)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cancelling_a_picker_returns_to_the_launcher_then_the_draft() {
+        let mut state = active_state();
+        state.set_commands(vec![Command::new(
+            "Choose agent",
+            "Open an ACP agent",
+            CommandOwner::BitRouter,
+            CommandTarget::ChooseAgent,
+        )]);
+        state.editor.set_text("unsent draft");
+        let _ = state
+            .editor
+            .apply(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL));
+        let before = format!("{:?}", state.editor);
+        let _ = state.step(raw(KeyCode::Char('/')));
+        for character in "choose agent".chars() {
+            let _ = state.step(raw(KeyCode::Char(character)));
+        }
+        assert!(matches!(
+            state.step(raw(KeyCode::Enter)).as_slice(),
+            [CodeEffect::ChooseAgent]
+        ));
+        state.set_selectors(vec![Selector::new("agent", "Choose agent", "", Vec::new())]);
+        assert!(state.open_selector("agent"));
+        let _ = state.step(raw(KeyCode::Esc));
+        assert!(matches!(state.surface, Surface::Palette(_)));
+        let _ = state.step(raw(KeyCode::Esc));
+        assert!(matches!(state.surface, Surface::Conversation));
+        assert_eq!(format!("{:?}", state.editor), before);
+    }
+
+    #[test]
+    fn accepting_custom_picker_value_closes_the_launcher() {
+        let mut state = active_state();
+        state.set_commands(vec![Command::new(
+            "Route preview",
+            "Preview a model route",
+            CommandOwner::BitRouter,
+            CommandTarget::Report {
+                id: "route".to_string(),
+            },
+        )]);
+        let _ = state.step(raw(KeyCode::Char('/')));
+        for character in "route preview".chars() {
+            let _ = state.step(raw(KeyCode::Char(character)));
+        }
+        assert!(matches!(
+            state.step(raw(KeyCode::Enter)).as_slice(),
+            [CodeEffect::Report { id }] if id == "route"
+        ));
+        state.set_selectors(vec![
+            Selector::new("preview", "Route preview", "", Vec::new()).allow_custom("Model"),
+        ]);
+        assert!(state.open_selector("preview"));
+        let _ = state.step(raw(KeyCode::Char('x')));
+        assert!(matches!(
+            state.step(raw(KeyCode::Enter)).as_slice(),
+            [CodeEffect::Select { selector, id, custom: true }]
+                if selector == "preview" && id == "x"
+        ));
+        assert!(matches!(state.surface, Surface::Conversation));
+    }
+
+    #[test]
+    fn invalid_hotkey_chords_and_unknown_actions_are_rejected() -> Result<(), String> {
+        assert!(CodeHotkey::parse("Ctrl-I", "hotkeys").is_err());
+        assert!(CodeHotkey::parse("r", "hotkeys").is_err());
+        let mut state = active_state();
+        let binding = CodeHotkey::parse("F2", "unknown_action")?;
+        assert!(state.set_hotkeys("test keymap", vec![binding]).is_err());
+        Ok(())
     }
 
     fn option(id: &str, kind: PermissionOptionKind) -> PermissionOption {
@@ -4765,7 +5777,7 @@ mod tests {
             state.queue.front().map(|item| item.prompt.as_str()),
             Some("second")
         );
-        let resumed = state.step(press(KeyCode::Char('r')));
+        let resumed = state.step(CodeAction::TestCommand(CommandTarget::ResumeQueue));
         assert!(matches!(
             &resumed[..],
             [CodeEffect::Submit { prompt }] if prompt == "second"
@@ -4778,7 +5790,7 @@ mod tests {
     }
 
     #[test]
-    fn paused_queue_resume_is_a_full_palette_action_not_a_slash_alias() {
+    fn slash_launcher_exposes_the_full_action_inventory() {
         let mut state = active_state();
         start_working(&mut state, "active");
         let _ = state.step(paste("queued"));
@@ -4817,7 +5829,7 @@ mod tests {
         assert!(
             list.choices
                 .iter()
-                .all(|choice| choice.label().starts_with('/'))
+                .any(|choice| choice.label() == "Review queue")
         );
         assert!(
             !list
@@ -4865,7 +5877,7 @@ mod tests {
         })?;
         let rendered = grid(terminal.backend());
         assert!(rendered.contains("small-permission"), "{rendered}");
-        assert!(rendered.contains("F2 Review"), "{rendered}");
+        assert!(rendered.contains("/ Review"), "{rendered}");
         assert!(rendered.contains("Approval is disabled"), "{rendered}");
 
         let denied = state.step(press(KeyCode::Esc));
@@ -5106,11 +6118,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             _ => Vec::new(),
         };
-        assert_eq!(working_reasons.len(), 4);
+        assert_eq!(
+            working_reasons
+                .iter()
+                .filter(|reason| reason.contains("current turn"))
+                .count(),
+            4
+        );
         assert!(
             working_reasons
                 .iter()
-                .all(|reason| reason.contains("current turn"))
+                .any(|reason| reason.contains("current turn"))
         );
 
         assert!(
@@ -5131,11 +6149,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             _ => Vec::new(),
         };
-        assert_eq!(permission_reasons.len(), 4);
+        assert_eq!(
+            permission_reasons
+                .iter()
+                .filter(|reason| reason.contains("pending permissions"))
+                .count(),
+            4
+        );
         assert!(
             permission_reasons
                 .iter()
-                .all(|reason| reason.contains("pending permissions"))
+                .any(|reason| reason.contains("pending permissions"))
         );
     }
 
@@ -5159,6 +6183,14 @@ mod tests {
         ));
 
         let _ = state.step(ctrl('p'));
+        for character in "route".chars() {
+            let _ = state.step(press(KeyCode::Char(character)));
+        }
+        if let Surface::Palette(list) = &mut state.surface {
+            list.selected = list.matches.iter().position(|index| {
+                matches!(list.choices.get(*index), Some(Choice::Command(command)) if command.owner == CommandOwner::Agent)
+            });
+        }
         let registry = Registry::default();
         let mut cache = DocumentCache::default();
         let mut terminal = Terminal::new(TestBackend::new(80, 24))?;
@@ -5166,6 +6198,8 @@ mod tests {
         let palette = grid(terminal.backend());
         assert!(palette.contains("BitRouter"));
         assert!(palette.contains("Agent"));
+        assert!(state.step(press(KeyCode::Enter)).is_empty());
+        let _ = state.step(press(KeyCode::Down));
         let _ = state.step(press(KeyCode::Down));
         let sent = state.step(press(KeyCode::Enter));
         assert!(matches!(
@@ -5631,7 +6665,7 @@ mod tests {
             state
                 .notice
                 .as_deref()
-                .is_some_and(|notice| notice.contains("F2 to review"))
+                .is_some_and(|notice| notice.contains("/ to review"))
         );
 
         assert!(
@@ -5733,7 +6767,9 @@ mod tests {
         assert_eq!(agent_rows, 0);
         assert!(operations.step(ctrl('c')).is_empty());
         assert!(matches!(&operations.surface, Surface::Conversation));
-        let _ = operations.step(ctrl('o'));
+        if let Some(root) = operations.operations_root.clone() {
+            operations.open_inspector(root);
+        }
         assert!(matches!(
             &operations.surface,
             Surface::Inspector(inspector) if inspector.inspector.title == "Target status"
@@ -5904,7 +6940,7 @@ mod tests {
         };
         let compact = compact_tool_lines(call, 80, 24, &Registry::default());
         let compact_text = compact.iter().map(line_text).collect::<Vec<_>>().join("\n");
-        assert!(compact_text.contains("F4 inspects full tool output"));
+        assert!(compact_text.contains("/ Inspect detail"));
         assert!(!compact_text.contains("command output line 12"));
 
         let _ = state.step(press(KeyCode::F(4)));
@@ -6247,7 +7283,7 @@ mod tests {
         let rendered = grid(terminal.backend());
         assert!(rendered.contains("› [5] option 5"));
         assert!(rendered.contains("Enter confirms selection"));
-        assert!(rendered.contains("F4 inspects complete"));
+        assert!(rendered.contains("/ Inspect detail"));
 
         let effects = state.step(press(KeyCode::Enter));
         assert!(matches!(

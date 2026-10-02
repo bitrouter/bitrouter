@@ -522,7 +522,7 @@ mod tests {
             saved_routers: None,
             running_routers: None,
             router_restart_required: None,
-            config_state: Some(ConfigurationState {
+            config_state: Some(Box::new(ConfigurationState {
                 server_instance_id: server_instance_id.map(str::to_string),
                 generation: Some(0),
                 source: ConfigSourceKind::File,
@@ -534,7 +534,7 @@ mod tests {
                 access_policies: AuxiliaryConfigState::NotConfigured,
                 last_reload: None,
                 mixed_state_history: Vec::new(),
-            }),
+            })),
         }
     }
 

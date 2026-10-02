@@ -11,10 +11,10 @@
 //!    ingress normalization, then the pipeline freezes any named-router
 //!    identity and checker bindings. Router-preparation hooks may choose the
 //!    effective selector before its defaults are applied. Ordinary local
-//!    policy/guardrail hooks then run before configured external checks. For
+//!    policy/guardrail hooks then run before configured native checks. For
 //!    requests without checks, the legacy order is retained: ordinary hooks
 //!    finalize the selector before its defaults are applied.
-//! 2. **Route** — after external checks allow the request, the cached
+//! 2. **Route** — after native checks allow the request, the cached
 //!    [`RoutingTable`] resolution applies model policy and produces an
 //!    ordered chain of [`RoutingTarget`]s, then every [`RouteHook`] can mutate
 //!    or extend it (e.g. BYOK swaps the caller's own provider key onto a
@@ -68,7 +68,6 @@ pub mod executor;
 pub mod hooks;
 pub mod pipeline;
 pub mod protocol;
-pub mod receipts;
 pub mod request_checks;
 pub mod routing;
 pub mod server_tools;

@@ -159,6 +159,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 |---|---|
 | `references/cli.md` | Full subcommand reference — the primary reference |
 | `references/remote-administration.md` | Remote contexts, operator credentials, and host boundaries |
+| `references/guardrails.md` | Independent input checker, router binding, and blocked legacy guardrails migration |
 | `references/providers.md` | Add / configure providers, multi-account, custom endpoints, model-id spelling |
 | `references/cloud-setup.md` | Cloud signup, key mint, billing, wallet path |
 | `references/diagnose.md` | Install issues, daemon won't start, connection refused, model ids |
@@ -169,6 +170,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 
 ## Gotchas
 
+- Request-check extensions use SDK ExtensionApi and the shared foreground host. Restart the same custom binary, not official `bro restart`. No HTTP service or probe; legacy `plugins.bitrouter-guardrails` blocks startup. See `references/guardrails.md`.
 - **A Skill does not grant command execution.** If the host cannot run local
   processes, explain that this local integration is unavailable; do not suggest
   the removed OSS origin MCP server as a fallback.

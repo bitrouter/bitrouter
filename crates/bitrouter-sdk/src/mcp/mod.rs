@@ -776,7 +776,7 @@ mod tests {
         }
     }
 }
-#[cfg(feature = "config_file")]
+#[cfg(all(feature = "config_file", feature = "mcp"))]
 #[test]
 fn default_config_prefers_modern_upstream_discovery() {
     assert_eq!(
