@@ -493,6 +493,8 @@ pub struct Restore {
     pub available_artifacts: Vec<ArtifactRef>,
     /// Takeover is never inferred from an epoch alone. The authenticated
     /// harness must have revoked the previous scheduler and reconciled its I/O.
+    /// Replacing a crashed process under the same instance/epoch also requires
+    /// this attestation. A live transport reconnect is a separate operation.
     pub previous_owner_stopped: bool,
 }
 

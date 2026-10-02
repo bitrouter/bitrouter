@@ -50,6 +50,13 @@ pub(crate) struct Activity {
 }
 
 impl Activity {
+    pub fn restored(accumulated_ms: u64) -> Self {
+        Self {
+            accumulated_ms,
+            ..Self::default()
+        }
+    }
+
     pub fn start(&mut self, id: String) {
         if self.running.is_empty() {
             self.since = Some(Instant::now());
@@ -70,5 +77,21 @@ impl Activity {
             .saturating_add(self.since.map_or(0, |since| {
                 since.elapsed().as_millis().min(u64::MAX as u128) as u64
             }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restored_active_time_adds_new_work_without_charging_idle_time() {
+        let mut activity = Activity::restored(5000);
+        assert_eq!(activity.elapsed_ms(), 5000);
+        activity.start("resumed".into());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let settled = activity.finish("resumed");
+        assert!(settled >= 5010);
+        assert_eq!(activity.elapsed_ms(), settled);
     }
 }

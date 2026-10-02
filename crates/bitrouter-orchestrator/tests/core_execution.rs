@@ -10,6 +10,8 @@ mod preparation_work;
 mod provider_work;
 #[path = "core_execution/reconstruction.rs"]
 mod reconstruction;
+#[path = "core_execution/recovery.rs"]
+mod recovery;
 mod support;
 
 use std::sync::Arc;

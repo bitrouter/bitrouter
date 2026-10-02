@@ -299,6 +299,7 @@ pub fn apply(
                         && !turn.status.terminal()
                     {
                         turn.status = AgentStatus::Cancelling;
+                        turn.cancellation_requested = true;
                         turn.terminal_reason = Some("agent interruption requested".into());
                     }
                 }
@@ -475,6 +476,7 @@ pub fn new_turn(work: Assignment, history_start: Option<usize>) -> AgentTurn {
         allocation_id: work.allocation_id,
         history_start,
         status: AgentStatus::Runnable,
+        cancellation_requested: false,
         steps: Vec::new(),
         invocations: Vec::new(),
         core_calls: Vec::new(),

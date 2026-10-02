@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration and tool reconciliation implemented; live reconnect, late provider evidence and queue/steering remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -1478,3 +1478,83 @@ queues/steering/cancellation, and exercise the crash/ACK-loss matrix. C5 adds th
 authenticated harness channel and managed Responses mapping over those same
 operations. C6 must supply the production harness, independent client, real-task
 and pressure evidence. Final A01–A23 audit, PR and CI remain required.
+
+
+## C4 authenticated snapshot restoration
+
+`CoreSession::restore` reconstructs a session from an authenticated harness's
+committed checkpoint and optional contiguous journal tail. It verifies exact
+batch bytes/digests, session identity, ownership progression, revisions/sequences,
+and agreement with the supplied durable head. A different core instance requires
+a higher epoch. The complete restore envelope is bounded by
+`unacknowledged_bytes`; the harness can select a recent checkpoint instead of
+sending an unbounded history of full snapshots. Snapshot structure and all
+required artifact declarations/availability are checked before a new checkpoint
+can be proposed. The harness remains responsible for verifying durable artifact
+bytes and authenticating the binding.
+
+Creating a replacement scheduler requires `previous_owner_stopped=true`, even
+when preserving the same core instance and epoch. This is the authenticated
+harness's attestation that the previous scheduler and provider I/O have been
+stopped/reconciled, not a conclusion inferred from elapsed time or an epoch
+number. The replacement records `session.restored` and waits for its exact ACK
+before returning a schedulable session. It extends the recovered head rather than
+re-appending historical batches, including an input batch whose original ACK was
+lost. A retained complete model receipt is applied through ordinary output
+validation without another provider call or SDK settlement. An incomplete step
+is marked interrupted and closed; a subsequent call gets a new step/attempt ID,
+while original attempt counts, unknown costs, run limits and recorded active time
+remain. This does not reconstruct unobserved active duration during a crash.
+
+Pending tool reconciliation has explicit behavior:
+
+| Harness evidence | Restored behavior |
+| --- | --- |
+| Committed or supplied definite result | Retain/consume the result; never execute the tool again |
+| `not_started` | Preserve invocation/attempt identity and authorize delivery under the new epoch after the restore ACK, subject to current permissions, manifest and workspace |
+| `running` or `waiting_approval` | Retain the original execution/approval wait; accept its eventual result without sending a second execute |
+| Missing, `stopped` without a result, or `effect_unknown` | Preserve uncertainty and block dependent scheduling; a stopped process does not prove absence of effects |
+
+A later explicit restore can reconcile an `EffectUnknown` result with a definite
+outcome. The original is retained in `prior_uncertain_result`, including artifact
+dependencies; known results remain immutable. Fresh observations are required for
+unresolved tools on every restore. Stored `recovery_observation` is audit evidence,
+not permission to assume the tool remained unstarted across another crash.
+Cancellation messages use the current grant epoch while retaining the original
+invocation/attempt identity. The harness must fence old approval authority and
+revalidate any permission to execute under the current grant.
+
+Independent review identified and the implementation addresses three recovery
+boundaries: workspace-only manifest changes revoke unstarted tool authorizations;
+per-turn cancellation intent survives temporary `RecoveryRequired` across multiple
+restores; and uncertain tool outcomes can be reconciled without erasing their
+original evidence. Newly admitted invocations freeze workspace revision alongside
+permission, manifest and signal provenance. Restoration additionally denies known
+unstarted calls when the binding's workspace revision changes, including older
+snapshots without the new invocation field. Agent cancellation is separately
+retained in `cancellation_requested` at all cancellation entry points.
+
+This is the replacement-process path. Live same-owner transport/head reconnect,
+late provider evidence import, durable root queue/steering/release, the remaining
+crash/concurrency matrix, and C5/C6 remain open. No remote endpoint is introduced
+by this change; full A01–A23 acceptance, final independent audit, PR and CI are
+still required.
+
+Validation with Rust 1.95.0:
+
+- Twelve new restore integration tests exercise recorded crash boundaries,
+  lost input ACK and the restore ACK barrier, complete-output adoption,
+  uncertain attempts/costs, definite tool results, approval/running waits,
+  workspace changes, two-stage subtree cancellation, uncertain-result
+  reconciliation, artifact dependencies, ownership/chain rejection and exhausted
+  budgets. One active-time unit test verifies resumed accumulation.
+- Workspace all-feature nextest: 3838 passed, 22 skipped, in 300.031 seconds.
+  This final run includes all thirteen new tests and the existing core/SDK/API
+  regressions. An earlier fixture had mismatched signal/manifest workspace
+  revisions and was corrected before this run; that failing run is not evidence
+  for workspace-change recovery.
+- Strict all-target/all-feature workspace clippy passed with `-D warnings`.
+- Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
+- Independent review's three findings were fixed and re-reviewed with no
+  remaining P1/P2 finding for this restoration increment. Full C4 and the final
+  requirements audit remain open.
