@@ -50,6 +50,12 @@ pub(crate) struct Activity {
 }
 
 impl Activity {
+    pub fn observe_elapsed(&mut self, elapsed_ms: u64) {
+        self.accumulated_ms = self
+            .accumulated_ms
+            .saturating_add(elapsed_ms.saturating_sub(self.elapsed_ms()));
+    }
+
     pub fn restored(accumulated_ms: u64) -> Self {
         Self {
             accumulated_ms,

@@ -290,6 +290,13 @@ pub struct NativeAttemptReport {
 /// Per-request durable controls supplied by a native embedding runtime.
 #[async_trait]
 pub trait NativeExecutionControl: Send + Sync {
+    /// Request cancellation of active provider I/O. The SDK still reports the
+    /// resulting attempt and runs settlement; cancellation does not prove that
+    /// the provider performed no work. Ordinary callers never trigger this.
+    async fn provider_cancelled(&self) {
+        std::future::pending::<()>().await;
+    }
+
     /// Commit callback intent and recheck live source, cancellation and limits.
     async fn before_preparation_work(
         &self,

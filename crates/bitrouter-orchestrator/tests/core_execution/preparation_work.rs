@@ -171,6 +171,57 @@ impl NativeCostSource for Probe {
 
 struct Hook(Arc<Probe>, Kind);
 
+#[tokio::test]
+async fn reconnect_retains_preparation_time_without_an_outcome_checkpoint() -> TestResult {
+    let probe = Arc::new(Probe::new(Some(Kind::RequestCheck), false));
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor) = session(harness.clone(), probe.clone()).await?;
+    session
+        .start("input", session.head().await.state_revision, input())
+        .await?;
+    let driving = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), probe.entered.acquire())
+        .await??
+        .forget();
+    let before = session.snapshot().await.run.ok_or("missing run")?.active_ms;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    session.disconnect().await;
+    probe.resume.add_permits(1);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), driving)
+            .await??
+            .is_err()
+    );
+    assert!(session.pending_provider_evidence().await.reports.is_empty());
+    super::reconnect::reconnect(&session, &harness).await?;
+    let state = session.snapshot().await;
+    let after = state.run.as_ref().ok_or("missing run")?.active_ms;
+    assert!(
+        after >= before + 30,
+        "completed callback time must survive reconnect"
+    );
+    let step = &state.root_turn().ok_or("missing turn")?.steps[0];
+    assert!(step.interrupted);
+    assert!(
+        step.preparation_work
+            .last()
+            .ok_or("missing callback")?
+            .report
+            .is_none()
+    );
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    super::reconnect::reconnect(&session, &harness).await?;
+    assert_eq!(
+        session.snapshot().await.run.ok_or("missing run")?.active_ms,
+        after
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
 #[async_trait]
 impl PreRequestHook for Hook {
     async fn check(&self, _: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {

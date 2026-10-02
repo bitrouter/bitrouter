@@ -40,6 +40,7 @@ use super::signals::{self, MaterialRequest, SignalState};
 
 mod preparation_work;
 mod provider_work;
+mod reconnect;
 mod recovery;
 
 /// Implemented by the authenticated durable harness connection, including an
@@ -266,6 +267,9 @@ pub struct SessionSnapshot {
     /// Missing legacy entries mean unknown coverage, never a zero-cost run.
     #[serde(default)]
     pub cost_work: BTreeMap<String, super::accounting::work::RunCostWork>,
+    /// Late results are retained as evidence, never injected into agent history.
+    #[serde(default)]
+    pub provider_evidence: BTreeMap<String, super::protocol::ProviderAttemptEvidence>,
 }
 
 impl SessionSnapshot {
@@ -281,11 +285,16 @@ struct LiveSession {
     gate: CommitGate,
     pending: Option<SessionSnapshot>,
     sent_tools: BTreeSet<String>,
+    unresolved_tool_deliveries: BTreeSet<String>,
     cancelled_tools: BTreeSet<String>,
     sent_materials: BTreeSet<String>,
     provisional_blocks: BTreeSet<String>,
     disconnected: CancellationToken,
+    connection_generation: u64,
     activity: Activity,
+    model_controls: Vec<std::sync::Weak<StepControl>>,
+    provider_evidence: super::protocol::PendingProviderEvidence,
+    reconnecting: bool,
 }
 
 struct Shared {
@@ -355,6 +364,7 @@ impl CoreSession {
             operations: BTreeMap::new(),
             allocations: BTreeMap::new(),
             cost_work: BTreeMap::new(),
+            provider_evidence: BTreeMap::new(),
         };
         let session = Self {
             shared: Arc::new(Shared {
@@ -367,11 +377,16 @@ impl CoreSession {
                     )?,
                     pending: None,
                     sent_tools: BTreeSet::new(),
+                    unresolved_tool_deliveries: BTreeSet::new(),
                     cancelled_tools: BTreeSet::new(),
                     sent_materials: BTreeSet::new(),
                     provisional_blocks: BTreeSet::new(),
                     disconnected: CancellationToken::new(),
+                    connection_generation: 0,
                     activity: Activity::default(),
+                    model_controls: Vec::new(),
+                    provider_evidence: Default::default(),
+                    reconnecting: false,
                 }),
                 commits: Mutex::new(()),
                 driver: Mutex::new(()),
@@ -401,6 +416,14 @@ impl CoreSession {
         let mut live = self.shared.live.lock().await;
         live.gate.disconnect();
         live.disconnected.cancel();
+    }
+
+    async fn disconnect_generation(&self, generation: u64) {
+        let mut live = self.shared.live.lock().await;
+        if live.connection_generation == generation {
+            live.gate.disconnect();
+            live.disconnected.cancel();
+        }
     }
 
     /// The host authenticates the session before calling this method. The
@@ -1349,7 +1372,7 @@ impl CoreSession {
             .await?;
         }
         for material in &missing {
-            let (message, disconnected) = {
+            let (message, disconnected, generation) = {
                 let _admission = self.shared.commits.lock().await;
                 let mut live = self.shared.live.lock().await;
                 if !live.gate.can_dispatch() {
@@ -1391,7 +1414,11 @@ impl CoreSession {
                         material_id: material.material_id.clone(),
                         version: material.version.clone(),
                     });
-                (message, live.disconnected.clone())
+                (
+                    message,
+                    live.disconnected.clone(),
+                    live.connection_generation,
+                )
             };
             if let Some(message) = message {
                 let session = self.clone();
@@ -1402,14 +1429,14 @@ impl CoreSession {
                         sent=session.shared.harness.send(message)=>sent,
                     };
                     if sent.is_err() {
-                        session.disconnect().await;
+                        session.disconnect_generation(generation).await;
                     }
                     sent
                 });
                 match sending.await {
                     Ok(sent) => sent?,
                     Err(error) => {
-                        self.disconnect().await;
+                        self.disconnect_generation(generation).await;
                         return Err(reject(ErrorCode::RecoveryRequired, &error.to_string()));
                     }
                 }
@@ -1847,7 +1874,7 @@ impl CoreSession {
             return Ok(true);
         }
         for call in turn.invocations.iter().filter(|call| call.result.is_none()) {
-            let send = {
+            let (send, disconnected, generation, execution_epoch) = {
                 let _admission = self.shared.commits.lock().await;
                 let mut live = self.shared.live.lock().await;
                 if live
@@ -1871,20 +1898,32 @@ impl CoreSession {
                         "cancellation delivery awaits durable state",
                     ));
                 }
-                live.cancelled_tools
-                    .insert(call.dispatch.invocation_id.clone())
+                let send = live
+                    .cancelled_tools
+                    .insert(call.dispatch.invocation_id.clone());
+                (
+                    send,
+                    live.disconnected.clone(),
+                    live.connection_generation,
+                    live.gate.grant().execution_epoch,
+                )
             };
             if send {
                 let session = self.clone();
                 let message = ServerMessage::ToolCancel {
                     invocation_id: call.dispatch.invocation_id.clone(),
                     attempt_id: call.dispatch.attempt_id.clone(),
-                    execution_epoch: self.shared.live.lock().await.gate.grant().execution_epoch,
+                    execution_epoch,
                 };
                 // Cleanup delivery has the same cancellation safety as execute.
                 tokio::spawn(async move {
-                    if session.shared.harness.send(message).await.is_err() {
-                        session.disconnect().await;
+                    let sent = tokio::select! {
+                        biased;
+                        _ = disconnected.cancelled() => Err(reject(ErrorCode::CheckpointUnavailable, "harness disconnected before cancellation delivery")),
+                        sent = session.shared.harness.send(message) => sent,
+                    };
+                    if sent.is_err() {
+                        session.disconnect_generation(generation).await;
                     }
                 });
             }
@@ -2026,11 +2065,20 @@ impl CoreSession {
             agent_id: agent_id.to_owned(),
             step_id: Mutex::new(step_id.clone()),
             validation_gate_time: Default::default(),
+            run_id: turn.run_id.clone(),
+            agent_turn_id: turn.agent_turn_id.clone(),
+            disconnected: self.shared.live.lock().await.disconnected.clone(),
             model_selection: match turn.input.routing.model {
                 super::protocol::ModelMode::Fixed => NativeModelSelection::Fixed,
                 super::protocol::ModelMode::Policy => NativeModelSelection::Policy,
             },
         });
+        {
+            let mut live = self.shared.live.lock().await;
+            live.model_controls
+                .retain(|control| control.strong_count() > 0);
+            live.model_controls.push(Arc::downgrade(&control));
+        }
         let response = self
             .shared
             .app
@@ -2611,7 +2659,7 @@ impl CoreSession {
 
     async fn dispatch_tools(&self, agent_id: &str) -> Result<(), CoreError> {
         loop {
-            let (command, disconnected) = {
+            let (command, disconnected, generation) = {
                 let _admission = self.shared.commits.lock().await;
                 let mut live = self.shared.live.lock().await;
                 if !live.gate.can_dispatch() {
@@ -2667,8 +2715,14 @@ impl CoreSession {
                         return Ok(());
                     }
                     live.sent_tools.insert(command.invocation_id.clone());
+                    live.unresolved_tool_deliveries
+                        .insert(command.invocation_id.clone());
                 }
-                (command, live.disconnected.clone())
+                (
+                    command,
+                    live.disconnected.clone(),
+                    live.connection_generation,
+                )
             };
             let Some(command) = command else {
                 return Ok(());
@@ -2677,6 +2731,7 @@ impl CoreSession {
             // drive future. Dropping that future must not strand a sent marker
             // before the harness actually receives the command.
             let session = self.clone();
+            let invocation_id = command.invocation_id.clone();
             let sending = tokio::spawn(async move {
                 let delivered = tokio::select! {
                     biased;
@@ -2684,14 +2739,22 @@ impl CoreSession {
                     delivered = session.shared.harness.send(ServerMessage::ToolExecute(command)) => delivered,
                 };
                 if delivered.is_err() {
-                    session.disconnect().await;
+                    session.disconnect_generation(generation).await;
+                } else {
+                    session
+                        .shared
+                        .live
+                        .lock()
+                        .await
+                        .unresolved_tool_deliveries
+                        .remove(&invocation_id);
                 }
                 delivered
             });
             match sending.await {
                 Ok(delivered) => delivered?,
                 Err(error) => {
-                    self.disconnect().await;
+                    self.disconnect_generation(generation).await;
                     return Err(reject(ErrorCode::RecoveryRequired, &error.to_string()));
                 }
             }
@@ -2803,7 +2866,7 @@ impl CoreSession {
         {
             let mut live = self.shared.live.lock().await;
             live.provisional_blocks.remove(operation_id);
-            if live.provisional_blocks.is_empty() {
+            if live.provisional_blocks.is_empty() && !live.reconnecting {
                 live.gate.clear_dispatch_block();
             }
         }
@@ -2937,10 +3000,17 @@ struct StepControl {
     agent_id: String,
     step_id: Mutex<String>,
     model_selection: NativeModelSelection,
+    run_id: String,
+    agent_turn_id: String,
+    disconnected: CancellationToken,
 }
 
 #[async_trait]
 impl NativeExecutionControl for StepControl {
+    async fn provider_cancelled(&self) {
+        self.disconnected.cancelled().await;
+    }
+
     async fn before_preparation_work(
         &self,
         work: &bitrouter_sdk::language_model::native_preparation::NativePreparationWork,
@@ -3614,6 +3684,8 @@ impl NativeExecutionControl for StepControl {
             })
             .await;
         if recorded.is_err() {
+            self.retain_provider_evidence(&step_id, report, active_ms)
+                .await;
             self.session.disconnect().await;
         }
     }

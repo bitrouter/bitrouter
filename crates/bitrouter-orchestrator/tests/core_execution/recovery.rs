@@ -36,7 +36,7 @@ fn application(
     Ok((Arc::new(app), executor))
 }
 
-async fn completed_store() -> Result<DurableHarness, Box<dyn std::error::Error>> {
+pub(super) async fn completed_store() -> Result<DurableHarness, Box<dyn std::error::Error>> {
     let harness = Arc::new(Harness::new(None, None));
     let (session, _, _) = setup(
         vec![output(vec![call("read")]), output(vec![text("finished")])],
@@ -64,7 +64,7 @@ async fn completed_store() -> Result<DurableHarness, Box<dyn std::error::Error>>
     Ok(harness.store.lock().await.clone())
 }
 
-fn prefix(
+pub(super) fn prefix(
     store: &DurableHarness,
     kind: &str,
 ) -> Result<DurableHarness, Box<dyn std::error::Error>> {
@@ -91,7 +91,10 @@ fn prefix(
     Ok(store)
 }
 
-fn request(store: &DurableHarness, tail: bool) -> Result<Restore, Box<dyn std::error::Error>> {
+pub(super) fn request(
+    store: &DurableHarness,
+    tail: bool,
+) -> Result<Restore, Box<dyn std::error::Error>> {
     let last = store.batches.last().ok_or("missing checkpoint")?;
     let state: SessionSnapshot =
         serde_json::from_value(last.decode(&store.limits)?.checkpoint.state)?;
@@ -119,7 +122,7 @@ fn request(store: &DurableHarness, tail: bool) -> Result<Restore, Box<dyn std::e
     })
 }
 
-async fn harness_at(mut store: DurableHarness) -> Arc<Harness> {
+pub(super) async fn harness_at(mut store: DurableHarness) -> Arc<Harness> {
     store.grant.execution_epoch += 1;
     store.grant.core_instance_id = "replacement".into();
     let harness = Arc::new(Harness::new(None, None));
@@ -127,7 +130,7 @@ async fn harness_at(mut store: DurableHarness) -> Arc<Harness> {
     harness
 }
 
-async fn restore(
+pub(super) async fn restore(
     request: Restore,
     harness: Arc<Harness>,
     responses: Vec<MockResponse>,
