@@ -640,6 +640,89 @@ impl CoreSession {
             .ok_or_else(|| reject(ErrorCode::CheckpointUnavailable, "material receipt missing"))
     }
 
+    /// Refresh monetary evidence for an owned run, including a retired run.
+    /// This reads the host's settlement store; it cannot charge or regenerate.
+    pub async fn refresh_costs(
+        &self,
+        operation_id: &str,
+        run_id: &str,
+    ) -> Result<OperationReceipt, CoreError> {
+        validate_id(operation_id)?;
+        validate_id(run_id)?;
+        let fingerprint = digest(&json!({"type":"cost.refresh","run_id":run_id}))?;
+        if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
+            return Ok(receipt);
+        }
+        let snapshot = self.snapshot().await;
+        let ledger = snapshot.cost_work.get(run_id).ok_or_else(|| {
+            reject(
+                ErrorCode::UnauthorizedScope,
+                "cost run is not owned or has unknown legacy coverage",
+            )
+        })?;
+        let requested = super::accounting::claims::request_ids(ledger);
+        let ids: Vec<_> = requested.iter().cloned().collect();
+        let disconnected = self.shared.live.lock().await.disconnected.clone();
+        // A read-only source may be cancelled. Bound the entire read, including
+        // all batches, without holding input or commit locks needed by controls.
+        let observations = tokio::select! {
+            _ = disconnected.cancelled() => return Err(reject(
+                ErrorCode::CheckpointUnavailable, "harness disconnected during cost read")),
+            result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let mut observations = Vec::new();
+                for batch in ids.chunks(64) {
+                    observations.extend(self.shared.app
+                        .native_cost_observations(&self.shared.caller, batch).await
+                        .map_err(|_| reject(ErrorCode::CheckpointUnavailable,
+                            "cost evidence source unavailable"))?);
+                }
+                Ok::<_, CoreError>(observations)
+            }) => result.map_err(|_| reject(ErrorCode::CheckpointUnavailable,
+                "cost evidence source timed out"))??,
+        };
+        let _input = self.shared.inputs.lock().await;
+        if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
+            return Ok(receipt);
+        }
+        self.transition_scoped(None, Some(run_id), "cost.observed", |state, head, _| {
+            super::accounting::claims::validate_bill_ownership(
+                &state.cost_work,
+                run_id,
+                &observations,
+            )?;
+            let ledger = state
+                .cost_work
+                .get_mut(run_id)
+                .ok_or_else(|| reject(ErrorCode::UnauthorizedScope, "cost run disappeared"))?;
+            if !requested.is_subset(&super::accounting::claims::request_ids(ledger)) {
+                return Err(reject(
+                    ErrorCode::OperationConflict,
+                    "cost request ownership changed",
+                ));
+            }
+            super::accounting::claims::apply(ledger, &requested, &observations)?;
+            let receipt = OperationReceipt {
+                operation_id: operation_id.into(),
+                request_sha256: fingerprint,
+                disposition: OperationDisposition::Applied,
+                assigned_ids: BTreeMap::from([("run_id".into(), run_id.into())]),
+                state_revision: head.state_revision + 1,
+                error: None,
+            };
+            state
+                .operations
+                .insert(operation_id.into(), receipt.clone());
+            Ok(json!({"receipt":receipt,"observations":observations}))
+        })
+        .await?;
+        self.operation(operation_id).await.ok_or_else(|| {
+            reject(
+                ErrorCode::CheckpointUnavailable,
+                "cost observation receipt missing",
+            )
+        })
+    }
+
     async fn replay(
         &self,
         operation_id: &str,
@@ -1871,6 +1954,19 @@ impl CoreSession {
             .app
             .execute_native_controlled(prompt, self.shared.caller.clone(), control.clone())
             .await;
+        // Settlement has completed (or the source remains unavailable). Amount
+        // observations cannot erase the already committed unknown work costs.
+        if let Err(error) = self.refresh_costs(&id("cost_refresh"), &turn.run_id).await {
+            // A provisional signal/cancel block prevents new dispatch, not
+            // settlement of output already received. Only lost authority or
+            // an uncertain commit can stop that durable outcome transition.
+            if error.commit_status != CommitStatus::NotCommitted
+                || self.shared.live.lock().await.disconnected.is_cancelled()
+            {
+                return Err(error);
+            }
+            tracing::warn!("managed cost evidence could not be refreshed");
+        }
         let step_id = control.step_id.lock().await.clone();
         match response {
             Ok(response) => {
@@ -2640,6 +2736,19 @@ impl CoreSession {
     where
         F: FnOnce(&mut SessionSnapshot, &DurableHead, bool) -> Result<Value, CoreError> + Send,
     {
+        self.transition_scoped(agent_id, None, kind, change).await
+    }
+
+    async fn transition_scoped<F>(
+        &self,
+        agent_id: Option<&str>,
+        run_id: Option<&str>,
+        kind: &str,
+        change: F,
+    ) -> Result<(), CoreError>
+    where
+        F: FnOnce(&mut SessionSnapshot, &DurableHead, bool) -> Result<Value, CoreError> + Send,
+    {
         let _commit = self.shared.commits.lock().await;
         let (batch, disconnected) = {
             let mut live = self.shared.live.lock().await;
@@ -2696,7 +2805,9 @@ impl CoreSession {
                 events: vec![DurableEvent {
                     event_seq: head.event_seq + 1,
                     kind: kind.to_owned(),
-                    run_id: next.run.as_ref().map(|run| run.run_id.clone()),
+                    run_id: run_id
+                        .map(str::to_owned)
+                        .or_else(|| next.run.as_ref().map(|run| run.run_id.clone())),
                     agent_id: Some(agent_id.unwrap_or(&next.agent_id).to_owned()),
                     payload,
                 }],

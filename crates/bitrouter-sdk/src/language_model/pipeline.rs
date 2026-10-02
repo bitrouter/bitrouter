@@ -328,6 +328,7 @@ pub struct Pipeline {
         Option<Arc<dyn super::native_context::NativePrivateContextPolicy>>,
     pub(crate) native_cost_estimator:
         Option<Arc<dyn super::native_accounting::NativeCostEstimator>>,
+    pub(crate) native_cost_source: Option<Arc<dyn super::native_accounting::NativeCostSource>>,
 }
 
 /// Adapts the pipeline's fallback execution into an [`UpstreamTurn`] so the

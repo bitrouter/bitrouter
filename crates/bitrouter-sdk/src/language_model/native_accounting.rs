@@ -6,6 +6,78 @@ use serde::{Deserialize, Serialize};
 use super::native::NativeAttemptReport;
 use super::types::{ApiProtocol, NormalizedUsage, Usage, UsageOrigin};
 
+/// Distinct observations of the same bill; never add these bases together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeCostBasis {
+    /// Configured prices or another explicitly identified estimate.
+    Estimated,
+    /// Monetary amount explicitly reported by the source's billing authority.
+    Reported,
+    /// Report accepted by the host's existing reconciliation process.
+    Reconciled,
+}
+
+/// What an amount covers, independently of execution work categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeCostScope {
+    /// Tokens only; does not establish provider tools, storage or other charges.
+    ModelTokens,
+    /// The source's logical request bill, not all work performed by a core run.
+    RequestBill,
+}
+
+/// Content-free monetary evidence from a trusted host's existing settlement
+/// store. The source/bill/basis tuple is immutable; changed evidence conflicts.
+/// A source/bill identity belongs to one request across all evidence bases.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeCostClaim {
+    /// SDK request whose durable execution owns this observation.
+    pub request_id: String,
+    /// Stable host-controlled evidence source identifier.
+    pub source: String,
+    /// Stable billing identity within the source.
+    pub bill_id: String,
+    /// Estimate, report and reconciliation are separate observations.
+    pub basis: NativeCostBasis,
+    /// Explicit billing coverage.
+    pub scope: NativeCostScope,
+    /// Integer micro-USD, including authoritative zero when established.
+    pub micro_usd: u64,
+    /// Commitment to the retained source evidence, without exposing its content.
+    pub evidence_sha256: String,
+    /// Identity reported by this evidence, possibly absent on a no-charge bill.
+    pub provider: String,
+    /// Model identity reported by this evidence.
+    pub model: String,
+}
+
+/// One source read for one caller-owned request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeCostObservation {
+    /// Requested identity; missing and foreign records remain indistinguishable.
+    pub request_id: String,
+    /// Immutable, separately classified monetary evidence.
+    pub claims: Vec<NativeCostClaim>,
+    /// Missing, invisible, unreported or unreconciled amounts stay explicit.
+    pub unknown_reason: Option<String>,
+}
+
+/// Read existing settlement evidence only. Implementations must authenticate
+/// caller ownership, return one observation per requested ID, and never execute
+/// generation, price usage again, write a charge or initiate reconciliation.
+/// Reads must be cancellation safe; callers may drop a read on timeout.
+#[async_trait::async_trait]
+pub trait NativeCostSource: Send + Sync {
+    /// Load at most 64 exact request identities owned by the caller.
+    async fn read(
+        &self,
+        caller: &crate::caller::CallerContext,
+        request_ids: &[String],
+    ) -> crate::Result<Vec<NativeCostObservation>>;
+}
+
 /// Frozen rates used to reproduce a configured token estimate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NativeTokenRates {

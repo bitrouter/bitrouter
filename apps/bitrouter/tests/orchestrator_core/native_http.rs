@@ -2,6 +2,8 @@
 //! The control captures pipeline evidence; durable scheduling is covered by the
 //! CoreSession fixtures. Both gateway and upstream use loopback HTTP sockets.
 
+#[path = "native_http/costs.rs"]
+mod costs;
 #[path = "native_http/private_context.rs"]
 mod private_context;
 #[path = "native_http/protocol_matrix.rs"]

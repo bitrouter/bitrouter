@@ -561,6 +561,7 @@ async fn assemble_app(
     let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
+    let metering_for_native_costs = metering_store.clone();
     let pricing_for_recorder = pricing.clone();
     let pricing_for_native = pricing.clone();
     let policy_store: Arc<PolicyStore> = Arc::new(load_policy_store(config).await?);
@@ -857,6 +858,7 @@ async fn assemble_app(
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
             lm.native_cost_estimator(pricing_for_native);
+            lm.native_cost_source(Arc::new(metering_for_native_costs));
             lm.native_private_context(Arc::new(private_context.clone()));
             lm.request_checker_runner(request_checks_for_pipeline);
             lm.fallback_backoff(
