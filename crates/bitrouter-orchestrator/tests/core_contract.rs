@@ -18,6 +18,62 @@ use support::DurableHarness;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn archive_chunks_and_transitive_dependencies_are_required_for_ack() -> TestResult {
+    let mut harness = DurableHarness::new(grant());
+    let evidence = ArtifactRef {
+        artifact_id: "evidence".into(),
+        sha256: sha256(b"proof"),
+        bytes: 5,
+        media_type: "text/plain".into(),
+    };
+    harness.put_artifact(evidence.clone(), b"proof")?;
+    let body = serde_json::to_vec(&json!({"dependencies":[evidence]}))?;
+    let reference = ArtifactRef {
+        artifact_id: "archive".into(),
+        sha256: sha256(&body),
+        bytes: body.len() as u64,
+        media_type: "application/vnd.bitrouter.recovery+json".into(),
+    };
+    let mut payload = proposal(&harness.head, "archive-checkpoint");
+    payload.checkpoint.artifact_refs.push(reference.clone());
+    let batch = CheckpointBatch::encode(&payload, &harness.limits)?;
+    let boundary = body.len() / 2;
+    harness.put_chunk(reference.clone(), 0, &body[..boundary])?;
+    assert_eq!(
+        harness.commit(&batch).err().map(|error| error.code),
+        Some(ErrorCode::ArtifactUnavailable)
+    );
+    assert_eq!(harness.head, DurableHead::default());
+    assert!(
+        harness
+            .put_chunk(reference.clone(), 1, b"conflicting")
+            .is_err()
+    );
+    harness.put_chunk(reference.clone(), 0, &body[..boundary])?;
+    harness.put_chunk(reference.clone(), boundary as u64, &body[boundary..])?;
+    assert!(harness.staged_artifacts.is_empty());
+    assert_eq!(harness.read_artifact(&reference, 0, 7)?, body[..7]);
+    let ack = harness.commit(&batch)?;
+    harness.put_chunk(reference.clone(), 0, &body)?;
+    assert_eq!(harness.commit(&batch)?, ack);
+    let mut restarted = harness.clone();
+    restarted.artifacts.remove("evidence");
+    assert_eq!(
+        restarted
+            .read_artifact(&reference, 0, 7)
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::ArtifactUnavailable)
+    );
+    assert_eq!(
+        restarted.commit(&batch).err().map(|error| error.code),
+        Some(ErrorCode::ArtifactUnavailable)
+    );
+    assert_eq!(restarted.head, ack.head());
+    Ok(())
+}
+
+#[test]
 fn tool_start_fences_commit_atomically_and_survive_restart_and_epoch_change() -> TestResult {
     for start_first in [false, true] {
         let mut harness = DurableHarness::new(grant());

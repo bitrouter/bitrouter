@@ -145,6 +145,45 @@ pub struct CheckpointBatch {
 }
 
 impl CheckpointBatch {
+    /// Check a projected payload length without allocating its base64 bytes.
+    /// Base64 contains no JSON-escaped characters, so the empty wire envelope
+    /// plus its encoded length gives the exact transport size.
+    pub(crate) fn check_projected_size(
+        identity: &BatchIdentity,
+        payload_bytes: u64,
+        limits: &Limits,
+    ) -> Result<(), CoreError> {
+        if payload_bytes > limits.checkpoint_bytes {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "checkpoint cleanup capacity exhausted",
+            ));
+        }
+        let encoded = payload_bytes
+            .checked_add(2)
+            .and_then(|bytes| (bytes / 3).checked_mul(4))
+            .ok_or_else(|| {
+                CoreError::rejected(ErrorCode::LimitExceeded, "checkpoint size exhausted")
+            })?;
+        let envelope = Self {
+            identity: identity.clone(),
+            payload_encoding: "base64-json".into(),
+            payload_bytes: String::new(),
+            payload_sha256: "0".repeat(64),
+        };
+        if envelope
+            .wire_bytes()?
+            .checked_add(encoded)
+            .is_none_or(|bytes| bytes > limits.unacknowledged_bytes)
+        {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "checkpoint cleanup wire capacity exhausted",
+            ));
+        }
+        Ok(())
+    }
+
     /// Serialize exactly once. Retain this object for retransmission; neither
     /// endpoint computes a digest from a reserialized/reordered JSON object.
     pub fn encode(payload: &CheckpointPayload, limits: &Limits) -> Result<Self, CoreError> {

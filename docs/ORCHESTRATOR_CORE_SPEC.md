@@ -341,6 +341,21 @@ total length. Only a complete verified durable artifact may be referenced by a
 committed checkpoint. Retries are idempotent; incomplete staging is never a
 recoverable artifact. The local port obeys the same availability rules.
 
+The local `HarnessPort::read_artifact(reference, offset, max_bytes)` returns a
+bounded range of a complete immutable object. It is a required port method.
+Before returning bytes or acknowledging a checkpoint referencing an archive
+root, the harness verifies and retains the root's transitive dependencies. The
+availability inventory can name direct roots; it need not flatten the complete
+archive graph into every restore request. A missing root or dependency blocks
+recovery. Content-addressed retries preserve the same bytes and identity.
+
+Recovery histories may be represented by a `recovery_archive` reference in the
+wire snapshot. Core hydrates and validates those records before using their
+activity, lifecycle, uncertainty or approval facts. `CoreSession::snapshot()`
+returns the complete hydrated state; directly decoding a wire checkpoint is
+not a substitute for authenticated restoration. Artifact reads and staging
+perform no workspace execution and run outside the session state mutex.
+
 ### 6.2 Required barriers
 
 | Before | Durable record required |

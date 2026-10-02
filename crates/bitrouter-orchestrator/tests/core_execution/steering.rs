@@ -213,6 +213,17 @@ async fn steering_preserves_slots_for_an_abandoned_drivers_live_provider() -> Te
 }
 #[async_trait]
 impl HarnessPort for AdmissionPort {
+    async fn read_artifact(
+        &self,
+        reference: &ArtifactRef,
+        offset: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.harness
+            .read_artifact(reference, offset, max_bytes)
+            .await
+    }
+
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         let payload = batch.decode(&Limits::default())?;
         let child_id = self.child_id.lock().await.clone();

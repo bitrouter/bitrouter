@@ -433,7 +433,7 @@ struct NotifiedFault {
 }
 
 #[tokio::test]
-async fn active_budget_cleanup_reports_checkpoint_exhaustion_without_spinning() -> TestResult {
+async fn active_budget_rejects_restore_without_cleanup_capacity() -> TestResult {
     let harness = Arc::new(Harness::new(None, None));
     let table = StaticRoutingTable::new();
     table.insert("fixture-model", vec![target("first")]);
@@ -448,7 +448,7 @@ async fn active_budget_cleanup_reports_checkpoint_exhaustion_without_spinning() 
         .build()?;
     let limits = Limits {
         active_seconds: 1,
-        checkpoint_bytes: 256 * 1024,
+        checkpoint_bytes: 2 * 1024 * 1024,
         ..Limits::default()
     };
     let session = bind_app_with_limits(Arc::new(app), harness.clone(), limits.clone()).await?;
@@ -470,7 +470,8 @@ async fn active_budget_cleanup_reports_checkpoint_exhaustion_without_spinning() 
 
     // Simulate a nearly full, internally consistent durable snapshot. The
     // restore and interruption records fit, but pairing the required tool
-    // result into history exceeds the negotiated checkpoint bound.
+    // result into history exceeds the negotiated checkpoint bound. Reject
+    // before changing the durable head or granting execution authority.
     let mut store = harness.store.lock().await.clone();
     store.limits = limits;
     let batch = store.batches.last_mut().ok_or("checkpoint")?;
@@ -490,15 +491,26 @@ async fn active_budget_cleanup_reports_checkpoint_exhaustion_without_spinning() 
         .payload_sha256 = batch.payload_sha256.clone();
     let replacement = super::recovery::harness_at(store).await;
     let request = super::recovery::request(&*replacement.store.lock().await, false)?;
-    let (restored, _) = super::recovery::restore(request, replacement.clone(), Vec::new()).await?;
     let before = replacement.store.lock().await.batches.len();
-    let error = tokio::time::timeout(Duration::from_secs(5), restored.drive())
-        .await?
+    let head = replacement.store.lock().await.head.clone();
+    let error = super::recovery::restore(request, replacement.clone(), Vec::new())
+        .await
         .err()
-        .ok_or("cleanup unexpectedly fit")?;
+        .ok_or("restore without cleanup capacity was accepted")?;
+    let error = error.downcast_ref::<CoreError>().ok_or("core error")?;
     assert_eq!(error.code, ErrorCode::LimitExceeded);
     assert_eq!(error.commit_status, CommitStatus::NotCommitted);
-    let state = restored.snapshot().await;
+    let store = replacement.store.lock().await;
+    assert_eq!(store.head, head);
+    let state: SessionSnapshot = serde_json::from_value(
+        store
+            .batches
+            .last()
+            .ok_or("checkpoint")?
+            .decode(&store.limits)?
+            .checkpoint
+            .state,
+    )?;
     assert_eq!(
         state.run.as_ref().map(|run| run.status),
         Some(RunStatus::Cancelling)
@@ -509,7 +521,7 @@ async fn active_budget_cleanup_reports_checkpoint_exhaustion_without_spinning() 
             .is_some()
     );
     assert!(!state.root_turn().ok_or("turn")?.invocations[0].consumed);
-    assert_eq!(replacement.store.lock().await.batches.len(), before + 1);
+    assert_eq!(store.batches.len(), before);
     assert!(replacement.sent.lock().await.is_empty());
     Ok(())
 }
@@ -693,6 +705,15 @@ async fn active_budget_restore_rejects_inconsistent_failure_and_cleanup_facts() 
 }
 #[async_trait]
 impl HarnessPort for NotifiedFault {
+    async fn read_artifact(
+        &self,
+        reference: &ArtifactRef,
+        offset: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.inner.read_artifact(reference, offset, max_bytes).await
+    }
+
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         let result = self.inner.commit(batch).await;
         if result.is_err() {

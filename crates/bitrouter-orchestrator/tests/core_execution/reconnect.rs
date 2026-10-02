@@ -25,6 +25,29 @@ impl FaultPort {
 
 #[async_trait]
 impl HarnessPort for FaultPort {
+    async fn observe_restoration(
+        &self,
+        observer: bitrouter_orchestrator::core::session::restoration_activity::RestorationActivity,
+    ) -> Result<(), CoreError> {
+        self.harness.observe_restoration(observer).await
+    }
+    async fn synchronize_restoration(
+        &self,
+        observer: bitrouter_orchestrator::core::session::restoration_activity::RestorationActivity,
+    ) -> Result<(), CoreError> {
+        self.harness.synchronize_restoration(observer).await
+    }
+    async fn read_artifact(
+        &self,
+        reference: &ArtifactRef,
+        offset: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.harness
+            .read_artifact(reference, offset, max_bytes)
+            .await
+    }
+
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         let matches = batch
             .decode(&Limits::default())?
@@ -702,6 +725,17 @@ struct CancelPort {
 
 #[async_trait]
 impl HarnessPort for CancelPort {
+    async fn read_artifact(
+        &self,
+        reference: &ArtifactRef,
+        offset: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.harness
+            .read_artifact(reference, offset, max_bytes)
+            .await
+    }
+
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         self.harness.commit(batch).await
     }

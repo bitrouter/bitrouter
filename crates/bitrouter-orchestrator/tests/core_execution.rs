@@ -2,6 +2,8 @@
 mod accounting;
 #[path = "core_execution/budget.rs"]
 mod budget;
+#[path = "core_execution/capacity.rs"]
+mod capacity;
 #[path = "core_execution/input_count.rs"]
 mod input_count;
 #[path = "core_execution/material_work.rs"]
@@ -132,6 +134,18 @@ impl Harness {
 
 #[async_trait]
 impl HarnessPort for Harness {
+    async fn read_artifact(
+        &self,
+        reference: &ArtifactRef,
+        offset: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.store
+            .lock()
+            .await
+            .read_artifact(reference, offset, max_bytes)
+    }
+
     async fn observe_restoration(
         &self,
         observer: bitrouter_orchestrator::core::session::restoration_activity::RestorationActivity,
@@ -204,6 +218,22 @@ impl HarnessPort for Harness {
     }
 
     async fn send(&self, message: ServerMessage) -> Result<(), CoreError> {
+        if let ServerMessage::ArtifactPut {
+            reference,
+            offset,
+            content_base64,
+        } = &message
+        {
+            use base64::{Engine, engine::general_purpose::STANDARD};
+            let bytes = STANDARD.decode(content_base64).map_err(|error| {
+                CoreError::rejected(ErrorCode::ArtifactUnavailable, error.to_string())
+            })?;
+            return self
+                .store
+                .lock()
+                .await
+                .put_chunk(reference.clone(), *offset, &bytes);
+        }
         if let ServerMessage::MaterialRequest {
             request_id,
             material_id,

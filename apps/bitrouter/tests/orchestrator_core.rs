@@ -38,6 +38,18 @@ struct Harness {
 }
 #[async_trait]
 impl HarnessPort for Harness {
+    async fn read_artifact(
+        &self,
+        _reference: &bitrouter_orchestrator::core::protocol::ArtifactRef,
+        _offset: u64,
+        _max_bytes: u64,
+    ) -> std::result::Result<Vec<u8>, CoreError> {
+        Err(CoreError::rejected(
+            ErrorCode::ArtifactUnavailable,
+            "fixture has no artifacts",
+        ))
+    }
+
     async fn commit(
         &self,
         batch: CheckpointBatch,

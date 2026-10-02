@@ -141,7 +141,7 @@ pub(super) async fn harness_at(mut store: DurableHarness) -> Arc<Harness> {
 
 pub(super) async fn restore(
     request: Restore,
-    harness: Arc<Harness>,
+    harness: Arc<dyn HarnessPort>,
     responses: Vec<MockResponse>,
 ) -> Result<(CoreSession, Arc<RecordingExecutor>), Box<dyn std::error::Error>> {
     let (app, executor) = application(responses)?;

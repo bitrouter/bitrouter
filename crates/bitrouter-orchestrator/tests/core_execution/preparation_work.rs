@@ -303,6 +303,15 @@ impl PhaseHarness {
 
 #[async_trait]
 impl HarnessPort for PhaseHarness {
+    async fn read_artifact(
+        &self,
+        reference: &ArtifactRef,
+        offset: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.inner.read_artifact(reference, offset, max_bytes).await
+    }
+
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         let payload = batch.decode(&Limits::default())?;
         let agent_id = self.agent_id.lock().await.clone();

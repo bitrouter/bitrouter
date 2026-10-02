@@ -14,7 +14,7 @@ use bitrouter_sdk::language_model::native::{
 };
 use bitrouter_sdk::language_model::types::{
     Content, FinishReason, GenerationParams, Message, Prompt, ReasoningEffort, Role, Tool,
-    ToolChoice, ToolResultOutput,
+    ToolChoice,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -38,7 +38,10 @@ use super::routing::{
 };
 use super::signals::{self, MaterialRequest, SignalState};
 
+mod archive;
 mod budget;
+mod capacity;
+mod pairing;
 mod preparation_work;
 mod provider_work;
 mod reconnect;
@@ -60,9 +63,19 @@ mod tool_status;
 pub trait HarnessPort: Send + Sync {
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError>;
     async fn send(&self, message: ServerMessage) -> Result<(), CoreError>;
+    /// Read a bounded range of a complete immutable artifact. Before returning
+    /// bytes, verify the referenced root and its transitive dependencies are
+    /// durable. Checkpoint ACKs must retain that same dependency closure.
+    async fn read_artifact(
+        &self,
+        reference: &super::protocol::ArtifactRef,
+        offset: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, CoreError>;
     /// Install concurrent stop reporting before the restore checkpoint is
-    /// proposed. Keep reporting until the observer closes, then use the live
-    /// session's status/result API. An implementation without this bridge may
+    /// proposed. Replay stops captured since `observer.started_at()`, including
+    /// during artifact reads before registration. Keep reporting until the
+    /// observer closes, then use the live session's status/result API. An implementation without this bridge may
     /// restore only when no tools are running at the handoff boundary.
     async fn observe_restoration(
         &self,
@@ -326,6 +339,10 @@ pub struct SessionSnapshot {
     /// Committed ownership releases remain available across later grants.
     #[serde(default)]
     pub releases: BTreeMap<String, release::ReleaseRecord>,
+    /// Wire checkpoints may replace recovery histories with this immutable
+    /// object. Public snapshots and scheduler state are always fully hydrated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_archive: Option<super::protocol::ArtifactRef>,
 }
 
 impl SessionSnapshot {
@@ -430,6 +447,7 @@ impl CoreSession {
             root_queue: Default::default(),
             steering: BTreeMap::new(),
             releases: BTreeMap::new(),
+            recovery_archive: None,
         };
         let session = Self {
             shared: Arc::new(Shared {
@@ -2824,99 +2842,7 @@ impl CoreSession {
 
     async fn consume_results(&self, agent_id: &str) -> Result<(), CoreError> {
         self.transition_for(Some(agent_id), "tool.results.consumed", |state, _| {
-            let agent = agent_mut(state, agent_id)?;
-            let turn = agent
-                .turn
-                .as_mut()
-                .ok_or_else(|| reject(ErrorCode::Busy, "agent has no turn"))?;
-            let mut messages = Vec::new();
-            let mut context_sources = Vec::new();
-            let mut verified = None;
-            for call in turn.invocations.iter_mut().filter(|call| !call.consumed) {
-                let result = call
-                    .result
-                    .as_ref()
-                    .ok_or_else(|| reject(ErrorCode::Busy, "tool batch is not complete"))?;
-                if result.status == ToolOutcome::EffectUnknown {
-                    return Err(reject(
-                        ErrorCode::RecoveryRequired,
-                        "tool effect is unknown",
-                    ));
-                }
-                if matches!(result.status, ToolOutcome::Succeeded | ToolOutcome::Failed) {
-                    context_sources.push(ContextSource {
-                        permission_revision: call.dispatch.permission_revision,
-                        workspace_revision: result.workspace_revision.clone(),
-                        tool_manifest_digest: call.dispatch.tool_manifest_digest.clone(),
-                        materials: Vec::new(),
-                    });
-                }
-                if call.dispatch.verification {
-                    verified = Some(result.status == ToolOutcome::Succeeded);
-                } else {
-                    let output = if result.status == ToolOutcome::Succeeded {
-                        ToolResultOutput::Text {
-                            value: result.output.clone(),
-                        }
-                    } else {
-                        ToolResultOutput::ErrorText {
-                            value: format!("{:?}: {}", result.status, result.output),
-                        }
-                    };
-                    messages.push(Message {
-                        role: Role::Tool,
-                        content: vec![Content::ToolResult {
-                            call_id: call.provider_call_id.clone(),
-                            tool_name: Some(call.dispatch.tool.clone()),
-                            dynamic: false,
-                            output,
-                            provider_metadata: Default::default(),
-                        }],
-                    });
-                }
-                call.consumed = true;
-            }
-            for call in turn.core_calls.iter_mut().filter(|call| !call.consumed) {
-                let result = call.result.as_ref().ok_or_else(|| {
-                    reject(ErrorCode::Busy, "collaboration batch is not complete")
-                })?;
-                if matches!(call.action, Action::Wait { .. })
-                    && let Some(observations) = result["value"]["agents"].as_array()
-                {
-                    for observation in observations {
-                        let sources: Vec<ContextSource> =
-                            serde_json::from_value(observation["context_sources"].clone())
-                                .map_err(json_error)?;
-                        context_sources.extend(sources);
-                    }
-                }
-                messages.push(Message {
-                    role: Role::Tool,
-                    content: vec![Content::ToolResult {
-                        call_id: call.provider_call_id.clone(),
-                        tool_name: Some(call.action.name().into()),
-                        dynamic: false,
-                        output: ToolResultOutput::Text {
-                            value: serde_json::to_string(result).map_err(json_error)?,
-                        },
-                        provider_metadata: Default::default(),
-                    }],
-                });
-                call.consumed = true;
-            }
-            if turn.status != AgentStatus::Cancelling {
-                turn.status = AgentStatus::Runnable;
-            }
-            if let Some(success) = verified {
-                turn.terminal_reason = Some(format!("harness verification succeeded: {success}"));
-            }
-            agent.history.extend(messages);
-            for source in context_sources {
-                if !agent.context_sources.contains(&source) {
-                    agent.context_sources.push(source);
-                }
-            }
-            agent.context_revision += 1;
+            pairing::consume(agent_mut(state, agent_id)?)?;
             Ok(json!({}))
         })
         .await
@@ -3203,7 +3129,7 @@ impl CoreSession {
         F: FnOnce(&mut SessionSnapshot, &DurableHead, bool) -> Result<Value, CoreError> + Send,
     {
         let _commit = self.shared.commits.lock().await;
-        let (batch, disconnected) =
+        let (batch, disconnected, archive, manifest) =
             {
                 let mut live = self.shared.live.lock().await;
                 let mut next = live.state.clone();
@@ -3235,8 +3161,9 @@ impl CoreSession {
                     next.root_queue.paused = true;
                 }
                 super::accounting::work::synchronize(&mut next)?;
-                let artifacts = recovery::artifacts(&next)?;
-                let proposed = CheckpointPayload {
+                let mut prepared = archive::prepare(&next, false, &self.shared.limits)?;
+                let artifacts = recovery::artifacts(&prepared.state)?;
+                let mut proposed = CheckpointPayload {
                     identity: BatchIdentity {
                         batch_id: id("batch"),
                         session_id: next.session_id.clone(),
@@ -3265,9 +3192,23 @@ impl CoreSession {
                         schema_version: VERSION,
                         state_revision: head.state_revision + 1,
                         artifact_refs: artifacts.into_values().collect(),
-                        state: encode(&next)?,
+                        state: encode(&prepared.state)?,
                     },
                 };
+                if let Err(error) =
+                    capacity::check(&next, &proposed, &self.shared.limits, live.gate.grant())
+                {
+                    if error.code != ErrorCode::LimitExceeded || prepared.blob.is_some() {
+                        return Err(error);
+                    }
+                    prepared = archive::prepare(&next, true, &self.shared.limits)?;
+                    proposed.checkpoint.state = encode(&prepared.state)?;
+                    proposed.checkpoint.artifact_refs = recovery::artifacts(&prepared.state)?
+                        .into_values()
+                        .collect();
+                    capacity::check(&next, &proposed, &self.shared.limits, live.gate.grant())?;
+                }
+                next.recovery_archive = prepared.state.recovery_archive;
                 let batch = live.gate.propose(proposed)?.clone();
                 // Status/result receipt establishes a local observation time,
                 // independent of the later durable ACK. Keep confirmed running
@@ -3281,13 +3222,17 @@ impl CoreSession {
                     })
                     .collect();
                 live.activity.synchronize_tools(&tools);
+                let manifest = next.manifest.clone();
                 live.pending = Some(next);
-                (batch, live.disconnected.clone())
+                (batch, live.disconnected.clone(), prepared.blob, manifest)
             };
         let acknowledgement = tokio::select! {
             biased;
             _ = disconnected.cancelled() => Err(reject(ErrorCode::CheckpointUnavailable, "durable authority disconnected during commit")),
-            acknowledgement = self.shared.harness.commit(batch) => acknowledgement,
+            acknowledgement = async {
+                archive::persist(archive.as_ref(), &manifest, self.shared.harness.as_ref()).await?;
+                self.shared.harness.commit(batch).await
+            } => acknowledgement,
         };
         let mut live = self.shared.live.lock().await;
         let result = match acknowledgement {

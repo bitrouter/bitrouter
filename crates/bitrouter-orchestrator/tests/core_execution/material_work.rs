@@ -99,6 +99,15 @@ struct LostMaterialAck(Arc<Harness>);
 
 #[async_trait]
 impl HarnessPort for LostMaterialAck {
+    async fn read_artifact(
+        &self,
+        reference: &ArtifactRef,
+        offset: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.0.read_artifact(reference, offset, max_bytes).await
+    }
+
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         let lose_ack = batch
             .decode(&Limits::default())?

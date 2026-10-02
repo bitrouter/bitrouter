@@ -101,15 +101,27 @@ impl CoreSession {
         // was not adopted. Resubmit exactly its original identity and bytes.
         {
             let _commit = self.shared.commits.lock().await;
-            let (pending, disconnected) = {
+            let (pending, disconnected, prepared) = {
                 let live = self.shared.live.lock().await;
-                (live.gate.pending().cloned(), live.disconnected.clone())
+                (
+                    live.gate.pending().cloned(),
+                    live.disconnected.clone(),
+                    live.pending
+                        .as_ref()
+                        .map(|state| archive::prepare(state, false, &self.shared.limits))
+                        .transpose()?,
+                )
             };
             if let Some(batch) = pending {
                 let ack = tokio::select! {
                     biased;
                     _ = disconnected.cancelled() => return Err(reject(ErrorCode::CheckpointUnavailable, "reconnect interrupted during batch retransmission")),
-                    ack = self.shared.harness.commit(batch) => ack,
+                    ack = async {
+                        if let Some(prepared) = &prepared {
+                            archive::persist(prepared.blob.as_ref(), &prepared.state.manifest, self.shared.harness.as_ref()).await?;
+                        }
+                        self.shared.harness.commit(batch).await
+                    } => ack,
                 }.map_err(unknown_commit)?;
                 let mut live = self.shared.live.lock().await;
                 let payload = live
