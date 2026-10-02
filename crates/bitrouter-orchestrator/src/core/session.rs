@@ -3145,6 +3145,9 @@ impl NativeExecutionControl for StepControl {
                                 "input_limit_exceeded"
                                     | "context_window_exceeded"
                                     | "protocol_incompatible:private_context_target_mismatch"
+                                    | "protocol_incompatible:native_continuation_target_mismatch"
+                                    | "protocol_incompatible:native_continuation_prefix_mismatch"
+                                    | "protocol_incompatible:native_continuation_effort_mismatch"
                             )
                         })
                     })

@@ -172,6 +172,9 @@ pub struct NativeRoute {
     /// Shared executor/adapter assessment of the actual prepared prompt.
     #[serde(default)]
     pub protocol_validation: NativeProtocolValidation,
+    /// Candidate-local continuation choice; no private handle is serialized.
+    #[serde(default)]
+    pub continuation: super::native_continuation::NativeContinuationInput,
 }
 
 /// Protocol feasibility is distinct from catalog capabilities and token counts.
@@ -210,6 +213,7 @@ impl NativeRoute {
             output_token_limit_supported: None,
             input_count: None,
             protocol_validation: Default::default(),
+            continuation: Default::default(),
         }
     }
 }
@@ -272,6 +276,9 @@ pub struct NativeAttemptReport {
     /// Authenticated private-history evidence from the actual provider attempt.
     #[serde(default)]
     pub private_context: super::native_context::NativePrivateContextObservation,
+    /// Actual provider-state use and output artifact evidence.
+    #[serde(default)]
+    pub continuation: super::native_continuation::NativeContinuationObservation,
 }
 
 /// Per-request durable controls supplied by a native embedding runtime.

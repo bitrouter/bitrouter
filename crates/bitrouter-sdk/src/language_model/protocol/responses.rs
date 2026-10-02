@@ -50,6 +50,96 @@ const MAX_STREAMING_COMMITMENT_TOOL_CALLS: usize = 64;
 // https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses
 const REASONING_ITEM: &str = "reasoningItem";
 
+/// Whether every provider output item has a complete supported replay form.
+/// A stored response may contain other items, but its artifact must then retain
+/// the provider state instead of permitting a visible-history detachment.
+/// https://developers.openai.com/api/docs/guides/conversation-state
+pub(crate) fn output_replayable(response: &serde_json::Value) -> bool {
+    fn fields(value: &serde_json::Value, known: &[&str]) -> bool {
+        value
+            .as_object()
+            .is_some_and(|object| object.keys().all(|key| known.contains(&key.as_str())))
+    }
+    response
+        .get("output")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|items| {
+            !items.is_empty()
+                && items.iter().all(|item| {
+                    match item.get("type").and_then(serde_json::Value::as_str) {
+                        Some("reasoning") => {
+                            validate_reasoning_history(&parse_reasoning_item(item)).is_ok()
+                        }
+                        Some("message") => {
+                            fields(item, &["type", "id", "role", "status", "content"])
+                                && item.get("role").and_then(serde_json::Value::as_str)
+                                    == Some("assistant")
+                                && item
+                                    .get("content")
+                                    .and_then(serde_json::Value::as_array)
+                                    .is_some_and(|parts| {
+                                        !parts.is_empty()
+                                            && parts.iter().all(|part| {
+                                                fields(
+                                                    part,
+                                                    &["type", "text", "annotations", "logprobs"],
+                                                ) && part
+                                                    .get("type")
+                                                    .and_then(serde_json::Value::as_str)
+                                                    == Some("output_text")
+                                                    && part
+                                                        .get("text")
+                                                        .is_some_and(serde_json::Value::is_string)
+                                                    && ["annotations", "logprobs"].iter().all(
+                                                        |key| {
+                                                            part.get(*key).is_none_or(|value| {
+                                                                value.is_null()
+                                                                    || value
+                                                                        .as_array()
+                                                                        .is_some_and(Vec::is_empty)
+                                                            })
+                                                        },
+                                                    )
+                                            })
+                                    })
+                        }
+                        Some("function_call" | "custom_tool_call") => {
+                            fields(
+                                item,
+                                &[
+                                    "type",
+                                    "id",
+                                    "status",
+                                    "call_id",
+                                    "name",
+                                    if item["type"] == "custom_tool_call" {
+                                        "input"
+                                    } else {
+                                        "arguments"
+                                    },
+                                    "namespace",
+                                ],
+                            ) && ["call_id", "name"].iter().all(|key| {
+                                item.get(*key)
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|value| !value.is_empty())
+                            }) && item
+                                .get(if item["type"] == "custom_tool_call" {
+                                    "input"
+                                } else {
+                                    "arguments"
+                                })
+                                .is_some_and(serde_json::Value::is_string)
+                                && item
+                                    .get("namespace")
+                                    .is_none_or(|value| value.is_null() || value.is_string())
+                        }
+                        _ => false,
+                    }
+                })
+        })
+}
+
 #[cfg(test)]
 mod reasoning_tests;
 

@@ -990,3 +990,78 @@ Validation is separate from that review:
 - Strict all-target/all-feature workspace clippy, workspace doctests (5 passed,
   1 ignored), formatting and diff checks passed. The initial clippy result failed
   on the redundant wrapper and is not counted as passing evidence.
+
+
+## C3 native Responses continuation and redacted receipts
+
+Managed non-streaming Responses execution can now retain an encrypted
+`provider_metadata.bitrouter.nativeContinuation` artifact on the first part of
+its assistant message. It uses the existing installation key with a distinct
+AEAD domain; it does not introduce another transcript store. The artifact binds
+the authenticated owner, serving target, final credential/scope authority,
+requested effective effort (including the absence of an explicit effort), whole
+assistant message and exact ordered canonical prefix. Only the built-in
+successful HTTP attempt can supply its source, and the actual dispatched prompt
+must equal the prepared prompt before a prefix can be certified.
+
+Core plans and durable history keep the complete prompt. The executor alone
+renders a suffix and substitutes the provider ID when the binding matches.
+Current instructions, tools and settings are still sent. Input counting uses
+the same finalized generation view, and final authentication is rechecked for
+both operations and retries. The plaintext response ID is removed from managed
+Responses output before attempt receipts or core checkpoints receive it,
+including unverified custom/stream-bridge output. A private terminal-valid bit
+preserves the preexisting terminal checks without treating an unverified result
+as proven provenance. Ordinary HTTP gateway continuation remains independent.
+
+Target, effort or prefix changes permit full-history detachment only when the
+retained provider output has a supported replay form and private-origin checks
+also allow the candidate. Unsupported or lossy output receives a source-proven
+`nativeContextRequired` marker with a distinct successful-output nonce. It is
+included in message/prefix commitments and requires covering stored state;
+deleting the newest handle, selecting an older anchor or merging another branch
+cannot silently replay that output. Even identical visible projections cannot
+exchange handles for different hidden state. An output with no canonical parts
+retains an empty text carrier for this marker. As with the existing stateless
+origin proofs, removing all provenance and state markers from arbitrary caller
+input is not detectable by that proof alone; core frozen-history validation
+separately protects required retained content.
+
+Only a response confirming `store: true`, an outbound request allowing storage,
+a matching actual effort and a verified authority can issue a handle. Seal
+failure preserves the billed result and usage with an explicit unverified
+reason. Unstored lossy output retains its state requirement and cannot be
+silently replayed. Planned route decisions and actual attempt observations are
+separate: full-history reason, resumed prefix length or rejection on input;
+issued, not-stored, not-supported or unverified on output. Unknown legacy fields
+remain unknown. Neither a shorter wire suffix nor a stored response establishes
+cache hits or token savings.
+
+Independent review found and corrected missing coverage after artifact removal,
+lossy mixed-branch detachment, successful-input binding, unverified response-ID
+exposure and indistinguishable hidden output states. Production App regressions
+exercise suffix/count parity, installation restart, target/effort/prefix changes,
+owner/message/token/key checks, state coverage and paid output on seal failure.
+A real CoreSession runs three tasks, retains full history, records encrypted
+artifacts in checkpoints and dispatches only the proper suffix on follow-ups.
+An SDK HTTP regression changes the explicit execution prompt while retaining
+its original pipeline context and verifies that no false prefix is certified.
+
+This segment covers the built-in non-streaming HTTP executor. Stream-bridge
+private source binding, child/reuse/fallback combined acceptance, complete
+output-item fidelity, full monetary accounting, C4 recovery, C5 remote API and
+C6 production conformance remain open. A provider can expire or reject stored
+state; this local proof does not guarantee indefinite availability. Full A01–A23
+acceptance, final audit, PR and CI remain required.
+
+Final independent read-only review found no remaining blocker for this segment.
+Validation on the reviewed implementation:
+
+- Focused SDK/App/core selection: 12 passed, including all 10 new regressions.
+- Workspace nextest: 3786 passed, 22 skipped, in 217.963 seconds.
+- Strict all-target/all-feature workspace clippy passed without warnings.
+- Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
+- Earlier runs exposed a test-only missing dependency, the interaction between
+  ID redaction and terminal validation, and two fixture assertions that needed
+  to distinguish current instructions from input and decode checkpoint payloads.
+  Those failed runs are not counted as passing evidence.

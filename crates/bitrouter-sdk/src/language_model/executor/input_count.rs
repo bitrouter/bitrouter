@@ -150,10 +150,7 @@ impl HttpExecutor {
             .input_token_count_endpoint(target)
             .ok_or_else(|| invalid("transport does not support input counting"))?;
         Self::check_response_format(prompt, adapter, target)?;
-        let mut upstream = prompt.clone();
-        upstream.model = target.service_id.clone();
-        upstream.stream = false;
-        let mut body = adapter.render_request_for_target(&upstream, target)?;
+        let mut body = self.render_execution_request(adapter.as_ref(), target, prompt, ctx)?;
         let managed_expected = self.managed_expected_body(&body, target, ctx)?;
         apply_provider_continuation(&mut body, target, ctx)?;
         let url = transport.endpoint_url(target, false);
