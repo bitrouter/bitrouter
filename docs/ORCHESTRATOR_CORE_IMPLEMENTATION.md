@@ -1065,3 +1065,47 @@ Validation on the reviewed implementation:
   ID redaction and terminal validation, and two fixture assertions that needed
   to distinguish current instructions from input and decode checkpoint payloads.
   Those failed runs are not counted as passing evidence.
+
+
+## C3 native continuation with allocation, reuse and fallback
+
+Production App/CoreSession fixtures now exercise native Responses continuation
+together with core collaboration and actual HTTP dispatch. Eight child cases
+combine replayable or lossy provider output, inherited or fresh allocation, and
+the original or a changed model. The parent emits `spawn_agent` during its active
+turn. Each child step retains exactly the selected parent step's input plus its
+task, or just its task for fresh allocation. The inherited snapshot excludes the
+parent's current unpaired tool call and uses the earlier stored anchor for
+same-model continuation.
+Tests compare complete wire input arrays for suffix, fresh and detached requests.
+Replayable inherited history can detach to another model; lossy history rejects
+that change before any child HTTP request or attempt.
+
+The worker-reuse fixture directly invokes `CoreSession::collaborate` with
+`Action::Delegate`. The selected idle worker resumes its own stored history while
+receiving current root instructions. It checks that the harness checkpoint saves
+the worker history and continuation receipt; it does not test restoring or
+rebinding that checkpoint. A failed stored-state request
+also exercises provider fallback: replayable history reaches the backup in full,
+whereas lossy history cannot reach it. The failed and successful attempts have
+separate receipts, and a subsequent request resumes the backup's response handle,
+confirming that the newly issued artifact identifies the actual successful source.
+
+Independent read-only review identified missing positive cross-model detachment
+coverage and overly permissive child-history assertions. The final fixtures
+include both fixes; follow-up review found no remaining blocker for this segment.
+Focused validation passed all three integration tests, including the eight-case
+child matrix. Earlier compile and terminal-parent fixture failures are excluded
+from passing evidence.
+
+These tests establish combined non-streaming Responses allocation/continuation
+behavior. They do not establish stream-bridge private provenance, complete
+output-item fidelity, full monetary accounting, C4 recovery, C5 remote API or
+C6 production conformance. Full A01–A23 acceptance, final audit, PR and CI remain
+required.
+
+Validation on the reviewed test code:
+
+- Workspace nextest: 3789 passed, 22 skipped, in 220.557 seconds.
+- Strict all-target/all-feature workspace clippy passed without warnings.
+- Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.

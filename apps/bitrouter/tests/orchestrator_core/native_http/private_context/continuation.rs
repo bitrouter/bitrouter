@@ -1,6 +1,9 @@
 //! Native continuation through the production App, authentication and HTTP executor.
 //! https://developers.openai.com/api/docs/guides/conversation-state
 
+#[path = "continuation/collaboration.rs"]
+mod collaboration;
+
 use super::*;
 use bitrouter_sdk::language_model::native_context::metadata;
 use bitrouter_sdk::language_model::native_continuation::{
