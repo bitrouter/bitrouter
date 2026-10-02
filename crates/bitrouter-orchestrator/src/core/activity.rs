@@ -4,6 +4,44 @@
 use std::collections::BTreeSet;
 use std::time::Instant;
 
+/// Request-local gate callback time, including time awaiting another commit's
+/// ACK. A guard records early returns as well as successful admission.
+#[derive(Default)]
+pub(crate) struct GateTime(std::sync::atomic::AtomicU64);
+
+impl GateTime {
+    pub fn reset(&self) {
+        self.0.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn elapsed(&self) -> std::time::Duration {
+        std::time::Duration::from_nanos(self.0.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub fn measure(&self) -> GateMeasurement<'_> {
+        GateMeasurement {
+            time: self,
+            started: Instant::now(),
+        }
+    }
+}
+
+pub(crate) struct GateMeasurement<'a> {
+    time: &'a GateTime,
+    started: Instant,
+}
+
+impl Drop for GateMeasurement<'_> {
+    fn drop(&mut self) {
+        let nanos = self.started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        let _ = self.time.0.fetch_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |prior| Some(prior.saturating_add(nanos)),
+        );
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Activity {
     running: BTreeSet<String>,

@@ -207,6 +207,44 @@ async fn explicit_optional_history_rebuild_is_committed_recounted_and_auditable(
     assert_eq!(turn.steps.len(), 3);
     let rejected = &turn.steps[1];
     let rebuilt = &turn.steps[2];
+    use bitrouter_orchestrator::core::accounting::work::{CostWorkKind, CostWorkState};
+    let ledger = &state.cost_work[&turn.run_id];
+    assert_eq!(
+        ledger
+            .work
+            .values()
+            .filter(|work| work.kind == CostWorkKind::InputCount)
+            .count(),
+        3
+    );
+    let rejected_count = &ledger.work[&format!("{}/count/0", rejected.step_id)];
+    let rebuilt_count = &ledger.work[&format!("{}/count/0", rebuilt.step_id)];
+    assert_eq!(rejected_count.request_id, rebuilt_count.request_id);
+    assert_ne!(rejected_count.step_id, rebuilt_count.step_id);
+    assert_eq!(rejected_count.state, CostWorkState::OutcomeRecorded);
+    assert_eq!(rebuilt_count.state, CostWorkState::OutcomeRecorded);
+    assert_eq!(
+        ledger
+            .work
+            .values()
+            .filter(|work| work.kind == CostWorkKind::Preparation)
+            .count(),
+        2
+    );
+    assert_eq!(
+        ledger.work[&format!("{}/rebuild", rejected.step_id)].state,
+        CostWorkState::OutcomeRecorded
+    );
+    assert_eq!(
+        ledger.work[&format!("{}/validation", rebuilt.step_id)].state,
+        CostWorkState::OutcomeRecorded
+    );
+    assert!(
+        ledger
+            .work
+            .values()
+            .all(|work| !work.unknown_cost_reason.is_empty())
+    );
     assert!(rejected.attempts.is_empty());
     assert!(rejected.input_history.starts_with(&original_history));
     let record = rejected
@@ -358,6 +396,7 @@ async fn mandatory_history_over_capacity_rejects_after_one_rebuild() -> TestResu
 #[tokio::test]
 async fn reconstruction_ack_is_a_barrier_for_recount_and_generation() -> TestResult {
     for (kind, disconnect) in [
+        "context.rebuild.intent",
         "context.rebuild",
         "context.validation.intent",
         "context.validation.outcome",
@@ -386,7 +425,11 @@ async fn reconstruction_ack_is_a_barrier_for_recount_and_generation() -> TestRes
                 .ok_or("turn")?
                 .steps
                 .len(),
-            if kind == "context.rebuild" { 2 } else { 3 }
+            if matches!(kind, "context.rebuild.intent" | "context.rebuild") {
+                2
+            } else {
+                3
+            }
         );
         let state = session.snapshot().await;
         if kind == "context.validation.outcome" {
@@ -432,6 +475,14 @@ async fn failed_reconstruction_commit_keeps_the_original_context() -> TestResult
     assert!(serde_json::to_string(&state.agents[&state.agent_id].history)?.contains("artifact-42"));
     assert_eq!(executor.counts.lock().await.len(), 4);
     assert_eq!(executor.generated.lock().await.len(), 3);
+    let turn = state.root_turn().ok_or("turn")?;
+    let step = turn.steps.last().ok_or("step")?;
+    let work = &state.cost_work[&turn.run_id].work[&format!("{}/rebuild", step.step_id)];
+    assert_eq!(
+        work.state,
+        bitrouter_orchestrator::core::accounting::work::CostWorkState::IntentRecorded
+    );
+    assert!(work.elapsed_ms.is_none());
     Ok(())
 }
 
@@ -689,6 +740,27 @@ async fn checkpoint_wait_between_validation_guards_does_not_spend_active_budget(
     );
     assert!(result.run.as_ref().is_some_and(|run| run.active_ms < 1000));
     assert_eq!(validation.next_calls.load(Ordering::SeqCst), 1);
+    let turn = result.root_turn().ok_or("turn")?;
+    let step = turn.steps.last().ok_or("step")?;
+    let report = step
+        .context_validation
+        .as_ref()
+        .and_then(|validation| validation.report.as_ref())
+        .ok_or("validation report")?;
+    assert!(report.elapsed_ms >= 1200);
+    assert!(report.work_elapsed_ms.is_some_and(|elapsed| elapsed < 1000));
+    assert_eq!(
+        result.cost_work[&turn.run_id].work[&format!("{}/validation", step.step_id)].elapsed_ms,
+        report.work_elapsed_ms
+    );
+    let mut legacy = serde_json::to_value(report)?;
+    legacy
+        .as_object_mut()
+        .ok_or("report object")?
+        .remove("work_elapsed_ms");
+    let legacy: bitrouter_sdk::language_model::native::NativeContextValidationReport =
+        serde_json::from_value(legacy)?;
+    assert!(legacy.work_elapsed_ms.is_none());
     Ok(())
 }
 

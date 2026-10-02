@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared-plan records, worker allocation, output/input capacity, constrained reconstruction, production hook revalidation and token/cache evidence below; full protocol/continuation feasibility and complete accounting acceptance remain open |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared plans, worker allocation, capacity, reconstruction, hook revalidation, token/cache evidence, native continuation and durable cost work below; full protocol coverage and monetary accounting acceptance remain open |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -716,9 +716,10 @@ final-tree workspace validation, PR and CI remain open.
 ### Remaining C3 acceptance audit
 
 A separate read-only audit confirmed that the token subtotal is still only part
-of the run-cost contract. Preparation, input counting and integration work need
-explicit cost categories, including durable unknown evidence when no amount is
-available. Reported monetary charges and reconciled charges need independent,
+of the run-cost contract. The cost-work inventory below now retains preparation,
+input counting, validation, reconstruction, model and workspace-tool exposure,
+including durable unknown costs. Remaining integration sources and actual
+monetary evidence still need coverage. Reported and reconciled charges need independent,
 idempotently correlated evidence alongside estimates; provider-reported token
 usage is not a reported charge, and the values must not be added together as
 independent bills. The existing authoritative settlement path should supply this
@@ -1109,3 +1110,59 @@ Validation on the reviewed test code:
 - Workspace nextest: 3789 passed, 22 skipped, in 220.557 seconds.
 - Strict all-target/all-feature workspace clippy passed without warnings.
 - Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
+
+
+## C3 durable cost work inventory
+
+`SessionSnapshot.cost_work` retains work by its original run, independently of
+the currently visible root run or worker turn. Preparation, provider attempts,
+input counts, context validation, reconstruction and workspace invocations are
+projected from their execution records into the same proposed checkpoint. Work
+identities preserve agent, turn and step attribution; count identities include
+the step so repeated counts after reconstruction cannot overwrite one another.
+Retired child turns and prior root runs retain their records. Legacy snapshots
+without a run entry have unknown coverage, not a reconstructed zero-cost run.
+
+Intent and outcome states describe durable execution evidence, not billing
+status. Model-token estimates retain the original receipt evidence separately
+from the explicit unknown total cost. Missing operation duration remains absent,
+and observed durations exclude acknowledgement waits. The inventory is not a
+second bill and must not be summed with token subtotals or request settlement.
+Repeated checkpoints and duplicate tool results do not add work. Conflicting
+work identities or changes to recorded outcomes reject the proposed checkpoint.
+All retained records count toward the existing checkpoint size bound.
+
+Context reconstruction now commits an intent before local work begins. A failed
+outcome commit leaves that intent pending. Rebuilt contexts use their separate
+validation/count records and do not pretend to repeat App/router preparation.
+Preparation rejected before any provider attempt still retains unknown expense.
+
+Independent review found that the existing validation wall clock includes live
+gates awaiting another checkpoint's ACK. A request-local timer now accounts for
+all core gate callbacks, including checks inside App transforms. Validation
+reports retain the original wall clock and add optional `work_elapsed_ms` after
+subtracting those callbacks. The inventory uses only this new measurement.
+Uninstrumented custom controls and legacy reports keep it unknown. A real
+concurrent checkpoint barrier holds an ACK for 1.2 seconds and verifies that wall
+time includes the wait while work time and the run's active budget exclude it.
+
+Focused tests cover outcome ACK visibility/failure, unknown failed fallback,
+retired child turns and new runs, preparation rejection, tool result deduplication,
+checkpoint serialization, repeated count rounds and reconstruction ACK barriers.
+This is the durable work inventory, not complete monetary accounting: reported
+and reconciled charges, delayed evidence import, internal authentication retries,
+and remaining material/authentication integration costs still need real sources
+and correlated coverage. C3 completion, C4–C6, the full A01–A23 audit, PR and CI
+remain open.
+
+Final independent read-only review found no remaining blocker after the timing
+fix. Validation on the final implementation:
+
+- Accounting/reconstruction selection: 18 passed, including two new integration
+  tests and expanded retirement, checkpoint and concurrent-wait assertions.
+- Workspace nextest: 3791 passed, 22 skipped, in 234.033 seconds.
+- Strict all-target/all-feature workspace clippy passed without warnings.
+- Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
+- An initial check used a nonexistent error constructor; it was corrected before
+  executable validation. The first broad pass preceded the timing fix and is not
+  used as evidence for that fix.

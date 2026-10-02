@@ -217,6 +217,10 @@ pub struct SessionSnapshot {
     pub waits: BTreeMap<String, RuntimeWait>,
     pub signals: SignalState,
     pub allocations: BTreeMap<String, ContextAllocation>,
+    /// Run-wide cost exposure retained even after agents retire or runs change.
+    /// Missing legacy entries mean unknown coverage, never a zero-cost run.
+    #[serde(default)]
+    pub cost_work: BTreeMap<String, super::accounting::work::RunCostWork>,
 }
 
 impl SessionSnapshot {
@@ -305,6 +309,7 @@ impl CoreSession {
             run: None,
             operations: BTreeMap::new(),
             allocations: BTreeMap::new(),
+            cost_work: BTreeMap::new(),
         };
         let session = Self {
             shared: Arc::new(Shared {
@@ -418,6 +423,7 @@ impl CoreSession {
                 terminal_reason: None,
                 notified: false,
             });
+            state.cost_work.insert(run_id.clone(), Default::default());
             state.run = Some(RootRun {
                 run_id: run_id.clone(),
                 agent_turn_id: turn_id.clone(),
@@ -1854,6 +1860,7 @@ impl CoreSession {
             session: self.clone(),
             agent_id: agent_id.to_owned(),
             step_id: Mutex::new(step_id.clone()),
+            validation_gate_time: Default::default(),
             model_selection: match turn.input.routing.model {
                 super::protocol::ModelMode::Fixed => NativeModelSelection::Fixed,
                 super::protocol::ModelMode::Policy => NativeModelSelection::Policy,
@@ -2642,6 +2649,7 @@ impl CoreSession {
             if !matches!(kind, "run.completed" | "run.failed" | "run.cancelled") {
                 refresh_run(&mut next);
             }
+            super::accounting::work::synchronize(&mut next)?;
             let references = next
                 .agents
                 .values()
@@ -2742,6 +2750,7 @@ impl CoreSession {
 }
 
 struct StepControl {
+    validation_gate_time: super::activity::GateTime,
     session: CoreSession,
     agent_id: String,
     step_id: Mutex<String>,
@@ -2861,6 +2870,7 @@ impl NativeExecutionControl for StepControl {
     }
 
     async fn before_context_validation(&self, request_id: &str) -> bitrouter_sdk::Result<()> {
+        self.validation_gate_time.reset();
         let step_id = self.step_id.lock().await.clone();
         self.session
             .transition_for(
@@ -2908,6 +2918,7 @@ impl NativeExecutionControl for StepControl {
     }
 
     async fn check_context_validation(&self, request_id: &str) -> bitrouter_sdk::Result<()> {
+        let _gate_time = self.validation_gate_time.measure();
         // Pause between guards before waiting for another checkpoint's ACK.
         // ensure_dispatch resumes activity only after its live gate succeeds.
         self.session
@@ -2936,6 +2947,10 @@ impl NativeExecutionControl for StepControl {
             .ensure_dispatch(&self.agent_id, &step_id, format!("{request_id}/validation"))
             .await
             .map_err(sdk_error)
+    }
+
+    fn context_validation_gate_duration(&self) -> Option<std::time::Duration> {
+        Some(self.validation_gate_time.elapsed())
     }
 
     async fn after_context_validation(
@@ -3155,6 +3170,18 @@ impl NativeExecutionControl for StepControl {
         if !eligible {
             return Ok(None);
         }
+        self.session
+            .transition_for(
+                Some(&self.agent_id),
+                "context.rebuild.intent",
+                |state, _| {
+                    validate_step_source(state, &self.agent_id, &step_id)?;
+                    super::accounting::work::begin_rebuild(state, &self.agent_id, &step_id)?;
+                    Ok(json!({"step_id":step_id,"request_id":plan.request_id}))
+                },
+            )
+            .await
+            .map_err(sdk_error)?;
         let activity_id = format!("{}/rebuild", plan.request_id);
         self.session
             .ensure_dispatch(&self.agent_id, &step_id, activity_id.clone())

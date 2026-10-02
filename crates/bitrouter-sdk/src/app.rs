@@ -343,6 +343,9 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
     async fn check_context_validation(&self, request_id: &str) -> Result<()> {
         self.inner.check_context_validation(request_id).await
     }
+    fn context_validation_gate_duration(&self) -> Option<std::time::Duration> {
+        self.inner.context_validation_gate_duration()
+    }
     async fn after_context_validation(
         &self,
         report: crate::language_model::native::NativeContextValidationReport,

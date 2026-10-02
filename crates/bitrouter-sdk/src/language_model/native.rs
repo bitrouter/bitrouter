@@ -73,8 +73,14 @@ pub struct NativeContextValidationReport {
     pub allowed: bool,
     /// Controlled SDK error category only; never upstream diagnostic text.
     pub error_code: Option<String>,
-    /// Validation time, excluding the intent and outcome checkpoint waits.
+    /// Validation wall time, excluding the intent and outcome checkpoint waits.
+    /// Intervening live-gate callbacks can still wait for concurrent commits.
     pub elapsed_ms: u64,
+    /// Validation time excluding all live-gate callbacks as well. Absent when
+    /// the embedding control does not measure them; legacy wall time is not a
+    /// substitute for this observation.
+    #[serde(default)]
+    pub work_elapsed_ms: Option<u64>,
 }
 
 /// Kept inside the live pipeline; only request digests cross the core boundary.
@@ -309,6 +315,12 @@ pub trait NativeExecutionControl: Send + Sync {
     /// Recheck the live gate before each hook/checker within that durable intent.
     async fn check_context_validation(&self, _request_id: &str) -> Result<()> {
         Ok(())
+    }
+
+    /// Total time spent in live-gate callbacks since before_context_validation.
+    /// Includes checks invoked by App transforms and must be request-local.
+    fn context_validation_gate_duration(&self) -> Option<std::time::Duration> {
+        None
     }
 
     /// Validate embedding preparation contracts within an acknowledged validation

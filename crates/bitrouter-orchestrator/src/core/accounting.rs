@@ -2,6 +2,8 @@
 //! retired child turns and fallbacks. Provider invoices and auxiliary charges
 //! are outside this subtotal; it must not be added to request settlement rows.
 
+pub mod work;
+
 use bitrouter_sdk::language_model::native_accounting::NativeTokenCost;
 use serde::{Deserialize, Serialize};
 

@@ -893,6 +893,11 @@ impl Pipeline {
                                 .await
                         }
                         .await;
+                        let elapsed = started.elapsed();
+                        let work_elapsed_ms = control
+                            .context_validation_gate_duration()
+                            .and_then(|gates| elapsed.checked_sub(gates))
+                            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64);
                         control
                             .after_context_validation(
                                 crate::language_model::native::NativeContextValidationReport {
@@ -902,11 +907,9 @@ impl Pipeline {
                                         .as_ref()
                                         .err()
                                         .map(|error| error.error_code().to_owned()),
-                                    elapsed_ms: started
-                                        .elapsed()
-                                        .as_millis()
-                                        .min(u128::from(u64::MAX))
+                                    elapsed_ms: elapsed.as_millis().min(u128::from(u64::MAX))
                                         as u64,
+                                    work_elapsed_ms,
                                 },
                             )
                             .await?;
