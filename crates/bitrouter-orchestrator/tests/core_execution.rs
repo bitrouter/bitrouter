@@ -25,6 +25,8 @@ mod root_queue;
 #[path = "core_execution/steering.rs"]
 mod steering;
 mod support;
+#[path = "core_execution/tool_payloads.rs"]
+mod tool_payloads;
 #[path = "core_execution/tool_status.rs"]
 mod tool_status;
 

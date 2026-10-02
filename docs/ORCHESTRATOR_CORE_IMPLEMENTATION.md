@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue, targeted steering, live tool observations, active-time admission/cleanup, settled ownership release and authenticated cumulative activity handoff implemented; cleanup capacity reservations and remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue, targeted steering, live tool observations, active-time admission/cleanup, settled ownership release, authenticated cumulative activity handoff and frozen tool payload bounds implemented; cleanup capacity reservations and remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -2103,3 +2103,67 @@ Final validation with Rust 1.99.0:
 
 The next commit's remote CI is a separate verification gate. The remaining C4
 capacity/fault work and C5/C6 production integration remain required.
+
+## C4 bounded tool outcome and lifecycle payloads
+
+New workspace and verification intents freeze `ToolExecute.result_limits`:
+`output_bytes` limits UTF-8 output and `payload_bytes` limits the complete
+serialized result/status object, including JSON escapes, evidence reference
+metadata and workspace revision. The latter deducts the largest control
+message envelope from the caller-lowered run input bound. A result at its
+payload bound fits even maximum-length session/operation identities, epoch and
+expected revision. Local calls and restore reconciliation use the same bound;
+remote ingress additionally validates the full wire message.
+
+Live admission checks the host bound before fingerprint serialization and the
+frozen invocation bound before proposing a checkpoint. Rejection leaves the
+head and operation identity available for retry with valid evidence. It does
+not truncate or synthesize a successful result. Signal updates and later root
+runs cannot enlarge an admitted reply. Counting uses a writer rather than
+allocating another serialized copy solely to measure its length.
+
+Restoration validates retained results, uncertain prior results and lifecycle
+observations, then validates newly supplied evidence before any proposal or
+execution. Legacy intents without `result_limits` derive their bound from the
+matching retained run or the original turn's explicit inherited input limits.
+The restore checkpoint freezes that migration before redispatch. If neither
+source remains, restore returns `recovery_required`; it does not guess a larger
+host policy. Declared limits that cannot fit even an empty result, or exceed
+the retained policy, are rejected as checkpoint conflicts.
+
+Compatibility has an explicit limit: an old snapshot can contain an outcome
+whose raw output was legal but whose escaped JSON or metadata exceeds the new
+payload bound. Such a snapshot is rejected before commit with `limit_exceeded`,
+without deleting or truncating evidence. This increment does not provide an
+artifact migration for that historical content and does not claim all legacy
+snapshots can resume unchanged.
+
+Independent review found the missing durable legacy upgrade and acceptance of
+an unusably small restored bound; both were repaired. It also identified two
+existing internally generated denial messages that could exceed a legal
+one-byte output limit. These now retain an empty denied output, with the reason
+in the admission event or the restored workspace-change fact. Regressions cover
+both paths followed by another process restoration.
+
+This establishes bounded tool replies needed for capacity accounting. It does
+not reserve aggregate checkpoint/wire space for all pending outcomes,
+cancellation, pairing, child conclusions or terminal records. Provider outputs
+also need a separate byte-bound/artifact strategy. C4 capacity and fault work,
+C5/C6, the full acceptance audit and final independent review remain required.
+
+The preceding activity-handoff commit `f539460b` completed remote CI successfully
+on Linux, macOS and Windows (run `37053855510`).
+
+Validation and review for this increment:
+
+- Rust 1.99.0 workspace/all-feature nextest: 3932 passed, 22 skipped in
+  122.460 seconds with four threads, including all ten payload integrations.
+- The first workspace run stopped after a PTY resize/display wait timeout
+  (`code_detached_backlog_catches_up_once_after_resizes`). The unchanged test
+  passed alone in 4.713 seconds; the complete unchanged suite then passed.
+- Strict workspace/all-target/all-feature clippy passed (36.17 seconds), as did
+  strict workspace rustdoc (20.57 seconds), workspace doctests, format and diff
+  checks. Rust 1.93.0 workspace/all-feature compilation passed (18.02 seconds).
+- Independent read-only re-review found no remaining P1/P2 for this increment.
+  Aggregate cleanup reservation and historical oversized-evidence migration
+  remain open requirements, not covered by that review conclusion.

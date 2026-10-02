@@ -217,16 +217,10 @@ impl CheckpointBatch {
             kind: &'static str,
             payload: &'a CheckpointBatch,
         }
-        let mut counter = ByteCounter(0);
-        serde_json::to_writer(
-            &mut counter,
-            &Envelope {
-                kind: "checkpoint.proposed",
-                payload: self,
-            },
-        )
-        .map_err(|error| conflict(error.to_string()))?;
-        Ok(counter.0)
+        serialized_bytes(&Envelope {
+            kind: "checkpoint.proposed",
+            payload: self,
+        })
     }
 
     fn check_wire_limit(&self, limits: &Limits) -> Result<(), CoreError> {
@@ -556,6 +550,12 @@ impl CommitGate {
 
 fn conflict(message: impl Into<String>) -> CoreError {
     CoreError::rejected(ErrorCode::CheckpointConflict, message)
+}
+
+pub(crate) fn serialized_bytes(value: &impl Serialize) -> Result<u64, CoreError> {
+    let mut counter = ByteCounter(0);
+    serde_json::to_writer(&mut counter, value).map_err(|error| conflict(error.to_string()))?;
+    Ok(counter.0)
 }
 
 struct ByteCounter(u64);

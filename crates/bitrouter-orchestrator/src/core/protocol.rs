@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, sha256};
+use super::checkpoint::{CheckpointAck, CheckpointBatch, DurableHead, serialized_bytes, sha256};
 
 pub const VERSION: u32 = 1;
 pub const BETA: &str = "orchestrator_core=v1";
@@ -473,6 +473,77 @@ pub struct ToolObservation {
     pub evidence: Vec<ArtifactRef>,
 }
 
+/// Frozen per-invocation limits, including JSON escaping and all evidence
+/// metadata. Payloads at this bound fit a control envelope with maximum-length
+/// session/operation IDs and version counters. The same payload bound applies
+/// to lifecycle observations; neither limit reserves checkpoint space itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolResultLimits {
+    pub output_bytes: u64,
+    pub payload_bytes: u64,
+}
+
+impl ToolResultLimits {
+    pub(crate) fn for_input(input_bytes: u64, output_bytes: u64) -> Result<Self, CoreError> {
+        let result = ToolResult {
+            invocation_id: "x".repeat(128),
+            attempt_id: "x".repeat(128),
+            status: ToolOutcome::EffectUnknown,
+            output: String::new(),
+            evidence: Vec::new(),
+            workspace_revision: None,
+        };
+        let result_bytes = serialized_bytes(&result)?;
+        let envelope = ClientMessage {
+            version: VERSION,
+            session_id: "x".repeat(128),
+            execution_epoch: u64::MAX,
+            operation_id: "x".repeat(128),
+            expected_state_revision: Some(u64::MAX),
+            command: Command::ToolResult(result),
+        };
+        // tool.result and tool.status have equal-length tags and identical
+        // envelopes. Reserve the largest envelope even for in-process callers.
+        let overhead = serialized_bytes(&envelope)?.saturating_sub(result_bytes);
+        let payload_bytes = input_bytes.saturating_sub(overhead);
+        if output_bytes == 0 || payload_bytes < result_bytes {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "tool control input cannot fit a result envelope",
+            ));
+        }
+        Ok(Self {
+            output_bytes,
+            payload_bytes,
+        })
+    }
+
+    pub fn validate_result(&self, result: &ToolResult) -> Result<(), CoreError> {
+        if result.output.len() as u64 > self.output_bytes {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "tool result exceeds its admitted output bound",
+            ));
+        }
+        self.validate_payload(result)
+    }
+
+    pub fn validate_observation(&self, observation: &ToolObservation) -> Result<(), CoreError> {
+        self.validate_payload(observation)
+    }
+
+    fn validate_payload(&self, value: &impl Serialize) -> Result<(), CoreError> {
+        if serialized_bytes(value)? > self.payload_bytes {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "tool payload exceeds its admitted serialized bound",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bind {
@@ -616,16 +687,13 @@ impl ClientMessage {
                 "message does not belong to the active grant",
             ));
         }
-        let encoded = serde_json::to_vec(self).map_err(|error| {
-            CoreError::rejected(ErrorCode::UnsupportedCapability, error.to_string())
-        })?;
         let bound = match self.command {
             Command::Bind(_) | Command::Restore(_) | Command::ProviderEvidence(_) => {
                 limits.unacknowledged_bytes
             }
             _ => limits.input_bytes,
         };
-        if encoded.len() as u64 > bound {
+        if serialized_bytes(self)? > bound {
             return Err(CoreError::rejected(
                 ErrorCode::LimitExceeded,
                 "control input exceeds negotiated byte bound",
@@ -687,6 +755,10 @@ pub struct ToolExecute {
     pub execution_epoch: u64,
     pub authorizing_event_seq: u64,
     pub verification: bool,
+    /// Present on newly admitted invocations. Absence identifies a legacy
+    /// intent whose limits must be derived by the restoring core.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_limits: Option<ToolResultLimits>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
