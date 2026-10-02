@@ -1,5 +1,98 @@
 # CLI reference
 
+## BRO native coding tasks
+
+| Command | Behavior |
+| --- | --- |
+| `bro task run <prompt> --model ID [--effort EFFORT] [--check COMMAND\|--read-only] [--workspace PATH] [-c PATH]` | Connect to or start the local BRO task server, stream accepted/snapshot/event/terminal NDJSON, and exit nonzero for failed, cancelled, or interrupted tasks. The local headless client approves its own tool requests. `--read-only` permits only `read`, `ls`, `find`, and `grep`, with no verification command. Without `--check`, verification is `not_requested`. Explicit remote contexts are rejected without local fallback. This is distinct from ACP `bro run <agent>`. |
+
+The local task socket is a sibling of the daemon control socket with a
+version 13 capabilities handshake bound to a server instance. Local requests
+and replies carry a correlated `command_id` (distinct from approval `request_id`); submit accepts an optional
+`idempotency_key` scoped to that instance and caller. `bro code [--model ID] [--task-id ID]
+[--check COMMAND\|--read-only] [--workspace PATH]` uses the same task service. It prompts
+for a model if no `--model` or `chat.model` exists, submits from its editor,
+projects sequenced events, accepts identified approvals with `y`/`n`, requests
+cancellation with Ctrl-C, and detaches with Ctrl-D. `--task-id` reattaches a
+task retained by the current server instance. Explicit `bro code <agent>` remains the ACP surface.
+
+Assistant start/delta/full/interrupted events and live snapshots carry the same
+stable Item ID; accepted user messages have their own Item ID. Interrupted
+output is bounded presentation evidence and never becomes a complete context
+message or executable tool request.
+
+Read batches use at most 4 workers per task and 16 tool workers across the server.
+Write/edit/shell and configured verification remain ordered workspace barriers.
+Verification requests its own approval; denial reports `denied`, and uncertain
+interrupted effects block the task as `recovery_required`.
+
+Opt-in HTTP tasks use a separate loopback listener configured under
+`agent_api`:
+
+```yaml
+agent_api:
+  enabled: true
+  listen: 127.0.0.1:4359
+  token_env: BRO_AGENT_API_TOKEN
+  workspaces: [/absolute/server/project]
+```
+
+The server reads the bearer token from that environment variable and requires
+it on every `/agent/v1` operation. `POST /agent/v1/tasks` also requires an
+`Idempotency-Key` header and a JSON body with `prompt`, `workspace`, `model`,
+optional `effort`, `read_only`, and `verification_command` (the latter two
+cannot be combined). First read `/agent/v1/capabilities` and use its
+`runtime.server_instance_id` in the `X-Bro-Server-Instance` header for every
+other operation. `/tasks/{id}/observe?after=N` streams SSE snapshots and events;
+slow observers or expired cursors receive `resynchronized: true`. A catchup
+batch is history before the snapshot cutoff; do not apply it again to the
+snapshot. Reads and event cursors
+use `GET /agent/v1/tasks/{id}` and `/events?after=N`; identified input and
+cancel use `/inputs` and `/cancel`. The task API does not inherit inference
+`server.skip_auth` or read-only control credentials.
+
+The live task runtime is instance-local; execution facts are committed to the
+configured database before model/tool advancement. Detach keeps tasks running,
+and shutdown joins execution cleanup. Core Thread loading reconstructs a bounded
+read-only recovery view; safe continuation remains under implementation.
+Report instance loss without automatically
+resubmitting. The Rust core has retained Thread context, durable FIFO/control
+keys, steering and bounded history/observation/reconnect; Thread controls are
+not yet CLI, HTTP or local transport operations. Legacy
+task keys remain instance-local. Storage failure blocks execution as `recovery_required`. Defaults: 8 active
+tasks, 32 retained terminal tasks / 64 MiB for up to 30 minutes, 256 events / 2 MiB per
+task, 8 observers / task, 32 queued events / observer, 32 KiB live output.
+Retention pressure may evict terminal tasks sooner. CLI/TUI use subscriptions;
+TUI reconnects to the same instance, with full approval metadata in snapshots.
+Core recovery defaults: 2 readers, 64 records / 4 MiB per page, 1,000,000 records
+per Thread. Loaded Threads stay `recovery_required`; no CLI recovery command is
+published. Reconstruction cannot confirm old execution termination or effects.
+Native startup also claims one database execution owner. Active lost owners and
+legacy unfenced records block new native work as `recovery_required`; inference
+can serve. Normal shutdown joins workers and persists a stopped proof before
+transfer. No owner-resolution command is published; never delete owner records
+or automatically repeat work to clear a blocker.
+
+Native execution also requires a writable parent for its canonical workspace.
+The local v13 handshake rejects an older daemon before task submission.
+Shared `.bro-workspace-<sha256(canonical UTF-8 path)>.lock` / `.json` sidecars
+live in that parent, outside the workspace, and coordinate runtimes even when
+configured with different databases. A live owner reports conflict; an active
+marker without confirmed release reports `recovery_required` after process loss.
+Only joined work with committed release preparation can write an idle marker.
+Do not delete these files to clear a blocker: the lock inode must stay stable,
+and marker deletion cannot prove termination or effects. This is cooperating
+local-runtime exclusion; it is not an OS sandbox or power-loss guarantee.
+
+Native initialization also completes bounded cold discovery before admitting work.
+Defaults are 1024 stored roots, 1,000,000 scanned records and 4 MiB of cold metadata.
+Protocol v13 capabilities report aggregate scan progress/completion and failure;
+root identities and prompts are not exposed there. An incomplete scan blocks
+admission. Unknown cold execution blocks its workspace even before explicit load,
+including old Task submissions. Discovery creates no model request, runnable
+approval or hot context and does not automatically resume stored queues. Legacy
+Task conversion and safe same-Turn continuation remain under implementation.
+
 Every subcommand the v1 binary actually exposes. Anything not listed here doesn't exist — don't suggest `bro doctor`, `bro providers add`, `bro cloud connect`, or the old auth subcommand tree (cloud identity is `bro cloud whoami`, see below).
 
 Bare `bro` opens first-run onboarding when no default ACP harness is saved. Credentials alone do not complete setup. The wizard saves `chat.agent` and optional `chat.model`, then either opens BitRouter's ACP TUI, starts the daemon, or exits. Subsequent bare invocations immediately open the saved TUI.  Configuration resolves from `./bitrouter.yaml`, then `$BITROUTER_HOME/bitrouter.yaml`, then `~/.bitrouter/bitrouter.yaml`. With no existing file, onboarding writes to the BitRouter home. `init -c PATH` selects an explicit destination. Existing configuration values are preserved while updating chat defaults; `--force` replaces them with the starter configuration. Writes are atomic. First-run defaults bind `127.0.0.1:4356` with `skip_auth: true`.  `init --yes` saves configuration without interactive credential prompts and exits by default. The default harness is `codex-acp`; `--harness claude` selects `claude-acp`. Repeated `--harness` flags use the first as the default. An explicit `--after launch` opens the ACP TUI even when setup itself was headless. Without a terminal, bare unconfigured invocation prints setup instructions and an inert onboarding envelope; it does not silently complete the wizard.
@@ -50,7 +143,7 @@ Configuration status uses the target-owned optional `config_state`: saved input 
 
 | Command | Effect |
 |---|---|
-| `bro route <model> [--prompt TEXT] [--config PATH]` | Preview a model or router using the running daemon, otherwise local config (`resolved_via: live/config/zero_config`). Fixed routes show `effective_model`, `provider_chain`, and available rate estimates. Policy-bound routers show identity, source, `bound_policy`, candidates, and `policy_decision_executed: false`; their `effective_model` is the base model and their provider chain is empty. No dynamic selection is executed. `--prompt` only affects the existing local static policy-table preview. Nothing is sent upstream. |
+| `bro route <model> [--prompt TEXT] [--config PATH]` | Preview a model or router using the running daemon, otherwise local config (`resolved_via: live/config/zero_config`). The config fallback discovers models for `auto_discover: true` providers, as `bro models` does. Fixed routes show `effective_model`, `provider_chain`, and available rate estimates. Policy-bound routers show identity, source, `bound_policy`, candidates, and `policy_decision_executed: false`; their `effective_model` is the base model and their provider chain is empty. No dynamic selection is executed. `--prompt` only affects the existing local static policy-table preview. Nothing is sent upstream for inference; discovery may query provider `/models` endpoints. |
 | `bro models [--config PATH] [--provider ID]` | List every routable model selector, each with **all** the providers that can serve it (the fallback chain, in order). Subscription providers are explicit-route-only and therefore appear as pinned `provider:canonical-model` selectors; every displayed selector can be passed unchanged to `bro route`. Tries the running daemon first, falls back to a standalone config parse — same order as `bro route`. The parse is resolved the way the daemon resolves its own config at start-up (built-in defaults, then subscription providers such as `claude-code` / `google-ai` re-activated from the OAuth credential store), so a subscription-backed provider is listed with no daemon running; the live table additionally reflects `reload`s and whatever the daemon resolved at start-up. `--json` reports `resolved_via: "live" \| "config"`. Filter with `--provider`. |
 | `bro providers list [--config PATH] [--socket PATH]` | Local compatibility output retains `ID  MODELS  ACTIVE  API_BASE`; a named remote context and the dashboard use the redacted accepted catalog without API bases or credentials. Active means configured for routing rather than connectivity-probed. |
 | `bro mcp check [server] [--config PATH]` | Connect to one configured upstream MCP server, or all of them, and report transport, reachability, latency, negotiated tools capability, and advertised tool names. |
@@ -217,7 +310,18 @@ See `references/sessions.md` for the controller/native-session boundary and what
 
 ## Interactive interface (`bro code`)
 
-Bare local `bro code` opens an empty conversation and **Choose agent**.
+Bare `bro code` is BRO's native task view. It streams assistant text and live
+shell output through transient task snapshots; complete turns and tool results
+remain in the durable event journal. Coding tools are `read` (UTF-8 text),
+`ls` (directory entries), `find` (glob paths), `grep` (regex or literal text),
+`write` (create/overwrite), `edit` (unique `oldText`/`newText` replacements),
+and `bash` on Unix or `powershell` on Windows (`command`, optional timeout in
+seconds). Search tools respect `.gitignore` and output limits. New tasks started
+with `--read-only` expose only `read`, `ls`, `find`, and `grep`; the server also
+rejects an unadvertised effectful call. The local task socket contract is
+version 3; restart an older daemon before connecting.
+
+Explicit local `bro code <agent>` opens an ACP conversation.
 `bro code <agent>` asks the daemon supervisor to own the ACP controller from
 creation. There are no permanent tabs: foreground history stays in native
 scrollback, while the bottom control deck keeps the composer/status and a

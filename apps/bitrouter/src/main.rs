@@ -123,7 +123,7 @@ struct NativeLaunchArgs {
 
 #[derive(Args)]
 struct CodeArgs {
-    /// ACP agent id. Omit to choose an agent in the conversation.
+    /// ACP agent id. Omit for BRO's native coding view.
     agent: Option<String>,
     /// Load a harness-native session and replay its history.
     #[arg(
@@ -152,10 +152,57 @@ struct CodeArgs {
     /// Explicit local control socket for read-only operations.
     #[arg(long)]
     socket: Option<PathBuf>,
+    /// Reattach a BRO native task by its ID (bare `bro code` only).
+    #[arg(long)]
+    task_id: Option<String>,
+    /// Bounded project verification command for new BRO native tasks.
+    #[arg(long)]
+    check: Option<String>,
+    /// Restrict new BRO native tasks to read, ls, find, and grep.
+    #[arg(long, conflicts_with_all = ["check", "task_id"])]
+    read_only: bool,
+    /// Workspace for new BRO native tasks.
+    #[arg(long)]
+    workspace: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct TaskRunArgs {
+    /// Coding task to submit to the local BRO server.
+    prompt: String,
+    /// Fixed model or routed model selector for the native agent.
+    #[arg(long)]
+    model: String,
+    /// Fixed reasoning effort for each model turn.
+    #[arg(long)]
+    effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    /// Bounded project verification command. Without one, verification is unavailable.
+    #[arg(long)]
+    check: Option<String>,
+    /// Restrict this task to read, ls, find, and grep.
+    #[arg(long, conflicts_with = "check")]
+    read_only: bool,
+    /// Server-local workspace (defaults to the client's current directory).
+    #[arg(long)]
+    workspace: Option<PathBuf>,
+    /// Path to `bitrouter.yaml` for the local server.
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+enum TaskAction {
+    /// Submit a native coding task and wait for its terminal result.
+    Run(TaskRunArgs),
 }
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run a BRO-owned native coding task through the task server.
+    Task {
+        #[command(subcommand)]
+        action: TaskAction,
+    },
     /// Load a config, run migrations, and serve HTTP + control socket
     /// **in the foreground**.
     Serve {
@@ -1800,7 +1847,7 @@ async fn async_main() {
             serve: true,
             legacy_agent: None,
             ..
-        })
+        }) | Some(Command::Task { .. })
     );
     let output = bitrouter::output::Output::from_flags(cli.json, cli.human || cli.human_short);
     // Box the dispatch future onto the heap. `run` is a large `async fn` whose
@@ -1859,6 +1906,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         None | Some(
             Command::Acp { .. }
                 | Command::Run { .. }
+                | Command::Task { .. }
                 | Command::Spawn { .. }
                 | Command::Chat { .. }
                 | Command::Code { .. }
@@ -1929,6 +1977,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     validate_remote_invocation(&command, remote_context.is_some())?;
 
     match command {
+        Command::Task { action } => match action {
+            TaskAction::Run(args) => run_native_task(args, remote_context.is_some()).await,
+        },
         Command::Serve { config } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             bitrouter::host::serve_with_extensions(&source, |_| Ok(())).await
@@ -2476,6 +2527,10 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     routing,
                     config,
                     socket: None,
+                    task_id: None,
+                    check: None,
+                    read_only: false,
+                    workspace: None,
                 },
                 None,
                 None,
@@ -2510,6 +2565,133 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             Ok(())
         }
     }
+}
+
+async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
+    use bitrouter::agent_local::{Operation, ReplyResult};
+    use bitrouter_orchestrator::service::TaskStatus;
+
+    anyhow::ensure!(
+        !remote,
+        "remote native tasks require an explicitly configured task API; no local fallback was attempted"
+    );
+    let source = bitrouter::paths::resolve_config(args.config.as_deref())?;
+    let cfg = bitrouter::paths::load_config(&source).await?;
+    let control_socket = daemon::socket_path_for(&source, &cfg);
+    let task_socket = bitrouter::agent_local::connect_or_start(&source, &control_socket).await?;
+    let workspace = match args.workspace {
+        Some(workspace) => workspace,
+        None => std::env::current_dir()?,
+    };
+    let client = bitrouter::agent_local::TaskClient::connect(&task_socket).await?;
+    let accepted = match client
+        .request(Operation::Submit {
+            prompt: args.prompt,
+            workspace,
+            model: args.model,
+            effort: args.effort,
+            read_only: args.read_only,
+            verification_command: args.check,
+            idempotency_key: Some(uuid::Uuid::new_v4().to_string()),
+        })
+        .await?
+    {
+        ReplyResult::Task { snapshot } => snapshot,
+        _ => anyhow::bail!("BRO task server returned an unexpected submit response"),
+    };
+    emit_task_json(serde_json::json!({
+        "type": "accepted", "task_id": accepted.task_id, "host": "local",
+        "server_instance_id": accepted.server_instance_id, "workspace": accepted.workspace,
+        "tool_mode": accepted.tool_mode, "cursor": accepted.cursor,
+    }))?;
+    let mut stream = client
+        .observe(&accepted.task_id, Some(accepted.cursor))
+        .await?;
+    let mut snapshot = *accepted;
+    let mut answered = None;
+    let mut cancelling = false;
+    loop {
+        let observation = tokio::select! {
+            signal = tokio::signal::ctrl_c(), if !cancelling => {
+                signal?;
+                client.request(Operation::Cancel { task_id: snapshot.task_id.clone() }).await?;
+                cancelling = true;
+                continue;
+            }
+            next = stream.next() => next?.ok_or_else(|| anyhow::anyhow!("task observation disconnected; task {} may still be running; no task was resubmitted", snapshot.task_id))?,
+        };
+        match observation {
+            bitrouter_orchestrator::service::Observation::Snapshot {
+                snapshot: fresh,
+                resynchronized,
+                catchup,
+            } => {
+                for event in catchup {
+                    emit_task_json(serde_json::json!({"type": "event", "event": event}))?;
+                }
+                snapshot = *fresh;
+                emit_task_json(
+                    serde_json::json!({"type": "snapshot", "snapshot": snapshot, "resynchronized": resynchronized}),
+                )?;
+            }
+            bitrouter_orchestrator::service::Observation::Event { event } => {
+                snapshot.apply(&event);
+                emit_task_json(serde_json::json!({"type": "event", "event": event}))?;
+            }
+        }
+        if snapshot.status == TaskStatus::WaitingForInput
+            && let Some(request_id) = snapshot.pending_input_id.as_ref()
+            && answered.as_ref() != Some(request_id)
+            && !cancelling
+        {
+            // Explicit headless coding tasks approve their own identified tools.
+            let result = client
+                .request(Operation::Input {
+                    task_id: snapshot.task_id.clone(),
+                    request_id: request_id.clone(),
+                    approved: true,
+                })
+                .await;
+            if let Err(error) = result
+                && !error
+                    .downcast_ref::<bitrouter_orchestrator::service::ServiceError>()
+                    .is_some_and(|error| {
+                        error.code == bitrouter_orchestrator::service::ErrorCode::Conflict
+                    })
+            {
+                return Err(error);
+            }
+            answered = Some(request_id.clone());
+        }
+        if snapshot.status == TaskStatus::RecoveryRequired {
+            emit_task_json(serde_json::json!({"type": "blocked", "snapshot": snapshot}))?;
+            anyhow::bail!("BRO execution is blocked; inspect recovery state before continuing");
+        }
+        if snapshot.status.terminal() {
+            emit_task_json(serde_json::json!({
+                "type": "terminal", "task_id": snapshot.task_id, "status": snapshot.status,
+                "server_instance_id": snapshot.server_instance_id,
+                "verification": snapshot.verification, "verification_evidence": snapshot.verification_evidence,
+                "final_answer": snapshot.final_answer, "detail": snapshot.detail, "unknown_effect": snapshot.unknown_effect,
+                "host": "local", "workspace": snapshot.workspace, "cursor": snapshot.cursor,
+            }))?;
+            anyhow::ensure!(
+                snapshot.status == TaskStatus::Completed,
+                "BRO task ended with {:?}",
+                snapshot.status
+            );
+            return Ok(());
+        }
+    }
+}
+
+fn emit_task_json(value: serde_json::Value) -> Result<()> {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    serde_json::to_writer(&mut stdout, &value)?;
+    writeln!(stdout)?;
+    stdout.flush()?;
+    Ok(())
 }
 
 // ===== `bro config …` (config tooling) =====
@@ -5566,7 +5748,44 @@ async fn run_code(
         routing,
         config,
         socket,
+        task_id,
+        check,
+        read_only,
+        workspace,
     } = options;
+    if agent.is_none() && remote_context.is_none() {
+        if socket.is_some()
+            && routing.model.is_none()
+            && task_id.is_none()
+            && check.is_none()
+            && !read_only
+            && workspace.is_none()
+        {
+            return bitrouter::dashboard::run(None, config.as_deref(), socket.as_deref(), None)
+                .await;
+        }
+        anyhow::ensure!(
+            !routing.direct
+                && routing.base_url.is_none()
+                && !routing.no_start
+                && turn_timeout.is_none(),
+            "--direct, --base-url, --no-start, and --turn-timeout apply to `code <agent>`"
+        );
+        return bitrouter::native_code::run(
+            config.as_deref(),
+            socket.as_deref(),
+            routing.model,
+            task_id,
+            check,
+            read_only,
+            workspace,
+        )
+        .await;
+    }
+    anyhow::ensure!(
+        task_id.is_none() && check.is_none() && !read_only && workspace.is_none(),
+        "--task-id, --check, --read-only, and --workspace apply only to local bare `bro code`"
+    );
     let initial_session = if let Some(agent) = agent {
         if remote_context.is_some() {
             return Err(bitrouter_sdk::BitrouterError::bad_request(

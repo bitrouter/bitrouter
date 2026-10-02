@@ -61,6 +61,7 @@ pub mod journal;
 pub mod lifecycle;
 pub mod log_tail;
 pub mod machine;
+pub mod native_agent;
 pub mod permission;
 pub mod picker;
 pub mod plain;

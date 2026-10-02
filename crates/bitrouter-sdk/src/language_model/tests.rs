@@ -4405,6 +4405,78 @@ fn search_server_tool_loop() -> Arc<server_tools::loop_controller::ServerToolLoo
 }
 
 #[tokio::test]
+async fn native_turn_leaves_client_tool_calls_for_the_agent() -> Result<()> {
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Generate(gen_result(
+            vec![router_tool_call()],
+        ))])),
+        |builder| {
+            builder.server_tool_loop(search_server_tool_loop());
+        },
+    );
+    let mut req = request();
+    req.prompt.tools = vec![Tool::Function {
+        name: "search".into(),
+        description: None,
+        parameters: serde_json::json!({"type": "object"}),
+        strict: None,
+        provider_metadata: Default::default(),
+    }];
+    let response = pipeline.execute_without_server_tools(req).await?;
+    assert!(matches!(
+        response.result.content.first(),
+        Some(Content::ToolCall { .. })
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_stream_leaves_client_tool_calls_for_the_agent() -> Result<()> {
+    let pipeline = pipeline_with(
+        routing_table(&["openai"]),
+        Arc::new(MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::ToolCallDelta {
+                id: "c1".into(),
+                name: Some("search".into()),
+                arguments: "{}".into(),
+                provider_metadata: Default::default(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::ToolCalls,
+            },
+        ])])),
+        |builder| {
+            builder.server_tool_loop(search_server_tool_loop());
+        },
+    );
+    let mut req = request();
+    req.prompt.stream = true;
+    req.prompt.tools = vec![Tool::Function {
+        name: "search".into(),
+        description: None,
+        parameters: serde_json::json!({"type": "object"}),
+        strict: None,
+        provider_metadata: Default::default(),
+    }];
+    let parts = collect_stream(pipeline.execute_stream_without_server_tools(req).await?)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    assert!(
+        parts
+            .iter()
+            .any(|part| matches!(part, StreamPart::ToolCallDelta { .. }))
+    );
+    assert!(
+        parts
+            .iter()
+            .all(|part| !matches!(part, StreamPart::ServerToolResult { .. }))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn server_tool_streaming_preflight_respects_fail_decision() {
     let pipeline = pipeline_with(
         routing_table(&["a-provider", "b-provider"]),

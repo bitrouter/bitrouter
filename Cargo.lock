@@ -665,6 +665,7 @@ dependencies = [
  "axum-test",
  "base64 0.22.1",
  "bitrouter-guardrails",
+ "bitrouter-orchestrator",
  "bitrouter-providers",
  "bitrouter-sdk",
  "bitrouter-telemetry",
@@ -694,6 +695,7 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "sha2 0.11.0",
+ "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -720,6 +722,28 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "bitrouter-orchestrator"
+version = "1.0.0-alpha.33"
+dependencies = [
+ "async-trait",
+ "bitrouter-sdk",
+ "futures",
+ "globset",
+ "ignore",
+ "process-wrap",
+ "regex",
+ "rustix 1.1.4",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "similar",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "uuid",
 ]
 
 [[package]]
@@ -2158,6 +2182,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
+name = "globset"
+version = "0.4.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e47d37d2ae4464254884b60ab7071be2b876a9c35b696bd018ddcc76847309cd"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "log",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "granit-parser"
 version = "0.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2570,6 +2607,22 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "ignore"
+version = "0.4.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b17771570a2b94107741a7b033f19132c2eee21d59d21b24d2ced26500bd66e"
+dependencies = [
+ "crossbeam-deque",
+ "globset",
+ "log",
+ "memchr",
+ "regex-automata",
+ "same-file",
+ "walkdir",
+ "winapi-util",
 ]
 
 [[package]]

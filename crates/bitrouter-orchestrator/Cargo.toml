@@ -1,0 +1,31 @@
+[package]
+name = "bitrouter-orchestrator"
+description = "BRO native coding agent engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bitrouter-sdk.workspace = true
+futures.workspace = true
+globset.workspace = true
+ignore.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+similar.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "macros", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }
+
+[target.'cfg(windows)'.dependencies]
+process-wrap = { workspace = true, features = ["tokio1", "job-object", "kill-on-drop"] }
