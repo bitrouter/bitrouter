@@ -110,12 +110,21 @@ pub(crate) async fn observe_pipeline<T>(
     let Some(runtime) = runtime.filter(|runtime| runtime.active.load(Ordering::Relaxed)) else {
         return operation.await;
     };
-    let work_index = runtime
-        .next_work
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |index| {
-            index.checked_add(1)
-        })
-        .map_err(|_| BitrouterError::internal("preparation work index exhausted"))?;
+    let mut work_index = runtime.next_work.load(Ordering::Relaxed);
+    loop {
+        let next = work_index
+            .checked_add(1)
+            .ok_or_else(|| BitrouterError::internal("preparation work index exhausted"))?;
+        match runtime.next_work.compare_exchange_weak(
+            work_index,
+            next,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(current) => work_index = current,
+        }
+    }
     observe(
         runtime.control.as_ref(),
         NativePreparationWork {
