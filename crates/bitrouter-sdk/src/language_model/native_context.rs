@@ -200,6 +200,7 @@ pub fn metadata_mut(content: &mut Content) -> &mut ProviderMetadata {
 /// Provider-private data that cannot acquire provenance merely by being renderable.
 /// https://platform.claude.com/docs/en/build-with-claude/extended-thinking
 /// https://ai.google.dev/gemini-api/docs/thought-signatures
+/// https://developers.openai.com/api/docs/guides/reasoning
 pub fn is_private(content: &Content) -> bool {
     let meta = metadata(content);
     meta.get("anthropic").is_some_and(|value| {
@@ -209,6 +210,9 @@ pub fn is_private(content: &Content) -> bool {
     }) || meta
         .get("google")
         .is_some_and(|value| value.get("thoughtSignature").is_some())
+        || meta
+            .get("openai")
+            .is_some_and(|value| value.get("reasoningItem").is_some())
 }
 
 /// Proof-bearing parts still require integrity validation when a caller removes
@@ -226,6 +230,17 @@ pub fn is_opaque_reasoning(content: &Content) -> bool {
         && metadata(content)
             .get("anthropic")
             .is_some_and(|value| value.get("redactedThinking").is_some())
+}
+
+/// Opaque payloads excluded from checker text, including metadata attached to
+/// readable summaries. A readable summary still needs to be checked.
+pub(crate) fn has_opaque_payload(content: &Content) -> bool {
+    is_opaque_reasoning(content)
+        || metadata(content)
+            .get("openai")
+            .and_then(|fields| fields.get("reasoningItem"))
+            .and_then(|item| item.get("encrypted_content"))
+            .is_some_and(|value| !value.is_null())
 }
 
 /// Remove every origin marker before computing the whole-message commitment,

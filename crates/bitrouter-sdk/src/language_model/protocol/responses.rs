@@ -45,6 +45,123 @@ const CAUSAL_PREFIX_ROOT_DOMAIN: &[u8] = b"bitrouter.causal-prefix.root.v1";
 const CAUSAL_PREFIX_STEP_DOMAIN: &[u8] = b"bitrouter.causal-prefix.step.v1";
 const MAX_STREAMING_COMMITMENT_TOOL_CALLS: usize = 64;
 
+// Retain each item as one opaque unit, including empty summaries and encrypted
+// state. Replaying summary text alone cannot continue provider reasoning.
+// https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses
+const REASONING_ITEM: &str = "reasoningItem";
+
+#[cfg(test)]
+mod reasoning_tests;
+
+fn reasoning_summary(item: &serde_json::Value) -> String {
+    item.get("summary")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+        .collect()
+}
+
+fn parse_reasoning_item(item: &serde_json::Value) -> Content {
+    let mut provider_metadata = ProviderMetadata::new();
+    set_provider_metadata(
+        &mut provider_metadata,
+        PROVIDER_ID_OPENAI,
+        REASONING_ITEM,
+        item.clone(),
+    );
+    Content::Reasoning {
+        text: reasoning_summary(item),
+        provider_metadata,
+    }
+}
+
+fn reasoning_item(content: &Content) -> Option<&serde_json::Value> {
+    let Content::Reasoning {
+        provider_metadata, ..
+    } = content
+    else {
+        return None;
+    };
+    provider_namespace(provider_metadata, PROVIDER_ID_OPENAI)?.get(REASONING_ITEM)
+}
+
+/// Managed replay supports complete, known reasoning items. Unknown fields stay
+/// in the result, but cannot silently bypass the readable checker projection.
+pub(super) fn validate_reasoning_history(
+    content: &Content,
+) -> std::result::Result<(), &'static str> {
+    let Some(item) = reasoning_item(content) else {
+        return Err("reasoning_history_would_be_dropped");
+    };
+    validate_reasoning_projection(content)?;
+    if item
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|id| !id.is_empty())
+    {
+        Ok(())
+    } else {
+        Err("responses_reasoning_item_invalid")
+    }
+}
+
+/// All checked entry points must reject opaque metadata containing readable
+/// fields outside the canonical summary, even without managed execution.
+pub(in crate::language_model) fn validate_reasoning_projection(
+    content: &Content,
+) -> std::result::Result<(), &'static str> {
+    let Some(item) = reasoning_item(content) else {
+        return Ok(());
+    };
+    if crate::language_model::native_context::is_opaque_reasoning(content) {
+        // A foreign opaque flag must not hide a readable Responses summary
+        // from the protocol-neutral checker projection.
+        return Err("responses_reasoning_item_invalid");
+    }
+    let valid = item.as_object().is_some_and(|fields| {
+        fields.keys().all(|key| {
+            matches!(
+                key.as_str(),
+                "type" | "id" | "summary" | "status" | "encrypted_content"
+            )
+        })
+    }) && item.get("type").and_then(serde_json::Value::as_str) == Some("reasoning")
+        && item
+            .get("id")
+            .is_none_or(|value| value.as_str().is_some_and(|id| !id.is_empty()))
+        && item
+            .get("summary")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|parts| {
+                parts.iter().all(|part| {
+                    part.get("type").and_then(serde_json::Value::as_str) == Some("summary_text")
+                        && part.get("text").is_some_and(serde_json::Value::is_string)
+                        && part.as_object().is_some_and(|fields| {
+                            fields
+                                .keys()
+                                .all(|key| matches!(key.as_str(), "type" | "text"))
+                        })
+                })
+            })
+        && item.get("encrypted_content").is_none_or(|value| {
+            value.is_null() || value.as_str().is_some_and(|value| !value.is_empty())
+        })
+        && item.get("status").is_none_or(|value| {
+            value.is_null()
+                || matches!(
+                    value.as_str(),
+                    Some("in_progress" | "completed" | "incomplete")
+                )
+        })
+        && matches!(content, Content::Reasoning { text, .. } if *text == reasoning_summary(item));
+    if valid {
+        Ok(())
+    } else {
+        Err("responses_reasoning_item_invalid")
+    }
+}
+
 /// Fixed-size, protocol-neutral commitment to one canonical assistant turn.
 /// Provider metadata and stream fragmentation are intentionally excluded.
 #[derive(Clone, PartialEq, Eq)]
@@ -311,6 +428,12 @@ fn observe_content(turn: &mut TurnAccumulator, content: &Content) {
             (1, !text.is_empty())
         }
         Content::Reasoning { text, .. } => {
+            if reasoning_item(content).is_some() {
+                // The protocol-neutral visible-history proof cannot establish
+                // equivalence of opaque reasoning or stored item references.
+                turn.invalidate();
+                return;
+            }
             let Some(value) = field(text) else {
                 turn.invalidate();
                 return;
@@ -391,6 +514,9 @@ fn terminal_assistant_turn_commitment(
                 }
             }
             "reasoning" => {
+                if item.get("id").is_some() || item.get("encrypted_content").is_some() {
+                    return None;
+                }
                 let summary = item.get("summary")?.as_array()?;
                 if summary.is_empty() {
                     return None;
@@ -1775,9 +1901,8 @@ fn parse_responses_annotations(
 /// the document path (documented loss). Returns an empty Vec when the result
 /// carries no sources.
 /// <https://platform.openai.com/docs/api-reference/responses/object> (`annotations`)
-fn render_responses_annotations(result: &GenerateResult) -> Vec<serde_json::Value> {
-    result
-        .content
+fn render_responses_annotations(content: &[Content]) -> Vec<serde_json::Value> {
+    content
         .iter()
         .filter_map(|c| match c {
             Content::Source { source, .. } => Some(render_source_annotation(source)),
@@ -2009,25 +2134,13 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                         });
                     }
                     Some("reasoning") => {
-                        let text = item
-                            .get("summary")
-                            .and_then(|s| s.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
-                                    .collect::<Vec<_>>()
-                                    .join("")
-                            })
-                            .unwrap_or_default();
-                        if !text.is_empty() {
-                            messages.push(Message {
-                                role: Role::Assistant,
-                                content: vec![Content::Reasoning {
-                                    text,
-                                    provider_metadata: ProviderMetadata::new(),
-                                }],
-                            });
-                        }
+                        let content = parse_reasoning_item(item);
+                        validate_reasoning_projection(&content)
+                            .map_err(BitrouterError::bad_request)?;
+                        messages.push(Message {
+                            role: Role::Assistant,
+                            content: vec![content],
+                        });
                     }
                     // An `mcp_call` echoed back into the request `input[]` (a
                     // stateless client replaying the assistant turn) is lowered to
@@ -2359,6 +2472,9 @@ impl OutboundAdapter for ResponsesAdapter {
     fn render_request(&self, prompt: &Prompt) -> Result<serde_json::Value> {
         let mut input = Vec::new();
         for m in &prompt.messages {
+            for content in &m.content {
+                validate_reasoning_projection(content).map_err(BitrouterError::bad_request)?;
+            }
             input.extend(render_message_items(m));
         }
         let mut req = serde_json::Map::new();
@@ -2461,22 +2577,7 @@ impl OutboundAdapter for ResponsesAdapter {
                     }
                 }
                 Some("reasoning") => {
-                    let text = item
-                        .get("summary")
-                        .and_then(|s| s.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
-                                .collect::<Vec<_>>()
-                                .join("")
-                        })
-                        .unwrap_or_default();
-                    if !text.is_empty() {
-                        content.push(Content::Reasoning {
-                            text,
-                            provider_metadata: ProviderMetadata::new(),
-                        });
-                    }
+                    content.push(parse_reasoning_item(item));
                 }
                 Some("function_call" | "custom_tool_call") => {
                     content.push(Content::ToolCall {
@@ -2935,6 +3036,12 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
     let mut items = Vec::new();
     let mut text_parts = Vec::new();
     for c in &m.content {
+        if !matches!(
+            c,
+            Content::Text { .. } | Content::File { .. } | Content::Source { .. }
+        ) {
+            flush_message_parts(&mut items, &mut text_parts, m.role);
+        }
         match c {
             Content::Text { text, .. } => {
                 let kind = if m.role == Role::Assistant {
@@ -2945,7 +3052,9 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
                 text_parts.push(serde_json::json!({ "type": kind, "text": text }));
             }
             Content::Reasoning { .. } => {
-                // reasoning is not re-sent as input; drop on the request side
+                if let Some(item) = reasoning_item(c) {
+                    items.push(item.clone());
+                }
             }
             Content::ToolCall {
                 id,
@@ -3080,17 +3189,20 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
             Content::Source { .. } => {}
         }
     }
-    if !text_parts.is_empty() {
-        items.insert(
-            0,
-            serde_json::json!({
-                "type": "message",
-                "role": role_str(m.role),
-                "content": text_parts,
-            }),
-        );
-    }
+    flush_message_parts(&mut items, &mut text_parts, m.role);
     items
+}
+
+fn flush_message_parts(
+    items: &mut Vec<serde_json::Value>,
+    parts: &mut Vec<serde_json::Value>,
+    role: Role,
+) {
+    if !parts.is_empty() {
+        items.push(serde_json::json!({
+            "type": "message", "role": role_str(role), "content": std::mem::take(parts),
+        }));
+    }
 }
 
 /// Render a [`ToolResultOutput`] into a Responses `function_call_output.output`
@@ -3223,9 +3335,24 @@ fn parse_responses_tool_output_part(part: &serde_json::Value) -> Option<ToolResu
 
 /// Render a canonical result into Responses `output` items.
 fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
+    // Opaque reasoning items form ordered boundaries. Keep the compatibility
+    // renderer for intervening content, without merging or relocating an item.
     let mut items = Vec::new();
-    let reasoning: String = result
-        .content
+    let mut start = 0;
+    for (index, content) in result.content.iter().enumerate() {
+        if let Some(item) = reasoning_item(content) {
+            items.extend(render_output_content(&result.content[start..index]));
+            items.push(item.clone());
+            start = index + 1;
+        }
+    }
+    items.extend(render_output_content(&result.content[start..]));
+    items
+}
+
+fn render_output_content(content: &[Content]) -> Vec<serde_json::Value> {
+    let mut items = Vec::new();
+    let reasoning: String = content
         .iter()
         .filter_map(|c| match c {
             Content::Reasoning { text, .. } => Some(text.as_str()),
@@ -3238,8 +3365,7 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
             "summary": [{ "type": "summary_text", "text": reasoning }],
         }));
     }
-    let text: String = result
-        .content
+    let text: String = content
         .iter()
         .filter_map(|c| match c {
             Content::Text { text, .. } => Some(text.as_str()),
@@ -3253,7 +3379,7 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
         // omitted entirely when there are no sources (#454-5: never emit null /
         // gratuitous empty fields).
         let mut part = serde_json::json!({ "type": "output_text", "text": text });
-        let annotations = render_responses_annotations(result);
+        let annotations = render_responses_annotations(content);
         if !annotations.is_empty() {
             part["annotations"] = annotations.into();
         }
@@ -3263,7 +3389,7 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
             "content": [part],
         }));
     }
-    for c in &result.content {
+    for c in content {
         if let Content::ToolCall {
             id,
             name,
@@ -3285,8 +3411,7 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
             // `mcp.<name>_call` item the Responses API does not define.
             if *dynamic
                 && *provider_executed
-                && let Some(item) = result
-                    .content
+                && let Some(item) = content
                     .iter()
                     .filter_map(|r| match r {
                         Content::ToolResult {
@@ -3359,7 +3484,7 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
     // distinct `itemId` was preserved, `approval_request_id` is emitted alongside
     // (= `approval_id`) so the original two-id item round-trips byte-faithfully —
     // inverting the parse path. <https://platform.openai.com/docs/api-reference/responses/object>
-    for c in &result.content {
+    for c in content {
         if let Content::ToolApprovalRequest {
             approval_id,
             provider_metadata,
@@ -3396,7 +3521,7 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
     // Best-effort: a generated file becomes an image message item. The Responses
     // API has no standard output-image item, so this preserves the data rather
     // than dropping it. <https://platform.openai.com/docs/api-reference/responses>
-    for c in &result.content {
+    for c in content {
         if let Content::File {
             media_type, data, ..
         } = c
