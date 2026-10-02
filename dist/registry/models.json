@@ -6819,6 +6819,21 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "openai/gpt-6.1-sol"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "github-copilot",
           "provider_model_id": "gpt-6.1-sol"
         },
@@ -8287,6 +8302,21 @@
         },
         {
           "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "cache_write": 0.2,
+              "no_cache": 0.16
+            },
+            "output_tokens": {
+              "text": 0.47
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "Qwen/Qwen3.8-Flash"
+        },
+        {
+          "api_protocol": "openai",
           "provider": "opencode-go",
           "provider_model_id": "qwen3.8-flash"
         },
@@ -8411,6 +8441,21 @@
           },
           "provider": "bitrouter",
           "provider_model_id": "qwen/qwen3.8-max"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "gmicloud",
+          "provider_model_id": "Qwen/Qwen3.8-Max"
         },
         {
           "api_protocol": "openai",
