@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bitrouter_orchestrator::core::checkpoint::{
-    CheckpointAck, CheckpointBatch, DurableHead, sha256,
+    CheckpointAck, CheckpointBatch, DurableHead, ToolStartFence, sha256,
 };
 use bitrouter_orchestrator::core::protocol::{
     ArtifactRef, CoreError, ErrorCode, Limits, OwnershipGrant,
@@ -18,6 +18,8 @@ pub struct DurableHarness {
     pub artifacts: BTreeMap<String, ArtifactRef>,
     pub limits: Limits,
     pub fail_next_commit: bool,
+    pub tool_start_fences: BTreeSet<ToolStartFence>,
+    pub started_tools: BTreeSet<ToolStartFence>,
 }
 
 impl DurableHarness {
@@ -30,6 +32,8 @@ impl DurableHarness {
             artifacts: BTreeMap::new(),
             limits: Limits::default(),
             fail_next_commit: false,
+            tool_start_fences: BTreeSet::new(),
+            started_tools: BTreeSet::new(),
         }
     }
 
@@ -64,12 +68,20 @@ impl DurableHarness {
             ));
         }
         if self.head != ack.head() {
+            self.tool_start_fences
+                .extend(batch.decode(&self.limits)?.tool_start_fences);
             self.batches.push(batch.clone());
             self.acknowledgements
                 .insert(batch.identity.batch_id.clone(), ack.clone());
             self.head = ack.head();
         }
         Ok(ack)
+    }
+
+    /// Called under the same store lock as commit, at the actual start boundary
+    /// after approval. False means no new effect, including duplicate commands.
+    pub fn try_start_tool(&mut self, identity: ToolStartFence) -> bool {
+        !self.tool_start_fences.contains(&identity) && self.started_tools.insert(identity)
     }
 
     pub fn put_artifact(&mut self, reference: ArtifactRef, bytes: &[u8]) -> Result<(), CoreError> {

@@ -6,7 +6,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use bitrouter_orchestrator::core::checkpoint::{
     BatchIdentity, Checkpoint, CheckpointBatch, CheckpointPayload, CommitGate, DurableEvent,
-    DurableHead, sha256,
+    DurableHead, ToolStartFence, sha256,
 };
 use bitrouter_orchestrator::core::protocol::{
     ArtifactRef, Capabilities, ClientMessage, Command, CoreError, ErrorCode, HarnessManifest,
@@ -16,6 +16,55 @@ use serde_json::json;
 use support::DurableHarness;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+#[test]
+fn tool_start_fences_commit_atomically_and_survive_restart_and_epoch_change() -> TestResult {
+    for start_first in [false, true] {
+        let mut harness = DurableHarness::new(grant());
+        let identity = ToolStartFence {
+            invocation_id: "tool_1".into(),
+            attempt_id: "attempt_1".into(),
+        };
+        if start_first {
+            assert!(harness.try_start_tool(identity.clone()));
+        }
+        let mut payload = proposal(&harness.head, "fence");
+        payload.tool_start_fences.push(identity.clone());
+        let batch = CheckpointBatch::encode(&payload, &harness.limits)?;
+        harness.fail_next_commit = true;
+        assert!(harness.commit(&batch).is_err());
+        assert!(harness.tool_start_fences.is_empty());
+        assert_eq!(harness.head, DurableHead::default());
+        let ack = harness.commit(&batch)?;
+        assert!(harness.tool_start_fences.contains(&identity));
+        assert_eq!(harness.commit(&batch)?, ack);
+        assert!(!harness.try_start_tool(identity.clone()));
+        assert_eq!(harness.started_tools.contains(&identity), start_first);
+        let mut restored = harness.clone();
+        restored.grant.execution_epoch += 1;
+        assert!(!restored.try_start_tool(identity.clone()));
+        assert_eq!(restored.started_tools.contains(&identity), start_first);
+    }
+    Ok(())
+}
+
+#[test]
+fn tool_start_fences_reject_invalid_and_duplicate_identities() -> TestResult {
+    let mut payload = proposal(&DurableHead::default(), "fence");
+    payload.tool_start_fences.push(ToolStartFence {
+        invocation_id: "tool_1".into(),
+        attempt_id: "attempt_1".into(),
+    });
+    payload.tool_start_fences.push(ToolStartFence {
+        invocation_id: "tool_1".into(),
+        attempt_id: "attempt_2".into(),
+    });
+    assert!(CheckpointBatch::encode(&payload, &Limits::default()).is_err());
+    payload.tool_start_fences.pop();
+    payload.tool_start_fences[0].attempt_id.clear();
+    assert!(CheckpointBatch::encode(&payload, &Limits::default()).is_err());
+    Ok(())
+}
 
 fn grant() -> OwnershipGrant {
     OwnershipGrant {
@@ -36,6 +85,7 @@ fn proposal(base: &DurableHead, batch: &str) -> CheckpointPayload {
         },
         base_event_seq: base.event_seq,
         base_state_revision: base.state_revision,
+        tool_start_fences: Vec::new(),
         events: vec![DurableEvent {
             event_seq: base.event_seq + 1,
             kind: "session.bound".into(),

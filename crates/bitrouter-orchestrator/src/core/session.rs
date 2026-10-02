@@ -43,9 +43,13 @@ mod provider_work;
 mod reconnect;
 mod recovery;
 pub mod root_queue;
+pub mod steering;
 
 /// Implemented by the authenticated durable harness connection, including an
 /// in-process harness. Returning an ACK means the atomic append is durable.
+/// The append includes `tool_start_fences`: serialize them with actual local
+/// tool starts, revoke pending approvals, and retain tombstones for late execute
+/// delivery before ACK. Report actual outcomes separately through `tool_result`.
 #[async_trait]
 pub trait HarnessPort: Send + Sync {
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError>;
@@ -273,6 +277,8 @@ pub struct SessionSnapshot {
     pub provider_evidence: BTreeMap<String, super::protocol::ProviderAttemptEvidence>,
     #[serde(default)]
     pub root_queue: root_queue::RootQueue,
+    #[serde(default)]
+    pub steering: BTreeMap<String, steering::SteeringRecord>,
 }
 
 impl SessionSnapshot {
@@ -292,6 +298,7 @@ struct LiveSession {
     cancelled_tools: BTreeSet<String>,
     sent_materials: BTreeSet<String>,
     provisional_blocks: BTreeSet<String>,
+    provisional_steering: BTreeMap<String, steering::SteeringTarget>,
     disconnected: CancellationToken,
     connection_generation: u64,
     activity: Activity,
@@ -311,6 +318,7 @@ struct Shared {
     limits: Limits,
     capabilities: Capabilities,
     changed: Notify,
+    steering_changed: Notify,
 }
 
 #[derive(Clone)]
@@ -369,6 +377,7 @@ impl CoreSession {
             cost_work: BTreeMap::new(),
             provider_evidence: BTreeMap::new(),
             root_queue: Default::default(),
+            steering: BTreeMap::new(),
         };
         let session = Self {
             shared: Arc::new(Shared {
@@ -385,6 +394,7 @@ impl CoreSession {
                     cancelled_tools: BTreeSet::new(),
                     sent_materials: BTreeSet::new(),
                     provisional_blocks: BTreeSet::new(),
+                    provisional_steering: BTreeMap::new(),
                     disconnected: CancellationToken::new(),
                     connection_generation: 0,
                     activity: Activity::default(),
@@ -401,6 +411,7 @@ impl CoreSession {
                 limits: binding.limits,
                 capabilities: capabilities.clone(),
                 changed: Notify::new(),
+                steering_changed: Notify::new(),
             }),
         };
         session
@@ -883,6 +894,7 @@ impl CoreSession {
                     .values()
                     .filter(|agent| {
                         !running.contains(&agent.agent_id)
+                            && !steering::has_pending(&state, &agent.agent_id)
                             && agent.turn.as_ref().is_some_and(|turn| {
                                 turn.run_id == run.run_id
                                     && turn.status == AgentStatus::Runnable
@@ -897,9 +909,59 @@ impl CoreSession {
                         &agent.agent_id,
                     )
                 });
+                let occupied = {
+                    let live = self.shared.live.lock().await;
+                    let mut occupied = running.clone();
+                    for control in live
+                        .model_controls
+                        .iter()
+                        .filter_map(|control| control.upgrade())
+                    {
+                        let Some(turn) = live
+                            .state
+                            .agents
+                            .get(&control.agent_id)
+                            .and_then(|agent| agent.turn.as_ref())
+                            .filter(|turn| {
+                                turn.run_id == control.run_id
+                                    && turn.agent_turn_id == control.agent_turn_id
+                            })
+                        else {
+                            continue;
+                        };
+                        // A dropped driver does not stop the SDK task. A
+                        // steering fence prevents its next admission, but work
+                        // already admitted still owns a slot until its outcome.
+                        // Finalization alone cannot issue new execution and
+                        // therefore does not reserve a model slot.
+                        if turn.steps.last().is_some_and(|step| {
+                            (!step.settled
+                                && !steering::has_pending(&live.state, &control.agent_id))
+                                || step
+                                    .preparation_work
+                                    .iter()
+                                    .any(|work| work.report.is_none())
+                                || step.input_counts.iter().any(|count| count.report.is_none())
+                                || step
+                                    .context_validation
+                                    .as_ref()
+                                    .is_some_and(|validation| validation.report.is_none())
+                                || step.attempts.iter().any(|attempt| {
+                                    attempt.receipt.is_none()
+                                        || attempt
+                                            .provider_work
+                                            .iter()
+                                            .any(|work| work.report.is_none())
+                                })
+                        }) {
+                            occupied.insert(control.agent_id.clone());
+                        }
+                    }
+                    occupied.len()
+                };
                 for agent in ready
                     .into_iter()
-                    .take((run.limits.active_models as usize).saturating_sub(running.len()))
+                    .take((run.limits.active_models as usize).saturating_sub(occupied))
                 {
                     let agent_id = agent.agent_id.clone();
                     running.insert(agent_id.clone());
@@ -910,6 +972,41 @@ impl CoreSession {
                     });
                 }
                 if jobs.is_empty() {
+                    // The SDK can deliver its result just before dropping its
+                    // finalization context. Steering must await that context's
+                    // release rather than strand an otherwise runnable turn.
+                    let (settling, disconnected) = {
+                        let live = self.shared.live.lock().await;
+                        let settling = live.model_controls.iter().any(|control| {
+                            control.upgrade().is_some_and(|control| {
+                                steering::has_pending(&live.state, &control.agent_id)
+                            })
+                        });
+                        (settling, live.disconnected.clone())
+                    };
+                    if settling {
+                        tokio::select! {
+                            _ = self.shared.changed.notified() => continue,
+                            _ = disconnected.cancelled() => return Err(reject(
+                                ErrorCode::CheckpointUnavailable,
+                                "steering settlement lost durable authority",
+                            )),
+                        }
+                    }
+                    if state.agents.values().any(|agent| {
+                        steering::has_pending(&state, &agent.agent_id)
+                            && agent.turn.as_ref().is_some_and(|turn| {
+                                turn.invocations.iter().all(|call| {
+                                    call.result.as_ref().is_some_and(|result| {
+                                        result.status != ToolOutcome::EffectUnknown
+                                    })
+                                })
+                            })
+                    }) {
+                        // Finalization may have ended since advance_agent's
+                        // observation, without creating another checkpoint.
+                        continue;
+                    }
                     // No runnable producer exists. Expose the blocked reason
                     // once; do not poll an all-waiting graph or spend model work.
                     let waiting_agents = state
@@ -977,6 +1074,12 @@ impl CoreSession {
                     running.remove(&agent_id);
                     if let Err(error) = outcome {
                         let state = self.snapshot().await;
+                        if error.commit_status == CommitStatus::NotCommitted
+                            && steering::has_pending(&state, &agent_id)
+                            && self.can_progress().await
+                        {
+                            continue;
+                        }
                         // A rejected preparation leaves the agent runnable.
                         // Retrying unchanged state would repeatedly submit the
                         // same rejected work, or spin on a pending checkpoint.
@@ -1027,6 +1130,9 @@ impl CoreSession {
         }
         if turn.status == AgentStatus::Cancelling {
             return self.cleanup_interruption(agent_id).await;
+        }
+        if steering::has_pending(&state, agent_id) {
+            return self.advance_steering(agent_id).await;
         }
         if turn.status == AgentStatus::WaitingMaterial {
             return self.prepare_materials(agent_id).await;
@@ -1204,7 +1310,9 @@ impl CoreSession {
                 self.schedule_verification(agent_id).await?;
                 return Ok(true);
             }
+            let _input = self.shared.inputs.lock().await;
             self.transition_for(Some(agent_id), "agent.completed", |state, _| {
+                steering::ensure_ready(state, agent_id)?;
                 let signal_revision = state.signals.revision;
                 if pending_dependencies(state, agent_id) {
                     return Err(reject(
@@ -1316,7 +1424,9 @@ impl CoreSession {
             })
         });
         if needs_request || turn.status != AgentStatus::WaitingMaterial {
+            let _input = self.shared.inputs.lock().await;
             self.transition_for(Some(agent_id), "material.requested", |state, _| {
+                steering::ensure_ready(state, agent_id)?;
                 let current = agent_turn(state, agent_id)?;
                 if current.agent_turn_id != turn.agent_turn_id
                     || current.run_id != turn.run_id
@@ -1358,8 +1468,12 @@ impl CoreSession {
         }
         for material in &missing {
             let (message, disconnected, generation) = {
+                let _input = self.shared.inputs.lock().await;
                 let _admission = self.shared.commits.lock().await;
                 let mut live = self.shared.live.lock().await;
+                if steering::has_pending(&live.state, agent_id) {
+                    return Ok(false);
+                }
                 if !live.gate.can_dispatch() {
                     return Err(reject(
                         ErrorCode::CheckpointUnavailable,
@@ -1513,6 +1627,7 @@ impl CoreSession {
     }
 
     async fn dispatch_collaboration(&self, agent_id: &str) -> Result<bool, CoreError> {
+        let _input = self.shared.inputs.lock().await;
         let state = self.snapshot().await;
         let Some(turn) = state
             .agents
@@ -1540,6 +1655,7 @@ impl CoreSession {
             self.block_dispatch(&call.invocation_id).await;
         }
         let committed = self.transition_for(Some(agent_id), "collaboration.applied", |state, head| {
+            steering::ensure_ready(state, agent_id)?;
             let limit = active_run(state)?.limits.input_bytes;
             let applied = if let Some(wait) = &call.wait {
                 Ok(Applied::Complete(collaboration::wait_result(state,wait,now)))
@@ -1616,6 +1732,9 @@ impl CoreSession {
         }
         let result = self
             .transition_for(Some(actor_id), "collaboration.runtime", |state, head| {
+                if !interrupt {
+                    steering::ensure_ready(state, actor_id)?;
+                }
                 if expected_revision != head.state_revision {
                     return Err(reject(
                         ErrorCode::StaleRevision,
@@ -1955,7 +2074,11 @@ impl CoreSession {
     }
 
     async fn execute_agent_step(&self, agent_id: &str) -> Result<(), CoreError> {
+        let preparing = self.shared.inputs.lock().await;
         let state = self.snapshot().await;
+        if steering::has_pending(&state, agent_id) {
+            return Ok(());
+        }
         let run = state
             .run
             .as_ref()
@@ -2003,6 +2126,7 @@ impl CoreSession {
             .get(agent_id)
             .map(|agent| agent.context_revision);
         self.transition_for(Some(agent_id), "model.step.preparing", |state, head| {
+            steering::ensure_ready(state, agent_id)?;
             if state.signals.revision != source_signal_revision
                 || state.manifest != source_manifest
                 || state
@@ -2076,6 +2200,7 @@ impl CoreSession {
                 .retain(|control| control.strong_count() > 0);
             live.model_controls.push(Arc::downgrade(&control));
         }
+        drop(preparing);
         let response = self
             .shared
             .app
@@ -2095,6 +2220,10 @@ impl CoreSession {
             tracing::warn!("managed cost evidence could not be refreshed");
         }
         let step_id = control.step_id.lock().await.clone();
+        let _input = self.shared.inputs.lock().await;
+        if self.supersede_steered_step(agent_id, &step_id).await? {
+            return Ok(());
+        }
         match response {
             Ok(response) => {
                 if self
@@ -2456,7 +2585,9 @@ impl CoreSession {
     }
 
     async fn schedule_verification(&self, agent_id: &str) -> Result<(), CoreError> {
+        let _input = self.shared.inputs.lock().await;
         self.transition_for(Some(agent_id), "tool.verification.intent", |state, head| {
+            steering::ensure_ready(state, agent_id)?;
             let signal_revision = state.signals.revision;
             if pending_dependencies(state, agent_id) {
                 return Err(reject(
@@ -2657,8 +2788,12 @@ impl CoreSession {
     async fn dispatch_tools(&self, agent_id: &str) -> Result<(), CoreError> {
         loop {
             let (command, disconnected, generation) = {
+                let _input = self.shared.inputs.lock().await;
                 let _admission = self.shared.commits.lock().await;
                 let mut live = self.shared.live.lock().await;
+                if steering::has_pending(&live.state, agent_id) {
+                    return Ok(());
+                }
                 if !live.gate.can_dispatch() {
                     return Err(reject(
                         ErrorCode::CheckpointUnavailable,
@@ -2810,38 +2945,53 @@ impl CoreSession {
         activity_id: String,
         requires_remaining_attempt: bool,
     ) -> Result<(), CoreError> {
-        let _admission = self.shared.commits.lock().await;
-        let mut live = self.shared.live.lock().await;
-        if !live.gate.can_dispatch()
-            || live
-                .state
-                .run
-                .as_ref()
-                .is_none_or(|run| !matches!(run.status, RunStatus::Running | RunStatus::Waiting))
-            || live
-                .state
-                .agents
-                .get(agent_id)
-                .and_then(|agent| agent.turn.as_ref())
-                .is_none_or(|turn| turn.status != AgentStatus::ModelRunning)
-        {
-            return Err(reject(
-                ErrorCode::CheckpointUnavailable,
-                "model dispatch is no longer authorized",
-            ));
+        loop {
+            let changed = self.shared.steering_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let _admission = self.shared.commits.lock().await;
+            let mut live = self.shared.live.lock().await;
+            if steering::provisionally_blocked(&live, agent_id) {
+                let disconnected = live.disconnected.clone();
+                drop(live);
+                drop(_admission);
+                tokio::select! {
+                    _ = &mut changed => continue,
+                    _ = disconnected.cancelled() => return Err(reject(
+                        ErrorCode::CheckpointUnavailable, "steering admission lost durable authority",
+                    )),
+                }
+            }
+            if !live.gate.can_dispatch()
+                || live.state.run.as_ref().is_none_or(|run| {
+                    !matches!(run.status, RunStatus::Running | RunStatus::Waiting)
+                })
+                || live
+                    .state
+                    .agents
+                    .get(agent_id)
+                    .and_then(|agent| agent.turn.as_ref())
+                    .is_none_or(|turn| turn.status != AgentStatus::ModelRunning)
+            {
+                return Err(reject(
+                    ErrorCode::CheckpointUnavailable,
+                    "model dispatch is no longer authorized",
+                ));
+            }
+            if live.state.run.as_ref().is_some_and(|run| {
+                live.activity.elapsed_ms() >= run.limits.active_seconds.saturating_mul(1000)
+                    || (requires_remaining_attempt
+                        && run.model_attempts >= run.limits.model_attempts)
+            }) {
+                return Err(reject(
+                    ErrorCode::LimitExceeded,
+                    "dispatch resource budget exhausted",
+                ));
+            }
+            validate_step_source(&live.state, agent_id, step_id)?;
+            live.activity.start(activity_id);
+            return Ok(());
         }
-        if live.state.run.as_ref().is_some_and(|run| {
-            live.activity.elapsed_ms() >= run.limits.active_seconds.saturating_mul(1000)
-                || (requires_remaining_attempt && run.model_attempts >= run.limits.model_attempts)
-        }) {
-            return Err(reject(
-                ErrorCode::LimitExceeded,
-                "dispatch resource budget exhausted",
-            ));
-        }
-        validate_step_source(&live.state, agent_id, step_id)?;
-        live.activity.start(activity_id);
-        Ok(())
     }
 
     async fn can_progress(&self) -> bool {
@@ -2923,6 +3073,7 @@ impl CoreSession {
                 if !matches!(kind, "run.completed" | "run.failed" | "run.cancelled") {
                     refresh_run(&mut next);
                 }
+                steering::cancel_inactive(&mut next, head.state_revision + 1);
                 if next.run.as_ref().is_some_and(|run| {
                     matches!(
                         run.status,
@@ -2947,6 +3098,12 @@ impl CoreSession {
                     },
                     base_event_seq: head.event_seq,
                     base_state_revision: head.state_revision,
+                    tool_start_fences: next
+                        .steering
+                        .values()
+                        .filter(|record| record.received_state_revision == head.state_revision + 1)
+                        .flat_map(|record| record.tool_start_fences.iter().cloned())
+                        .collect(),
                     events: vec![DurableEvent {
                         event_seq: head.event_seq + 1,
                         kind: kind.to_owned(),
@@ -3014,6 +3171,12 @@ struct StepControl {
     run_id: String,
     agent_turn_id: String,
     disconnected: CancellationToken,
+}
+
+impl Drop for StepControl {
+    fn drop(&mut self) {
+        self.session.shared.changed.notify_one();
+    }
 }
 
 #[async_trait]
@@ -3844,6 +4007,7 @@ fn validate_step_source(
     agent_id: &str,
     step_id: &str,
 ) -> Result<(), CoreError> {
+    steering::ensure_ready(state, agent_id)?;
     let agent = state
         .agents
         .get(agent_id)

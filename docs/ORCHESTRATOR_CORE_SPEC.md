@@ -280,6 +280,28 @@ state_revision, execution_epoch)`. The append compares the stored base sequence
 and revision. Exact retransmission returns the prior acknowledgement; a
 conflicting append, missing artifact or epoch mismatch is rejected.
 
+Checkpoint payloads also carry `tool_start_fences`, a list of exact
+`invocation_id` / `attempt_id` pairs scoped by the batch's session. On steering
+receipt, core includes every unresolved workspace invocation of the target turn.
+The harness atomically persists these tombstones with the append and head,
+serialized against its local execution-start admission. Receiving `tool.execute`
+or creating a pending approval is not a start: the start boundary is durable local
+intent after approval and policy checks, immediately before allowing effects.
+If the fence wins that order, neither a delayed execute nor an old approval may
+start the invocation. If start wins, the tool continues and reports its actual
+outcome; the fence cannot roll back an effect or certify `not_executed`.
+
+Fences are retained even for identities absent from the harness execution ledger,
+and survive batch replay, restart, epoch change and log compaction. They cannot be
+removed when steering is applied or cancelled. A harness must durably settle a
+fenced unstarted invocation as `not_executed` and deliver `tool.result` using the
+original identities; core waits for that result before applying steering. An ACK
+alone is not a tool result. A peer unable to enforce this barrier must reject the
+checkpoint, including the initial binding proposal, rather than ignore the field.
+Legacy persisted payloads without fences remain decodable for restoration; all
+new proposals explicitly carry the field. This completes the existing v1
+unstarted-work barrier, rather than changing tool approval ownership.
+
 Only the matching acknowledgement advances core's committed state. Before
 then the transition is tentative; dependent dispatch and terminal publication
 are blocked. Final answers, accepted-input confirmations and collaboration

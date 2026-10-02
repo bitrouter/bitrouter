@@ -165,8 +165,10 @@ async fn monetary_claims_source_failure_preserves_output_during_provisional_sign
     assert_eq!(harness.seen.available_permits(), 1);
     let mut update =
         Box::pin(session.signals("signals", signal_update(&session, Vec::new()).await));
-    // Establish the provisional block but leave this future suspended on inputs
-    // until after model output is durable. The List ACK owns both serializers.
+    // Establish the provisional block while the List ACK owns both serializers.
+    // Output now shares the input serializer with steering and other controls;
+    // keep driving the queued signal after releasing List so neither waits for
+    // an artificially suspended future. The source fails while still blocked.
     assert!(futures::poll!(update.as_mut()).is_pending());
     source.resume.add_permits(1);
     tokio::time::timeout(Duration::from_secs(2), source.returned.acquire())
@@ -175,6 +177,7 @@ async fn monetary_claims_source_failure_preserves_output_during_provisional_sign
     harness.hold_enabled.store(false, Ordering::SeqCst);
     harness.resume.add_permits(1);
     listing.await?;
+    update.await?;
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             if session
@@ -190,7 +193,6 @@ async fn monetary_claims_source_failure_preserves_output_during_provisional_sign
         }
     })
     .await?;
-    update.await?;
     let done = tokio::time::timeout(Duration::from_secs(3), driver).await???;
     assert_eq!(done.run.as_ref().ok_or("run")?.status, RunStatus::Completed);
     assert!(

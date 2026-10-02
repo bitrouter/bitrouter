@@ -16,6 +16,8 @@ mod reconstruction;
 mod recovery;
 #[path = "core_execution/root_queue.rs"]
 mod root_queue;
+#[path = "core_execution/steering.rs"]
+mod steering;
 mod support;
 
 use std::sync::Arc;
@@ -65,6 +67,7 @@ struct Harness {
     hold_send: bool,
     hold_after_send: bool,
     hold_material_send: bool,
+    wait_for_approval: bool,
     seen: Semaphore,
     resume: Semaphore,
     delivered: Semaphore,
@@ -85,6 +88,7 @@ impl Harness {
             hold_send: false,
             hold_after_send: false,
             hold_material_send: false,
+            wait_for_approval: false,
             seen: Semaphore::new(0),
             resume: Semaphore::new(0),
             delivered: Semaphore::new(0),
@@ -244,7 +248,7 @@ impl HarnessPort for Harness {
                     })?
                     .forget();
             }
-            let store = self.store.lock().await;
+            let mut store = self.store.lock().await;
             let batch = store.batches.last().ok_or_else(|| {
                 CoreError::rejected(
                     ErrorCode::CheckpointUnavailable,
@@ -273,6 +277,12 @@ impl HarnessPort for Harness {
                     ErrorCode::UnauthorizedScope,
                     "tool has no exact durable dispatch authorization",
                 ));
+            }
+            if !self.wait_for_approval {
+                store.try_start_tool(bitrouter_orchestrator::core::checkpoint::ToolStartFence {
+                    invocation_id: command.invocation_id.clone(),
+                    attempt_id: command.attempt_id.clone(),
+                });
             }
             self.sent.lock().await.push(command);
             self.delivered.add_permits(1);
