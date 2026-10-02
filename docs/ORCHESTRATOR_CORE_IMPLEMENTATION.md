@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence and durable root queue implemented; steering/release, live tool-status observations and remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: in-process snapshot restoration, live reconnect, late provider evidence, durable root queue and targeted steering implemented; release, live tool-status observations and remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -1732,3 +1732,71 @@ and completion assertions retained. Independent review found no removed timing
 requirement or correctness coverage. The targeted regression passed, then Rust
 1.99 workspace all-feature nextest with four test threads passed: 3862 passed,
 22 skipped, in 79.701 seconds. Strict clippy, formatting and diff checks passed.
+
+The pushed `9907c486` CI run subsequently passed every executed check, including
+Linux/macOS/Windows tests and clippy, MSRV, docs and feature isolation. Publishing
+jobs were skipped by workflow policy.
+
+## C4 targeted steering and tool start fences
+
+`CoreSession::steer` accepts a bounded text input for an exact active run/agent
+turn. `input.steer.received` and `input.steer.applied` are separate acknowledged
+transitions; the original acceptance receipt remains immutable. Pending input
+is ordered by receipt revision, retained through reconnect/replacement, scoped
+to its target, and marked cancelled with cancellation of the owning turn/run.
+
+Receipt leaves the running step and prompt immutable. Targeted provisional
+admission fences wait for the input serializer without failing unrelated agents;
+rejected or abandoned requests release those fences. Durable receipt prevents
+new target preparation, input counting, provider attempts/fallbacks, workspace
+dispatch and collaboration. SDK execution/settlement retains original evidence
+and costs; superseded output cannot start its dependent calls. Application waits
+for SDK quiescence and definite tool outcomes, consumes paired call/results,
+then appends input to history/required instructions and advances context revision.
+
+`CheckpointPayload.tool_start_fences` makes the harness half of that admission
+barrier explicit. Each pair identifies an outstanding target invocation/attempt
+within the batch's session. The harness must persist tombstones atomically with
+the checkpoint/head, serialized against actual tool-start admission after
+approval and policy checks. This also covers commands not yet delivered locally.
+An older peer that cannot enforce the field must reject, including initial bind;
+new proposals always carry it. Legacy persisted payloads without it remain
+decodable. Tombstones survive replay, restart, epoch change and compaction.
+Fences do not stop running tools or establish an outcome: the harness returns
+durable `not_executed` for prevented starts and actual results for existing work.
+Core continues to wait for those results, including restored approval waits.
+
+The deterministic durable fixture now models this atomic start/fence ordering.
+It is not a production harness implementation. C4 live tool-status observations,
+session release and the remaining fault matrix, C5 transport/auth integration,
+C6 production conformance and the full A01–A23 audit remain open.
+
+Independent review identified and drove fixes for unrelated-agent admission
+failure, scheduler starvation during SDK finalization, pending approvals retaining
+start authority, and detached live SDK execution exceeding model concurrency.
+The scheduler counts outstanding execution across driver replacement while
+allowing independent work once only finalization remains. The accounting
+regression's control future now continues after its held List ACK: output shares
+the input serializer, so a deliberately suspended queued control cannot be held
+until output completion. Its failure-during-provisional-block and preserved-output
+assertions remain in place.
+
+Validation of the final source on Rust 1.99:
+
+- Workspace all-feature nextest: 3879 passed, 22 skipped, in 91.084 seconds,
+  using four test threads. This includes fifteen new steering integrations and
+  two checkpoint start-fence tests, plus the existing accounting regression.
+- The targeted eighteen-test run passed. Coverage includes separate receipt/
+  application ACKs, two directions of ACK loss, exact replay and forged restore
+  rejection, ordered input restoration, cancellation, child targeting/bounds,
+  held provider output, first/fallback admission, unsent tool/collaboration
+  supersession, approval/start ordering, lost-ACK/restart/epoch fences,
+  unrelated-agent admission and detached execution versus finalization capacity.
+- Strict workspace/all-target/all-feature clippy with `-D warnings`, strict
+  workspace rustdoc with `RUSTDOCFLAGS=-D warnings`, formatting and diff checks
+  passed. Workspace doctests: 5 passed, 1 ignored.
+- Rust 1.93.0 workspace/all-feature `cargo check` passed.
+- The final independent review confirmed all four findings were fixed and
+  reported no remaining P1/P2 issue in this increment.
+
+Remote CI and complete cross-stage acceptance remain separate gates.

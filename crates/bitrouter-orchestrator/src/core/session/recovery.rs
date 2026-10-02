@@ -45,6 +45,7 @@ impl CoreSession {
                     cancelled_tools: BTreeSet::new(),
                     sent_materials: BTreeSet::new(),
                     provisional_blocks: BTreeSet::new(),
+                    provisional_steering: BTreeMap::new(),
                     disconnected: CancellationToken::new(),
                     connection_generation: 0,
                     activity: Activity::restored(active_ms),
@@ -61,6 +62,7 @@ impl CoreSession {
                 limits: binding.limits,
                 capabilities: capabilities.clone(),
                 changed: Notify::new(),
+                steering_changed: Notify::new(),
             }),
         };
         session
@@ -241,6 +243,7 @@ fn validate_snapshot(
     }
     state.manifest.validate(caps, &binding.limits)?;
     root_queue::validate(state, &binding.limits)?;
+    steering::validate(state, &binding.limits, binding.durable_head.state_revision)?;
     let root = state
         .agents
         .get(&state.agent_id)
@@ -663,6 +666,12 @@ pub(super) fn resume_model_steps(
         .run
         .as_ref()
         .is_some_and(|run| run.cancellation.is_some());
+    let steered = state
+        .agents
+        .keys()
+        .filter(|id| steering::has_pending(state, id))
+        .cloned()
+        .collect::<BTreeSet<_>>();
     for agent in state.agents.values_mut() {
         let Some(turn) = &mut agent.turn else {
             continue;
@@ -699,7 +708,17 @@ pub(super) fn resume_model_steps(
                         .as_ref()
                         .map(|result| (receipt.report.request_id.clone(), result.clone()))
                 });
-            if let Some((request_id, output)) = output {
+            if steered.contains(&agent.agent_id) {
+                step.interrupted = true;
+                step.settled = true;
+                if turn.status != AgentStatus::RecoveryRequired {
+                    turn.status = if cancelled || turn.cancellation_requested {
+                        AgentStatus::Cancelling
+                    } else {
+                        AgentStatus::Runnable
+                    };
+                }
+            } else if let Some((request_id, output)) = output {
                 // Replay the ordinary output admission transition, never the
                 // provider request. A complete receipt is durable evidence.
                 outputs.push((

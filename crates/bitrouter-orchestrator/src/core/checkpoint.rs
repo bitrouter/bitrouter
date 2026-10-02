@@ -107,7 +107,32 @@ pub struct CheckpointPayload {
     pub base_event_seq: u64,
     pub base_state_revision: u64,
     pub events: Vec<DurableEvent>,
+    /// Persist with the append, serialized against the harness's actual tool
+    /// start. Block late execute/approval for these exact identities, including
+    /// identities absent from the local ledger. Already started work continues;
+    /// this fence is not a tool outcome. An ACK covers both records atomically.
+    #[serde(default)]
+    pub tool_start_fences: Vec<ToolStartFence>,
     pub checkpoint: Checkpoint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolStartFence {
+    pub invocation_id: String,
+    pub attempt_id: String,
+}
+
+pub(crate) fn validate_tool_start_fences(fences: &[ToolStartFence]) -> Result<(), CoreError> {
+    let mut ids = BTreeSet::new();
+    for fence in fences {
+        validate_id(&fence.invocation_id)?;
+        validate_id(&fence.attempt_id)?;
+        if !ids.insert(&fence.invocation_id) {
+            return Err(conflict("duplicate tool start fence"));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -281,6 +306,7 @@ impl CheckpointBatch {
 }
 
 fn validate_payload(payload: &CheckpointPayload) -> Result<(), CoreError> {
+    validate_tool_start_fences(&payload.tool_start_fences)?;
     validate_id(&payload.identity.batch_id)?;
     validate_id(&payload.identity.session_id)?;
     validate_id(&payload.identity.core_instance_id)?;
