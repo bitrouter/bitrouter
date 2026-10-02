@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.34](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.33...v1.0.0-alpha.34)
+
+
+### ⛰️ Features
+
+- *(daemon)* Hand off idle local daemon safely ([#932](https://github.com/bitrouter/bitrouter/pull/932)) - ([d8b66a9](https://github.com/bitrouter/bitrouter/commit/d8b66a9edf44b5f46afac66ce01e976c21fe6df4))
+
+### 🐛 Bug Fixes
+
+- *(ci)* Restore compatibility with Rust stable ([#955](https://github.com/bitrouter/bitrouter/pull/955)) - ([b0312a6](https://github.com/bitrouter/bitrouter/commit/b0312a667badb5bfd88833501eb03ad1a91956ad))
+- *(sdk)* Surface Chat Completions SSE errors ([#948](https://github.com/bitrouter/bitrouter/pull/948)) - ([eb28fef](https://github.com/bitrouter/bitrouter/commit/eb28feffe748bf05bf668fd6eefc7e2bf89d234b))
+
+### ⚙️ Miscellaneous Tasks
+
+- Sync registry catalog ([#954](https://github.com/bitrouter/bitrouter/pull/954)) - ([93a4d67](https://github.com/bitrouter/bitrouter/commit/93a4d676ec928a935b79f5ed6201b7f8d26a36b7))
+- Sync registry catalog ([#950](https://github.com/bitrouter/bitrouter/pull/950)) - ([d93ed73](https://github.com/bitrouter/bitrouter/commit/d93ed73be2411992cc44e3234b6e7b11df1effb2))
+- Sync registry catalog ([#944](https://github.com/bitrouter/bitrouter/pull/944)) - ([7a8643c](https://github.com/bitrouter/bitrouter/commit/7a8643cde84a49f582d51c281179cef6f0ac01c4))
+- Sync registry catalog ([#943](https://github.com/bitrouter/bitrouter/pull/943)) - ([d7abbb4](https://github.com/bitrouter/bitrouter/commit/d7abbb42a536fcb1a00210cc20ebb67aa455c8bd))
+- Update Cargo.toml dependencies - ([0000000](https://github.com/bitrouter/bitrouter/commit/0000000))
+
+
 ## [1.0.0-alpha.33](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.32...v1.0.0-alpha.33)
 
 
