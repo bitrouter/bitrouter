@@ -186,13 +186,9 @@ impl StepControl {
         } else {
             // Even after cancellation, consuming an accepted response and settling
             // its usage is ongoing work. New dispatch requires its own live gate.
-            self.session
-                .shared
-                .live
-                .lock()
-                .await
-                .activity
-                .start(activity_id);
+            let mut live = self.session.shared.live.lock().await;
+            live.activity.start(activity_id);
+            budget::watch(&self.session, &mut live);
         }
     }
 }

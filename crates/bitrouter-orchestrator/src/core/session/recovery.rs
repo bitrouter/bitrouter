@@ -54,6 +54,7 @@ impl CoreSession {
                     model_controls: Vec::new(),
                     provider_evidence: Default::default(),
                     reconnecting: false,
+                    budget_watching: false,
                 }),
                 commits: Mutex::new(()),
                 driver: Mutex::new(()),
@@ -65,6 +66,7 @@ impl CoreSession {
                 capabilities: capabilities.clone(),
                 changed: Notify::new(),
                 steering_changed: Notify::new(),
+                budget_changed: Arc::new(Notify::new()),
             }),
         };
         session
@@ -245,6 +247,7 @@ fn validate_snapshot(
     }
     state.manifest.validate(caps, &binding.limits)?;
     root_queue::validate(state, &binding.limits)?;
+    budget::validate(state)?;
     steering::validate(state, &binding.limits, binding.durable_head.state_revision)?;
     let root = state
         .agents
