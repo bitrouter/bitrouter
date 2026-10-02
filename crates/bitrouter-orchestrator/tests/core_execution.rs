@@ -3081,7 +3081,9 @@ async fn implicit_assignment_cycles_reject_before_acceptance() -> TestResult {
         Some(ErrorCode::OperationConflict)
     );
     assert_eq!(session.head().await, before);
-    let done = tokio::time::timeout(Duration::from_secs(5), session.drive()).await??;
+    // Completing the acyclic graph includes five turns and their durable
+    // checkpoints. The deadline bounds a hang, not scheduler latency on CI.
+    let done = tokio::time::timeout(Duration::from_secs(30), session.drive()).await??;
     assert_eq!(
         done.run.as_ref().map(|run| run.status),
         Some(RunStatus::Completed)
