@@ -279,7 +279,7 @@ impl CoreSession {
     }
 }
 
-fn settled(state: &SessionSnapshot) -> bool {
+pub(super) fn settled(state: &SessionSnapshot) -> bool {
     state.run.as_ref().is_none_or(|run| run.status.terminal())
         && state.agents.values().all(|agent| {
             agent.queue.is_empty()

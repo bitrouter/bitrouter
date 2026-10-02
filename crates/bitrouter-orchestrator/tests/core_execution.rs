@@ -16,6 +16,8 @@ mod reconnect;
 mod reconstruction;
 #[path = "core_execution/recovery.rs"]
 mod recovery;
+#[path = "core_execution/release.rs"]
+mod release;
 #[path = "core_execution/root_queue.rs"]
 mod root_queue;
 #[path = "core_execution/steering.rs"]

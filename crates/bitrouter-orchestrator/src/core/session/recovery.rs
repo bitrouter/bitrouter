@@ -145,8 +145,10 @@ fn restore_snapshot(
     let mut owner = None::<String>;
     let mut identities = BTreeSet::new();
     let mut final_payload = None;
+    let mut releases = BTreeMap::new();
     for batch in std::iter::once(checkpoint).chain(&request.journal_tail) {
         let payload = batch.decode(&binding.limits)?;
+        release::validate_history(&payload, &mut releases)?;
         if batch.identity.session_id != binding.grant.session_id {
             return Err(reject(
                 ErrorCode::UnauthorizedScope,
@@ -246,6 +248,7 @@ fn validate_snapshot(
         ));
     }
     state.manifest.validate(caps, &binding.limits)?;
+    release::validate(state, binding)?;
     root_queue::validate(state, &binding.limits)?;
     budget::validate(state)?;
     steering::validate(state, &binding.limits, binding.durable_head.state_revision)?;
