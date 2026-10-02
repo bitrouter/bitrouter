@@ -85,10 +85,11 @@ covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supp
 
 ### 5. Start the desired agent interface
 
-BitRouter's inline conversation uses explicit alternate-screen inspectors:
+BitRouter uses native scrollback and explicit inspectors. Empty-composer Left
+opens read-only Agents; Esc returns; navigation never attaches or stops a run:
 
 ```bash
-bro code                    # conversation with Choose agent picker
+bro code                    # conversation first; /agent chooses an agent
 bro code codex              # explicit interactive ACP session
 bro run claude "summarize this repo"  # headless ACP turn
 bro run codex "audit this repo" --background  # supervised; returns run id

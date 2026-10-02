@@ -758,36 +758,34 @@ bro code --socket <path>
 bro --context <name> code
 ```
 
-Bare local `code` opens an empty conversation and a searchable **Choose agent**
-picker. Explicit `code <agent>` connects directly. Dismissing a picker restores
-the draft and reading position. A draft written before connecting remains a
-draft after agent selection and needs an explicit send.
+Bare local `code` opens an editable empty conversation. `/agent` or submitting
+an unbound draft opens **Choose agent**. Selecting an agent restores the draft;
+a subsequent Enter sends it. Explicit `code <agent>` connects directly.
 
-The conversation remains in the normal terminal buffer and native scrollback.
-The multiline composer, **agent, route, activity, and attributed session
-cost**, plus a one- or two-line background-agent strip stay in the bounded
-bottom control deck. Background output is never appended to the foreground
-document plane. `/` opens the searchable command launcher and temporary
-inspectors; there are no
-permanent page tabs.
+Conversation stays in the normal buffer and terminal-native scrollback. The
+composer has a distinct band and a compact footer with confirmed session facts
+and cost when available. There is no permanent background strip. `/` opens the
+searchable command launcher and existing explicit inspectors.
 
-Every local Code controller is daemon-supervised from creation. Foreground and
-background are presentation states, not different process owners. The current
-foreground run therefore participates in canonical worktree claims. Clean
-Ctrl-C/Ctrl-D from Ready with an empty draft stops it; **Detach current session
-and exit** leaves it running as a background row; terminal loss detaches after
-lease expiry. An active turn is cancelled by Ctrl-C/Escape, while detach is the
-explicit way to leave it running.
+With an empty composer and no pending permission/modal, plain Left (`← agents`)
+opens read-only **Agents** in the same normal-buffer dock, capped at 40% of
+terminal height. Up/Down selects, Tab/Shift-Tab filters, `/` searches, Enter
+previews supplied metadata, and Esc returns. Drafts, queues and focus are
+retained. Incoming foreground text is accumulated while this menu is open and
+appears once on return. Navigation never attaches, submits, answers permissions
+or stops another run. No task operation has been added to this menu.
 
-Choose **Background agents** from `/` to expand or collapse the command center
-inside the normal-buffer dock. The whole
-expanded deck is capped at 40% of physical rows and replaces the editable
-foreground composer with a one-line draft-preserved summary. Selection, peek,
-target-bound background replies, bounded permission choices, cancel,
-mark-reviewed, and stop stay inside this surface. Retained history, search,
-long output/diffs, and complex permission review open an explicit
-alternate-screen inspector. Detach returns to the same row without replaying
-background history into native scrollback.
+Every local Code controller remains daemon-supervised from creation. Foreground
+and background are presentation states, not different process owners. Clean
+Ctrl-C/Ctrl-D from Ready with an empty draft retains its explicit exit policy;
+**Detach current session and exit** leaves it running. An active turn is
+cancelled by Ctrl-C/Escape in Conversation; menu Esc only returns.
+
+Existing **Background run controls** remain an explicit command-launcher action
+for the legacy control surface. Replies, attachment, lease takeover and stop
+continue through their existing checks; complex retained-history/permission
+inspectors may use alternate screen. These controls are separate from the new
+read-only menu. Standalone `bro agents` commands are unchanged.
 
 Named remote contexts and explicit `--socket` operation targets open an
 operations-only status inspector. `/` exposes status, models, host requests,

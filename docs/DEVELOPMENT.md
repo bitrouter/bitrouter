@@ -12,7 +12,7 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 | `crates/bitrouter-providers`     | crate   | Provider catalog glue: the compiled-in `bitrouter` cloud gateway, the registry fetch/merge, and the `AuthApplier` impls    |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback; optional `sdk` retains legacy hooks |
 | `crates/bitrouter-telemetry`     | crate   | Optional telemetry egress: the OTLP exporter (traces + metrics, multi-tenant attribution), the inbound ingress span, and the `tracing` ↔ OTel bridge — all default-off |
-| `crates/bitrouter-tui`           | crate   | Full-screen unified Code shell (`bro code [<agent>]`) — ACP transcript, multiline composer, temporary inspectors, and explicit permission choices |
+| `crates/bitrouter-tui`           | crate   | Native-scrollback Code shell (`bro code [<agent>]`) — ACP transcript, composer/footer, read-only Agents navigation, explicit inspectors and permission choices |
 | `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App` and owns the management commands |
 
 The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `bitrouter_sdk::extension::ExtensionApi` inside `assemble::build_app_with_extensions`; the SDK also retains legacy `Plugin`/hook interfaces for host assembly. See [the extension directory guide](../extensions/README.md) and [guardrails](../extensions/regex-checker/README.md).

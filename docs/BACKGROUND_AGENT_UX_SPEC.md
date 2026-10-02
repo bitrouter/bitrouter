@@ -2,6 +2,11 @@
 
 Status: **implemented; locally verified** · Revision 3 · Date: 2026-09-20
 
+Current Code presentation: [Codex-style navigation spec](CODE_TUI_CODEX_NAVIGATION_SPEC.md)
+replaces the default strip/deck navigation with read-only Agents. Existing run
+controls remain an explicit legacy action; this document retains their
+historical implementation evidence and the unchanged supervisor contracts.
+
 Implementation was authorized after review. Progress and verification evidence
 are tracked in [BACKGROUND_AGENT_IMPLEMENTATION.md](BACKGROUND_AGENT_IMPLEMENTATION.md).
 The acceptance criteria below remain requirements, not claims of completed work.
