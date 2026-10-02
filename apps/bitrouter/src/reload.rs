@@ -1835,11 +1835,20 @@ impl AppReloader {
         if matches!(invocation, ReloadInvocation::Local) && !env.is_empty() {
             let overrides = env.into_iter().collect();
             bitrouter_sdk::config::set_env_overrides(overrides);
-            let _ = self.environment_revision.fetch_update(
-                Ordering::AcqRel,
-                Ordering::Acquire,
-                |revision| Some(revision.saturating_add(1)),
-            );
+            // Keep the saturating update and publication ordering on our MSRV;
+            // `try_update` is newer and `fetch_update` is deprecated in Rust 1.99.
+            let mut revision = self.environment_revision.load(Ordering::Acquire);
+            loop {
+                match self.environment_revision.compare_exchange_weak(
+                    revision,
+                    revision.saturating_add(1),
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(current) => revision = current,
+                }
+            }
             tracing::info!("env override map updated by local reload");
         }
 
