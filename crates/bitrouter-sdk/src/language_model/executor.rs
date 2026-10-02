@@ -33,6 +33,7 @@ mod input_count;
 use super::native_continuation::{
     ContinuationFailure, NativeContinuationInput, NativeContinuationPlan,
 };
+use super::native_work::{self, NativeProviderWorkKind};
 
 fn native_continuation_plan(
     target: &RoutingTarget,
@@ -835,7 +836,11 @@ fn build_http_client(timeouts: &HttpTimeouts, managed: bool) -> Result<reqwest::
     // https://docs.rs/reqwest/latest/reqwest/redirect/struct.Policy.html
     let builder = reqwest::Client::builder();
     let builder = if managed {
-        builder.redirect(reqwest::redirect::Policy::none())
+        // Every actual HTTP retry needs its own durable admission and budget.
+        // https://docs.rs/reqwest/0.13.4/reqwest/retry/fn.never.html
+        builder
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
     } else {
         builder
     };
@@ -1127,6 +1132,19 @@ impl HttpExecutor {
         &self,
         input: &RequestBuildInput<'_>,
     ) -> Result<crate::language_model::auth::AppliedAuth> {
+        native_work::observe(
+            input.ctx,
+            NativeProviderWorkKind::Authentication,
+            self.build_authenticated_request_inner(input),
+            |_| None,
+        )
+        .await
+    }
+
+    async fn build_authenticated_request_inner(
+        &self,
+        input: &RequestBuildInput<'_>,
+    ) -> Result<AppliedAuth> {
         input.ctx.record_credential_authority(None);
         let mut builder = input.client.post(input.url).json(input.body);
         if let Some(total) = input.timeouts.total {
@@ -1260,14 +1278,25 @@ impl HttpExecutor {
         &self,
         target: &RoutingTarget,
         rejected_authorization: Option<&reqwest::header::HeaderValue>,
+        ctx: &PipelineContext,
     ) -> Result<bool> {
         let Some(applier) = self.auth_appliers.lookup(&target.provider_name) else {
             return Ok(false);
         };
-        applier
-            .refresh_after_unauthorized(target, rejected_authorization)
-            .await
-            .map_err(|error| normalize_auth_extension_error(error, AuthExtensionOperation::Refresh))
+        native_work::observe(
+            ctx,
+            NativeProviderWorkKind::AuthenticationRefresh,
+            async {
+                applier
+                    .refresh_after_unauthorized(target, rejected_authorization)
+                    .await
+                    .map_err(|error| {
+                        normalize_auth_extension_error(error, AuthExtensionOperation::Refresh)
+                    })
+            },
+            |_| None,
+        )
+        .await
     }
 
     fn no_dispatch_error(target: &RoutingTarget) -> BitrouterError {
@@ -1307,6 +1336,7 @@ impl HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
+        let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
         let mut stream = self.execute_stream(target, prompt, ctx).await?;
         let mut content = Vec::new();
@@ -1465,7 +1495,11 @@ impl HttpExecutor {
                 provider_metadata: Default::default(),
             },
             request_duration_ms: elapsed,
-            upstream_duration_ms: Some(elapsed),
+            upstream_duration_ms: Some(native_work::elapsed_work_millis(
+                ctx,
+                started,
+                initial_gate,
+            )),
             server_tool_calls: Vec::new(),
         })
     }
@@ -1678,7 +1712,15 @@ impl Executor for HttpExecutor {
 
         let mut body = self.render_execution_request(adapter.as_ref(), target, prompt, ctx)?;
         let managed_expected = self.managed_expected_body(&body, target, ctx)?;
-        self.shape_request_body(&mut body, target).await?;
+        if self.auth_appliers.lookup(&target.provider_name).is_some() {
+            native_work::observe(
+                ctx,
+                NativeProviderWorkKind::AuthenticationPreparation,
+                self.shape_request_body(&mut body, target),
+                |_| None,
+            )
+            .await?;
+        }
         let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
         let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
         error_scrubber.capture_effective_target_key(target);
@@ -1701,6 +1743,7 @@ impl Executor for HttpExecutor {
             ctx,
             trace_headers: trace_headers.as_ref(),
         };
+        let initial_gate = native_work::gate_duration(ctx);
         let started = Instant::now();
         let mut attempted_auth_refresh = false;
         let requested_effort = serde_json::to_value(prompt.params.reasoning_effort)
@@ -1729,30 +1772,41 @@ impl Executor for HttpExecutor {
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
-            if let Some(runtime) =
-                ctx.extension::<super::native_context::NativePrivateContextRuntime>()
-            {
-                let plan = runtime
-                    .continuation_plan(prompt, ctx.caller(), target)
-                    .map_err(ContinuationFailure::error)?;
-                runtime.dispatched(
-                    &plan
-                        .execution_prompt(prompt)
-                        .map_err(ContinuationFailure::error)?,
-                );
-                runtime.continuation_dispatched(&plan);
-            }
-            let response = client.execute(request).await.map_err(|error| {
-                let error = if error.is_timeout() {
-                    BitrouterError::UpstreamTimeout
-                } else {
-                    BitrouterError::Upstream {
-                        status: 502,
-                        message: format!("request to {} failed: {error}", target.provider_name),
+            let response = native_work::observe(
+                ctx,
+                NativeProviderWorkKind::HttpDispatch,
+                async {
+                    if let Some(runtime) =
+                        ctx.extension::<super::native_context::NativePrivateContextRuntime>()
+                    {
+                        let plan = runtime
+                            .continuation_plan(prompt, ctx.caller(), target)
+                            .map_err(ContinuationFailure::error)?;
+                        runtime.dispatched(
+                            &plan
+                                .execution_prompt(prompt)
+                                .map_err(ContinuationFailure::error)?,
+                        );
+                        runtime.continuation_dispatched(&plan);
                     }
-                };
-                error_scrubber.scrub_error(error)
-            })?;
+                    client.execute(request).await.map_err(|error| {
+                        let error = if error.is_timeout() {
+                            BitrouterError::UpstreamTimeout
+                        } else {
+                            BitrouterError::Upstream {
+                                status: 502,
+                                message: format!(
+                                    "request to {} failed: {error}",
+                                    target.provider_name
+                                ),
+                            }
+                        };
+                        error_scrubber.scrub_error(error)
+                    })
+                },
+                |response| Some(response.status().as_u16()),
+            )
+            .await?;
 
             let status = response.status();
             let retry_after =
@@ -1767,7 +1821,7 @@ impl Executor for HttpExecutor {
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !attempted_auth_refresh
                 && self
-                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref())
+                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref(), ctx)
                     .await
                     .map_err(|error| error_scrubber.scrub_error(error))?
             {
@@ -1814,7 +1868,11 @@ impl Executor for HttpExecutor {
             account_label: target.account_label.clone(),
             result,
             request_duration_ms: elapsed,
-            upstream_duration_ms: Some(elapsed),
+            upstream_duration_ms: Some(native_work::elapsed_work_millis(
+                ctx,
+                started,
+                initial_gate,
+            )),
             server_tool_calls: Vec::new(),
         })
     }
@@ -1837,7 +1895,15 @@ impl Executor for HttpExecutor {
         upstream_prompt.stream = true;
         let mut body = adapter.render_request_for_target(&upstream_prompt, target)?;
         let managed_expected = self.managed_expected_body(&body, target, ctx)?;
-        self.shape_request_body(&mut body, target).await?;
+        if self.auth_appliers.lookup(&target.provider_name).is_some() {
+            native_work::observe(
+                ctx,
+                NativeProviderWorkKind::AuthenticationPreparation,
+                self.shape_request_body(&mut body, target),
+                |_| None,
+            )
+            .await?;
+        }
         let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
         let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
         error_scrubber.capture_effective_target_key(target);
@@ -1872,20 +1938,28 @@ impl Executor for HttpExecutor {
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
-            let response = client.execute(request).await.map_err(|error| {
-                let error = if error.is_timeout() {
-                    BitrouterError::UpstreamTimeout
-                } else {
-                    BitrouterError::Upstream {
-                        status: 502,
-                        message: format!(
-                            "stream request to {} failed: {error}",
-                            target.provider_name
-                        ),
-                    }
-                };
-                error_scrubber.scrub_error(error)
-            })?;
+            let response = native_work::observe(
+                ctx,
+                NativeProviderWorkKind::HttpDispatch,
+                async {
+                    client.execute(request).await.map_err(|error| {
+                        let error = if error.is_timeout() {
+                            BitrouterError::UpstreamTimeout
+                        } else {
+                            BitrouterError::Upstream {
+                                status: 502,
+                                message: format!(
+                                    "stream request to {} failed: {error}",
+                                    target.provider_name
+                                ),
+                            }
+                        };
+                        error_scrubber.scrub_error(error)
+                    })
+                },
+                |response| Some(response.status().as_u16()),
+            )
+            .await?;
 
             let status = response.status();
             let retry_after =
@@ -1902,7 +1976,7 @@ impl Executor for HttpExecutor {
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !attempted_auth_refresh
                 && self
-                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref())
+                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref(), ctx)
                     .await
                     .map_err(|error| error_scrubber.scrub_error(error))?
             {

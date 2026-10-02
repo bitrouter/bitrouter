@@ -2,6 +2,8 @@
 mod accounting;
 #[path = "core_execution/input_count.rs"]
 mod input_count;
+#[path = "core_execution/provider_work.rs"]
+mod provider_work;
 #[path = "core_execution/reconstruction.rs"]
 mod reconstruction;
 mod support;
@@ -1164,7 +1166,7 @@ async fn setup(
 
 async fn bind_app(
     app: Arc<App>,
-    harness: Arc<Harness>,
+    harness: Arc<dyn HarnessPort>,
 ) -> Result<CoreSession, Box<dyn std::error::Error>> {
     let tools = vec![HarnessTool {
         name: "read".into(),

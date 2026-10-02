@@ -38,6 +38,8 @@ use super::routing::{
 };
 use super::signals::{self, MaterialRequest, SignalState};
 
+mod provider_work;
+
 /// Implemented by the authenticated durable harness connection, including an
 /// in-process harness. Returning an ACK means the atomic append is durable.
 #[async_trait]
@@ -69,6 +71,16 @@ pub struct AttemptRecord {
     pub attempt_id: String,
     pub index: u32,
     pub receipt: Option<ExecutionReceipt>,
+    /// Actual integration work, including internal HTTP authentication retries.
+    /// Empty legacy/custom-executor records do not prove complete coverage.
+    #[serde(default)]
+    pub provider_work: Vec<ProviderWorkRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderWorkRecord {
+    pub work: bitrouter_sdk::language_model::native_work::NativeProviderWork,
+    pub report: Option<bitrouter_sdk::language_model::native_work::NativeProviderWorkReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3432,7 +3444,7 @@ impl NativeExecutionControl for StepControl {
                 return Err(reject(ErrorCode::OperationConflict, "attempt does not follow its immutable model plan"));
             }
             let attempt_id = id("attempt");
-            step.attempts.push(AttemptRecord { attempt_id: attempt_id.clone(), index: attempt_index, receipt: None });
+            step.attempts.push(AttemptRecord { attempt_id: attempt_id.clone(), index: attempt_index, receipt: None, provider_work: Vec::new() });
             active_run(state)?.model_attempts += 1;
             Ok(json!({"attempt_id":attempt_id,"request_id":request_id,"attempt_index":attempt_index}))
         }).await.map_err(sdk_error)?;
@@ -3444,6 +3456,20 @@ impl NativeExecutionControl for StepControl {
             )
             .await
             .map_err(sdk_error)
+    }
+
+    async fn before_provider_work(
+        &self,
+        work: &bitrouter_sdk::language_model::native_work::NativeProviderWork,
+    ) -> bitrouter_sdk::Result<()> {
+        self.admit_provider_work(work).await
+    }
+
+    async fn after_provider_work(
+        &self,
+        report: bitrouter_sdk::language_model::native_work::NativeProviderWorkReport,
+    ) {
+        self.record_provider_work(report).await
     }
 
     async fn after_attempt(&self, report: NativeAttemptReport) {

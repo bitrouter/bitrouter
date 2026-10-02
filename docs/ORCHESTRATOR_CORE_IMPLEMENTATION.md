@@ -22,7 +22,7 @@ mock-provider demonstration does not establish production integration.
 | C0 | Typed harness contract, capability negotiation, exact-byte checkpoint protocol, deterministic durable harness fixture | Implemented and independently reviewed; validation below |
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
-| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared plans, worker allocation, capacity, reconstruction, hook revalidation, token/cache evidence, native continuation, durable cost work and settlement evidence below; full protocol coverage and monetary accounting acceptance remain open |
+| C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | In progress: signals, prepared plans, worker allocation, capacity, reconstruction, hook revalidation, token/cache evidence, native continuation, durable cost work, settlement evidence and internal HTTP retry admission below; full protocol coverage and monetary accounting acceptance remain open |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Pending |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
@@ -1230,3 +1230,61 @@ Validation on the reviewed implementation:
   aggregated failure rather than the intended legacy zero normalization. The final
   regression uses two 429 endpoints and verifies that the actual persisted row
   has the synthetic zero while the core retains unknown monetary evidence.
+
+## C3 provider integration work and internal HTTP retries
+
+Managed execution now observes installed authentication body preparation, each
+authenticated request build, credential refresh and each HTTP dispatch inside a
+selected provider attempt. SDK callbacks carry only request/route/work identity,
+phase, duration, received HTTP status and a controlled error category. They do not
+carry credentials, URLs, request bodies or upstream diagnostic text. Each core
+attempt retains ordered `provider_work` intent/outcome records and projects them
+into its original run's cost inventory. Missing legacy or custom-executor records
+remain unknown coverage. Parent and phase durations overlap and are not additive.
+
+Every phase waits for its own intent ACK and rechecks current source, permission,
+cancellation, active-time and durable-authority gates before running. HTTP status
+records describe receipt of response headers, independently of successful body
+decoding or generation. A phase's outcome is flushed before the next integration
+operation or after executor completion. This permits draining already accepted
+response bodies and bridged streams before waiting for an outcome ACK, while
+still preventing authentication refresh or retry after a missing ACK. The SDK
+continues settlement for received usage when an outcome cannot become durable.
+
+An outer provider attempt reserves the first HTTP dispatch. Each additional HTTP
+request after credential refresh reserves another shared model attempt, in the
+same checkpoint as its intent. The outer result's token estimate covers only the
+terminal result; the extra request adds unknown token expenditure, not a free
+401. Unknown admitted work remains pending when cancellation prevents dispatch.
+The retry and its original request still share a single settlement/bill identity.
+Managed reqwest clients disable implicit protocol retries as well as redirects,
+so a client call cannot silently repeat HTTP work outside core admission.
+
+All integration callbacks pause the run's active clock. The SDK separately
+subtracts their duration from its attempt report and the executor's upstream
+generation time, using each interval's own baseline. End-to-end request latency
+remains wall time. Actual continuation/private-context dispatch observations are
+recorded after the HTTP intent ACK, immediately before executing the request.
+
+Independent review found and corrected premature continuation observations,
+reqwest's implicit retries and upstream generation timing that included ACKs.
+The follow-up read-only review found no remaining blocker in this segment.
+
+Validation on the reviewed implementation:
+
+- Focused `test(provider_work)` nextest selection: 7 passed, including six new
+  integration tests and the existing input-count cancellation regression.
+- Rust 1.95.0 workspace nextest with all features: 3806 passed, 22 skipped, in
+  275.724 seconds. This includes ordinary HTTP behavior and the new core fixtures.
+- Strict all-target/all-feature workspace clippy passed without warnings.
+- Workspace doctests: 5 passed, 1 ignored; formatting and diff checks passed.
+- Initial test compilation exposed a fixture recorder ownership mismatch and an
+  unused import; both were fixed before final validation. The initial focused
+  run used the host's updated Rust 1.99.0; final workspace checks used the
+  previously recorded Rust 1.95.0 validation toolchain.
+
+The new HTTP fixtures use Chat Completions and production metering, with explicit
+ACK loss, cancellation, failed refresh, retry-budget and timing assertions. They
+do not establish complete native SSE bridge provenance/continuation, live-provider
+behavior, auxiliary/material monetary coverage, or crash recovery. Those C3
+requirements and C4–C6, A01–A23 acceptance, final audit, PR and CI remain open.

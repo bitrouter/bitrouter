@@ -360,6 +360,19 @@ pub trait NativeExecutionControl: Send + Sync {
     /// must prevent authorization of the next attempt.
     async fn before_attempt(&self, request_id: &str, attempt_index: u32) -> Result<()>;
 
+    /// Persist integration work before any actual authentication or HTTP I/O.
+    /// Implementations recheck live dispatch gates and reserve internal retries.
+    async fn before_provider_work(
+        &self,
+        _work: &super::native_work::NativeProviderWork,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// Persist integration outcome. ACK failure must close subsequent admission
+    /// without suppressing response consumption and SDK usage settlement.
+    async fn after_provider_work(&self, _report: super::native_work::NativeProviderWorkReport) {}
+
     /// Preserve complete outcome/usage before another attempt is considered.
     /// Observation failure must close subsequent admission in the control
     /// implementation. It must not suppress SDK settlement for a billed call.
