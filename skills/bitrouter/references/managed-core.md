@@ -133,4 +133,22 @@ tool actions. A rejected error body is discarded while its HTTP status still
 governs rejection, authentication refresh and Retry-After. The receipt retains
 unknown spend when usage is unavailable; exact operation replay does not retry
 the provider. This ingress bound does not establish full physical memory
-accounting or bound custom executors, preparation hooks and canonical output.
+accounting or bound allocations inside custom executors and preparation hooks.
+
+Canonical model results have a separate admission check using the same frozen
+root/session byte minimum. Core's SDK control counts serialized JSON before
+private-output sealing and before copying a result into its durable attempt
+report, then checks again after sealing. This also covers custom executor
+results and JSON escaping that expands beyond the original text size.
+
+A rejected complete result has no deliverable content in its attempt report.
+`output_rejection` retains the byte limit, canonical usage counters and their
+origin, without raw provider metadata; configured cost and cache observations
+remain separate evidence. SDK settlement still receives the original result
+and raw usage once. Neither live execution nor recovery after an outcome ACK
+loss retries that rejected result or authorizes its tool calls. An exact
+response replay retains its original failure. Missing usage remains unknown.
+Late evidence remains attributed to its original attempt; a newer run, model
+step or applied steering input cannot be failed by an older rejected output.
+This per-result bound does not reserve all future checkpoint/history growth
+or account for every physical copy and trusted extension allocation.

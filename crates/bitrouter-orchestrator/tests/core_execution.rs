@@ -14,6 +14,8 @@ mod capacity;
 mod input_count;
 #[path = "core_execution/material_work.rs"]
 mod material_work;
+#[path = "core_execution/output_admission.rs"]
+mod output_admission;
 #[path = "core_execution/preparation_work.rs"]
 mod preparation_work;
 #[path = "core_execution/provider_work.rs"]

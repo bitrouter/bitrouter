@@ -9,6 +9,9 @@ mod managed_protocol;
 #[path = "tests_provider_body.rs"]
 mod provider_body;
 
+#[path = "tests_native_output.rs"]
+mod native_output;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

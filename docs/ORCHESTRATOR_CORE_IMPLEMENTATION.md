@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission and durable capacity failure implemented; physical storage/future archive exhaustion, unknown output admission and the remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure and single canonical output admission implemented; physical storage/future archive exhaustion, concurrent output headroom and the remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, incremental HTTP/SSE projection and separate bounded WebSocket control lane connected to the service host; independent clients cover binding/release ACK loss, released-epoch restoration and read-only head queries during provider work; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -2779,4 +2779,51 @@ seconds, and Rust 1.93.0 workspace/all-feature check in 19.363 seconds.
 Workspace doctests passed five tests with one ignored. Formatting, diff and
 tracked-ignore checks passed. Independent final re-review of code, tests,
 documentation and the Windows watchdog adjustment found no actionable P1/P2.
-The complete C4–C6 and A01–A23 acceptance requirements remain open.
+The complete C4–C6 and A01–A23 acceptance requirements remain open. Commit
+`dff74045` passed CI `37154689564`, including Linux, macOS and Windows tests.
+
+## C4 canonical model output admission
+
+Managed execution now counts serialized canonical result bytes before private
+output sealing and durable-report cloning, including custom executor output.
+It checks again after sealing to include newly attached policy metadata. The
+bound is the minimum of the frozen root run and session checkpoint limits;
+the provider HTTP entity bound remains a separate ingress check. Counting
+stops at the bound without building an encoded copy and includes JSON escaping.
+
+A complete rejected result has a bounded `output_rejection` summary with
+canonical usage counters and provenance. It does not carry result content or
+raw provider metadata. The cost estimator sees the original result before
+projection, and SDK settlement retains the original execution and raw usage.
+The error is returned after settlement, without another provider fallback.
+Core preserves the receipt but cannot derive tools or success from its content.
+
+Restoration and same-owner reconnect recognize the durable rejection even if
+the outcome ACK was lost before or after persistence. They settle the rejected
+step as failed instead of treating it as an uncertain attempt eligible for
+retry. A restored root failure cancels descendants as the live failure path
+does. Cancellation and steering retain their existing precedence.
+
+Independent review identified three gaps, now covered by regressions. Rejected
+output bypasses fallible execution success hooks so the original billed usage
+reaches settlement even when such a hook would fail. Reconnect also recognizes
+rejection evidence buffered after disconnection and imported after the old step
+was closed as interrupted. Late evidence cannot fail a replacement run, a newer
+step, or input superseded by pending or already applied steering. Applied input
+is identified by its durable revision even before its next model step exists.
+The applied-steering regression reproduced the failure before the fix. Final
+independent read-only review found no remaining P1/P2 in this increment. Nine
+focused regressions passed in 0.393 seconds.
+
+This increment bounds one canonical result and its durable projection. It does
+not reserve every future history/archive byte, all concurrent pending outputs,
+or allocations inside a custom executor, raw settlement data or trusted hooks.
+Remote running-tool clock handoff and the remaining C4–C6/A01–A23 acceptance
+requirements remain open. Final workspace validation is recorded below.
+
+Final-source Rust 1.99.0 workspace/all-feature nextest passed 4015 tests with
+22 skipped in 112.708 seconds using four test threads. Strict workspace/all-
+target/all-feature clippy passed in 72.589 seconds, strict rustdoc in 29.496
+seconds, and Rust 1.93.0 workspace/all-feature check in 98.572 seconds.
+Workspace doctests passed five tests with one ignored. Formatting, diff and
+tracked-ignore checks passed. Remote CI for the new commit is a separate gate.

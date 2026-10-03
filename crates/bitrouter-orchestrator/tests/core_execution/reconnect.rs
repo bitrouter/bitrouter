@@ -348,7 +348,7 @@ async fn reconnect_imports_bounded_late_output_as_evidence_without_applying_call
 }
 
 #[tokio::test]
-async fn reconnect_fails_closed_when_unacknowledged_output_exceeds_bound() -> TestResult {
+async fn reconnect_imports_bounded_output_rejection_without_retrying() -> TestResult {
     let limits = Limits {
         checkpoint_bytes: 256 * 1024,
         unacknowledged_bytes: 512 * 1024,
@@ -358,20 +358,152 @@ async fn reconnect_fails_closed_when_unacknowledged_output_exceeds_bound() -> Te
         disconnecting_session(1024 * 1024, limits).await?;
     assert!(session.drive().await.is_err());
     let pending = session.pending_provider_evidence().await;
-    assert!(pending.overflowed);
-    assert!(pending.reports.is_empty());
-    let head = harness.store.lock().await.head.clone();
+    assert!(!pending.overflowed);
+    assert_eq!(pending.reports.len(), 1);
+    assert!(pending.reports[0].report.result.is_none());
+    assert!(pending.reports[0].report.output_rejection.is_some());
+    reconnect(&session, &harness).await?;
+    let done = session.drive().await?;
     assert_eq!(
-        session
-            .reconnect(&grant(), &head)
-            .await
-            .err()
-            .ok_or("overflow resumed")?
-            .code,
-        ErrorCode::RecoveryRequired
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Failed)
     );
+    assert_eq!(
+        done.provider_evidence.get(&pending.reports[0].attempt_id),
+        Some(&pending.reports[0])
+    );
+    assert!(session.pending_provider_evidence().await.reports.is_empty());
+    assert!(harness.sent.lock().await.is_empty());
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
     assert_eq!(settlements.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn late_canonical_output_rejection_preserves_applied_steering() -> TestResult {
+    let (original, original_harness, _, settlements) = disconnecting_session(
+        1024 * 1024,
+        Limits {
+            checkpoint_bytes: 256 * 1024,
+            unacknowledged_bytes: 512 * 1024,
+            ..Limits::default()
+        },
+    )
+    .await?;
+    assert!(original.drive().await.is_err());
+    let evidence = original
+        .pending_provider_evidence()
+        .await
+        .reports
+        .first()
+        .cloned()
+        .ok_or("evidence")?;
+    assert!(evidence.report.output_rejection.is_some());
+    let harness = recovery::harness_at(original_harness.store.lock().await.clone()).await;
+    let request = recovery::request(&*harness.store.lock().await, false)?;
+    let port = Arc::new(FaultPort::new(harness.clone(), "input.steer.applied", true));
+    let (session, executor) =
+        recovery::restore(request, port, vec![output(vec![text("revised answer")])]).await?;
+    let state = session.snapshot().await;
+    let turn = state.root_turn().ok_or("turn")?;
+    session
+        .steer(
+            "steer",
+            session.head().await.state_revision,
+            &turn.run_id,
+            &turn.agent_turn_id,
+            "revised input after interrupted output".into(),
+        )
+        .await?;
+    assert!(session.drive().await.is_err());
+    reconnect(&session, &harness).await?;
+    let state = session.snapshot().await;
+    assert_eq!(
+        state.steering["steer"].disposition,
+        bitrouter_orchestrator::core::session::steering::SteeringDisposition::Applied
+    );
+    assert_eq!(state.root_turn().ok_or("turn")?.steps.len(), 1);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    session
+        .provider_evidence("late-rejection", evidence.clone())
+        .await?;
+    assert_eq!(
+        session.snapshot().await.root_turn().ok_or("turn")?.status,
+        AgentStatus::Runnable
+    );
+    let done = session.drive().await?;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    assert_eq!(
+        done.provider_evidence.get(&evidence.attempt_id),
+        Some(&evidence)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    assert!(
+        serde_json::to_string(&executor.prompts.lock().await[0])?
+            .contains("revised input after interrupted output")
+    );
+    assert_eq!(settlements.load(Ordering::SeqCst), 1);
+    assert!(harness.sent.lock().await.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn late_canonical_output_rejection_cannot_fail_a_replacement_run() -> TestResult {
+    let (original, original_harness, _, settlements) = disconnecting_session(
+        1024 * 1024,
+        Limits {
+            checkpoint_bytes: 256 * 1024,
+            unacknowledged_bytes: 512 * 1024,
+            ..Limits::default()
+        },
+    )
+    .await?;
+    assert!(original.drive().await.is_err());
+    let evidence = original
+        .pending_provider_evidence()
+        .await
+        .reports
+        .first()
+        .cloned()
+        .ok_or("evidence")?;
+    assert!(evidence.report.output_rejection.is_some());
+    let harness = recovery::harness_at(original_harness.store.lock().await.clone()).await;
+    let request = recovery::request(&*harness.store.lock().await, false)?;
+    let (session, executor) = recovery::restore(
+        request,
+        harness.clone(),
+        vec![
+            output(vec![text("retry before late evidence is available")]),
+            output(vec![text("replacement run")]),
+        ],
+    )
+    .await?;
+    assert_eq!(
+        session.drive().await?.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    let accepted = session
+        .start("replacement", session.head().await.state_revision, input())
+        .await?;
+    assert_ne!(&accepted.assigned_ids["run_id"], &evidence.run_id);
+    session
+        .provider_evidence("late-rejection", evidence.clone())
+        .await?;
+    let done = session.drive().await?;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    assert_eq!(
+        done.provider_evidence.get(&evidence.attempt_id),
+        Some(&evidence)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(settlements.load(Ordering::SeqCst), 1);
+    assert!(harness.sent.lock().await.is_empty());
     Ok(())
 }
 

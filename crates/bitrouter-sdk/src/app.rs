@@ -361,6 +361,10 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
         self.inner.provider_response_byte_limit()
     }
 
+    fn canonical_output_byte_limit(&self) -> Option<u64> {
+        self.inner.canonical_output_byte_limit()
+    }
+
     async fn provider_cancelled(&self) {
         self.inner.provider_cancelled().await;
     }

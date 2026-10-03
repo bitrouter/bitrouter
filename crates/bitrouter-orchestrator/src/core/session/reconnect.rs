@@ -552,6 +552,16 @@ fn apply_evidence(
     state
         .provider_evidence
         .insert(evidence.attempt_id.clone(), evidence.clone());
+    if first
+        && evidence.report.output_rejection.is_some()
+        && state
+            .run
+            .as_ref()
+            .is_some_and(|run| run.run_id == evidence.run_id)
+        && let Some(step_id) = &work.step_id
+    {
+        recovery::finish_rejected_output(state, &work.agent_id, &work.agent_turn_id, step_id);
+    }
     Ok(())
 }
 

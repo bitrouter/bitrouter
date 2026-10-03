@@ -903,6 +903,11 @@ pub(super) fn resume_model_steps(
                         .as_ref()
                         .map(|result| (receipt.report.request_id.clone(), result.clone()))
                 });
+            let rejected_output = step
+                .attempts
+                .last()
+                .and_then(|attempt| attempt.receipt.as_ref())
+                .is_some_and(|receipt| receipt.report.output_rejection.is_some());
             if steered.contains(&agent.agent_id) {
                 step.interrupted = true;
                 step.settled = true;
@@ -912,6 +917,17 @@ pub(super) fn resume_model_steps(
                     } else {
                         AgentStatus::Runnable
                     };
+                }
+            } else if rejected_output {
+                // This attempt completed and failed canonical admission. It
+                // is not an uncertain interrupted call eligible for retry.
+                step.settled = true;
+                if cancelled || turn.cancellation_requested {
+                    turn.status = AgentStatus::Cancelling;
+                } else {
+                    turn.status = AgentStatus::Failed;
+                    turn.terminal_reason =
+                        Some("canonical model output exceeds its admitted byte limit".into());
                 }
             } else if let Some((request_id, output)) = output {
                 // Replay the ordinary output admission transition, never the
@@ -942,5 +958,78 @@ pub(super) fn resume_model_steps(
             }
         }
     }
+    cancel_descendants_of_failed_root(state);
     outputs
+}
+
+/// Late evidence can arrive after reconciliation closed the interrupted step.
+/// It may fail that same runnable turn, never a new step, run or steered input.
+pub(super) fn finish_rejected_output(
+    state: &mut SessionSnapshot,
+    agent_id: &str,
+    agent_turn_id: &str,
+    step_id: &str,
+) {
+    if steering::has_pending(state, agent_id) {
+        return;
+    }
+    let Some(turn) = state
+        .agents
+        .get_mut(agent_id)
+        .and_then(|agent| agent.turn.as_mut())
+    else {
+        return;
+    };
+    if turn.agent_turn_id != agent_turn_id || turn.status != AgentStatus::Runnable {
+        return;
+    }
+    if turn.steps.last().is_some_and(|step| {
+        step.step_id == step_id
+            && step.interrupted
+            && step.settled
+            // Applied steering changes input before the next step exists.
+            // Late accounting for the superseded step cannot fail that input.
+            && !state.steering.values().any(|record| {
+                record.agent_id == agent_id
+                    && record.run_id == turn.run_id
+                    && record.agent_turn_id == agent_turn_id
+                    && record.disposition == steering::SteeringDisposition::Applied
+                    && record
+                        .resolved_state_revision
+                        .is_some_and(|revision| revision > step.input_state_revision)
+            })
+            && step
+                .attempts
+                .last()
+                .and_then(|attempt| attempt.receipt.as_ref())
+                .is_some_and(|receipt| receipt.report.output_rejection.is_some())
+    }) {
+        turn.status = AgentStatus::Failed;
+        turn.terminal_reason =
+            Some("canonical model output exceeds its admitted byte limit".into());
+        cancel_descendants_of_failed_root(state);
+    }
+}
+
+fn cancel_descendants_of_failed_root(state: &mut SessionSnapshot) {
+    if state
+        .agents
+        .get(&state.agent_id)
+        .and_then(|agent| agent.turn.as_ref())
+        .is_some_and(|turn| turn.status == AgentStatus::Failed)
+    {
+        // Match live root failure: descendants cannot continue detached from
+        // a root whose complete output has a durable rejection receipt.
+        for (agent_id, agent) in &mut state.agents {
+            if agent_id != &state.agent_id {
+                agent.queue.clear();
+                if let Some(turn) = &mut agent.turn
+                    && !turn.status.terminal()
+                {
+                    turn.status = AgentStatus::Cancelling;
+                    turn.cancellation_requested = true;
+                }
+            }
+        }
+    }
 }

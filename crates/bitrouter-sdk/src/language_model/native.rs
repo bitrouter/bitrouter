@@ -272,6 +272,10 @@ pub struct NativeAttemptReport {
     pub actual_model: Option<String>,
     /// Complete output and optional reported usage. Missing usage stays unknown.
     pub result: Option<GenerateResult>,
+    /// Complete output was received but could not enter the embedding runtime.
+    /// Its bounded usage summary does not authorize content or tool execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_rejection: Option<NativeOutputRejection>,
     /// Failure detail when no successful upstream result was obtained.
     pub error: Option<String>,
     /// Provider execution wall time, excluding durable admission waits.
@@ -290,6 +294,36 @@ pub struct NativeAttemptReport {
     pub continuation: super::native_continuation::NativeContinuationObservation,
 }
 
+/// Bounded evidence for a complete canonical output rejected before delivery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeOutputRejection {
+    /// Maximum admitted serialized canonical result size.
+    pub byte_limit: u64,
+    /// Original canonical counters and provenance, without the raw provider
+    /// object. Full usage remains available to the SDK settlement recorders.
+    pub usage: Option<NativeOutputUsage>,
+}
+
+/// Canonical counters retained without unbounded raw provider metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeOutputUsage {
+    /// Original prompt-token total, including cache subsets.
+    pub prompt_tokens: u64,
+    /// Original completion-token total, including reasoning.
+    pub completion_tokens: u64,
+    /// Reasoning subset of completion tokens.
+    pub reasoning_tokens: u64,
+    /// Cache-read subset of prompt tokens.
+    pub cache_read_tokens: u64,
+    /// Cache-write subset of prompt tokens.
+    pub cache_write_tokens: u64,
+    /// Provider-reported search calls, independent of token cost.
+    pub web_search_count: u64,
+    /// Original canonical usage provenance.
+    pub origin: super::types::UsageOrigin,
+}
+
 /// Per-request durable controls supplied by a native embedding runtime.
 #[async_trait]
 pub trait NativeExecutionControl: Send + Sync {
@@ -298,6 +332,14 @@ pub trait NativeExecutionControl: Send + Sync {
     /// The bound is checked before passing each chunk to JSON/SSE parsing. It is
     /// not an allocation accounting guarantee for custom executors or hooks.
     fn provider_response_byte_limit(&self) -> Option<u64> {
+        None
+    }
+
+    /// Bound canonical results before copying them into durable reports,
+    /// including results from custom executors. The original execution still
+    /// settles; rejection must not trigger another provider attempt. This does
+    /// not bound allocations inside the executor or trusted extension hooks.
+    fn canonical_output_byte_limit(&self) -> Option<u64> {
         None
     }
 

@@ -193,6 +193,11 @@ pub(crate) struct PreparedPipelineResponse {
     pub(crate) model_id: String,
 }
 
+struct ControlledExecution {
+    result: ExecutionResult,
+    output_rejection: Option<BitrouterError>,
+}
+
 pub(crate) struct PreparedPipelineStream {
     pub(crate) parts: Pin<Box<dyn Stream<Item = Result<PreparedStreamPart>> + Send>>,
     #[cfg(feature = "server")]
@@ -662,7 +667,7 @@ impl Pipeline {
                 server_loop
                     .run_with_provenance(ctx.prompt(), &tool_ctx, &upstream)
                     .await
-                    .map(|outcome| (outcome.result, outcome.provider_terminal_exposed))
+                    .map(|outcome| (outcome.result, outcome.provider_terminal_exposed, None))
             }
             (Ok(admission), _) => self
                 .execute_with_fallback_controlled(
@@ -674,10 +679,22 @@ impl Pipeline {
                         .map(|(control, admission)| (control, native_routes.as_slice(), admission)),
                 )
                 .await
-                .map(|result| (result, true)),
+                .map(|outcome| (outcome.result, true, outcome.output_rejection)),
         };
         match exec_outcome {
-            Ok((result, provider_terminal_exposed)) => {
+            Ok((result, provider_terminal_exposed, output_rejection)) => {
+                if let Some(error) = output_rejection {
+                    // The provider completed and may bill the entire result.
+                    // Preserve its original usage for settlement, but never
+                    // deliver rejected content or start a fallback attempt.
+                    ctx.execution_result = Some(result);
+                    self.run_settlement(&mut ctx, false, Some(error.clone()))
+                        .await;
+                    self.observe_after(Phase::Settlement, &ctx).await;
+                    self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
+                        .await;
+                    return Err(error);
+                }
                 // Managed execution retains terminal validity privately after
                 // removing the raw Responses ID from output and receipts.
                 let response_id_valid = ctx
@@ -1732,6 +1749,7 @@ impl Pipeline {
     ) -> Result<ExecutionResult> {
         self.execute_with_fallback_controlled(chain, prompt, ctx, None)
             .await
+            .map(|outcome| outcome.result)
     }
 
     async fn execute_with_fallback_controlled(
@@ -1744,7 +1762,7 @@ impl Pipeline {
             &[NativeRoute],
             &crate::language_model::native::NativePlanAdmission,
         )>,
-    ) -> Result<ExecutionResult> {
+    ) -> Result<ControlledExecution> {
         let mut errors = Vec::new();
         let mut dispatched = 0;
         for (attempt_index, target) in chain.iter().enumerate() {
@@ -1800,9 +1818,26 @@ impl Pipeline {
                 },
                 None => self.executor.execute(target, prompt, ctx).await,
             };
-            if let (Some(runtime), Ok(result)) = (&private_context, &mut outcome) {
+            let output_limit =
+                attempt_control.and_then(|(control, _)| control.canonical_output_byte_limit());
+            // Count without allocating an encoded copy, before private-output
+            // sealing or durable-report cloning. Check again after sealing,
+            // since trusted policy metadata may grow the canonical result.
+            let mut output_rejected = output_limit.is_some_and(|limit| {
+                outcome
+                    .as_ref()
+                    .is_ok_and(|result| !super::native_output::fits(&result.result, limit))
+            });
+            if !output_rejected
+                && let (Some(runtime), Ok(result)) = (&private_context, &mut outcome)
+            {
                 runtime.seal_output(ctx, target, &mut result.result);
             }
+            output_rejected |= output_limit.is_some_and(|limit| {
+                outcome
+                    .as_ref()
+                    .is_ok_and(|result| !super::native_output::fits(&result.result, limit))
+            });
             if let Some(runtime) = &work {
                 runtime.flush().await;
             }
@@ -1816,7 +1851,12 @@ impl Pipeline {
                         .ok()
                         .map(|result| result.provider_id.clone()),
                     actual_model: outcome.as_ref().ok().map(|result| result.model_id.clone()),
-                    result: outcome.as_ref().ok().map(|result| result.result.clone()),
+                    // Move the original through the estimator. Only admitted
+                    // output is cloned for the durable callback below.
+                    result: outcome.as_mut().ok().map(|result| {
+                        std::mem::replace(&mut result.result, super::native_output::empty_result())
+                    }),
+                    output_rejection: None,
                     error: outcome.as_ref().err().map(ToString::to_string),
                     elapsed_ms: super::timing::duration_millis(
                         work.as_ref()
@@ -1832,16 +1872,30 @@ impl Pipeline {
                         .as_ref()
                         .map(|runtime| runtime.continuation_observation())
                         .unwrap_or_default(),
-                    cache: super::native_accounting::NativeCacheObservation::capture(
-                        &route.protocol,
-                        outcome
-                            .as_ref()
-                            .ok()
-                            .and_then(|result| result.result.usage.as_ref()),
-                    ),
+                    cache: Default::default(),
                 };
+                report.cache = super::native_accounting::NativeCacheObservation::capture(
+                    &route.protocol,
+                    report
+                        .result
+                        .as_ref()
+                        .and_then(|result| result.usage.as_ref()),
+                );
                 if let Some(estimator) = &self.native_cost_estimator {
                     report.token_cost = estimator.estimate(&report);
+                }
+                if let Some(result) = report.result.take() {
+                    if output_rejected && let Some(limit) = output_limit {
+                        report.output_rejection =
+                            Some(super::native_output::rejection(&result, limit));
+                        report.error =
+                            Some("canonical model output exceeds its admitted byte limit".into());
+                    } else {
+                        report.result = Some(result.clone());
+                    }
+                    if let Ok(execution) = &mut outcome {
+                        execution.result = result;
+                    }
                 }
                 control.after_attempt(report).await;
             }
@@ -1857,11 +1911,26 @@ impl Pipeline {
             }
             match outcome {
                 Ok(result) => {
+                    if output_rejected {
+                        // Do not let a fallible success hook discard the
+                        // original billed result before rejection settlement.
+                        ctx.set_successful_target(target.clone());
+                        return Ok(ControlledExecution {
+                            result,
+                            output_rejection: Some(BitrouterError::UpstreamInvalidResponse {
+                                message: "canonical model output exceeds its admitted byte limit"
+                                    .into(),
+                            }),
+                        });
+                    }
                     for hook in &self.execution_hooks {
                         hook.on_success(ctx, &result).await?;
                     }
                     ctx.set_successful_target(target.clone());
-                    return Ok(result);
+                    return Ok(ControlledExecution {
+                        result,
+                        output_rejection: None,
+                    });
                 }
                 Err(e) => match self.classify_failure(ctx, &e, target).await {
                     FallbackDecision::TryNext => {

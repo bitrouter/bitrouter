@@ -305,15 +305,23 @@ impl ExecutionReceipt {
         plan: &NativePlan,
         report: NativeAttemptReport,
     ) -> Self {
-        let usage = report
+        let usage_origin = report
             .result
             .as_ref()
-            .and_then(|result| result.usage.as_ref());
+            .and_then(|result| result.usage.as_ref())
+            .map(|usage| usage.origin)
+            .or_else(|| {
+                report
+                    .output_rejection
+                    .as_ref()
+                    .and_then(|rejected| rejected.usage.as_ref())
+                    .map(|usage| usage.origin)
+            });
         Self {
             decision_id: decision_id.into(),
             attempt_id: attempt_id.into(),
             requested_effort: plan.prompt.params.reasoning_effort,
-            usage_origin: usage.map(|usage| usage.origin),
+            usage_origin,
             cost_micro_usd: report.token_cost.estimated_micro_usd(),
             cost_source: if report.token_cost.estimated_micro_usd().is_some() {
                 "configured_token_estimate"

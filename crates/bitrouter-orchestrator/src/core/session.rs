@@ -3549,6 +3549,10 @@ impl NativeExecutionControl for StepControl {
         Some(self.provider_response_bytes)
     }
 
+    fn canonical_output_byte_limit(&self) -> Option<u64> {
+        Some(self.provider_response_bytes)
+    }
+
     async fn provider_cancelled(&self) {
         self.provider_cancellation.cancelled().await;
     }
