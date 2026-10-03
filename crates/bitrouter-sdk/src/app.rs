@@ -177,6 +177,20 @@ impl App {
         caller: CallerContext,
         control: Arc<dyn crate::language_model::native::NativeExecutionControl>,
     ) -> Result<PipelineResponse> {
+        self.execute_native_controlled_with_headers(prompt, caller, http::HeaderMap::new(), control)
+            .await
+    }
+
+    /// Controlled native execution with host-authenticated ingress headers.
+    /// The host retains these credentials in memory, outside durable agent state.
+    /// Normal pipeline authentication and policy checks still run on every turn.
+    pub async fn execute_native_controlled_with_headers(
+        &self,
+        prompt: Prompt,
+        caller: CallerContext,
+        headers: http::HeaderMap,
+        control: Arc<dyn crate::language_model::native::NativeExecutionControl>,
+    ) -> Result<PipelineResponse> {
         if prompt.stream {
             return Err(crate::error::BitrouterError::bad_request(
                 "controlled model turns must be non-streaming",
@@ -185,7 +199,6 @@ impl App {
         let pipeline = self.language_model.as_ref().ok_or_else(|| {
             crate::error::BitrouterError::internal("no language_model pipeline configured")
         })?;
-        let headers = http::HeaderMap::new();
         let requested_model = sanitize_model_name(&prompt.model);
         let requested_effort = (prompt.params.reasoning_effort_source
             == crate::language_model::types::ReasoningEffortSource::Caller)
@@ -194,6 +207,7 @@ impl App {
         let mut prompt = prompt;
         prompt.model = requested_model.clone();
         let mut request = PipelineRequest::new(requested_model.clone(), caller, prompt);
+        request.headers = headers.clone();
         for (index, transform) in self.prompt_transforms.iter().enumerate() {
             use crate::language_model::native_preparation::{
                 NativePreparationWork, NativePreparationWorkKind, observe,

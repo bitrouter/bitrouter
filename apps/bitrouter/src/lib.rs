@@ -55,6 +55,7 @@ pub mod metering;
 pub mod native_code;
 pub mod onboarding;
 pub mod optimization;
+pub mod orchestrator_api;
 pub mod output;
 pub mod paths;
 pub mod policy;

@@ -23,6 +23,9 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 #[path = "orchestrator_core/native_http.rs"]
 mod native_http;
 
+#[path = "orchestrator_core/managed_api.rs"]
+mod managed_api;
+
 #[path = "orchestrator_core/auth_scope.rs"]
 mod auth_scope;
 
@@ -82,6 +85,7 @@ impl HarnessPort for Harness {
 
 fn input(text: &str) -> TaskInput {
     TaskInput {
+        max_concurrent_subagents: None,
         text: text.into(),
         model: "fixture-model".into(),
         effort: None,

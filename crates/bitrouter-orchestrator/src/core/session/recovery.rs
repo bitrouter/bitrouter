@@ -16,6 +16,55 @@ impl CoreSession {
         caller: CallerContext,
         harness: Arc<dyn HarnessPort>,
     ) -> Result<Self, CoreError> {
+        Self::restore_with_headers(
+            request,
+            capabilities,
+            app,
+            caller,
+            http::HeaderMap::new(),
+            harness,
+        )
+        .await
+    }
+
+    /// Restore with newly authenticated volatile credentials. Durable snapshots
+    /// never restore credentials or establish the caller's authority.
+    pub async fn restore_with_headers(
+        request: Restore,
+        capabilities: &Capabilities,
+        app: Arc<App>,
+        caller: CallerContext,
+        request_headers: http::HeaderMap,
+        harness: Arc<dyn HarnessPort>,
+    ) -> Result<Self, CoreError> {
+        Self::restore_registered(
+            request,
+            capabilities,
+            app,
+            caller,
+            request_headers,
+            harness,
+            |_| std::future::ready(Ok(())),
+        )
+        .await
+    }
+
+    /// Publish a prepared session to the host before its first checkpoint wait.
+    /// Registration must keep it unavailable for execution until binding succeeds;
+    /// retain the handle on errors to reconcile the original pending batch.
+    pub async fn restore_registered<Register, Registered>(
+        request: Restore,
+        capabilities: &Capabilities,
+        app: Arc<App>,
+        caller: CallerContext,
+        request_headers: http::HeaderMap,
+        harness: Arc<dyn HarnessPort>,
+        register: Register,
+    ) -> Result<Self, CoreError>
+    where
+        Register: FnOnce(CoreSession) -> Registered + Send,
+        Registered: std::future::Future<Output = Result<(), CoreError>> + Send,
+    {
         let handoff = Instant::now();
         if !request.previous_owner_stopped {
             return Err(reject(
@@ -31,6 +80,15 @@ impl CoreSession {
         responses::validate(&state, &request.binding)?;
         recovery_time::reconcile(&mut state, &request)?;
         let outputs = resume_model_steps(&mut state);
+        let initialization = PendingInitialization {
+            base_revision: request.binding.durable_head.state_revision,
+            kind: "session.restored",
+            payload: json!({"previous_owner_stopped":true,"tool_observations":request.tools,
+                "active_time":request.active_time,"workspace_changed":workspace_changed,
+                "interrupted_steps":state.agents.values().filter_map(|agent| agent.turn.as_ref())
+                    .flat_map(|turn| &turn.steps).filter(|step| step.interrupted)
+                    .map(|step| &step.step_id).collect::<Vec<_>>()}),
+        };
         let binding = request.binding;
         let active_ms = state.run.as_ref().map_or(0, |run| run.active_ms);
         let activity = Activity::handoff(active_ms, tool_status::activity_ids(&state), handoff);
@@ -38,6 +96,7 @@ impl CoreSession {
             shared: Arc::new(Shared {
                 live: Mutex::new(LiveSession {
                     state,
+                    initialization: Some(initialization),
                     gate: CommitGate::new(
                         binding.grant,
                         binding.durable_head,
@@ -65,6 +124,7 @@ impl CoreSession {
                 inputs: Mutex::new(()),
                 app,
                 caller,
+                request_headers,
                 harness,
                 limits: binding.limits,
                 capabilities: capabilities.clone(),
@@ -73,22 +133,8 @@ impl CoreSession {
                 budget_changed: Arc::new(Notify::new()),
             }),
         };
-        session
-            .shared
-            .harness
-            .observe_restoration(restoration_activity::RestorationActivity::new(&session))
-            .await?;
-        session
-            .transition("session.restored", |state, _| {
-                Ok(
-                    json!({"previous_owner_stopped":true,"tool_observations":request.tools,
-                "active_time":request.active_time,"workspace_changed":workspace_changed,
-                "interrupted_steps":state.agents.values().filter_map(|agent| agent.turn.as_ref())
-                    .flat_map(|turn| &turn.steps).filter(|step| step.interrupted)
-                    .map(|step| &step.step_id).collect::<Vec<_>>()}),
-                )
-            })
-            .await?;
+        register(session.clone()).await?;
+        session.initialize().await?;
         for (agent_id, step_id, request_id, output) in outputs {
             let state = session.snapshot().await;
             if state
@@ -118,6 +164,32 @@ impl CoreSession {
             .await
             .map_err(committed_restore_error)?;
         Ok(session)
+    }
+
+    /// Registration can be interrupted before a batch exists. Preserve its
+    /// original event until it is acknowledged, including across reconnects.
+    pub(super) async fn initialize(&self) -> Result<(), CoreError> {
+        let pending = {
+            let mut live = self.shared.live.lock().await;
+            let Some(pending) = live.initialization.clone() else {
+                return Ok(());
+            };
+            if live.gate.head().state_revision > pending.base_revision {
+                live.initialization = None;
+                return Ok(());
+            }
+            pending
+        };
+        if pending.kind == "session.restored" {
+            self.shared
+                .harness
+                .observe_restoration(restoration_activity::RestorationActivity::new(self))
+                .await?;
+        }
+        self.transition(pending.kind, |_, _| Ok(pending.payload))
+            .await?;
+        self.shared.live.lock().await.initialization = None;
+        Ok(())
     }
 }
 
@@ -314,6 +386,34 @@ fn validate_snapshot(
         validate_id(&run.run_id)?;
         validate_id(&run.agent_turn_id)?;
         run.limits.within(&binding.limits)?;
+        if run
+            .input
+            .max_concurrent_subagents
+            .is_some_and(|maximum| maximum >= run.limits.agents)
+        {
+            return Err(reject(
+                ErrorCode::CheckpointConflict,
+                "restored descendant limit exceeds retained agent capacity",
+            ));
+        }
+        if run.input.max_concurrent_subagents.is_some_and(|maximum| {
+            state
+                .agents
+                .values()
+                .filter(|agent| {
+                    agent.parent_id.is_some()
+                        && agent.turn.as_ref().is_some_and(|turn| {
+                            turn.run_id == run.run_id && !turn.status.terminal()
+                        })
+                })
+                .count()
+                > maximum as usize
+        }) {
+            return Err(reject(
+                ErrorCode::CheckpointConflict,
+                "restored active descendants exceed the frozen limit",
+            ));
+        }
         if root
             .turn
             .as_ref()

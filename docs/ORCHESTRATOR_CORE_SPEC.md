@@ -224,6 +224,37 @@ core response ID resolves to a session checkpoint, not directly to one upstream
 v1 does not promise restoration from response IDs alone or full stateless
 multi-agent transcript replay by an arbitrary OpenAI client.
 
+The preview HTTP adapter requires each continuation result to carry its durable
+operation identity and full outcome metadata. For example:
+
+```json
+{
+  "model": "bitrouter/coding",
+  "previous_response_id": "resp_previous",
+  "input": [{
+    "type": "function_call_output",
+    "call_id": "call_public",
+    "output": "Verified tool result",
+    "bitrouter": { "operation_id": "result_01", "status": "succeeded" }
+  }],
+  "multi_agent": { "enabled": true },
+  "bitrouter": {
+    "version": 1, "execution": "managed", "session_id": "session_01",
+    "execution_epoch": 1, "operation_id": "continue_01"
+  }
+}
+```
+
+Optional result metadata includes `evidence` and `workspace_revision`; `status`
+uses the same `ToolOutcome` values as channel results. When delivering through
+both transports, use `result_01` and the exact same metadata for `tool.result`.
+The successor and new result receipts share one checkpoint. Initial task
+verification, acceptance criteria, material requirements and discardable history
+are inherited and must be omitted on continuation. Model, effort, output-token
+limit, routing and descendant limit cannot change the frozen run settings.
+SSE currently projects retained output after the durable exchange boundary;
+live provider-token forwarding is not part of the preview's conformance claim.
+
 ### 5.3 Input and control
 
 `start` rejects a busy session; `enqueue` durably accepts a future root run;

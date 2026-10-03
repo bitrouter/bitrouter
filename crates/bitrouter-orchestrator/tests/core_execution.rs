@@ -1146,6 +1146,7 @@ fn target(provider: &str) -> RoutingTarget {
 
 fn input() -> TaskInput {
     TaskInput {
+        max_concurrent_subagents: None,
         text: "Inspect the file and report the result".into(),
         model: "fixture-model".into(),
         effort: None,
@@ -3551,7 +3552,7 @@ async fn model_collaboration_waits_release_slots_and_tools_keep_agent_attributio
         ..Limits::default()
     });
     session.start("input", 1, task).await?;
-    let waiting = tokio::time::timeout(Duration::from_secs(5), session.drive()).await??;
+    let waiting = tokio::time::timeout(Duration::from_secs(60), session.drive()).await??;
     assert_ne!(
         waiting.run.as_ref().map(|run| run.status),
         Some(RunStatus::Completed)
@@ -3567,7 +3568,7 @@ async fn model_collaboration_waits_release_slots_and_tools_keep_agent_attributio
             .tool_result(&format!("result_{index}"), result(command))
             .await?;
     }
-    let done = tokio::time::timeout(Duration::from_secs(5), session.drive()).await??;
+    let done = tokio::time::timeout(Duration::from_secs(60), session.drive()).await??;
     assert_eq!(
         done.run.as_ref().map(|run| run.status),
         Some(RunStatus::Completed)

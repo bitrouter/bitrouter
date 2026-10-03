@@ -421,3 +421,106 @@ pub(super) fn check(
     )?;
     CheckpointBatch::check_projected_size(&payload.identity, bytes, &limits)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proposal(
+        state: &SessionSnapshot,
+        grant: &OwnershipGrant,
+    ) -> Result<CheckpointPayload, CoreError> {
+        Ok(CheckpointPayload {
+            identity: BatchIdentity {
+                batch_id: "batch".into(),
+                session_id: state.session_id.clone(),
+                core_instance_id: grant.core_instance_id.clone(),
+                execution_epoch: 1,
+            },
+            base_state_revision: 1,
+            base_event_seq: 1,
+            events: Vec::new(),
+            tool_start_fences: Vec::new(),
+            checkpoint: Checkpoint {
+                schema_version: VERSION,
+                state_revision: 2,
+                artifact_refs: Vec::new(),
+                state: encode(state)?,
+            },
+        })
+    }
+
+    #[test]
+    fn saturated_managed_checkpoint_keeps_room_for_child_delivery()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let input = json!({"text":"task", "model":"model", "acceptance_criteria":[], "required_materials":[]});
+        let mut state: SessionSnapshot = serde_json::from_value(json!({
+            "session_id":"session", "agent_id":"root",
+            "manifest":{"tools":[],"tool_manifest_digest":HarnessManifest::digest(&[])?,
+                "workspace_id":"workspace","permission_revision":1,"max_tool_output_bytes":1024,
+                "artifact_quota_bytes":1048576,"max_artifact_chunk_bytes":1024,"required_features":[]},
+            "agents":{"root":{"agent_id":"root","display_path":"/root","depth":0,
+                "context_revision":0,"history":[],"required_instructions":[],"queue":[],
+                "mailbox":[],"context_sources":[],"last_scheduled":0,
+                "turn":{"run_id":"run","agent_turn_id":"root_turn","assigned_by":"root",
+                    "input":input,"status":"runnable","steps":[],"invocations":[],"core_calls":[],"notified":false}}},
+            "run":{"run_id":"run","agent_turn_id":"root_turn","input":input,
+                "limits":Limits::default(),"status":"running","model_attempts":0,"active_ms":0},
+            "operations":{},"waits":{},"signals":SignalState::default(),"allocations":{}
+        }))?;
+        let mut child = state.agents.get("root").ok_or("root")?.clone();
+        child.agent_id = "child".into();
+        child.parent_id = Some("root".into());
+        child.display_path = format!("/root/{}", "child".repeat(20));
+        child.depth = 1;
+        let turn = child.turn.as_mut().ok_or("turn")?;
+        turn.agent_turn_id = "child_turn".into();
+        turn.status = AgentStatus::Completed;
+        turn.final_answer = Some("child conclusion".into());
+        state.agents.insert("child".into(), child);
+        responses::begin(&mut state, "input", "run", None, 1)?;
+        let grant = OwnershipGrant {
+            session_id: "session".into(),
+            harness_id: "harness".into(),
+            core_instance_id: "core".into(),
+            execution_epoch: 1,
+        };
+        let before = proposal(&state, &grant)?;
+        let mut limits = Limits::default();
+        let (mut low, mut high) = (0, limits.checkpoint_bytes);
+        // Find the exact admission boundary instead of relying on a fixture's
+        // incidental spare bytes to hide growth during an essential transition.
+        while low < high {
+            let middle = low + (high - low) / 2;
+            limits.checkpoint_bytes = middle;
+            match check(&state, &before, &limits, &grant) {
+                Ok(()) => high = middle,
+                Err(error) if error.code == ErrorCode::LimitExceeded => low = middle + 1,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        limits.checkpoint_bytes = high;
+        check(&state, &before, &limits, &grant)?;
+        collaboration::enqueue_mail(
+            &mut state,
+            "child",
+            "root",
+            "agent_result",
+            json!({"agent_id":"child","agent_turn_id":"child_turn","status":"completed",
+                "answer":"child conclusion","reason":null,"provenance":"agent_conclusion"}),
+        )?;
+        agent_turn(&mut state, "child")?.notified = true;
+        responses::capture(
+            &mut state,
+            &DurableEvent {
+                event_seq: 2,
+                kind: "agent.result.delivered".into(),
+                run_id: Some("run".into()),
+                agent_id: Some("child".into()),
+                payload: json!({"parent_id":"root"}),
+            },
+        )?;
+        check(&state, &proposal(&state, &grant)?, &limits, &grant)?;
+        Ok(())
+    }
+}

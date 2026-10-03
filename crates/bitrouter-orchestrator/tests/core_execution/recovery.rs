@@ -151,6 +151,75 @@ pub(super) async fn restore(
     Ok((session, executor))
 }
 
+#[tokio::test]
+async fn interrupted_registration_preserves_the_original_restore_event() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, _, _) = setup(vec![], harness.clone(), false).await?;
+    session.start_response("input", 1, input()).await?;
+    session.disconnect().await;
+    let replacement = harness_at(harness.store.lock().await.clone()).await;
+    let request = request(&*replacement.store.lock().await, true)?;
+    let base = request.binding.durable_head.state_revision;
+    let (app, executor) = application(vec![])?;
+    let caps = capabilities(&request.binding.grant.core_instance_id);
+    let port = replacement.clone();
+    let (published, retained) = tokio::sync::oneshot::channel();
+    let pending = tokio::spawn(async move {
+        CoreSession::restore_registered(
+            request,
+            &caps,
+            app,
+            CallerContext::local(),
+            http::HeaderMap::new(),
+            port,
+            move |session| async move {
+                let _ = published.send(session);
+                std::future::pending::<Result<(), CoreError>>().await
+            },
+        )
+        .await
+    });
+    let restored = tokio::time::timeout(Duration::from_secs(5), retained).await??;
+    assert_eq!(restored.head().await.state_revision, base);
+    pending.abort();
+    assert!(pending.await.is_err());
+    reconnect::reconnect(&restored, &replacement).await?;
+    let kinds = replacement.committed_kinds().await?;
+    let initialized = kinds
+        .iter()
+        .position(|kind| kind == "session.restored")
+        .ok_or("restore event")?;
+    let reconnected = kinds
+        .iter()
+        .position(|kind| kind == "session.reconnected")
+        .ok_or("reconnect event")?;
+    assert!(initialized < reconnected);
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| *kind == "session.restored")
+            .count(),
+        1
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    restored.disconnect().await;
+    let next = harness_at(replacement.store.lock().await.clone()).await;
+    let next_request = self::request(&*next.store.lock().await, true)?;
+    let (validated, executor) = restore(next_request, next, vec![]).await?;
+    assert_eq!(
+        validated
+            .snapshot()
+            .await
+            .run
+            .ok_or("run")?
+            .activity_reconciliations
+            .len(),
+        2
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
 fn observation(command: &ToolExecute, status: ToolStatus) -> ToolObservation {
     ToolObservation {
         invocation_id: command.invocation_id.clone(),

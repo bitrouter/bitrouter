@@ -372,6 +372,7 @@ impl SessionSnapshot {
 struct LiveSession {
     state: SessionSnapshot,
     gate: CommitGate,
+    initialization: Option<PendingInitialization>,
     pending: Option<PendingTransition>,
     sent_tools: BTreeSet<String>,
     unresolved_tool_deliveries: BTreeSet<String>,
@@ -388,6 +389,13 @@ struct LiveSession {
     budget_watching: bool,
     restoration_started: Option<Instant>,
     restoration_stops: BTreeMap<String, (String, super::protocol::ToolObservation)>,
+}
+
+#[derive(Clone)]
+struct PendingInitialization {
+    base_revision: u64,
+    kind: &'static str,
+    payload: Value,
 }
 
 struct PendingTransition {
@@ -414,6 +422,7 @@ struct Shared {
     inputs: Mutex<()>,
     app: Arc<App>,
     caller: CallerContext,
+    request_headers: http::HeaderMap,
     harness: Arc<dyn HarnessPort>,
     limits: Limits,
     capabilities: Capabilities,
@@ -435,6 +444,55 @@ impl CoreSession {
         caller: CallerContext,
         harness: Arc<dyn HarnessPort>,
     ) -> Result<Self, CoreError> {
+        Self::bind_with_headers(
+            binding,
+            capabilities,
+            app,
+            caller,
+            http::HeaderMap::new(),
+            harness,
+        )
+        .await
+    }
+
+    /// Bind with volatile host-authenticated credentials for pipeline checks.
+    /// The headers are never part of a checkpoint or harness message.
+    pub async fn bind_with_headers(
+        binding: Bind,
+        capabilities: &Capabilities,
+        app: Arc<App>,
+        caller: CallerContext,
+        request_headers: http::HeaderMap,
+        harness: Arc<dyn HarnessPort>,
+    ) -> Result<Self, CoreError> {
+        Self::bind_registered(
+            binding,
+            capabilities,
+            app,
+            caller,
+            request_headers,
+            harness,
+            |_| std::future::ready(Ok(())),
+        )
+        .await
+    }
+
+    /// Publish a prepared session to the host before its first checkpoint wait.
+    /// Registration must keep it unavailable for execution until binding succeeds;
+    /// retain the handle on errors to reconcile the original pending batch.
+    pub async fn bind_registered<Register, Registered>(
+        binding: Bind,
+        capabilities: &Capabilities,
+        app: Arc<App>,
+        caller: CallerContext,
+        request_headers: http::HeaderMap,
+        harness: Arc<dyn HarnessPort>,
+        register: Register,
+    ) -> Result<Self, CoreError>
+    where
+        Register: FnOnce(CoreSession) -> Registered + Send,
+        Registered: std::future::Future<Output = Result<(), CoreError>> + Send,
+    {
         binding.grant.validate()?;
         binding.manifest.validate(capabilities, &binding.limits)?;
         if binding.grant.core_instance_id != capabilities.core_instance_id {
@@ -487,6 +545,11 @@ impl CoreSession {
             shared: Arc::new(Shared {
                 live: Mutex::new(LiveSession {
                     state,
+                    initialization: Some(PendingInitialization {
+                        base_revision: binding.durable_head.state_revision,
+                        kind: "session.bound",
+                        payload: json!({}),
+                    }),
                     gate: CommitGate::new(
                         binding.grant,
                         binding.durable_head,
@@ -514,6 +577,7 @@ impl CoreSession {
                 inputs: Mutex::new(()),
                 app,
                 caller,
+                request_headers,
                 harness,
                 limits: binding.limits,
                 capabilities: capabilities.clone(),
@@ -522,9 +586,8 @@ impl CoreSession {
                 budget_changed: Arc::new(Notify::new()),
             }),
         };
-        session
-            .transition("session.bound", |_, _| Ok(json!({})))
-            .await?;
+        register(session.clone()).await?;
+        session.initialize().await?;
         Ok(session)
     }
 
@@ -1332,64 +1395,84 @@ impl CoreSession {
                 };
             }
             if !agent.queue.is_empty() {
-                self.transition_for(Some(agent_id), "agent.followup.started", |state, head| {
-                    let run_id = active_run(state)?.run_id.clone();
-                    let source = state.agents.get(agent_id).ok_or_else(|| {
-                        reject(ErrorCode::UnauthorizedScope, "unknown queued agent")
-                    })?;
-                    let queued = source
-                        .queue
-                        .front()
-                        .ok_or_else(|| reject(ErrorCode::Busy, "follow-up queue is empty"))?;
-                    let allocation_id = queued.allocation_id.clone();
-                    let rejection = allocation_id.as_ref().and_then(|id| {
-                        super::allocation::validate_reuse(state, source, id, &queued.input, true)
-                            .err()
-                    });
-                    if let Some(id) = &allocation_id {
-                        let record = state.allocations.get_mut(id).ok_or_else(|| {
-                            reject(ErrorCode::CheckpointConflict, "queued allocation missing")
+                if !collaboration::has_turn_capacity(&state, Some(agent_id)) {
+                    return Ok(false);
+                }
+                let started = self
+                    .transition_for(Some(agent_id), "agent.followup.started", |state, head| {
+                        if !collaboration::has_turn_capacity(state, Some(agent_id)) {
+                            return Err(reject(
+                                ErrorCode::Busy,
+                                "active descendant turn capacity reached",
+                            ));
+                        }
+                        let run_id = active_run(state)?.run_id.clone();
+                        let source = state.agents.get(agent_id).ok_or_else(|| {
+                            reject(ErrorCode::UnauthorizedScope, "unknown queued agent")
                         })?;
-                        record.application_error = rejection.clone();
-                        if rejection.is_none() {
-                            record.applied_state_revision = Some(head.state_revision + 1);
+                        let queued = source
+                            .queue
+                            .front()
+                            .ok_or_else(|| reject(ErrorCode::Busy, "follow-up queue is empty"))?;
+                        let allocation_id = queued.allocation_id.clone();
+                        let rejection = allocation_id.as_ref().and_then(|id| {
+                            super::allocation::validate_reuse(
+                                state,
+                                source,
+                                id,
+                                &queued.input,
+                                true,
+                            )
+                            .err()
+                        });
+                        if let Some(id) = &allocation_id {
+                            let record = state.allocations.get_mut(id).ok_or_else(|| {
+                                reject(ErrorCode::CheckpointConflict, "queued allocation missing")
+                            })?;
+                            record.application_error = rejection.clone();
+                            if rejection.is_none() {
+                                record.applied_state_revision = Some(head.state_revision + 1);
+                            }
                         }
-                    }
-                    let agent = agent_mut(state, agent_id)?;
-                    if agent
-                        .turn
-                        .as_ref()
-                        .is_none_or(|turn| !turn.status.terminal() || !turn.notified)
-                        || agent.queue.front().is_none_or(|work| work.run_id != run_id)
-                    {
-                        return Err(reject(ErrorCode::Busy, "follow-up boundary changed"));
-                    }
-                    let work = agent
-                        .queue
-                        .pop_front()
-                        .ok_or_else(|| reject(ErrorCode::Busy, "follow-up queue is empty"))?;
-                    if let Some(error) = rejection {
-                        let mut turn = collaboration::new_turn(work, None);
-                        turn.status = AgentStatus::Failed;
-                        turn.terminal_reason = Some(error.to_string());
-                        agent.turn = Some(turn);
-                        return Ok(json!({"allocation_id":allocation_id,"error":error}));
-                    }
-                    let history_start = agent.history.len();
-                    agent
-                        .history
-                        .push(Message::text(Role::User, &work.input.text));
-                    for instruction in &work.required_instructions {
-                        if !agent.required_instructions.contains(instruction) {
-                            agent.required_instructions.push(instruction.clone());
+                        let agent = agent_mut(state, agent_id)?;
+                        if agent
+                            .turn
+                            .as_ref()
+                            .is_none_or(|turn| !turn.status.terminal() || !turn.notified)
+                            || agent.queue.front().is_none_or(|work| work.run_id != run_id)
+                        {
+                            return Err(reject(ErrorCode::Busy, "follow-up boundary changed"));
                         }
-                    }
-                    agent.context_revision += 1;
-                    agent.turn = Some(collaboration::new_turn(work, Some(history_start)));
-                    Ok(json!({}))
-                })
-                .await?;
-                return Ok(true);
+                        let work = agent
+                            .queue
+                            .pop_front()
+                            .ok_or_else(|| reject(ErrorCode::Busy, "follow-up queue is empty"))?;
+                        if let Some(error) = rejection {
+                            let mut turn = collaboration::new_turn(work, None);
+                            turn.status = AgentStatus::Failed;
+                            turn.terminal_reason = Some(error.to_string());
+                            agent.turn = Some(turn);
+                            return Ok(json!({"allocation_id":allocation_id,"error":error}));
+                        }
+                        let history_start = agent.history.len();
+                        agent
+                            .history
+                            .push(Message::text(Role::User, &work.input.text));
+                        for instruction in &work.required_instructions {
+                            if !agent.required_instructions.contains(instruction) {
+                                agent.required_instructions.push(instruction.clone());
+                            }
+                        }
+                        agent.context_revision += 1;
+                        agent.turn = Some(collaboration::new_turn(work, Some(history_start)));
+                        Ok(json!({}))
+                    })
+                    .await;
+                return match started {
+                    Ok(()) => Ok(true),
+                    Err(error) if error.code == ErrorCode::Busy => Ok(false),
+                    Err(error) => Err(error),
+                };
             }
             return Ok(false);
         }
@@ -2423,7 +2506,12 @@ impl CoreSession {
         let response = self
             .shared
             .app
-            .execute_native_controlled(prompt, self.shared.caller.clone(), control.clone())
+            .execute_native_controlled_with_headers(
+                prompt,
+                self.shared.caller.clone(),
+                self.shared.request_headers.clone(),
+                control.clone(),
+            )
             .await;
         // Settlement has completed (or the source remains unavailable). Amount
         // observations cannot erase the already committed unknown work costs.
@@ -2540,65 +2628,14 @@ impl CoreSession {
             .map(|agent| agent.agent_id.clone())
             .ok_or_else(|| reject(ErrorCode::InvalidToolResult, "unknown tool invocation"))?;
         self.transition_for(Some(&target_agent), "tool.result", |state, head| {
-            let run = state.run.as_ref();
-            let turn = state
-                .agents
-                .values_mut()
-                .filter_map(|agent| agent.turn.as_mut())
-                .find(|turn| {
-                    turn.invocations
-                        .iter()
-                        .any(|call| call.dispatch.invocation_id == result.invocation_id)
-                })
-                .ok_or_else(|| reject(ErrorCode::InvalidToolResult, "unknown tool invocation"))?;
-            let call = turn
-                .invocations
-                .iter_mut()
-                .find(|call| call.dispatch.invocation_id == result.invocation_id)
-                .ok_or_else(|| reject(ErrorCode::InvalidToolResult, "unknown tool invocation"))?;
-            let limits =
-                tool_payloads::limits(call, &self.shared.limits, run, turn.input.limits.as_ref())?;
-            tool_payloads::validate_result(call, &result, limits)?;
-            let may_change_workspace = (call.effect != super::protocol::ToolEffect::Read
-                && !matches!(
-                    result.status,
-                    ToolOutcome::Denied | ToolOutcome::NotExecuted
-                ))
-                || result.status == ToolOutcome::EffectUnknown;
-            let first_result = call.result.is_none();
-            if let Some(previous) = &call.result {
-                if previous != &result {
-                    return Err(reject(
-                        ErrorCode::OperationConflict,
-                        "tool outcome was already recorded with different content",
-                    ));
-                }
-            } else {
-                call.result = Some(result.clone());
-            }
-            if first_result && result.status == ToolOutcome::EffectUnknown {
-                turn.status = AgentStatus::RecoveryRequired;
-                active_run(state)?.status = RunStatus::RecoveryRequired;
-            }
-            // Tool observations have no ordering relative to revisioned
-            // signals. Keep them on the invocation; only signals establish a
-            // new current workspace version. Mutations invalidate that fact.
-            if first_result && may_change_workspace {
-                state.manifest.workspace_revision = None;
-            }
-            let receipt = OperationReceipt {
-                operation_id: operation_id.to_owned(),
-                request_sha256: fingerprint,
-                disposition: OperationDisposition::Accepted,
-                assigned_ids: BTreeMap::from([(
-                    "invocation_id".into(),
-                    result.invocation_id.clone(),
-                )]),
-                state_revision: head.state_revision + 1,
-                error: None,
-            };
-            state.operations.insert(operation_id.to_owned(), receipt);
-            encode(&result)
+            record_tool_result(
+                state,
+                &self.shared.limits,
+                operation_id,
+                &result,
+                fingerprint,
+                head.state_revision + 1,
+            )
         })
         .await?;
         self.operation(operation_id).await.ok_or_else(|| {
@@ -3255,7 +3292,12 @@ impl CoreSession {
                 .flat_map(|record| record.tool_start_fences.iter().cloned())
                 .chain(budget::start_fences(next, kind))
                 .collect(),
-            events: vec![event],
+            events: responses::transition_events(
+                &live.state,
+                next,
+                event,
+                head.state_revision + 1,
+            )?,
             checkpoint: Checkpoint {
                 schema_version: VERSION,
                 state_revision: head.state_revision + 1,
@@ -4393,6 +4435,15 @@ pub(super) fn validate_input(input: &TaskInput, limits: &Limits) -> Result<(), C
             ));
         }
     }
+    if input
+        .max_concurrent_subagents
+        .is_some_and(|maximum| maximum >= input.limits.as_ref().unwrap_or(limits).agents)
+    {
+        return Err(reject(
+            ErrorCode::LimitExceeded,
+            "descendant turn limit exceeds retained agent capacity",
+        ));
+    }
     parse_effort(input.effort.as_deref())?;
     if input.max_output_tokens == Some(0) {
         return Err(reject(
@@ -4613,4 +4664,69 @@ fn collaboration_receipt(receipt: OperationReceipt) -> Result<OperationReceipt, 
         Some(error) => Err(error.clone()),
         None => Ok(receipt),
     }
+}
+
+fn record_tool_result(
+    state: &mut SessionSnapshot,
+    limits: &Limits,
+    operation_id: &str,
+    result: &ToolResult,
+    fingerprint: String,
+    revision: u64,
+) -> Result<Value, CoreError> {
+    let run = state.run.as_ref();
+    let turn = state
+        .agents
+        .values_mut()
+        .filter_map(|agent| agent.turn.as_mut())
+        .find(|turn| {
+            turn.invocations
+                .iter()
+                .any(|call| call.dispatch.invocation_id == result.invocation_id)
+        })
+        .ok_or_else(|| reject(ErrorCode::InvalidToolResult, "unknown tool invocation"))?;
+    let call = turn
+        .invocations
+        .iter_mut()
+        .find(|call| call.dispatch.invocation_id == result.invocation_id)
+        .ok_or_else(|| reject(ErrorCode::InvalidToolResult, "unknown tool invocation"))?;
+    let limits = tool_payloads::limits(call, limits, run, turn.input.limits.as_ref())?;
+    tool_payloads::validate_result(call, result, limits)?;
+    let may_change_workspace = (call.effect != super::protocol::ToolEffect::Read
+        && !matches!(
+            result.status,
+            ToolOutcome::Denied | ToolOutcome::NotExecuted
+        ))
+        || result.status == ToolOutcome::EffectUnknown;
+    let first_result = call.result.is_none();
+    if let Some(previous) = &call.result {
+        if previous != result {
+            return Err(reject(
+                ErrorCode::OperationConflict,
+                "tool outcome was already recorded with different content",
+            ));
+        }
+    } else {
+        call.result = Some(result.clone());
+    }
+    if first_result && result.status == ToolOutcome::EffectUnknown {
+        turn.status = AgentStatus::RecoveryRequired;
+        active_run(state)?.status = RunStatus::RecoveryRequired;
+    }
+    // Tool observations have no ordering relative to revisioned
+    // signals. Keep them on the invocation; only signals establish a
+    // new current workspace version. Mutations invalidate that fact.
+    if first_result && may_change_workspace {
+        state.manifest.workspace_revision = None;
+    }
+    let receipt = OperationReceipt {
+        operation_id: operation_id.to_owned(),
+        request_sha256: fingerprint,
+        disposition: OperationDisposition::Accepted,
+        assigned_ids: BTreeMap::from([("invocation_id".into(), result.invocation_id.clone())]),
+        state_revision: revision,
+        error: None,
+    };
+    state.operations.insert(operation_id.to_owned(), receipt);
+    encode(result)
 }

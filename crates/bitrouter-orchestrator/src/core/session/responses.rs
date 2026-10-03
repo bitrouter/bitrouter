@@ -28,6 +28,16 @@ pub struct ResponseOutput {
     pub agent_turn_id: String,
     pub step_id: String,
     pub message: Message,
+    #[serde(default)]
+    pub call_ids: BTreeMap<String, String>,
+}
+
+/// Replayable attributed core collaboration event; never provider opaque state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseEvent {
+    pub agent_name: String,
+    pub event: DurableEvent,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,14 +46,86 @@ pub struct ResponseExchange {
     pub response_id: String,
     pub operation_id: String,
     pub run_id: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub created_at: Option<u64>,
+    #[serde(default)]
+    pub input: Option<TaskInput>,
+    #[serde(default)]
+    pub final_answer: Option<String>,
     pub previous_response_id: Option<String>,
     pub created_state_revision: u64,
     pub completed_state_revision: Option<u64>,
     pub run_status: Option<RunStatus>,
     pub output: Vec<ResponseOutput>,
+    #[serde(default)]
+    pub events: Vec<ResponseEvent>,
     /// Public call IDs map to the exact retained invocation/attempt. This is
     /// the exchange's terminal view, not a mutable view of later tool results.
     pub pending: BTreeMap<String, ToolExecute>,
+}
+
+/// A client function output names the same durable operation on both transports.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponseToolResult {
+    pub operation_id: String,
+    pub call_id: String,
+    pub result: ToolResult,
+}
+
+/// Results and successor acceptance are one append, with individually attributed
+/// result events. Receipts already committed through the channel need no event.
+pub(super) fn transition_events(
+    previous: &SessionSnapshot,
+    next: &SessionSnapshot,
+    event: DurableEvent,
+    revision: u64,
+) -> Result<Vec<DurableEvent>, CoreError> {
+    let mut events = vec![event];
+    if events[0].kind != "response.accepted" {
+        return Ok(events);
+    }
+    for receipt in next.operations.values().filter(|receipt| {
+        receipt.state_revision == revision
+            && !previous.operations.contains_key(&receipt.operation_id)
+    }) {
+        let Some(invocation) = receipt.assigned_ids.get("invocation_id") else {
+            continue;
+        };
+        let (agent, turn, call) = next
+            .agents
+            .values()
+            .filter_map(|agent| {
+                let turn = agent.turn.as_ref()?;
+                let call = turn
+                    .invocations
+                    .iter()
+                    .find(|call| &call.dispatch.invocation_id == invocation)?;
+                Some((agent, turn, call))
+            })
+            .next()
+            .ok_or_else(|| conflict("accepted result invocation is missing"))?;
+        let result = call
+            .result
+            .as_ref()
+            .ok_or_else(|| conflict("accepted result is missing"))?;
+        let event_seq = events
+            .last()
+            .ok_or_else(|| conflict("acceptance event is missing"))?
+            .event_seq
+            .checked_add(1)
+            .ok_or_else(|| conflict("event sequence exhausted"))?;
+        events.push(DurableEvent {
+            event_seq,
+            kind: "tool.result".into(),
+            run_id: Some(turn.run_id.clone()),
+            agent_id: Some(agent.agent_id.clone()),
+            payload: encode(result)?,
+        });
+    }
+    Ok(events)
 }
 
 fn latest(state: &SessionSnapshot) -> Option<&ResponseExchange> {
@@ -99,17 +181,33 @@ pub(super) fn begin(
         ));
     }
     let response_id = id("resp");
+    let input = state
+        .run
+        .as_ref()
+        .ok_or_else(|| conflict("response has no root input"))?
+        .input
+        .clone();
+    let model = input.model.clone();
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| conflict("system clock predates the Unix epoch"))?
+        .as_secs();
     state.responses.exchanges.insert(
         response_id.clone(),
         ResponseExchange {
             response_id: response_id.clone(),
             operation_id: operation_id.into(),
             run_id: run_id.into(),
+            model,
+            created_at: Some(created_at),
+            input: Some(input),
+            final_answer: None,
             previous_response_id,
             created_state_revision: revision,
             completed_state_revision: None,
             run_status: None,
             output: Vec::new(),
+            events: Vec::new(),
             pending: BTreeMap::new(),
         },
     );
@@ -118,12 +216,39 @@ pub(super) fn begin(
 }
 
 pub(super) fn capture(state: &mut SessionSnapshot, event: &DurableEvent) -> Result<(), CoreError> {
-    if event.kind != "model.output.applied" || event.payload.get("discarded").is_some() {
-        return Ok(());
-    }
     let Some(response_id) = active_id(state).map(str::to_owned) else {
         return Ok(());
     };
+    if event.kind.starts_with("collaboration.")
+        || matches!(
+            event.kind.as_str(),
+            "agent.result.delivered" | "agent.followup.started" | "mailbox.consumed"
+        )
+    {
+        let agent_name = event
+            .agent_id
+            .as_ref()
+            .and_then(|id| state.agents.get(id))
+            .ok_or_else(|| conflict("collaboration event has no agent"))?
+            .display_path
+            .clone();
+        let response = state
+            .responses
+            .exchanges
+            .get_mut(&response_id)
+            .ok_or_else(|| conflict("active response is missing"))?;
+        if event.run_id.as_ref() != Some(&response.run_id) {
+            return Err(conflict("collaboration event has another run"));
+        }
+        response.events.push(ResponseEvent {
+            agent_name,
+            event: event.clone(),
+        });
+        return Ok(());
+    }
+    if event.kind != "model.output.applied" || event.payload.get("discarded").is_some() {
+        return Ok(());
+    }
     let agent = event
         .agent_id
         .as_ref()
@@ -147,6 +272,18 @@ pub(super) fn capture(state: &mut SessionSnapshot, event: &DurableEvent) -> Resu
             .last()
             .cloned()
             .ok_or_else(|| conflict("applied response output is missing"))?,
+        call_ids: turn
+            .invocations
+            .iter()
+            .filter(|call| call.dispatch.step_id == step_id)
+            .map(|call| (call.provider_call_id.clone(), call.public_call_id.clone()))
+            .chain(
+                turn.core_calls
+                    .iter()
+                    .filter(|call| call.step_id == step_id)
+                    .map(|call| (call.provider_call_id.clone(), call.public_call_id.clone())),
+            )
+            .collect(),
     };
     let response = state
         .responses
@@ -202,9 +339,12 @@ fn complete(
     }
     response.completed_state_revision = Some(revision);
     response.run_status = Some(run.status);
+    response.final_answer = (run.status == RunStatus::Completed)
+        .then(|| run.final_answer.clone())
+        .flatten();
     response.pending = calls;
     Ok(json!({"response_id":response_id,"run_id":run.run_id,
-        "state_revision":revision,"run_status":run.status}))
+        "state_revision":revision,"run_status":run.status,"final_answer":response.final_answer}))
 }
 
 impl CoreSession {
@@ -227,16 +367,44 @@ impl CoreSession {
         expected_revision: u64,
         previous_response_id: &str,
     ) -> Result<OperationReceipt, CoreError> {
+        self.continue_response_with_results(
+            operation_id,
+            expected_revision,
+            previous_response_id,
+            Vec::new(),
+        )
+        .await
+    }
+
+    /// Accept all function outputs and the next exchange atomically. Result
+    /// operation IDs must also be used when delivering them over the channel.
+    pub async fn continue_response_with_results(
+        &self,
+        operation_id: &str,
+        expected_revision: u64,
+        previous_response_id: &str,
+        results: Vec<ResponseToolResult>,
+    ) -> Result<OperationReceipt, CoreError> {
         let _input = self.shared.inputs.lock().await;
         validate_id(operation_id)?;
         validate_id(previous_response_id)?;
-        let fingerprint = digest(
-            &json!({"type":"response.continue", "expected_state_revision":expected_revision,
-            "previous_response_id":previous_response_id}),
-        )?;
+        let mut input = json!({"type":"response.continue", "expected_state_revision":expected_revision,
+            "previous_response_id":previous_response_id});
+        if !results.is_empty() {
+            input["results"] = encode(&results)?;
+        }
+        let input_bytes = super::super::checkpoint::serialized_bytes(&input)?;
+        if input_bytes > self.shared.limits.input_bytes {
+            return Err(reject(
+                ErrorCode::LimitExceeded,
+                "response continuation exceeds input byte bound",
+            ));
+        }
+        let fingerprint = digest(&input)?;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
             return Ok(receipt);
         }
+        let sent_tools = self.shared.live.lock().await.sent_tools.clone();
         self.transition("response.accepted", |state, head| {
             if head.state_revision != expected_revision {
                 return Err(reject(
@@ -265,13 +433,78 @@ impl CoreSession {
                         "response run cannot be continued",
                     )
                 })?;
-            if completed == head.state_revision {
+            if input_bytes > run.limits.input_bytes {
+                return Err(reject(
+                    ErrorCode::LimitExceeded,
+                    "continuation exceeds the frozen run input bound",
+                ));
+            }
+            if completed == head.state_revision && results.is_empty() {
                 return Err(reject(
                     ErrorCode::Busy,
                     "continuation requires new results or control state",
                 ));
             }
             let run_id = run.run_id.clone();
+            let pending = previous.pending.clone();
+            let mut operations = BTreeSet::from([operation_id.to_owned()]);
+            let mut calls = BTreeSet::new();
+            for output in &results {
+                validate_id(&output.operation_id)?;
+                validate_id(&output.call_id)?;
+                if !operations.insert(output.operation_id.clone())
+                    || !calls.insert(output.call_id.clone())
+                {
+                    return Err(reject(
+                        ErrorCode::OperationConflict,
+                        "duplicate result operation or public call ID",
+                    ));
+                }
+                let command = pending.get(&output.call_id).ok_or_else(|| {
+                    reject(
+                        ErrorCode::InvalidToolResult,
+                        "result does not name a pending public call",
+                    )
+                })?;
+                if command.invocation_id != output.result.invocation_id
+                    || command.attempt_id != output.result.attempt_id
+                {
+                    return Err(reject(
+                        ErrorCode::InvalidToolResult,
+                        "result differs from the pending invocation or attempt",
+                    ));
+                }
+                let result_fingerprint = digest(&output.result)?;
+                if let Some(receipt) = state.operations.get(&output.operation_id) {
+                    if receipt.request_sha256 != result_fingerprint {
+                        return Err(reject(
+                            ErrorCode::OperationConflict,
+                            "result operation has different content",
+                        ));
+                    }
+                    continue;
+                }
+                if !sent_tools.contains(&output.result.invocation_id) {
+                    return Err(reject(
+                        ErrorCode::InvalidToolResult,
+                        "tool result has no dispatched invocation",
+                    ));
+                }
+                super::super::protocol::ToolResultLimits::for_input(
+                    self.shared.limits.input_bytes,
+                    u64::MAX,
+                )?
+                .validate_result(&output.result)?;
+                record_tool_result(
+                    state,
+                    &self.shared.limits,
+                    &output.operation_id,
+                    &output.result,
+                    result_fingerprint,
+                    head.state_revision + 1,
+                )?;
+            }
+
             let response_id = begin(
                 state,
                 operation_id,
@@ -402,6 +635,26 @@ pub(super) fn reserve_terminal(state: &mut SessionSnapshot) -> Result<Option<Val
     let Some(response_id) = active_id(state).map(str::to_owned) else {
         return Ok(None);
     };
+    // Cleanup delivers every outstanding child conclusion. The retained SSE
+    // event is another checkpoint copy, in addition to the parent's mailbox.
+    let deliveries = state
+        .agents
+        .values()
+        .filter_map(|agent| {
+            let turn = agent.turn.as_ref()?;
+            (agent.parent_id.is_some() && !turn.notified).then(|| DurableEvent {
+                event_seq: u64::MAX,
+                kind: "agent.result.delivered".into(),
+                run_id: Some(turn.run_id.clone()),
+                agent_id: Some(agent.agent_id.clone()),
+                payload: json!({"parent_id":turn.assigned_by}),
+            })
+        })
+        .collect::<Vec<_>>();
+    for event in deliveries {
+        capture(state, &event)?;
+    }
+    let final_answer = state.root_turn().and_then(|turn| turn.final_answer.clone());
     let mut event = complete(state, &response_id, u64::MAX)?;
     event["run_status"] = json!(RunStatus::RecoveryRequired);
     let response = state
@@ -410,6 +663,7 @@ pub(super) fn reserve_terminal(state: &mut SessionSnapshot) -> Result<Option<Val
         .get_mut(&response_id)
         .ok_or_else(|| conflict("response projection is missing"))?;
     response.run_status = Some(RunStatus::RecoveryRequired);
+    response.final_answer = final_answer;
     for command in response.pending.values_mut() {
         command.execution_epoch = u64::MAX;
         command.authorizing_event_seq = u64::MAX;
@@ -469,6 +723,7 @@ pub(super) fn validate(state: &SessionSnapshot, binding: &Bind) -> Result<(), Co
                     && revision <= binding.durable_head.state_revision
                     && response.run_status.is_some() => {}
             None if response.run_status.is_none()
+                && response.final_answer.is_none()
                 && response.pending.is_empty()
                 && state.responses.latest.as_ref() == Some(id)
                 && state
@@ -476,6 +731,18 @@ pub(super) fn validate(state: &SessionSnapshot, binding: &Bind) -> Result<(), Co
                     .as_ref()
                     .is_some_and(|run| run.run_id == response.run_id) => {}
             _ => return Err(conflict("response completion boundary is invalid")),
+        }
+        if response.created_at.is_some()
+            && (response.model.is_empty()
+                || response
+                    .input
+                    .as_ref()
+                    .is_none_or(|input| input.model != response.model)
+                || state.run.as_ref().is_some_and(|run| {
+                    run.run_id == response.run_id && response.input.as_ref() != Some(&run.input)
+                }))
+        {
+            return Err(conflict("response model differs from its accepted run"));
         }
         let mut previous_seq = 0;
         for output in &response.output {
@@ -492,6 +759,23 @@ pub(super) fn validate(state: &SessionSnapshot, binding: &Bind) -> Result<(), Co
                 ));
             }
             previous_seq = output.event_seq;
+        }
+        let mut sequence = 0;
+        for retained in &response.events {
+            if retained.event.event_seq <= sequence
+                || retained.event.event_seq > binding.durable_head.event_seq
+                || retained.event.run_id.as_ref() != Some(&response.run_id)
+                || !(retained.event.kind.starts_with("collaboration.")
+                    || matches!(
+                        retained.event.kind.as_str(),
+                        "agent.result.delivered" | "agent.followup.started" | "mailbox.consumed"
+                    ))
+            {
+                return Err(conflict(
+                    "retained collaboration event has invalid scope or order",
+                ));
+            }
+            sequence = retained.event.event_seq;
         }
         for (call_id, call) in &response.pending {
             validate_id(call_id)?;
@@ -598,9 +882,13 @@ pub(super) fn validate_history(
             } else if new.response_id != old.response_id
                 || new.operation_id != old.operation_id
                 || new.run_id != old.run_id
+                || new.model != old.model
+                || new.created_at != old.created_at
+                || new.input != old.input
                 || new.previous_response_id != old.previous_response_id
                 || new.created_state_revision != old.created_state_revision
                 || !new.output.starts_with(&old.output)
+                || !new.events.starts_with(&old.events)
                 || new
                     .completed_state_revision
                     .is_some_and(|revision| revision != payload.checkpoint.state_revision)
@@ -629,6 +917,7 @@ pub(super) fn validate_history(
                     && event.payload["response_id"].as_str() == Some(id)
                     && event.payload["run_id"].as_str() == Some(&response.run_id)
                     && event.payload["run_status"] == json!(response.run_status)
+                    && event.payload["final_answer"] == json!(response.final_answer)
                     && event.payload["state_revision"].as_u64() == response.completed_state_revision
             })
         {
@@ -637,6 +926,22 @@ pub(super) fn validate_history(
             ));
         }
         if previous.is_some() {
+            for retained in response
+                .events
+                .iter()
+                .skip(old.map_or(0, |record| record.events.len()))
+            {
+                if !payload.events.contains(&retained.event)
+                    || retained.event.agent_id.as_ref().is_none_or(|id| {
+                        payload.checkpoint.state["agents"][id]["display_path"].as_str()
+                            != Some(&retained.agent_name)
+                    })
+                {
+                    return Err(conflict(
+                        "retained collaboration event differs from its durable event",
+                    ));
+                }
+            }
             for output in response
                 .output
                 .iter()
@@ -651,6 +956,33 @@ pub(super) fn validate_history(
                     return Err(conflict("response output has no applied model event"));
                 }
                 let agent = &payload.checkpoint.state["agents"][&output.agent_id];
+                if response.created_at.is_some() {
+                    let agent_state: AgentState =
+                        serde_json::from_value(agent.clone()).map_err(json_error)?;
+                    let turn = agent_state
+                        .turn
+                        .as_ref()
+                        .ok_or_else(|| conflict("response turn is missing"))?;
+                    let expected: BTreeMap<String, String> = turn
+                        .invocations
+                        .iter()
+                        .filter(|call| call.dispatch.step_id == output.step_id)
+                        .map(|call| (call.provider_call_id.clone(), call.public_call_id.clone()))
+                        .chain(
+                            turn.core_calls
+                                .iter()
+                                .filter(|call| call.step_id == output.step_id)
+                                .map(|call| {
+                                    (call.provider_call_id.clone(), call.public_call_id.clone())
+                                }),
+                        )
+                        .collect();
+                    if output.call_ids != expected {
+                        return Err(conflict(
+                            "response call mapping differs from its applied output",
+                        ));
+                    }
+                }
                 if agent["display_path"].as_str() != Some(&output.agent_name)
                     || agent["turn"]["agent_turn_id"].as_str() != Some(&output.agent_turn_id)
                     || agent["turn"]["run_id"].as_str() != Some(&response.run_id)

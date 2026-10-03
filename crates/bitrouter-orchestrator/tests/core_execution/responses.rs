@@ -1,5 +1,6 @@
 use super::*;
 use bitrouter_orchestrator::core::protocol::{ToolObservation, ToolStatus};
+use bitrouter_orchestrator::core::session::AgentStatus;
 use bitrouter_sdk::language_model::hooks::HopOutcome;
 
 #[derive(Clone)]
@@ -550,5 +551,402 @@ async fn exchange_recovery_rejects_erasure_and_terminal_rewrites() -> TestResult
             Some(ErrorCode::CheckpointConflict)
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn continuation_results_are_atomic_and_share_channel_operations() -> TestResult {
+    use bitrouter_orchestrator::core::session::responses::ResponseToolResult;
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(
+        vec![output(vec![call("read")]), output(vec![text("done")])],
+        harness.clone(),
+        false,
+    )
+    .await?;
+    let accepted = session.start_response("input", 1, input()).await?;
+    let first = session
+        .drive_response(&accepted.assigned_ids["response_id"])
+        .await?;
+    let (public_id, command) = first.pending.first_key_value().ok_or("pending")?;
+    let result = ResponseToolResult {
+        operation_id: "result".into(),
+        call_id: public_id.clone(),
+        result: result(command),
+    };
+    let revision = session.head().await.state_revision;
+    let mut invalid = result.clone();
+    invalid.operation_id = "bad".into();
+    invalid.call_id = "unknown".into();
+    assert!(
+        session
+            .continue_response_with_results(
+                "invalid",
+                revision,
+                &first.response_id,
+                vec![result.clone(), invalid]
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(session.head().await.state_revision, revision);
+    assert!(session.operation("result").await.is_none());
+    let accepted = session
+        .continue_response_with_results(
+            "continue",
+            revision,
+            &first.response_id,
+            vec![result.clone()],
+        )
+        .await?;
+    assert_eq!(accepted.state_revision, revision + 1);
+    let result_receipt = session.operation("result").await.ok_or("result receipt")?;
+    assert_eq!(result_receipt.state_revision, accepted.state_revision);
+    assert_eq!(
+        session.tool_result("result", result.result.clone()).await?,
+        result_receipt
+    );
+    assert_eq!(
+        session
+            .continue_response_with_results(
+                "continue",
+                revision,
+                &first.response_id,
+                vec![result.clone()]
+            )
+            .await?,
+        accepted
+    );
+    let mut changed = result;
+    changed.result.output = "different".into();
+    assert_eq!(
+        session
+            .continue_response_with_results("continue", revision, &first.response_id, vec![changed])
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::OperationConflict)
+    );
+    {
+        let store = harness.store.lock().await;
+        let payload = store.batches.last().ok_or("batch")?.decode(&store.limits)?;
+        assert_eq!(payload.events.len(), 2);
+        assert_eq!(payload.events[1].kind, "tool.result");
+        assert_eq!(payload.events[1].agent_id.as_ref(), Some(&command.agent_id));
+        assert_eq!(payload.events[1].event_seq, payload.events[0].event_seq + 1);
+    }
+    let second = session
+        .drive_response(&accepted.assigned_ids["response_id"])
+        .await?;
+    assert_eq!(second.final_answer.as_deref(), Some("done"));
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+    session.disconnect().await;
+    let replacement = recovery::harness_at(harness.store.lock().await.clone()).await;
+    let request = recovery::request(&*replacement.store.lock().await, true)?;
+    let (restored, executor) = recovery::restore(request, replacement, vec![]).await?;
+    assert_eq!(restored.drive_response(&second.response_id).await?, second);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn continuation_result_ack_loss_reconciles_the_whole_batch() -> TestResult {
+    use bitrouter_orchestrator::core::session::responses::ResponseToolResult;
+    for committed in [false, true] {
+        let harness = Arc::new(Harness::new(None, None));
+        let port = Arc::new(reconnect::FaultPort::new(
+            harness.clone(),
+            "response.accepted",
+            committed,
+        ));
+        let (session, executor, _) = setup(
+            vec![output(vec![call("read")]), output(vec![text("done")])],
+            port,
+            false,
+        )
+        .await?;
+        let receipt = session.start_response("input", 1, input()).await?;
+        let first = session
+            .drive_response(&receipt.assigned_ids["response_id"])
+            .await?;
+        let (public_id, command) = first.pending.first_key_value().ok_or("pending")?;
+        let result = ResponseToolResult {
+            operation_id: "result".into(),
+            call_id: public_id.clone(),
+            result: result(command),
+        };
+        let revision = session.head().await.state_revision;
+        assert_eq!(
+            session
+                .continue_response_with_results(
+                    "continue",
+                    revision,
+                    &first.response_id,
+                    vec![result.clone()]
+                )
+                .await
+                .err()
+                .map(|error| error.commit_status),
+            Some(CommitStatus::Unknown)
+        );
+        assert!(session.operation("result").await.is_none());
+        assert!(session.operation("continue").await.is_none());
+        reconnect::reconnect(&session, &harness).await?;
+        let accepted = session
+            .continue_response_with_results(
+                "continue",
+                revision,
+                &first.response_id,
+                vec![result.clone()],
+            )
+            .await?;
+        assert_eq!(
+            session
+                .tool_result("result", result.result)
+                .await?
+                .state_revision,
+            accepted.state_revision
+        );
+        session
+            .drive_response(&accepted.assigned_ids["response_id"])
+            .await?;
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 2);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn descendant_limit_counts_waits_and_prevents_followup_capacity_cycles() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(vec![], harness.clone(), false).await?;
+    let mut task = input();
+    task.max_concurrent_subagents = Some(1);
+    let root = session.start("input", 1, task).await?.assigned_ids["agent_id"].clone();
+    let a = session
+        .collaborate(
+            "a",
+            session.head().await.state_revision,
+            &root,
+            Action::Spawn {
+                task: work("first child"),
+            },
+        )
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    assert_eq!(
+        session
+            .collaborate(
+                "full",
+                session.head().await.state_revision,
+                &root,
+                Action::Spawn {
+                    task: work("excess child")
+                }
+            )
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::LimitExceeded)
+    );
+    executor.agent_once.lock().await.extend([
+        (root.clone(), vec![call("root-tool")]),
+        (a.clone(), vec![text("first done")]),
+    ]);
+    session.drive().await?;
+    let b = session
+        .collaborate(
+            "b",
+            session.head().await.state_revision,
+            &root,
+            Action::Spawn {
+                task: work("second child"),
+            },
+        )
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    assert_eq!(
+        session
+            .collaborate(
+                "cycle",
+                session.head().await.state_revision,
+                &b,
+                Action::Followup {
+                    agent_id: a.clone(),
+                    task: Work {
+                        fresh_context: false,
+                        ..work("blocked followup")
+                    }
+                }
+            )
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::LimitExceeded)
+    );
+    session
+        .collaborate(
+            "safe",
+            session.head().await.state_revision,
+            &root,
+            Action::Followup {
+                agent_id: a.clone(),
+                task: Work {
+                    fresh_context: false,
+                    ..work("queued followup")
+                },
+            },
+        )
+        .await?;
+    executor.agent_once.lock().await.extend([
+        (b, vec![text("second done")]),
+        (a.clone(), vec![text("followup done")]),
+    ]);
+    session.drive().await?;
+    assert!(session.snapshot().await.agents[&a].queue.is_empty());
+    let store = harness.store.lock().await;
+    for batch in &store.batches {
+        let state: SessionSnapshot =
+            serde_json::from_value(batch.decode(&store.limits)?.checkpoint.state)?;
+        let active = state
+            .agents
+            .values()
+            .filter(|agent| {
+                agent.parent_id.is_some()
+                    && agent.turn.as_ref().is_some_and(|turn| {
+                        !matches!(
+                            turn.status,
+                            AgentStatus::Completed
+                                | AgentStatus::Failed
+                                | AgentStatus::Cancelled
+                                | AgentStatus::Interrupted
+                        )
+                    })
+            })
+            .count();
+        assert!(active <= 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn continuation_batch_obeys_the_frozen_run_input_bound() -> TestResult {
+    use bitrouter_orchestrator::core::session::responses::ResponseToolResult;
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, _, _) =
+        setup(vec![output(vec![call("one"), call("two")])], harness, false).await?;
+    let mut task = input();
+    task.limits = Some(Limits {
+        input_bytes: 4096,
+        ..Limits::default()
+    });
+    let accepted = session.start_response("input", 1, task).await?;
+    let first = session
+        .drive_response(&accepted.assigned_ids["response_id"])
+        .await?;
+    let results = first
+        .pending
+        .iter()
+        .enumerate()
+        .map(|(index, (call_id, command))| {
+            let mut result = result(command);
+            result.output = "x".repeat(1900);
+            if let Some(limits) = &command.result_limits {
+                limits.validate_result(&result)?;
+            }
+            Ok(ResponseToolResult {
+                operation_id: format!("result_{index}"),
+                call_id: call_id.clone(),
+                result,
+            })
+        })
+        .collect::<Result<Vec<_>, CoreError>>()?;
+    assert!(serde_json::to_vec(&results)?.len() > 4096);
+    let revision = session.head().await.state_revision;
+    assert_eq!(
+        session
+            .continue_response_with_results("continue", revision, &first.response_id, results)
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::LimitExceeded)
+    );
+    assert_eq!(session.head().await.state_revision, revision);
+    assert!(session.operation("result_0").await.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn descendant_followup_reserves_the_slot_before_another_spawn() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor, _) = setup(vec![], harness, false).await?;
+    let mut task = input();
+    task.max_concurrent_subagents = Some(2);
+    let root = session.start("input", 1, task).await?.assigned_ids["agent_id"].clone();
+    let a = session
+        .collaborate(
+            "a",
+            session.head().await.state_revision,
+            &root,
+            Action::Spawn {
+                task: work("first"),
+            },
+        )
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    executor.agent_once.lock().await.extend([
+        (root.clone(), vec![call("root-tool")]),
+        (a.clone(), vec![text("first done")]),
+    ]);
+    session.drive().await?;
+    let b = session
+        .collaborate(
+            "b",
+            session.head().await.state_revision,
+            &root,
+            Action::Spawn {
+                task: work("second"),
+            },
+        )
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    session
+        .collaborate(
+            "followup",
+            session.head().await.state_revision,
+            &b,
+            Action::Followup {
+                agent_id: a.clone(),
+                task: Work {
+                    fresh_context: false,
+                    ..work("dependency")
+                },
+            },
+        )
+        .await?;
+    assert_eq!(
+        session
+            .collaborate(
+                "steal-slot",
+                session.head().await.state_revision,
+                &root,
+                Action::Spawn {
+                    task: work("third")
+                }
+            )
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::LimitExceeded)
+    );
+    executor.agent_once.lock().await.extend([
+        (b, vec![text("second done")]),
+        (a.clone(), vec![text("dependency done")]),
+    ]);
+    tokio::time::timeout(Duration::from_secs(10), session.drive()).await??;
+    assert!(session.snapshot().await.agents[&a].queue.is_empty());
     Ok(())
 }
