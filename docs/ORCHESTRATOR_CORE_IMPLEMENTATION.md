@@ -24,7 +24,7 @@ mock-provider demonstration does not establish production integration.
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission and durable capacity failure implemented; physical storage/future archive exhaustion, unknown output admission and the remaining fault matrix remain |
-| C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, incremental HTTP/SSE projection and separate bounded WebSocket control lane connected to the service host; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
+| C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, incremental HTTP/SSE projection and separate bounded WebSocket control lane connected to the service host; independent clients cover binding/release ACK loss, released-epoch restoration and read-only head queries during provider work; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
 
@@ -2613,3 +2613,35 @@ passed. This evidence does not complete physical memory accounting,
 maximum-size control/ACK-loss stress, remote clock handoff, remaining
 C4/C6 work or A01–A23 acceptance. Previous head `3dbea06c` passed all jobs of
 remote CI `37144726860`; the next commit's CI is tracked separately.
+
+
+## C5 remote ownership and recovery conformance
+
+An independent HTTP/WebSocket client retains exact checkpoint bytes and controls
+ACK delivery. Initial binding and ownership release are each interrupted before
+and after persistence. Reconnection uses the actual durable head, preserves the
+original proposal exactly once, and never renews a released grant. The release
+receipt remains queryable after its lost ACK; neither HTTP input nor channel
+queue resumption can start work under that released owner.
+
+A terminal session is released and restored under the next epoch. Restoring its
+released epoch fails; stale HTTP input and WebSocket mutation envelopes fail
+without advancing the replacement's head. The original response replays unchanged
+under the new binding, and an explicit resume/new input completes another run.
+A separately held HTTP provider proves that a head query leaves the durable head
+unchanged and the original request completes with exactly one provider call.
+The provider is held by an explicit permit rather than a wall-clock delay.
+
+- Targeted managed API suite: 17 passed, 2.508 seconds, four test threads.
+- The four new regressions use the shipped application/authentication pipeline
+  and loopback network clients. They add recovery evidence; they do not establish
+  a production harness, a live provider, running-tool timing handoff, or the
+  complete A12–A17 acceptance matrix.
+- Independent read-only review found no actionable P1/P2 in this increment.
+- Rust 1.99.0 workspace/all-feature nextest: 3987 passed, 22 skipped, 108.534
+  seconds, four test threads. Strict workspace/all-target/all-feature clippy
+  passed (1.50 seconds); strict rustdoc passed (8.61 seconds).
+- Workspace doctests: five passed, one ignored. Rust 1.93.0 workspace/all-feature
+  check passed (0.51 seconds); formatting, diff and tracked-ignore checks passed.
+- Previous head `a66aa7ef` passed all jobs of GitHub CI 37147783376. The CI for
+  this increment remains a separate gate.
