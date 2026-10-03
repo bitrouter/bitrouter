@@ -15,6 +15,9 @@ mod authentication;
 #[path = "managed_api/pressure.rs"]
 mod pressure;
 
+#[path = "managed_api/recovery.rs"]
+mod recovery;
+
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -45,6 +48,14 @@ async fn fixture_with_output(output: Option<Value>) -> Result<Fixture> {
 }
 
 async fn configured_fixture(output: Option<Value>, policy: Option<&str>) -> Result<Fixture> {
+    configured_fixture_with_provider(output, policy, None).await
+}
+
+async fn configured_fixture_with_provider(
+    output: Option<Value>,
+    policy: Option<&str>,
+    provider: Option<&str>,
+) -> Result<Fixture> {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/responses/input_tokens"))
@@ -104,7 +115,7 @@ models:
         service_id: served
 "#,
             policy_dir.display(),
-            upstream.uri()
+            provider.map(String::from).unwrap_or_else(|| upstream.uri())
         ),
         |_| None,
     )?;
@@ -198,6 +209,13 @@ async fn harness_with_limits(
     tokio::task::JoinHandle<Result<()>>,
 )> {
     let socket = socket(fixture).await?;
+    let binding = binding(limits)?;
+    let grant = binding.grant.clone();
+    let first = envelope("bind", "session.bind", serde_json::to_value(binding)?);
+    connected_harness(socket, grant, Arc::new(Mutex::new(Store::default())), first).await
+}
+
+fn binding(limits: Limits) -> Result<Bind> {
     let tools = vec![bitrouter_orchestrator::core::protocol::HarnessTool {
         name: "read".into(),
         description: "Read a file".into(),
@@ -222,15 +240,13 @@ async fn harness_with_limits(
         core_instance_id: "remote_core".into(),
         execution_epoch: 1,
     };
-    let binding = Bind {
-        grant: grant.clone(),
+    Ok(Bind {
+        grant,
         durable_head: DurableHead::default(),
         checkpoint: None,
         manifest,
         limits,
-    };
-    let first = envelope("bind", "session.bind", serde_json::to_value(binding)?);
-    connected_harness(socket, grant, Arc::new(Mutex::new(Store::default())), first).await
+    })
 }
 
 async fn connected_harness(
@@ -271,7 +287,9 @@ async fn connected_harness(
                                 store.head = ack.head(); store.batches.push(batch.clone());
                                 store.acknowledgements.insert(batch.identity.batch_id.clone(), ack.clone());
                             }
-                            socket.send(Message::Text(envelope(&format!("ack_{}", batch.identity.batch_id), "checkpoint.ack", serde_json::to_value(ack)?).to_string().into())).await?;
+                            let mut message = envelope(&format!("ack_{}", batch.identity.batch_id), "checkpoint.ack", serde_json::to_value(ack)?);
+                            message["execution_epoch"] = json!(grant.execution_epoch);
+                            socket.send(Message::Text(message.to_string().into())).await?;
                         }
                         ServerMessage::Head(_) => { retained.lock().await.heads_received += 1; if let Some(ready) = ready.take() { let _ = ready.send(()); } }
                         ServerMessage::ToolExecute(command) => {

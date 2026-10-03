@@ -39,6 +39,18 @@ not automatically become durable managed-core clients.
    actual durable head: core retains its initialization and exact pending batch.
 8. Release only settled sessions. `session.release` commits the ownership fence;
    close the channel after receiving the receipt to free the registry slot.
+   If the release ACK is lost, reconnect with the original grant and actual
+   durable head, then use `operation.get` with the original release operation
+   ID. Adopting the release does not renew ownership or append a reconnect
+   record. Restore the released checkpoint under a strictly higher epoch to
+   resume work; retained queued roots remain paused until `queue.resume`.
+
+An initial bind whose ACK was lost follows the same exact-head reconciliation
+rule: reconnect with the original grant and the head actually persisted by the
+harness, including the empty head if no proposal was committed. Do not replace
+the session or accepted operation identity. Managed HTTP admission remains
+closed until binding completes. `session.head` is read-only and requires the
+actual current durable head; it does not cancel an active provider request.
 
 HTTP examples and the full wire contract are in the repository's
 `docs/ORCHESTRATOR_CORE_SPEC.md`. Client functions come from the bound manifest;
