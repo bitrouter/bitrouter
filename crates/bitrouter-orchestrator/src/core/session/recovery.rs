@@ -28,6 +28,7 @@ impl CoreSession {
             state.manifest.workspace_revision != request.binding.manifest.workspace_revision;
         state.manifest = request.binding.manifest.clone();
         let sent_tools = reconcile_tools(&mut state, &request, workspace_changed)?;
+        responses::validate(&state, &request.binding)?;
         recovery_time::reconcile(&mut state, &request)?;
         let outputs = resume_model_steps(&mut state);
         let binding = request.binding;
@@ -227,10 +228,12 @@ async fn restore_snapshot(
     let mut releases = BTreeMap::new();
     let mut activity_history = None;
     let mut resource_history = budget::ResourceHistory::default();
+    let mut response_history = None;
     for (batch, mut payload) in payloads {
         archive::hydrate(&mut payload, harness, &binding.limits).await?;
         release::validate_history(&payload, &mut releases)?;
         budget::validate_history(&payload, &mut resource_history)?;
+        responses::validate_history(&payload, &mut response_history)?;
         recovery_time::validate_history(
             &payload,
             CheckpointAck::for_batch(batch, &payload).head(),
@@ -292,6 +295,7 @@ fn validate_snapshot(
     release::validate(state, binding)?;
     root_queue::validate(state, &binding.limits)?;
     budget::validate(state)?;
+    responses::validate(state, binding)?;
     steering::validate(state, &binding.limits, binding.durable_head.state_revision)?;
     let root = state
         .agents

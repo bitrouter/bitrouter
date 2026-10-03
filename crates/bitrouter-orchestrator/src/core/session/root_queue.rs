@@ -214,7 +214,7 @@ impl CoreSession {
             return Ok(false);
         }
         let state = self.snapshot().await;
-        if state.root_queue.paused || !settled(&state) {
+        if state.root_queue.paused || !settled(&state) || responses::active_id(&state).is_some() {
             return Ok(false);
         }
         let Some(entry) = state.root_queue.pending.front() else {
@@ -229,6 +229,7 @@ impl CoreSession {
                     ));
                 }
                 if state.root_queue.paused
+                    || responses::active_id(state).is_some()
                     || !settled(state)
                     || state
                         .root_queue

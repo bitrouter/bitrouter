@@ -176,6 +176,9 @@ pub(super) fn check(
     let mut projected = state.clone();
     let mut reserve = Reservation::default();
     let mut event_payloads = vec![json!({"reason":"x".repeat(128)})];
+    if let Some(event) = responses::reserve_terminal(&mut projected)? {
+        event_payloads.push(event);
+    }
     let original_run = state.run.as_ref();
     let open = original_run.is_some_and(|run| !run.status.terminal());
     if open && let Some(run) = &mut projected.run {
