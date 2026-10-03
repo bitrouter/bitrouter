@@ -476,12 +476,18 @@ pub struct ToolObservation {
 /// Frozen per-invocation limits, including JSON escaping and all evidence
 /// metadata. Payloads at this bound fit a control envelope with maximum-length
 /// session/operation IDs and version counters. The same payload bound applies
-/// to lifecycle observations; neither limit reserves checkpoint space itself.
+/// to lifecycle observations. Admission separately reserves checkpoint space
+/// and the artifact-body allowances of newly admitted invocations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolResultLimits {
     pub output_bytes: u64,
     pub payload_bytes: u64,
+    /// Maximum distinct artifact body bytes referenced by one result or
+    /// lifecycle observation. None preserves a legacy contract without a body
+    /// reservation; restoration must not silently narrow an authorized reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_bytes: Option<u64>,
 }
 
 impl ToolResultLimits {
@@ -516,6 +522,7 @@ impl ToolResultLimits {
         Ok(Self {
             output_bytes,
             payload_bytes,
+            artifact_bytes: None,
         })
     }
 
@@ -526,11 +533,24 @@ impl ToolResultLimits {
                 "tool result exceeds its admitted output bound",
             ));
         }
-        self.validate_payload(result)
+        self.validate_payload(result)?;
+        self.validate_artifacts(&result.evidence)
     }
 
     pub fn validate_observation(&self, observation: &ToolObservation) -> Result<(), CoreError> {
-        self.validate_payload(observation)
+        self.validate_payload(observation)?;
+        self.validate_artifacts(&observation.evidence)
+    }
+
+    fn validate_artifacts(&self, references: &[ArtifactRef]) -> Result<(), CoreError> {
+        let bytes = artifact_bytes(references)?;
+        if self.artifact_bytes.is_some_and(|bound| bytes > bound) {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "tool evidence exceeds its admitted artifact bound",
+            ));
+        }
+        Ok(())
     }
 
     fn validate_payload(&self, value: &impl Serialize) -> Result<(), CoreError> {
@@ -542,6 +562,29 @@ impl ToolResultLimits {
         }
         Ok(())
     }
+}
+
+/// Count immutable objects once even when a payload references one repeatedly.
+pub(crate) fn artifact_bytes(references: &[ArtifactRef]) -> Result<u64, CoreError> {
+    let mut seen = BTreeMap::new();
+    let mut bytes = 0u64;
+    for reference in references {
+        validate_id(&reference.artifact_id)?;
+        super::checkpoint::validate_digest(&reference.sha256)?;
+        if let Some(prior) = seen.insert(&reference.artifact_id, reference) {
+            if prior != reference {
+                return Err(CoreError::rejected(
+                    ErrorCode::CheckpointConflict,
+                    "artifact identity has conflicting content references",
+                ));
+            }
+        } else {
+            bytes = bytes.checked_add(reference.bytes).ok_or_else(|| {
+                CoreError::rejected(ErrorCode::LimitExceeded, "artifact byte count overflow")
+            })?;
+        }
+    }
+    Ok(bytes)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -767,7 +810,7 @@ pub enum ServerMessage {
     #[serde(rename = "checkpoint.proposed")]
     Checkpoint(CheckpointBatch),
     #[serde(rename = "tool.execute")]
-    ToolExecute(ToolExecute),
+    ToolExecute(Box<ToolExecute>),
     #[serde(rename = "tool.cancel")]
     ToolCancel {
         invocation_id: String,
