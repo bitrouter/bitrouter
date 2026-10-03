@@ -75,6 +75,19 @@ consumer with the same operation identity. Key-bound policy is checked by the
 shared model pipeline on each new exchange; changing a policy does not reopen
 an already completed response.
 
+Credential validity is rechecked after managed body upload, after durable
+admission waits before model/preparation/counting work, and immediately before
+queued WebSocket output is sent. Revocation, expiry or unavailable authority
+fences the channel and blocks new dispatch; an earlier valid ACK is not a
+credential lease. Retain accepted intents and results for head reconciliation.
+Cached replay rechecks after registry contention, and the current binding epoch
+is checked again before returning a job or starting work.
+These checks do not retract network I/O or tools already dispatched. An
+in-process host with revocable authority must implement
+`HarnessPort::authorize_dispatch` and recheck after its own delivery waits;
+the default is for a trusted in-process embedding. That callback runs under
+the core admission lock and must not call session mutation methods.
+
 HTTP JSON and SSE serialize incrementally from a shared immutable exchange.
 The `ephemeral_bytes` window counts allocated output chunks across consumers of
 the session and, when lowered, the same frozen run. A logical response or SSE

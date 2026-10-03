@@ -651,6 +651,14 @@ do not replace API authentication or authorize cross-session access. Context
 and result references are resolved only within the authenticated session's
 permitted scope.
 
+Credential-bound hosts recheck current dispatch authority after durable
+admission waits and after transport queue/capacity waits. An acknowledged
+intent does not extend an expired or revoked credential. Failed authorization
+fences new dispatch while retaining accepted operation identities and evidence
+for reconciliation; it cannot undo a provider request or tool effect already
+started. Managed HTTP body upload also cannot extend the initial header
+authentication, including when requesting a completed response replay.
+
 Within the harness, independent reads may overlap; writes, arbitrary shell and
 verification require appropriate exclusive workspace enforcement. Unknown tool
 effects default to exclusive. The core supplies ordering/dependency identities;

@@ -26,6 +26,10 @@ use super::{
     auth::Principal, output,
 };
 
+#[cfg(test)]
+#[path = "channel/authority_tests.rs"]
+mod authority_tests;
+
 const IO_TIMEOUT: Duration = Duration::from_secs(20);
 
 struct Outgoing {
@@ -91,7 +95,7 @@ pub(super) struct RemotePort {
 }
 
 impl RemotePort {
-    fn new(
+    pub(super) fn new(
         principal: Principal,
         grant: bitrouter_orchestrator::core::protocol::OwnershipGrant,
         limits: Limits,
@@ -270,6 +274,20 @@ impl RemotePort {
 
 #[async_trait]
 impl HarnessPort for RemotePort {
+    async fn authorize_dispatch(&self) -> Result<(), CoreError> {
+        let connection = self.current().await?;
+        let result = tokio::select! {
+            biased;
+            _ = connection.closed.cancelled() => Err(disconnected()),
+            result = tokio::time::timeout(IO_TIMEOUT, self.principal.revalidate()) =>
+                result.unwrap_or_else(|_| Err(disconnected())),
+        };
+        if result.is_err() {
+            self.failed(&connection).await;
+        }
+        result
+    }
+
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         let connection = self.current().await?;
         let (sender, receive) = oneshot::channel();
@@ -389,7 +407,7 @@ async fn serve(
     let Some(message) = message else {
         return;
     };
-    let (sender, mut outgoing) = mpsc::channel::<Outgoing>(1);
+    let (sender, outgoing) = mpsc::channel::<Outgoing>(1);
     let prepared = prepare(&api, &principal, &message, sender).await;
     let (key, port, connection, existing) = match prepared {
         Ok(prepared) => prepared,
@@ -401,7 +419,7 @@ async fn serve(
         }
     };
     let (writer, reader) = socket.split();
-    let mut writer = BufferedHalf {
+    let writer = BufferedHalf {
         half: writer,
         owner: connection.buffered.clone(),
     };
@@ -409,30 +427,12 @@ async fn serve(
         half: reader,
         owner: connection.buffered.clone(),
     };
-    let write_closed = connection.closed.clone();
-    let writing = tokio::spawn(async move {
-        while let Some(output) = tokio::select! {
-            _ = write_closed.cancelled() => None,
-            output = outgoing.recv() => output,
-        } {
-            // Tungstenite can copy payload bytes into its socket write buffer.
-            // Retain the admitted owner until that buffer has been flushed.
-            writer.owner.retain(output.text.clone());
-            let delivered =
-                tokio::time::timeout(IO_TIMEOUT, writer.half.send(Message::Text(output.text)))
-                    .await;
-            let ok = matches!(delivered, Ok(Ok(())));
-            if !ok {
-                drop(writer);
-                let _ = output.sent.send(Err(disconnected()));
-                write_closed.cancel();
-                return;
-            }
-            writer.owner.clear();
-            let _ = output.sent.send(Ok(()));
-        }
-        write_closed.cancel();
-    });
+    let writing = tokio::spawn(write_messages(
+        writer,
+        outgoing,
+        principal.clone(),
+        connection.closed.clone(),
+    ));
     let (commands, receive) = mpsc::channel(1);
     let worker_api = api.clone();
     let worker_port = port.clone();
@@ -545,6 +545,47 @@ async fn serve(
             sessions.remove(&key);
         }
     }
+}
+
+async fn write_messages<S: futures::Sink<Message> + Unpin>(
+    mut writer: BufferedHalf<S>,
+    mut outgoing: mpsc::Receiver<Outgoing>,
+    principal: Principal,
+    closed: CancellationToken,
+) {
+    while let Some(output) = tokio::select! {
+        biased;
+        _ = closed.cancelled() => None,
+        output = outgoing.recv() => output,
+    } {
+        let sending = tokio::time::timeout(IO_TIMEOUT, async {
+            // Admission can wait for byte capacity, the queue or a prior flush.
+            // Authenticate at delivery, after all of those waits have ended.
+            principal.revalidate().await?;
+            // Tungstenite can copy payload bytes into its socket write buffer.
+            // Both socket halves retain this owner through failure cleanup.
+            writer.owner.retain(output.text.clone());
+            writer
+                .half
+                .send(Message::Text(output.text))
+                .await
+                .map_err(|_| disconnected())
+        });
+        let delivered = tokio::select! {
+            biased;
+            _ = closed.cancelled() => Err(disconnected()),
+            result = sending => result.unwrap_or_else(|_| Err(disconnected())),
+        };
+        if delivered.is_err() {
+            drop(writer);
+            let _ = output.sent.send(delivered);
+            closed.cancel();
+            return;
+        }
+        writer.owner.clear();
+        let _ = output.sent.send(Ok(()));
+    }
+    closed.cancel();
 }
 
 async fn prepare(

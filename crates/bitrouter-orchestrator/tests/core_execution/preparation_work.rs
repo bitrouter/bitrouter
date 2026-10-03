@@ -714,3 +714,30 @@ async fn preparation_rechecks_attempt_budget_consumed_during_its_ack() -> TestRe
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn authority_revoked_during_preparation_ack_starts_no_callback() -> TestResult {
+    let harness = Arc::new(Harness::new(None, Some("preparation.work.intent")));
+    let probe = Arc::new(Probe::new(None, false));
+    let (session, executor) = session(harness.clone(), probe.clone()).await?;
+    session.start("input", 1, task()).await?;
+    let driver = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(60), harness.seen.acquire())
+        .await??
+        .forget();
+    harness.dispatch_allowed.store(false, Ordering::SeqCst);
+    harness.hold_enabled.store(false, Ordering::SeqCst);
+    harness.resume.add_permits(1);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(60), driver)
+            .await??
+            .is_err()
+    );
+    assert_eq!(probe.transforms.load(Ordering::SeqCst), 0);
+    assert!(probe.calls.lock().await.is_empty());
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}

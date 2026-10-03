@@ -4,6 +4,10 @@
 mod projection;
 mod stream;
 
+#[cfg(test)]
+#[path = "responses/authority_tests.rs"]
+mod authority_tests;
+
 use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
@@ -208,8 +212,8 @@ pub(super) async fn intercept(
                 "managed execution and protocol version 1 are required",
             ));
         }
-        let (session, limits, budget) = api
-            .session(
+        let (limits, budget) = api
+            .response_scope(
                 &principal,
                 &create.bitrouter.session_id,
                 create.bitrouter.execution_epoch,
@@ -234,7 +238,10 @@ pub(super) async fn intercept(
         }
         let streaming = create.stream;
         let scope = budget.scope(limits.ephemeral_bytes, None)?;
-        let progress = start(&api, principal, session, create).await?;
+        // Uploading the body and looking up the session can outlive the
+        // credential that authenticated the initial headers, including replay.
+        principal.revalidate().await?;
+        let progress = start(&api, principal, create).await?;
         if streaming {
             Ok(stream::sse(
                 progress,
@@ -261,7 +268,6 @@ pub(super) async fn intercept(
 async fn start(
     api: &ManagedCoreApi,
     principal: Principal,
-    session: CoreSession,
     mut create: Create,
 ) -> Result<watch::Receiver<Progress>, ApiError> {
     create.stream = false;
@@ -279,8 +285,14 @@ async fn start(
             &principal,
             &create.bitrouter.session_id,
         ))
-        .filter(|entry| entry.connected)
+        .filter(|entry| entry.connected && entry.ready)
         .ok_or_else(ApiError::unauthorized)?;
+    if entry.grant.execution_epoch != create.bitrouter.execution_epoch {
+        return Err(ApiError::core(
+            ErrorCode::StaleEpoch,
+            "response binding changed while waiting",
+        ));
+    }
     if let Some(job) = &entry.job {
         if job.operation_id == create.bitrouter.operation_id
             && job
@@ -296,7 +308,12 @@ async fn start(
                     "active response operation has different content",
                 ));
             }
-            return Ok(job.progress.clone());
+            let progress = job.progress.clone();
+            drop(sessions);
+            // Registry contention can outlive the post-upload check. Cached
+            // consumers bypass the worker, so authorize after this wait too.
+            principal.revalidate().await?;
+            return Ok(progress);
         }
         if job.progress.borrow().outcome.is_none() {
             return Err(ApiError::core(
@@ -305,6 +322,7 @@ async fn start(
             ));
         }
     }
+    let session = entry.session.clone().ok_or_else(ApiError::unavailable)?;
     let (sender, progress) = watch::channel(Progress::default());
     entry.job = Some(Job {
         operation_id: create.bitrouter.operation_id.clone(),

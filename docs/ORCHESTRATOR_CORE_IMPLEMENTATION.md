@@ -2686,3 +2686,51 @@ seconds, and Rust 1.93.0 workspace/all-feature check in 23.358 seconds.
 Workspace doctests passed five tests with one ignored. Formatting, diff and
 tracked-ignore checks passed. These gates and the independent reviews cover
 this increment; the remaining acceptance requirements are still open.
+
+## C5 authorization after admission and delivery waits
+
+`HarnessPort::authorize_dispatch` lets credential-bound hosts check current
+authority after durable admission waits, before preparation callbacks, input
+counting, model attempts, provider integration phases and tool dispatch. The
+trusted in-process default preserves existing embeddings. A rejected check
+disconnects the session without erasing accepted intents, output or accounting;
+recovering them still requires exact head reconciliation. The hook runs under
+the admission lock and must not invoke session mutations.
+
+The remote port checks its live virtual key and fences its channel on denial
+or timeout. The socket writer checks again after byte/queue/prior-flush waits,
+immediately before sending the next message. Managed HTTP rechecks after body
+upload and session lookup, including immutable response replay. Previously
+these paths could continue waiting after their last credential check and
+dispatch using an expired decision. Disconnect also interrupts an authorization
+check already in progress.
+
+Core regressions revoke authority while acknowledged preparation, count,
+attempt, provider dispatch/retry and tool-output checkpoints are held. They
+verify that callbacks, actual provider HTTP calls and tool sends remain blocked
+after the ACK returns while accepted state is retained. API regressions use
+persisted key revocation/expiry between output queueing and socket delivery,
+and revoke during held uploads for new input and completed-response replay.
+These dispatch checks cannot retract I/O already started and do not establish
+instantaneous cancellation of an in-flight provider or its external effects.
+Running-tool remote clock handoff, remaining output/storage admission,
+process-replacement conformance and full C6/A01–A23 acceptance remain open.
+
+Independent review found cached response replay could wait on the session
+registry after its last check and bypass the new-job worker's authorization.
+Cached progress is now authorized after releasing that lock, and the current
+entry's readiness/epoch is rechecked before selecting a job. New work takes
+the current registered session rather than a handle captured before waiting.
+Regressions hold the registry while revoking/expiring the key or changing the
+epoch. The earlier 4004-test workspace pass predates this repair; final-source
+validation is recorded separately.
+
+Final-source Rust 1.99.0 workspace/all-feature nextest passed 4006 tests with
+22 skipped in 113.211 seconds using four test threads. The final targeted
+API/channel suite passed 26 tests in 3.111 seconds. Strict workspace/all-target/
+all-feature clippy passed in 25.078 seconds, strict rustdoc in 17.317 seconds,
+and Rust 1.93.0 workspace/all-feature check in 16.718 seconds. Workspace doctests
+passed five tests with one ignored; formatting, diff and tracked-ignore checks
+passed. Independent code and documentation re-review found no remaining P1/P2
+in this increment. Previous head `feef358d` passed all jobs of CI `37151419610`,
+including Windows tests; new-head CI is a separate gate.

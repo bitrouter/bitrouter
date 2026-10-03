@@ -94,6 +94,10 @@ impl WorkHarness {
 
 #[async_trait]
 impl HarnessPort for WorkHarness {
+    async fn authorize_dispatch(&self) -> Result<(), CoreError> {
+        self.inner.authorize_dispatch().await
+    }
+
     async fn read_artifact(
         &self,
         reference: &ArtifactRef,
@@ -305,6 +309,54 @@ async fn provider_work_http_retry_retains_phases_and_one_settlement() -> TestRes
             .decode(&Limits::default())?;
         let restored: SessionSnapshot = serde_json::from_value(payload.checkpoint.state)?;
         assert_eq!(restored.cost_work, done.cost_work);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn authority_revoked_during_http_intent_ack_blocks_initial_and_retry_dispatch() -> TestResult
+{
+    for bridge in [false, true] {
+        for index in [2, 5] {
+            let harness = WorkHarness::new("provider.work.intent", index, false);
+            let (session, server, _, _) = fixture(harness.clone(), bridge).await?;
+            session.start("input", 1, input()).await?;
+            let driver = tokio::spawn({
+                let session = session.clone();
+                async move { session.drive().await }
+            });
+            tokio::time::timeout(Duration::from_secs(60), harness.seen.acquire())
+                .await??
+                .forget();
+            let sent = usize::from(index == 5);
+            assert_eq!(
+                server.received_requests().await.ok_or("requests")?.len(),
+                sent
+            );
+            harness
+                .inner
+                .dispatch_allowed
+                .store(false, Ordering::SeqCst);
+            harness.hold.store(false, Ordering::SeqCst);
+            harness.resume.add_permits(1);
+            assert!(
+                tokio::time::timeout(Duration::from_secs(60), driver)
+                    .await??
+                    .is_err()
+            );
+            assert_eq!(
+                server.received_requests().await.ok_or("requests")?.len(),
+                sent
+            );
+            let state = session.snapshot().await;
+            let last = state.root_turn().ok_or("turn")?.steps[0].attempts[0]
+                .provider_work
+                .last()
+                .ok_or("work")?;
+            assert_eq!(last.work.work_index, index);
+            assert!(last.report.is_none());
+            assert!(harness.inner.sent.lock().await.is_empty());
+        }
     }
     Ok(())
 }
