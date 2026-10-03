@@ -869,6 +869,30 @@ impl MeteringStore {
         Ok(summarize(charges))
     }
 
+    /// Internal native cost view, scoped to the authenticated caller. Missing
+    /// and foreign rows are indistinguishable to the reader.
+    pub(super) async fn native_request_rows(
+        &self,
+        caller: &bitrouter_sdk::caller::CallerContext,
+        request_ids: &[String],
+    ) -> Result<Vec<requests::Model>> {
+        if request_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        if request_ids.len() > 64 || caller.is_anonymous() {
+            return Err(BitrouterError::bad_request(
+                "invalid native cost lookup scope",
+            ));
+        }
+        requests::Entity::find()
+            .filter(requests::Column::RequestId.is_in(request_ids.iter().cloned()))
+            .filter(requests::Column::UserId.eq(caller.user_id()))
+            .filter(requests::Column::ApiKeyId.eq(caller.api_key_id()))
+            .all(&self.db)
+            .await
+            .map_err(|_| BitrouterError::internal("native cost evidence unavailable"))
+    }
+
     /// Load reconciliation state for exactly the supplied request ids.
     pub async fn reconciliation_records(
         &self,

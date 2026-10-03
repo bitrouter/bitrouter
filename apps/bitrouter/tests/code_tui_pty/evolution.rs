@@ -155,7 +155,7 @@ server:
 database:
   url: "sqlite::memory:"
 registry:
-  inherit_defaults: false
+  enabled: false
 providers:
   fixture:
     api_base: "http://127.0.0.1:1"
@@ -327,7 +327,7 @@ fn code_checkpoint_history_displays_recorded_revisions_without_changing_the_curr
     );
     let mut config_text =
         std::fs::read_to_string(&mock.config_path)?.replace(MOCK_DAEMON_CONFIG, "");
-    config_text.push_str(&format!("\nserver:\n  skip_auth: true\n  control_socket: history.sock\ndatabase:\n  url: {}\nregistry:\n  inherit_defaults: false\nacp_recording:\n  enabled: true\n", serde_json::to_string(&database)?));
+    config_text.push_str(&format!("\nserver:\n  skip_auth: true\n  control_socket: history.sock\ndatabase:\n  url: {}\nregistry:\n  enabled: false\nacp_recording:\n  enabled: true\n", serde_json::to_string(&database)?));
     std::fs::write(&mock.config_path, &config_text)?;
     let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()

@@ -1534,6 +1534,15 @@ pub struct ProviderModel {
     /// exception requires a positive declaration.
     #[serde(default)]
     pub capabilities: Vec<crate::language_model::types::Capability>,
+    /// Concrete route token limits. Missing fields remain unknown. In
+    /// particular, an input limit does not imply a combined context window.
+    #[serde(default)]
+    pub token_limits: crate::language_model::native::ModelTokenLimits,
+    /// Explicit support for a provider input-token counting endpoint. Managed
+    /// requests require a successful count when enabled; ordinary calls do not
+    /// invoke it. API wire compatibility alone does not enable counting.
+    #[serde(default)]
+    pub input_token_counting: Option<crate::language_model::native::InputTokenCounting>,
     /// Positively verified qualitative effort levels for this exact route.
     /// Absence means unknown, not unsupported.
     #[serde(default)]
@@ -2152,6 +2161,8 @@ pub async fn discover_models(config: &mut Config) {
                         rate_limits: None,
                         pricing: None,
                         capabilities: Vec::new(),
+                        token_limits: Default::default(),
+                        input_token_counting: None,
                         reasoning_effort: None,
                         compatibility: ModelCompatibility::default(),
                     })

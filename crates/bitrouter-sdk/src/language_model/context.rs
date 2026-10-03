@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::caller::CallerContext;
+use crate::error::{BitrouterError, Result};
 use crate::event::{EventBus, PipelineEvent};
 use crate::language_model::auth::ContinuationAuthority;
 use crate::language_model::protocol::responses::{
@@ -24,8 +25,8 @@ use crate::language_model::timing::{
     FirstTokenKind, FirstTokenTiming, duration_millis, elapsed_millis,
 };
 use crate::language_model::types::{
-    ApiProtocol, ChatStreamOptions, Content, ExecutionResult, FinishReason, PipelineRequest,
-    PipelineResponse, Prompt, RoutingTarget, StreamPart, Usage,
+    ApiProtocol, ChatStreamOptions, Content, ExecutionResult, FinishReason, Message,
+    PipelineRequest, PipelineResponse, Prompt, RoutingTarget, StreamPart, Usage,
 };
 use crate::plugin::PluginId;
 
@@ -57,6 +58,7 @@ pub struct ProviderContinuation {
     api_base: String,
     api_key: String,
     credential_authority: ContinuationAuthority,
+    effort_constraint: Option<Option<crate::language_model::types::ReasoningEffort>>,
 }
 
 /// Request-scoped marker requiring the selected native Responses target to
@@ -92,7 +94,25 @@ impl ProviderContinuation {
                 .clone()
                 .unwrap_or_else(|| target.api_key.clone()),
             credential_authority,
+            effort_constraint: None,
         }
+    }
+
+    /// Preserve an authoritative effort from the continuation record. `None`
+    /// means the recorded provider default, distinct from unknown provenance.
+    pub fn with_effort_constraint(
+        mut self,
+        effort: Option<crate::language_model::types::ReasoningEffort>,
+    ) -> Self {
+        self.effort_constraint = Some(effort);
+        self
+    }
+
+    pub(crate) fn admits_effort(
+        &self,
+        effort: Option<crate::language_model::types::ReasoningEffort>,
+    ) -> bool {
+        self.effort_constraint == Some(effort)
     }
 
     pub(crate) fn response_id(&self) -> &str {
@@ -462,6 +482,30 @@ impl PipelineContext {
         &self.prompt
     }
 
+    /// A managed runtime may explicitly rebuild visible context before any
+    /// attempt. Every other prepared request field and hook binding stays fixed.
+    pub(crate) fn replace_managed_messages(&mut self, messages: Vec<Message>) -> Result<()> {
+        if messages.len() >= self.prompt.messages.len() {
+            return Err(BitrouterError::bad_request(
+                "managed context rebuild must reduce history",
+            ));
+        }
+        let mut retained = messages.iter();
+        let mut next = retained.next();
+        for original in &self.prompt.messages {
+            if next == Some(original) {
+                next = retained.next();
+            }
+        }
+        if next.is_some() {
+            return Err(BitrouterError::bad_request(
+                "managed context rebuild rewrote or reordered prepared messages",
+            ));
+        }
+        self.prompt.messages = messages;
+        Ok(())
+    }
+
     /// The inbound wire protocol the request arrived on, if known. Route
     /// resolution uses it to prefer a native (same-protocol) upstream.
     pub fn inbound_protocol(&self) -> Option<ApiProtocol> {
@@ -504,6 +548,16 @@ impl PipelineContext {
         self.prompt.params.reasoning_effort = effort;
         self.prompt.params.reasoning_effort_source =
             crate::language_model::types::ReasoningEffortSource::Policy;
+    }
+
+    /// Restore the embedding caller's hard effort constraint after policy.
+    pub(crate) fn preserve_caller_effort(
+        &mut self,
+        effort: crate::language_model::types::ReasoningEffort,
+    ) {
+        self.prompt.params.reasoning_effort = Some(effort);
+        self.prompt.params.reasoning_effort_source =
+            crate::language_model::types::ReasoningEffortSource::Caller;
     }
 
     /// Apply preset prompt-body overrides. `system_prompt`, when

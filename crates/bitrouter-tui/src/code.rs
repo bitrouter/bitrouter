@@ -3187,8 +3187,8 @@ impl ChoiceList {
             .filter(|(_, choice)| choice.searchable().to_lowercase().contains(&query))
             .map(|(index, _)| index)
             .collect();
-        self.selected = (!self.matches.is_empty()
-            && !(self.query.is_empty() && matches!(self.kind, ChoiceListKind::Palette { .. })))
+        self.selected = (!(self.matches.is_empty()
+            || self.query.is_empty() && matches!(self.kind, ChoiceListKind::Palette { .. })))
         .then_some(0);
     }
 

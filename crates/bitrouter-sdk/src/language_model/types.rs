@@ -1134,7 +1134,8 @@ pub enum ReasoningEffort {
 /// Caller-authored effort keeps the historical pass-through behavior. A
 /// policy-owned effort is a router treatment and must be positively supported
 /// by the exact provider/model route before dispatch.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReasoningEffortSource {
     /// The inbound request supplied the effort value.
     #[default]
@@ -1513,9 +1514,10 @@ pub struct Prompt {
 
 impl Prompt {
     /// The [`Capability`]s this request requires, derived from which optional
-    /// features it actually uses. A capability-aware routing table can use this
-    /// to restrict the fallback chain to providers that advertise all of these,
-    /// instead of silently degrading the request.
+    /// features it actually uses. A routing table can evaluate these against
+    /// authoritative support constraints. The configured catalog supplies only
+    /// positive observations; missing declarations remain unknown. Protocol
+    /// feasibility is checked separately against the serving adapter.
     ///
     /// Detected from the canonical [`Prompt`]: `structured_outputs` (a
     /// `response_format`), `tools` (a non-empty tool list), `reasoning` (a
@@ -1538,11 +1540,31 @@ impl Prompt {
         // Input modalities: each file part contributes the capability implied by
         // its media type, deduplicated (one `image_input` for several images).
         for content in self.messages.iter().flat_map(|m| &m.content) {
-            if let Content::File { media_type, .. } = content {
+            let mut add_media = |media_type: &str| {
                 let cap = Capability::from_input_media_type(media_type);
                 if !caps.contains(&cap) {
                     caps.push(cap);
                 }
+            };
+            match content {
+                Content::File { media_type, .. } => add_media(media_type),
+                Content::ToolResult {
+                    output: ToolResultOutput::Content { value },
+                    ..
+                } => {
+                    for part in value {
+                        match part {
+                            ToolResultContentPart::Media { media_type, .. } => {
+                                add_media(media_type)
+                            }
+                            ToolResultContentPart::FileId { media_type, .. } => add_media(
+                                media_type.as_deref().unwrap_or("application/octet-stream"),
+                            ),
+                            ToolResultContentPart::Text { .. } => {}
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         // Output modalities: from the requested response modalities.
@@ -2318,6 +2340,9 @@ pub struct RoutingTarget {
     /// Exact qualitative reasoning-effort support for this provider/model.
     /// `None` means unknown, not unsupported.
     pub reasoning_effort: Option<ReasoningEffortConfig>,
+    /// Model facts captured alongside this target, from the same configuration
+    /// snapshot. Route hooks replacing a target must replace these facts too.
+    pub model_constraints: crate::language_model::native::NativeRouteConstraints,
     /// Which account of a multi-account provider this target came from
     /// — `None` for a single-credential provider. Surfaced in the
     /// request log so an operator can see which subscription served a
@@ -2355,6 +2380,7 @@ impl std::fmt::Debug for RoutingTarget {
                 &self.chat_supports_stream_options,
             )
             .field("reasoning_effort", &self.reasoning_effort)
+            .field("model_constraints", &self.model_constraints)
             .field("account_label", &self.account_label)
             .field(
                 "api_key_override",

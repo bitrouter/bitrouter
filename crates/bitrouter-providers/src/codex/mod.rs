@@ -307,6 +307,11 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
 
 #[async_trait]
 impl AuthApplier for OpenAiCodexAuthApplier {
+    fn output_token_limit_support(&self, _target: &RoutingTarget) -> Option<bool> {
+        // The subscription request shaper below removes max_output_tokens.
+        Some(false)
+    }
+
     async fn apply(
         &self,
         request: reqwest::Request,
@@ -658,6 +663,28 @@ fn collect_text(value: &serde_json::Value, out: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn subscription_shaping_reports_unsupported_output_reservations()
+    -> bitrouter_sdk::Result<()> {
+        use bitrouter_sdk::language_model::auth::AuthAppliers;
+        use bitrouter_sdk::language_model::executor::{Executor, HttpExecutor};
+        use bitrouter_sdk::language_model::protocol::OutboundDispatch;
+        let applier = std::sync::Arc::new(super::OpenAiCodexAuthApplier::new(
+            "unused-managed-admission-store",
+        )?);
+        let target = codex_target(None);
+        let mut body = serde_json::json!({"model":"m","input":"hi","max_output_tokens":128});
+        super::AuthApplier::prepare_body(applier.as_ref(), &mut body, &target).await?;
+        assert!(body.get("max_output_tokens").is_none());
+        let executor = HttpExecutor::with_dispatch_and_auth(
+            Default::default(),
+            OutboundDispatch::builtin(),
+            AuthAppliers::new().with(super::PROVIDER_ID, applier),
+        )?;
+        assert_eq!(executor.output_token_limit_support(&target), Some(false));
+        Ok(())
+    }
+
     use std::path::PathBuf;
 
     use base64::Engine;
@@ -716,6 +743,7 @@ mod tests {
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: label.map(String::from),
             api_key_override: None,
             api_base_override: None,

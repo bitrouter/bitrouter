@@ -58,7 +58,7 @@ server:
 database:
   url: "sqlite::memory:"
 registry:
-  inherit_defaults: false
+  enabled: false
 policy:
   mode: frozen
 providers:

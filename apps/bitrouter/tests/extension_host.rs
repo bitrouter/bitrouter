@@ -404,8 +404,10 @@ async fn compiled_host_rejects_registration_before_database_and_cleans_bind_fail
         "control_collision",
     ] {
         let home = temporary_home()?;
-        let (mut inference, mut control) = addresses()?;
         let occupied = TcpListener::bind("127.0.0.1:0")?;
+        // Reserve the collision port before sampling unused addresses; otherwise
+        // the OS may reuse the just-released inference port for this listener.
+        let (mut inference, mut control) = addresses()?;
         if mode == "inference_collision" {
             inference = occupied.local_addr()?;
         }

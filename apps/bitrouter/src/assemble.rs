@@ -462,9 +462,12 @@ async fn assemble_app(
         Some(home) => home.to_path_buf(),
         None => std::env::current_dir().context("resolve continuation key home")?,
     };
+    let continuation_keys = ContinuationKeySource::lazy(runtime_home);
+    let private_context =
+        crate::continuation::native_context::PrivateContextPolicy::new(continuation_keys.clone());
     let continuation_registry = ContinuationRegistry::new(
         db.clone(),
-        ContinuationKeySource::lazy(runtime_home),
+        continuation_keys,
         config.continuation.retention_days,
         config.continuation.prune_batch_size,
     )?;
@@ -558,7 +561,9 @@ async fn assemble_app(
     let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
     let metering_store_for_recorder = metering_store.clone();
+    let metering_for_native_costs = metering_store.clone();
     let pricing_for_recorder = pricing.clone();
+    let pricing_for_native = pricing.clone();
     let policy_store: Arc<PolicyStore> = Arc::new(load_policy_store(config).await?);
     let policy_store_for_reload = policy_store.clone();
 
@@ -852,6 +857,9 @@ async fn assemble_app(
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
+            lm.native_cost_estimator(pricing_for_native);
+            lm.native_cost_source(Arc::new(metering_for_native_costs));
+            lm.native_private_context(Arc::new(private_context.clone()));
             lm.request_checker_runner(request_checks_for_pipeline);
             lm.fallback_backoff(
                 config
@@ -883,6 +891,7 @@ async fn assemble_app(
             // explicit routes and provider continuations retain precedence.
             // The pipeline runs bound external checks after these local hooks.
             lm.pre_resolution_hook(AuthHook::new(db_for_hooks.clone()));
+            lm.pre_resolution_hook(private_context);
             lm.pre_resolution_hook(SessionContextHook::new(acp_runtime_for_session));
             lm.pre_resolution_hook(continuation_for_pre_request);
             // Candidate recipe selection may replace defaults and the policy,

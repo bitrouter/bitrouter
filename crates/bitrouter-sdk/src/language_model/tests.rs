@@ -1,5 +1,14 @@
 //! Pipeline integration tests for the `language_model` pipeline.
 
+#[path = "tests_reconstruction.rs"]
+mod reconstruction;
+
+#[path = "tests_managed_protocol.rs"]
+mod managed_protocol;
+
+#[path = "tests_provider_body.rs"]
+mod provider_body;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -14,6 +23,7 @@ use crate::event::PipelineEvent;
 use crate::extension::request_check::{ContentRole, Decision, Input};
 use crate::language_model::executor::MockResponse;
 use crate::language_model::routing::{PromptOverrides, RouterRequestIdentity};
+use crate::language_model::types::{AuthScheme, ReasoningEffort, ReasoningEffortSource};
 use crate::language_model::*;
 
 // ===== test fixtures =====
@@ -29,6 +39,7 @@ fn target(provider: &str) -> RoutingTarget {
         chat_supports_store: None,
         chat_supports_stream_options: None,
         reasoning_effort: None,
+        model_constraints: Default::default(),
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -778,6 +789,460 @@ impl ModelSelector for CountingModelSelector {
 }
 
 struct FailingModelSelector;
+
+struct AdmittedRoutes(Vec<u32>);
+
+#[async_trait]
+impl native::NativeExecutionControl for AdmittedRoutes {
+    async fn plan(&self, _: native::NativePlan) -> Result<native::NativePlanAdmission> {
+        Ok(native::NativePlanAdmission {
+            route_indices: self.0.clone(),
+        })
+    }
+
+    async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
+        Ok(())
+    }
+
+    async fn after_attempt(&self, _: native::NativeAttemptReport) {}
+}
+
+#[tokio::test]
+async fn managed_admission_cannot_add_duplicate_or_reorder_frozen_routes() -> Result<()> {
+    for indices in [vec![], vec![2], vec![0, 0], vec![1, 0]] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(routing_table(&["first", "second"]))
+            .executor(Arc::new(NeverCalledExecutor(calls.clone())));
+        let result = Arc::new(builder.build()?)
+            .execute_native_controlled(request(), Arc::new(AdmittedRoutes(indices.clone())))
+            .await;
+        assert!(
+            result
+                .err()
+                .is_some_and(|error| error.to_string().contains("ordered nonempty route subset")),
+            "indices={indices:?}"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+    Ok(())
+}
+
+struct ManagedSelectionControl {
+    selection: native::NativeModelSelection,
+    plans: tokio::sync::Mutex<Vec<native::NativePlan>>,
+    reports: tokio::sync::Mutex<Vec<native::NativeAttemptReport>>,
+}
+
+#[async_trait]
+impl native::NativeExecutionControl for ManagedSelectionControl {
+    fn model_selection(&self) -> native::NativeModelSelection {
+        self.selection
+    }
+
+    async fn plan(&self, plan: native::NativePlan) -> Result<native::NativePlanAdmission> {
+        let route_indices = (0..plan.routes.len()).map(|index| index as u32).collect();
+        self.plans.lock().await.push(plan);
+        Ok(native::NativePlanAdmission { route_indices })
+    }
+
+    async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
+        Ok(())
+    }
+
+    async fn after_attempt(&self, report: native::NativeAttemptReport) {
+        self.reports.lock().await.push(report);
+    }
+}
+
+struct ModelAndEffortSelector(Arc<AtomicUsize>);
+
+struct FailedCounter(Arc<AtomicUsize>);
+
+#[async_trait]
+impl Executor for FailedCounter {
+    async fn count_input_tokens(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> Result<native::NativeInputCount> {
+        Err(BitrouterError::bad_request(
+            "SECRET_RAW_CREDENTIAL and NATIVE_CONTINUATION_ID",
+        ))
+    }
+
+    async fn execute(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err(BitrouterError::internal("must not generate"))
+    }
+
+    async fn execute_stream(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        Err(BitrouterError::internal("must not stream"))
+    }
+}
+
+#[tokio::test]
+async fn count_errors_are_redacted_and_cannot_be_admitted_as_unknown() -> Result<()> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let table = Arc::new(StaticRoutingTable::new());
+    let mut route = target("first");
+    route.model_constraints.input_token_counting = Some(native::InputTokenCounting::Responses);
+    table.insert("test-model", vec![route]);
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(table)
+        .executor(Arc::new(FailedCounter(calls.clone())));
+    let control = Arc::new(ManagedSelectionControl {
+        selection: native::NativeModelSelection::Fixed,
+        plans: tokio::sync::Mutex::new(Vec::new()),
+        reports: tokio::sync::Mutex::new(Vec::new()),
+    });
+    let pipeline = Arc::new(builder.build()?);
+    assert!(
+        pipeline
+            .clone()
+            .execute_native_controlled(request(), control.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let plans = control.plans.lock().await;
+    assert_eq!(plans.len(), 1);
+    let serialized = serde_json::to_string(&plans[0])
+        .map_err(|_| BitrouterError::internal("fixture serialization failed"))?;
+    assert!(!serialized.contains("SECRET_RAW_CREDENTIAL"));
+    assert!(!serialized.contains("NATIVE_CONTINUATION_ID"));
+    assert!(serialized.contains("input_count_failed:invalid_request:400"));
+    Ok(())
+}
+
+#[cfg(feature = "config_file")]
+struct ReloadAfterRoute {
+    table: Arc<crate::config::ConfigRoutingTable>,
+    replacement: crate::config::Config,
+}
+
+#[cfg(feature = "config_file")]
+#[async_trait]
+impl ObserveHook for ReloadAfterRoute {
+    async fn after_phase(&self, phase: Phase, _: &PipelineContext) {
+        if phase == Phase::Route {
+            let result = self.table.replace_config(self.replacement.clone()).await;
+            assert!(result.is_ok());
+        }
+    }
+    async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
+    async fn on_request_end(&self, _: &PipelineContext, _: &RequestOutcome) {}
+}
+
+#[cfg(feature = "config_file")]
+#[tokio::test]
+async fn managed_route_facts_share_the_resolved_targets_config_snapshot() -> Result<()> {
+    let config = |base: &str, output: u64| -> Result<crate::config::Config> {
+        serde_json::from_value(serde_json::json!({"providers":{"fixture":{
+            "api_base":base,"api_key":"fixture-secret","models":[{
+                "id":"test-model","token_limits":{"max_output_tokens":output}
+            }]
+        }}}))
+        .map_err(|error| BitrouterError::internal(error.to_string()))
+    };
+    let table = Arc::new(crate::config::ConfigRoutingTable::from_config(config(
+        "https://old.invalid",
+        128,
+    )?));
+    let mut builder = PipelineBuilder::new();
+    let answer = GenerateResult {
+        content: Vec::new(),
+        usage: None,
+        finish_reason: Some(FinishReason::Stop),
+        response_id: None,
+        stop_details: None,
+        provider_metadata: Default::default(),
+    };
+    builder
+        .routing_table(table.clone())
+        .executor(Arc::new(MockExecutor::new(vec![
+            MockResponse::Generate(answer.clone()),
+            MockResponse::Generate(answer),
+        ])))
+        .observe_hook(ReloadAfterRoute {
+            table,
+            replacement: config("https://new.invalid", 8192)?,
+        });
+    let pipeline = Arc::new(builder.build()?);
+    let control = Arc::new(ManagedSelectionControl {
+        selection: native::NativeModelSelection::Fixed,
+        plans: Default::default(),
+        reports: Default::default(),
+    });
+    pipeline
+        .clone()
+        .execute_native_controlled(request(), control.clone())
+        .await?;
+    pipeline
+        .clone()
+        .execute_native_controlled(request(), control.clone())
+        .await?;
+    let plans = control.plans.lock().await;
+    let reports = control.reports.lock().await;
+    assert_eq!(
+        plans[0].routes[0]
+            .constraints
+            .token_limits
+            .max_output_tokens,
+        Some(128)
+    );
+    assert_eq!(
+        plans[1].routes[0]
+            .constraints
+            .token_limits
+            .max_output_tokens,
+        Some(8192)
+    );
+    for (plan, report) in plans.iter().zip(reports.iter()) {
+        assert_eq!(plan.routes[0], report.route);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_fixed_continuation_requires_a_known_matching_effort() -> Result<()> {
+    for pinned in [None, Some(None), Some(Some(ReasoningEffort::High))] {
+        for requested in [
+            None,
+            Some(ReasoningEffort::Low),
+            Some(ReasoningEffort::High),
+        ] {
+            let mut builder = PipelineBuilder::new();
+            builder
+                .routing_table(Arc::new(PresetAwareRoutingTable))
+                .executor(Arc::new(MockExecutor::always_text(
+                    "compatible continuation",
+                )))
+                .route_hook(ManagedConstraintHook {
+                    change_model: false,
+                    pinned_effort: pinned,
+                });
+            let pipeline = Arc::new(builder.build()?);
+            let control = Arc::new(ManagedSelectionControl {
+                selection: native::NativeModelSelection::Fixed,
+                plans: Default::default(),
+                reports: Default::default(),
+            });
+            let mut request = request_for_model("@adaptive:preferred");
+            request.prompt.params.reasoning_effort = requested;
+            let result = pipeline
+                .clone()
+                .execute_native_controlled(request, control.clone())
+                .await;
+            let compatible = pinned == Some(requested);
+            assert_eq!(
+                result.is_ok(),
+                compatible,
+                "pinned={pinned:?}, requested={requested:?}"
+            );
+            assert_eq!(control.plans.lock().await.len(), usize::from(compatible));
+            assert_eq!(control.reports.lock().await.len(), usize::from(compatible));
+        }
+    }
+    Ok(())
+}
+
+struct ManagedConstraintHook {
+    change_model: bool,
+    pinned_effort: Option<Option<ReasoningEffort>>,
+}
+
+#[async_trait]
+impl RouteHook for ManagedConstraintHook {
+    async fn resolve(
+        &self,
+        chain: &mut Vec<RoutingTarget>,
+        ctx: &mut PipelineContext,
+    ) -> Result<()> {
+        if self.change_model {
+            ctx.set_model("wrong-attribution");
+        } else {
+            let route = chain
+                .first()
+                .ok_or_else(|| BitrouterError::internal("missing test route"))?;
+            let continuation = context::ProviderContinuation::new(
+                "opaque-continuation".into(),
+                route,
+                auth::ContinuationAuthority::new(
+                    auth::CredentialAuthority::derive("test/static", "fixture"),
+                    AuthScheme::Bearer,
+                ),
+            );
+            ctx.insert_extension(Arc::new(match self.pinned_effort {
+                Some(effort) => continuation.with_effort_constraint(effort),
+                None => continuation,
+            }));
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn managed_constraints_reject_policy_provenance_and_continuation_conflicts() -> Result<()> {
+    for case in 0..4 {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(PresetAwareRoutingTable))
+            .executor(Arc::new(NeverCalledExecutor(calls.clone())));
+        if case == 1 {
+            builder.model_selector(Arc::new(ModelAndEffortSelector(Arc::new(
+                AtomicUsize::new(0),
+            ))));
+        }
+        if case != 0 {
+            builder.route_hook(ManagedConstraintHook {
+                change_model: case == 2,
+                pinned_effort: Some(None),
+            });
+        }
+        let pipeline = Arc::new(builder.build()?);
+        let control = Arc::new(ManagedSelectionControl {
+            selection: if case >= 2 {
+                native::NativeModelSelection::Fixed
+            } else {
+                native::NativeModelSelection::Policy
+            },
+            plans: Default::default(),
+            reports: Default::default(),
+        });
+        let mut request = request_for_model("@adaptive:preferred");
+        request.prompt.params.reasoning_effort = Some(ReasoningEffort::High);
+        if case == 0 {
+            // Policy-produced effort has to prove target support even before
+            // the controlled pipeline starts. It is not a manual override.
+            request.prompt.params.reasoning_effort_source = ReasoningEffortSource::Policy;
+        }
+        assert!(
+            pipeline
+                .clone()
+                .execute_native_controlled(request, control.clone())
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(control.plans.lock().await.is_empty());
+    }
+    Ok(())
+}
+
+#[async_trait]
+impl ModelSelector for ModelAndEffortSelector {
+    async fn select_variant(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        ctx: &mut PipelineContext,
+    ) -> Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        ctx.set_model("economy-model");
+        ctx.set_policy_reasoning_effort(ReasoningEffort::Low);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn managed_fixed_model_skips_policy_and_manual_effort_survives_policy() -> Result<()> {
+    for selection in [
+        native::NativeModelSelection::Fixed,
+        native::NativeModelSelection::Policy,
+    ] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(Arc::new(PresetAwareRoutingTable))
+            .executor(Arc::new(MockExecutor::always_text("ok")))
+            .model_selector(Arc::new(ModelAndEffortSelector(calls.clone())));
+        let pipeline = Arc::new(builder.build()?);
+        let control = Arc::new(ManagedSelectionControl {
+            selection,
+            plans: Default::default(),
+            reports: Default::default(),
+        });
+        let mut request = request_for_model("@adaptive:preferred");
+        request.prompt.params.reasoning_effort = Some(ReasoningEffort::High);
+        pipeline
+            .clone()
+            .execute_native_controlled(request, control.clone())
+            .await?;
+        let plans = control.plans.lock().await;
+        let reports = control.reports.lock().await;
+        assert_eq!(plans.len(), 1);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(
+            plans[0].prompt.params.reasoning_effort,
+            Some(ReasoningEffort::High)
+        );
+        assert_eq!(
+            plans[0].prompt.params.reasoning_effort_source,
+            ReasoningEffortSource::Caller
+        );
+        let selected_model = if selection == native::NativeModelSelection::Fixed {
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            "strong-model"
+        } else {
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            "economy-model"
+        };
+        assert_eq!(plans[0].effective_model, selected_model);
+        assert_eq!(plans[0].routes[0].model, selected_model);
+        assert_eq!(plans[0].routes[0], reports[0].route);
+        assert_eq!(
+            plans[0]
+                .router
+                .as_ref()
+                .map(|router| router.router_id.as_str()),
+            Some("adaptive")
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn managed_fixed_model_rejects_hook_rewrite_before_dispatch() -> Result<()> {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(Arc::new(PresetAwareRoutingTable))
+        .executor(Arc::new(NeverCalledExecutor(calls.clone())))
+        .pre_request_hook(RewriteSelector {
+            selector: "other-model",
+            outcome: RewriteOutcome::Allow,
+        });
+    let pipeline = Arc::new(builder.build()?);
+    let control = Arc::new(ManagedSelectionControl {
+        selection: native::NativeModelSelection::Fixed,
+        plans: Default::default(),
+        reports: Default::default(),
+    });
+    assert!(
+        pipeline
+            .execute_native_controlled(request(), control.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(control.plans.lock().await.is_empty());
+    Ok(())
+}
 
 #[async_trait]
 impl ModelSelector for FailingModelSelector {
@@ -3407,6 +3872,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() {
         chat_supports_store: None,
         chat_supports_stream_options: None,
         reasoning_effort: None,
+        model_constraints: Default::default(),
         account_label: None,
         api_key_override: None,
         api_base_override: None,
@@ -3787,6 +4253,7 @@ fn auth_retry_target(api_base: String) -> RoutingTarget {
         chat_supports_store: None,
         chat_supports_stream_options: None,
         reasoning_effort: None,
+        model_constraints: Default::default(),
         account_label: None,
         api_key_override: None,
         api_base_override: None,

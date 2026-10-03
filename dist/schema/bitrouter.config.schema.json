@@ -610,6 +610,16 @@
       },
       "type": "object"
     },
+    "InputTokenCounting": {
+      "description": "Explicit provider support, never inferred from a compatible generation API.",
+      "oneOf": [
+        {
+          "const": "responses",
+          "description": "POST /responses/input_tokens on the same provider endpoint.",
+          "type": "string"
+        }
+      ]
+    },
     "McpAggregateConfig": {
       "description": "`mcp.aggregate` — the virtual aggregate endpoint.",
       "properties": {
@@ -817,6 +827,43 @@
             "token_limit_field": null
           },
           "description": "Chat Completions-specific request settings."
+        }
+      },
+      "type": "object"
+    },
+    "ModelTokenLimits": {
+      "additionalProperties": false,
+      "description": "Independently declared token limits. An input limit is not a combined\ncontext window, and an absent limit is unknown rather than unbounded.",
+      "properties": {
+        "context_window": {
+          "default": null,
+          "description": "Combined input and output capacity, only when explicitly known.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_input_tokens": {
+          "default": null,
+          "description": "Maximum input tokens, independently of the output allowance.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_output_tokens": {
+          "default": null,
+          "description": "Maximum generated tokens for one request.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -1392,6 +1439,18 @@
           "description": "The id this model is addressed by — a canonical `<org>/<model>` id when\nthe entry comes from the provider registry, or the upstream id for a\nhand-written config. This is the **match key** the auto-cascade compares\nthe requested model against.",
           "type": "string"
         },
+        "input_token_counting": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputTokenCounting"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Explicit support for a provider input-token counting endpoint. Managed\nrequests require a successful count when enabled; ordinary calls do not\ninvoke it. API wire compatibility alone does not enable counting."
+        },
         "pricing": {
           "anyOf": [
             {
@@ -1433,6 +1492,15 @@
           ],
           "default": null,
           "description": "Positively verified qualitative effort levels for this exact route.\nAbsence means unknown, not unsupported."
+        },
+        "token_limits": {
+          "$ref": "#/$defs/ModelTokenLimits",
+          "default": {
+            "context_window": null,
+            "max_input_tokens": null,
+            "max_output_tokens": null
+          },
+          "description": "Concrete route token limits. Missing fields remain unknown. In\nparticular, an input limit does not imply a combined context window."
         }
       },
       "required": [

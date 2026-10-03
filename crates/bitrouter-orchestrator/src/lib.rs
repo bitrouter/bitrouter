@@ -3,6 +3,7 @@
 
 pub mod agent;
 mod context;
+pub mod core;
 pub mod service;
 pub mod store;
 mod tools;

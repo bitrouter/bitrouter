@@ -221,13 +221,13 @@ impl BackgroundClient {
                 SessionResponse::Events { replay } => replay,
                 response => return unexpected("attached session events", response),
             };
-            if !self
+            if self
                 .state
                 .lock()
                 .await
                 .attached
                 .as_ref()
-                .is_some_and(|current| current.run_id == attached.run_id)
+                .is_none_or(|current| current.run_id != attached.run_id)
             {
                 return Ok(AgentResult::Batch(results));
             }

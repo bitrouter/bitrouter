@@ -32,6 +32,9 @@ use crate::language_model::types::{
 /// `providerMetadata.google.thoughtSignature`.
 /// <https://ai.google.dev/gemini-api/docs/thinking>
 const GOOGLE_THOUGHT_SIGNATURE: &str = "thoughtSignature";
+// Non-text thought parts cannot express this flag in the canonical File kind.
+// https://ai.google.dev/api/generate-content#Part
+const GOOGLE_THOUGHT: &str = "thought";
 // Preserve the provider's optional ID independently of the canonical ID used
 // to correlate calls and results internally, including when routing protocols.
 const GOOGLE_FUNCTION_CALL_ID: &str = "functionCallId";
@@ -444,11 +447,10 @@ fn sanitize_gemini_schema(schema: &serde_json::Value) -> serde_json::Value {
     serde_json::Value::Object(out)
 }
 
-/// Lift a Gemini part's `thoughtSignature` into a [`ProviderMetadata`] under the
-/// `google` namespace. Gemini stamps this opaque token on thinking parts (and on
-/// the `functionCall` parts that continue a reasoning chain); it must round-trip
-/// or a follow-up turn replaying the reasoning is rejected. Returns an empty map
-/// when the part has none.
+/// Preserve a Gemini part's opaque signature under the `google` namespace,
+/// including signatures attached to ordinary text and media. Non-text parts
+/// also retain their thought flag, which the canonical File kind cannot express.
+/// These fields must survive a follow-up turn without changing the signed part.
 /// <https://ai.google.dev/gemini-api/docs/thinking>
 fn parse_thought_signature(part: &serde_json::Value) -> ProviderMetadata {
     let mut meta = ProviderMetadata::new();
@@ -458,6 +460,16 @@ fn parse_thought_signature(part: &serde_json::Value) -> ProviderMetadata {
             PROVIDER_ID_GOOGLE,
             GOOGLE_THOUGHT_SIGNATURE,
             sig.clone(),
+        );
+    }
+    if part.get("text").is_none()
+        && let Some(thought) = part.get("thought").filter(|value| value.is_boolean())
+    {
+        set_provider_metadata(
+            &mut meta,
+            PROVIDER_ID_GOOGLE,
+            GOOGLE_THOUGHT,
+            thought.clone(),
         );
     }
     meta
@@ -472,6 +484,12 @@ fn apply_thought_signature(target: &mut serde_json::Value, meta: &ProviderMetada
         && let Some(obj) = target.as_object_mut()
     {
         obj.insert("thoughtSignature".to_string(), sig.clone());
+    }
+    if let Some(thought) =
+        provider_namespace(meta, PROVIDER_ID_GOOGLE).and_then(|fields| fields.get(GOOGLE_THOUGHT))
+        && let Some(obj) = target.as_object_mut()
+    {
+        obj.insert("thought".into(), thought.clone());
     }
 }
 
@@ -540,7 +558,7 @@ fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
                 output,
                 // Gemini has no MCP tool-result wire.
                 dynamic: false,
-                provider_metadata: ProviderMetadata::new(),
+                provider_metadata: parse_thought_signature(part),
             });
         } else if let Some(inline) = part.get("inlineData") {
             // Inline base64 media. <https://ai.google.dev/gemini-api/docs/image-understanding>
@@ -558,7 +576,7 @@ fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
                         .to_string(),
                 },
                 filename: None,
-                provider_metadata: ProviderMetadata::new(),
+                provider_metadata: parse_thought_signature(part),
             });
         } else if let Some(file) = part.get("fileData") {
             // A URI the model fetches.
@@ -576,7 +594,7 @@ fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
                         .to_string(),
                 },
                 filename: None,
-                provider_metadata: ProviderMetadata::new(),
+                provider_metadata: parse_thought_signature(part),
             });
         } else if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
             let is_thought = part
@@ -594,7 +612,7 @@ fn parse_parts(parts: &[serde_json::Value]) -> Vec<Content> {
             } else {
                 out.push(Content::Text {
                     text: text.to_string(),
-                    provider_metadata: ProviderMetadata::new(),
+                    provider_metadata: parse_thought_signature(part),
                 });
             }
         }
@@ -1078,6 +1096,27 @@ impl InboundAdapter for GenerateContentAdapter {
 }
 
 impl OutboundAdapter for GenerateContentAdapter {
+    fn validate_managed_prompt(&self, prompt: &Prompt) -> std::result::Result<(), &'static str> {
+        super::managed::validate_prompt(&ApiProtocol::GenerateContent, prompt)?;
+        for tool in &prompt.tools {
+            if let Tool::Function { parameters, .. } = tool
+                && sanitize_gemini_schema(parameters) != *parameters
+            {
+                return Err("tool_schema_conversion_requires_validation");
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_managed_body(
+        &self,
+        expected: &serde_json::Value,
+        actual: &serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> std::result::Result<(), &'static str> {
+        super::managed::validate_body(&ApiProtocol::GenerateContent, expected, actual)
+    }
+
     fn protocol(&self) -> ApiProtocol {
         ApiProtocol::GenerateContent
     }
@@ -1333,7 +1372,16 @@ fn google_function_call_id<'a>(id: &'a str, metadata: &'a ProviderMetadata) -> O
 
 fn render_part(c: &Content) -> Option<serde_json::Value> {
     match c {
-        Content::Text { text, .. } => Some(serde_json::json!({ "text": text })),
+        Content::Text {
+            text,
+            provider_metadata,
+        } => {
+            let mut part = serde_json::json!({ "text": text });
+            // Signatures can also accompany final text and media parts.
+            // https://ai.google.dev/gemini-api/docs/thought-signatures
+            apply_thought_signature(&mut part, provider_metadata);
+            Some(part)
+        }
         Content::Reasoning {
             text,
             provider_metadata,
@@ -1401,20 +1449,29 @@ fn render_part(c: &Content) -> Option<serde_json::Value> {
             {
                 fr["id"] = serde_json::json!(id);
             }
-            Some(serde_json::json!({ "functionResponse": fr }))
+            let mut part = serde_json::json!({ "functionResponse": fr });
+            apply_thought_signature(&mut part, provider_metadata);
+            Some(part)
         }
         // Inline bytes -> `inlineData`; a URL -> `fileData`. Gemini keys media by
         // `mimeType`. <https://ai.google.dev/gemini-api/docs/image-understanding>
         Content::File {
-            media_type, data, ..
-        } => Some(match data {
-            DataContent::Base64 { data } => serde_json::json!({
-                "inlineData": { "mimeType": media_type, "data": data }
-            }),
-            DataContent::Url { url } => serde_json::json!({
-                "fileData": { "mimeType": media_type, "fileUri": url }
-            }),
-        }),
+            media_type,
+            data,
+            provider_metadata,
+            ..
+        } => {
+            let mut part = match data {
+                DataContent::Base64 { data } => serde_json::json!({
+                    "inlineData": { "mimeType": media_type, "data": data }
+                }),
+                DataContent::Url { url } => serde_json::json!({
+                    "fileData": { "mimeType": media_type, "fileUri": url }
+                }),
+            };
+            apply_thought_signature(&mut part, provider_metadata);
+            Some(part)
+        }
         // Sources are response-side citation metadata, never a request part —
         // they are re-attached under `groundingMetadata` in `render_response`,
         // not rendered as a content `part`. Skip on the request path.

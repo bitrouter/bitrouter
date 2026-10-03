@@ -415,6 +415,14 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
 
 #[async_trait]
 impl AuthApplier for ClaudeCodeAuthApplier {
+    fn normalize_managed_body(
+        &self,
+        body: &mut serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> Result<()> {
+        normalize_claude_code_body(body)
+    }
+
     async fn apply(
         &self,
         mut request: reqwest::Request,
@@ -490,44 +498,48 @@ impl AuthApplier for ClaudeCodeAuthApplier {
         body: &mut serde_json::Value,
         _target: &RoutingTarget,
     ) -> Result<()> {
-        unwrap_litellm_extra_body(body)?;
-        // A/B against the first-party CLI shows the subscription endpoint
-        // returns a generic 429 for an OAuth-shaped request that lacks a
-        // recognized agent identity. Headers alone are insufficient. Add the
-        // current SDK identity only on the explicit claude-code route, retain
-        // every client system block, and do nothing for genuine/legacy Claude
-        // Code bodies that already carry an identity.
-        if system_has_agent_identity(body) {
-            return Ok(());
-        }
-        let object = body.as_object_mut().ok_or_else(|| {
-            BitrouterError::internal("claude-code request body must be a JSON object")
-        })?;
-        let identity = serde_json::json!({
-            "type": "text",
-            "text": headers::CLAUDE_AGENT_SYSTEM_PROMPT,
-        });
-        let system = match object.remove("system") {
-            None | Some(serde_json::Value::Null) => serde_json::Value::Array(vec![identity]),
-            Some(serde_json::Value::String(text)) => serde_json::Value::Array(vec![
-                identity,
-                serde_json::json!({ "type": "text", "text": text }),
-            ]),
-            Some(serde_json::Value::Array(mut blocks)) => {
-                blocks.insert(0, identity);
-                serde_json::Value::Array(blocks)
-            }
-            Some(other) => {
-                object.insert("system".to_string(), other);
-                return Err(BitrouterError::Upstream {
-                    status: 400,
-                    message: "claude-code request has an invalid Anthropic system field".into(),
-                });
-            }
-        };
-        object.insert("system".to_string(), system);
-        Ok(())
+        normalize_claude_code_body(body)
     }
+}
+
+fn normalize_claude_code_body(body: &mut serde_json::Value) -> Result<()> {
+    unwrap_litellm_extra_body(body)?;
+    // A/B against the first-party CLI shows the subscription endpoint
+    // returns a generic 429 for an OAuth-shaped request that lacks a
+    // recognized agent identity. Headers alone are insufficient. Add the
+    // current SDK identity only on the explicit claude-code route, retain
+    // every client system block, and do nothing for genuine/legacy Claude
+    // Code bodies that already carry an identity.
+    if system_has_agent_identity(body) {
+        return Ok(());
+    }
+    let object = body.as_object_mut().ok_or_else(|| {
+        BitrouterError::internal("claude-code request body must be a JSON object")
+    })?;
+    let identity = serde_json::json!({
+        "type": "text",
+        "text": headers::CLAUDE_AGENT_SYSTEM_PROMPT,
+    });
+    let system = match object.remove("system") {
+        None | Some(serde_json::Value::Null) => serde_json::Value::Array(vec![identity]),
+        Some(serde_json::Value::String(text)) => serde_json::Value::Array(vec![
+            identity,
+            serde_json::json!({ "type": "text", "text": text }),
+        ]),
+        Some(serde_json::Value::Array(mut blocks)) => {
+            blocks.insert(0, identity);
+            serde_json::Value::Array(blocks)
+        }
+        Some(other) => {
+            object.insert("system".to_string(), other);
+            return Err(BitrouterError::Upstream {
+                status: 400,
+                message: "claude-code request has an invalid Anthropic system field".into(),
+            });
+        }
+    };
+    object.insert("system".to_string(), system);
+    Ok(())
 }
 
 /// Normalize LiteLLM's provider-extension container before calling Anthropic.
@@ -636,6 +648,7 @@ mod tests {
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
+            model_constraints: Default::default(),
             account_label: label.map(String::from),
             api_key_override: None,
             api_base_override: None,
@@ -893,6 +906,43 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some("Bearer still-fresh")
         );
+    }
+
+    #[tokio::test]
+    async fn managed_protocol_normalization_preserves_claude_system_and_checks_expanded_extras()
+    -> Result<()> {
+        use bitrouter_sdk::language_model::protocol::{OutboundAdapter, messages::MessagesAdapter};
+        let applier = ClaudeCodeAuthApplier::new("unused-managed-normalization-store")?;
+        let target = cc_target(None);
+        let adapter = MessagesAdapter;
+        for system in [
+            serde_json::json!(null),
+            serde_json::json!("mandatory instruction"),
+            serde_json::json!([{"type":"text","text":"mandatory instruction","cache_control":{"type":"ephemeral"}}]),
+        ] {
+            let mut actual = serde_json::json!({"model":target.service_id,"system":system,"messages":[],"extra_body":{"session_id":"local-only"}});
+            let mut baseline = actual.clone();
+            applier.normalize_managed_body(&mut baseline, &target)?;
+            applier.prepare_body(&mut actual, &target).await?;
+            assert_eq!(
+                adapter.validate_managed_body(&baseline, &actual, &target),
+                Ok(())
+            );
+            assert!(actual.get("extra_body").is_none());
+            assert!(actual.get("session_id").is_none());
+            actual["system"] = serde_json::json!([]);
+            assert_eq!(
+                adapter.validate_managed_body(&baseline, &actual, &target),
+                Err("managed_context_or_controls_changed")
+            );
+        }
+        let mut body = serde_json::json!({"model":target.service_id,"messages":[],"extra_body":{"truncation":"auto"}});
+        applier.normalize_managed_body(&mut body, &target)?;
+        assert_eq!(
+            adapter.validate_managed_body(&body, &body, &target),
+            Err("automatic_truncation_forbidden")
+        );
+        Ok(())
     }
 
     #[tokio::test]

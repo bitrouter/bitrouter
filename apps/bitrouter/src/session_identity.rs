@@ -195,6 +195,45 @@ impl SessionContextHook {
 
 #[async_trait]
 impl PreRequestHook for SessionContextHook {
+    async fn revalidate_context(
+        &self,
+        ctx: &PipelineContext,
+    ) -> bitrouter_sdk::Result<HookDecision> {
+        let frozen = ctx.extension::<RequestSessionContext>().ok_or_else(|| {
+            bitrouter_sdk::BitrouterError::bad_request(
+                "session revalidation lost its identity binding",
+            )
+        })?;
+        // Native core requests have no ACP controller/route lease. Those leases
+        // require a separate revalidation contract and cannot be re-resolved here.
+        if frozen.api_principal_id != ctx.caller().api_key_id()
+            || frozen.claimed_controller_instance_id.is_some()
+            || frozen.route_lease.is_some()
+        {
+            return Err(bitrouter_sdk::BitrouterError::bad_request(
+                "context rebuild cannot rebind a controller session",
+            ));
+        }
+        let mut evidence = Vec::new();
+        let mut conflicts = Vec::new();
+        let native = extract_native(ctx, &mut evidence, &mut conflicts);
+        let body = canonical_extra_body(ctx);
+        let legacy = resolve_session_signal(&ExtractorInput {
+            harness_hint: header_value(ctx, "x-bitrouter-harness")
+                .and_then(|value| parse_compatibility_harness(&value)),
+            protocol_hint: protocol_kind(ctx.inbound_protocol()),
+            headers: ctx.headers(),
+            raw_body: &body,
+            prompt: ctx.prompt(),
+        });
+        if native != frozen.native || legacy.signal.key != frozen.legacy_workflow_session_id {
+            return Err(bitrouter_sdk::BitrouterError::bad_request(
+                "context rebuild changed session attribution",
+            ));
+        }
+        Ok(HookDecision::Allow)
+    }
+
     async fn check(&self, ctx: &mut PipelineContext) -> bitrouter_sdk::Result<HookDecision> {
         let api_principal_id = ctx.caller().api_key_id().to_string();
         let route_principal = if ctx.caller().is_local() {

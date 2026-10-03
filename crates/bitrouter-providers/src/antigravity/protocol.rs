@@ -77,8 +77,39 @@ impl Default for AntigravityAdapter {
 }
 
 impl OutboundAdapter for AntigravityAdapter {
+    fn validate_managed_prompt(&self, prompt: &Prompt) -> std::result::Result<(), &'static str> {
+        self.inner.validate_managed_prompt(prompt)
+    }
+
+    fn validate_managed_body(
+        &self,
+        expected: &Value,
+        actual: &Value,
+        target: &RoutingTarget,
+    ) -> std::result::Result<(), &'static str> {
+        if actual.get("model").and_then(Value::as_str) != Some(target.service_id.as_str()) {
+            return Err("managed_provider_model_changed");
+        }
+        let expected = expected
+            .get("request")
+            .ok_or("managed_provider_envelope_missing")?;
+        let actual = actual
+            .get("request")
+            .ok_or("managed_provider_envelope_missing")?;
+        self.inner.validate_managed_body(expected, actual, target)
+    }
+
     fn protocol(&self) -> ApiProtocol {
         antigravity_protocol()
+    }
+
+    fn supports_output_token_limit_validation(&self) -> bool {
+        true
+    }
+
+    fn output_token_limit(&self, body: &Value) -> Result<Option<u32>> {
+        self.inner
+            .output_token_limit(body.get("request").unwrap_or(body))
     }
 
     fn render_request(&self, prompt: &Prompt) -> Result<Value> {
@@ -196,6 +227,7 @@ mod tests {
             chat_supports_store: None,
             chat_supports_stream_options: None,
             reasoning_effort: None,
+            model_constraints: Default::default(),
         }
     }
 

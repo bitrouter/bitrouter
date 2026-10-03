@@ -10,18 +10,29 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+base64.workspace = true
 bitrouter-sdk.workspace = true
 futures.workspace = true
 globset.workspace = true
+hex.workspace = true
+http.workspace = true
 ignore.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
 similar.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "macros", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
+tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+bitrouter-sdk = { workspace = true, features = ["config_file"] }
+reqwest.workspace = true
+wiremock = "0.6"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process"] }
