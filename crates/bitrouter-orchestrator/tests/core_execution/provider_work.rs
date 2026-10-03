@@ -537,3 +537,83 @@ async fn provider_work_failed_auth_refresh_is_retained_without_another_http_call
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn committed_run_cancel_stops_provider_without_waiting_for_its_response() -> TestResult {
+    for bridge in [false, true] {
+        let harness = Arc::new(Harness::new(None, None));
+        let (session, server, _, records) = fixture(harness.clone(), bridge).await?;
+        server.reset().await;
+        let seen = Arc::new(Semaphore::new(0));
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with({
+                let seen = seen.clone();
+                move |_: &wiremock::Request| {
+                    seen.add_permits(1);
+                    wiremock::ResponseTemplate::new(200).set_delay(Duration::from_secs(60))
+                }
+            })
+            .mount(&server)
+            .await;
+        let accepted = session.start("input", 1, input()).await?;
+        let driver = tokio::spawn({
+            let session = session.clone();
+            async move { session.drive().await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), seen.acquire())
+            .await??
+            .forget();
+        session
+            .cancel_run(
+                "cancel",
+                session.head().await.state_revision,
+                &accepted.assigned_ids["run_id"],
+            )
+            .await?;
+        let done = tokio::time::timeout(Duration::from_secs(5), driver).await???;
+        assert_eq!(done.run.as_ref().ok_or("run")?.status, RunStatus::Cancelled);
+        let turn = done.root_turn().ok_or("turn")?;
+        let attempt = &turn.steps[0].attempts[0];
+        assert!(turn.steps[0].settled);
+        assert!(
+            attempt
+                .receipt
+                .as_ref()
+                .ok_or("receipt")?
+                .report
+                .result
+                .is_none()
+        );
+        assert!(
+            attempt
+                .receipt
+                .as_ref()
+                .ok_or("receipt")?
+                .cost_micro_usd
+                .is_none()
+        );
+        let dispatch = attempt.provider_work.last().ok_or("work")?;
+        assert_eq!(
+            dispatch.work.kind,
+            bitrouter_sdk::language_model::native_work::NativeProviderWorkKind::HttpDispatch
+        );
+        assert!(
+            dispatch.report.is_none(),
+            "no fabricated response or zero cost"
+        );
+        assert_eq!(records.0.lock().await.len(), 1, "SDK settlement still runs");
+        assert_eq!(
+            done.run
+                .as_ref()
+                .ok_or("run")?
+                .token_accounting
+                .as_ref()
+                .ok_or("accounting")?
+                .unknown_attempts,
+            1,
+            "missing provider usage is not a zero-cost receipt"
+        );
+        assert!(harness.sent.lock().await.is_empty());
+    }
+    Ok(())
+}

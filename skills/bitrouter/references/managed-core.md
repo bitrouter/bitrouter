@@ -52,6 +52,17 @@ the session or accepted operation identity. Managed HTTP admission remains
 closed until binding completes. `session.head` is read-only and requires the
 actual current durable head; it does not cancel an active provider request.
 
+After the cancellation checkpoint is acknowledged, `run.cancel` stops live
+provider executor futures throughout the run; `agent.cancel` and
+`interrupt_agent` affect only the target subtree. While a cancellation is
+pending, it fences new dispatch without aborting accepted provider work.
+A definitively rejected request releases its provisional barrier.
+Core still waits for SDK settlement and workspace tool cleanup before a
+terminal cancellation. A complete model result already returned to the SDK
+retains its usage evidence but cannot start new effects for an interrupted
+turn. Stopping a provider connection does not prove zero usage: incomplete
+attempts and any unresolved integration phase retain unknown cost exposure.
+
 HTTP examples and the full wire contract are in the repository's
 `docs/ORCHESTRATOR_CORE_SPEC.md`. Client functions come from the bound manifest;
 request-level `tools` overrides are rejected. Unsupported input fields fail

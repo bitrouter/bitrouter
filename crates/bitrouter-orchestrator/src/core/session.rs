@@ -2504,7 +2504,7 @@ impl CoreSession {
             validation_gate_time: Default::default(),
             run_id: turn.run_id.clone(),
             agent_turn_id: turn.agent_turn_id.clone(),
-            disconnected: self.shared.live.lock().await.disconnected.clone(),
+            provider_cancellation: self.shared.live.lock().await.disconnected.child_token(),
             model_selection: match turn.input.routing.model {
                 super::protocol::ModelMode::Fixed => NativeModelSelection::Fixed,
                 super::protocol::ModelMode::Policy => NativeModelSelection::Policy,
@@ -2514,6 +2514,7 @@ impl CoreSession {
             let mut live = self.shared.live.lock().await;
             live.model_controls
                 .retain(|control| control.strong_count() > 0);
+            control.observe_cancellation(&live.state);
             live.model_controls.push(Arc::downgrade(&control));
         }
         drop(preparing);
@@ -3514,7 +3515,26 @@ struct StepControl {
     model_selection: NativeModelSelection,
     run_id: String,
     agent_turn_id: String,
-    disconnected: CancellationToken,
+    provider_cancellation: CancellationToken,
+}
+
+impl StepControl {
+    fn observe_cancellation(&self, state: &SessionSnapshot) {
+        if state
+            .agents
+            .get(&self.agent_id)
+            .and_then(|agent| agent.turn.as_ref())
+            .is_some_and(|turn| {
+                turn.run_id == self.run_id
+                    && turn.agent_turn_id == self.agent_turn_id
+                    && (turn.cancellation_requested || turn.status == AgentStatus::Cancelling)
+            })
+        {
+            // This child token stops only this turn's executor. The detached
+            // SDK task still records accepted output and settles usage.
+            self.provider_cancellation.cancel();
+        }
+    }
 }
 
 impl Drop for StepControl {
@@ -3530,7 +3550,7 @@ impl NativeExecutionControl for StepControl {
     }
 
     async fn provider_cancelled(&self) {
-        self.disconnected.cancelled().await;
+        self.provider_cancellation.cancelled().await;
     }
 
     async fn before_preparation_work(

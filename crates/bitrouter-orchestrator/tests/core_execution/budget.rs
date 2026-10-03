@@ -355,7 +355,7 @@ impl Executor for HeldExecutor {
 async fn active_budget_preserves_provider_settlement_without_starting_tools_or_verification()
 -> TestResult {
     for verify in [false, true] {
-        let harness = Arc::new(Harness::new(None, None));
+        let harness = Arc::new(Harness::new(None, Some("model.attempt.outcome")));
         let executor = Arc::new(HeldExecutor {
             seen: Semaphore::new(0),
             resume: Semaphore::new(0),
@@ -391,6 +391,7 @@ async fn active_budget_preserves_provider_settlement_without_starting_tools_or_v
             async move { session.drive().await }
         });
         reached(&executor.seen).await?;
+        reached(&harness.seen).await?;
         let expired = limited(&session).await?;
         assert_eq!(
             expired.run.as_ref().map(|run| run.status),
@@ -402,17 +403,20 @@ async fn active_budget_preserves_provider_settlement_without_starting_tools_or_v
                 .is_none()
         );
         assert!(!driving.is_finished());
-        executor.resume.add_permits(1);
+        // Budget cancellation stopped the executor; terminal cleanup still
+        // waits for its interrupted-attempt receipt and SDK settlement.
+        harness.resume.add_permits(1);
         let done = tokio::time::timeout(Duration::from_secs(30), driving).await???;
         assert_eq!(
             done.run.as_ref().map(|run| run.status),
             Some(RunStatus::Failed)
         );
-        assert!(
-            done.root_turn().ok_or("turn")?.steps[0].attempts[0]
-                .receipt
-                .is_some()
-        );
+        let receipt = done.root_turn().ok_or("turn")?.steps[0].attempts[0]
+            .receipt
+            .as_ref()
+            .ok_or("receipt")?;
+        assert!(receipt.report.result.is_none());
+        assert!(receipt.cost_micro_usd.is_none());
         assert_eq!(settlements.load(Ordering::SeqCst), 1);
         assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
         assert!(harness.sent.lock().await.is_empty());
@@ -529,7 +533,7 @@ async fn active_budget_rejects_restore_without_cleanup_capacity() -> TestResult 
 #[tokio::test]
 async fn active_budget_waits_for_a_detached_provider_then_reconciles_its_settlement() -> TestResult
 {
-    let harness = Arc::new(Harness::new(None, None));
+    let harness = Arc::new(Harness::new(None, Some("model.attempt.outcome")));
     let executor = Arc::new(HeldExecutor {
         seen: Semaphore::new(0),
         resume: Semaphore::new(0),
@@ -556,15 +560,16 @@ async fn active_budget_waits_for_a_detached_provider_then_reconciles_its_settlem
     reached(&executor.seen).await?;
     original.abort();
     assert!(original.await.is_err());
+    reached(&harness.seen).await?;
     limited(&session).await?;
-    // The watchdog owns cleanup now, but the admitted SDK request still owns
-    // its execution/settlement context. Do not declare that outcome abandoned.
+    // The executor stopped, but the detached SDK still owns its outcome and
+    // settlement. Do not declare it abandoned before acknowledgement.
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(
         session.snapshot().await.run.as_ref().map(|run| run.status),
         Some(RunStatus::Cancelling)
     );
-    executor.resume.add_permits(1);
+    harness.resume.add_permits(1);
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if session

@@ -2734,3 +2734,49 @@ passed five tests with one ignored; formatting, diff and tracked-ignore checks
 passed. Independent code and documentation re-review found no remaining P1/P2
 in this increment. Previous head `feef358d` passed all jobs of CI `37151419610`,
 including Windows tests; new-head CI is a separate gate.
+
+## C2 committed cancellation of live provider calls
+
+Each model step now has a cancellation token scoped to its agent turn and
+inherited from the current connection. Adopting an acknowledged checkpoint
+stops executor futures whose matching run/turn requested cancellation. The
+same check runs when registering a new control, covering a budget cancellation
+that commits before registration. A child cancellation never cancels its
+connection, parent or sibling controls. Pending cancellation fences new
+dispatch without stopping accepted I/O; definitive rejection releases the
+request's provisional barrier.
+
+The SDK's existing detached execution still records the attempt and completes
+settlement. Complete output already returned to the SDK retains its receipt
+and usage; incomplete calls retain unknown provider exposure. Cancellation
+does not synthesize a completed provider integration phase or a zero-cost
+receipt. Preparation/counting callbacks keep their existing settlement gates;
+this increment changes cancellation of the provider executor, not arbitrary
+extension callback lifetimes.
+
+Regressions hold root, child, grandchild and sibling executor futures at once,
+reject a stale interrupt, then hold the real interrupt ACK. Only the child and
+grandchild stop after acknowledgement, without fallback; root and sibling
+complete. Actual HTTP and bridged streaming calls stop before response headers
+without waiting for a delayed server, while SDK settlement runs once and cost
+remains unknown. The complete-output regression now holds an already received
+child result at its outcome ACK, proving cancellation preserves known usage
+without applying new effects. Budget regressions now hold the interrupted
+attempt's outcome ACK, confirming cleanup waits for detached SDK settlement.
+Thirteen targeted regressions passed in 5.227 seconds. Independent review
+found no actionable P1/P2. Final-source validation is recorded below.
+
+Previous-head CI `37153208433` failed only a Windows lifecycle test: all three
+attempts exhausted its five-second watchdog while running multiple durable
+follow-up turns. That functional test now uses the same thirty-second bounded
+watchdog as other lifecycle tests; its FIFO, identity, wait and reuse assertions
+are unchanged. New-head Windows CI must confirm the adjustment.
+
+Final-source Rust 1.99.0 workspace/all-feature nextest passed 4008 tests with
+22 skipped in 112.993 seconds using four test threads. Strict workspace/all-
+target/all-feature clippy passed in 32.361 seconds, strict rustdoc in 19.971
+seconds, and Rust 1.93.0 workspace/all-feature check in 19.363 seconds.
+Workspace doctests passed five tests with one ignored. Formatting, diff and
+tracked-ignore checks passed. Independent final re-review of code, tests,
+documentation and the Windows watchdog adjustment found no actionable P1/P2.
+The complete C4–C6 and A01–A23 acceptance requirements remain open.

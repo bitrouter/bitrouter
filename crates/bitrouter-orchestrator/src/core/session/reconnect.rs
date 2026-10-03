@@ -400,6 +400,15 @@ pub(super) fn adopt_pending(
         )
     })?;
     live.state = pending.state;
+    // Interrupt only after acknowledgement, including adoption after an ACK
+    // loss. A provisional or rejected cancellation only fences new dispatch.
+    for control in live
+        .model_controls
+        .iter()
+        .filter_map(std::sync::Weak::upgrade)
+    {
+        control.observe_cancellation(&live.state);
+    }
     for id in pending.superseded_blocks {
         live.provisional_blocks.remove(&id);
     }

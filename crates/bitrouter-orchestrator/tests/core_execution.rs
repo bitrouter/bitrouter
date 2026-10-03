@@ -6,6 +6,8 @@ mod artifact_storage;
 mod authority;
 #[path = "core_execution/budget.rs"]
 mod budget;
+#[path = "core_execution/cancellation.rs"]
+mod cancellation;
 #[path = "core_execution/capacity.rs"]
 mod capacity;
 #[path = "core_execution/input_count.rs"]
@@ -2119,7 +2121,9 @@ async fn current_run_followups_reuse_old_agent_context_in_fifo_order() -> TestRe
     assert!(wait.result.is_none());
     assert_eq!(wait.state.targets[&child].agent_turn_id, assigned);
     assert!(wait.state.targets[&child].status.is_none());
-    let done = tokio::time::timeout(Duration::from_secs(5), session.drive()).await??;
+    // This exercises several durable turns, not a latency contract. Give the
+    // Windows CI runner the same bounded watchdog as other lifecycle tests.
+    let done = tokio::time::timeout(Duration::from_secs(30), session.drive()).await??;
     assert_eq!(
         done.run.as_ref().map(|run| run.status),
         Some(RunStatus::Completed)
@@ -3256,6 +3260,7 @@ async fn cancellation_cleanup_waits_for_another_agents_outcome_ack() -> TestResu
     tokio::time::timeout(Duration::from_secs(5), executor.child_seen.acquire())
         .await??
         .forget();
+    harness.hold_enabled.store(true, Ordering::SeqCst);
     session
         .cancel_run(
             "cancel",
@@ -3263,7 +3268,6 @@ async fn cancellation_cleanup_waits_for_another_agents_outcome_ack() -> TestResu
             &accepted.assigned_ids["run_id"],
         )
         .await?;
-    harness.hold_enabled.store(true, Ordering::SeqCst);
     executor.child_release.add_permits(1);
     tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
         .await??
@@ -3632,7 +3636,8 @@ async fn model_collaboration_waits_release_slots_and_tools_keep_agent_attributio
 
 #[tokio::test]
 async fn interruption_keeps_billed_child_output_but_discards_new_effects() -> TestResult {
-    let harness = Arc::new(Harness::new(None, None));
+    let harness = Arc::new(Harness::new(None, Some("model.attempt.outcome")));
+    harness.hold_enabled.store(false, Ordering::SeqCst);
     let table = StaticRoutingTable::new();
     table.insert("fixture-model", vec![target("first")]);
     let executor = Arc::new(ConcurrentExecutor {
@@ -3679,16 +3684,43 @@ async fn interruption_keeps_billed_child_output_but_discards_new_effects() -> Te
     tokio::time::timeout(Duration::from_secs(5), executor.seen.acquire())
         .await??
         .forget();
-    session
-        .collaborate(
-            "interrupt",
-            session.head().await.state_revision,
-            &root,
-            Action::Interrupt {
-                agent_id: child.clone(),
-            },
-        )
-        .await?;
+    // Let the root's earlier output settle before holding the child's outcome.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if session
+                .snapshot()
+                .await
+                .agents
+                .get(&root)
+                .and_then(|agent| agent.turn.as_ref())
+                .and_then(|turn| turn.steps.last())
+                .is_some_and(|step| step.settled)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    // The child has already returned complete billable output. Interrupt while
+    // its outcome waits for acknowledgement, before output can be applied.
+    harness.hold_enabled.store(true, Ordering::SeqCst);
+    executor.release.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
+        .await??
+        .forget();
+    let mut interrupt = Box::pin(session.collaborate(
+        "interrupt",
+        session.head().await.state_revision + 1,
+        &root,
+        Action::Interrupt {
+            agent_id: child.clone(),
+        },
+    ));
+    assert!(futures::poll!(interrupt.as_mut()).is_pending());
+    harness.hold_enabled.store(false, Ordering::SeqCst);
+    harness.resume.add_permits(1);
+    interrupt.await?;
     assert_eq!(
         session
             .snapshot()
@@ -3699,7 +3731,6 @@ async fn interruption_keeps_billed_child_output_but_discards_new_effects() -> Te
             .map(|turn| turn.status),
         Some(bitrouter_orchestrator::core::session::AgentStatus::Cancelling)
     );
-    executor.release.add_permits(1);
     let done = tokio::time::timeout(Duration::from_secs(5), running).await???;
     assert_eq!(
         done.run.as_ref().map(|run| run.status),
