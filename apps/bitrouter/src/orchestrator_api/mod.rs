@@ -147,12 +147,12 @@ impl ManagedCoreApi {
         (user, key, session_id.into())
     }
 
-    async fn session(
+    async fn response_scope(
         &self,
         principal: &auth::Principal,
         session_id: &str,
         epoch: u64,
-    ) -> Result<(CoreSession, Limits, Arc<output::Budget>), ApiError> {
+    ) -> Result<(Limits, Arc<output::Budget>), ApiError> {
         let sessions = self.shared.sessions.lock().await;
         let entry = sessions
             .get(&Self::key(principal, session_id))
@@ -171,8 +171,8 @@ impl ManagedCoreApi {
         }
         entry
             .session
-            .clone()
-            .map(|session| (session, entry.limits.clone(), entry.port.output.budget()))
+            .as_ref()
+            .map(|_| (entry.limits.clone(), entry.port.output.budget()))
             .ok_or_else(|| {
                 ApiError::core(
                     ErrorCode::Busy,

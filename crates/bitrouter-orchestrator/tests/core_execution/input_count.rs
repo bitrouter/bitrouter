@@ -572,3 +572,29 @@ async fn managed_protocol_filters_lossy_candidate_before_count_or_attempt() -> T
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn authority_revoked_during_count_intent_ack_starts_no_network_work() -> TestResult {
+    let counter = counter(false).await?;
+    let harness = Arc::new(Harness::new(None, Some("model.input_count.intent")));
+    let session = session_for(&counter, &[("fit", limits(100, 228))], harness.clone()).await?;
+    start_counted(&session).await?;
+    let driver = tokio::spawn({
+        let session = session.clone();
+        async move { session.drive().await }
+    });
+    tokio::time::timeout(Duration::from_secs(60), harness.seen.acquire())
+        .await??
+        .forget();
+    harness.dispatch_allowed.store(false, Ordering::SeqCst);
+    harness.hold_enabled.store(false, Ordering::SeqCst);
+    harness.resume.add_permits(1);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(60), driver)
+            .await??
+            .is_err()
+    );
+    assert!(counter.requests.lock().await.is_empty());
+    assert!(harness.sent.lock().await.is_empty());
+    Ok(())
+}

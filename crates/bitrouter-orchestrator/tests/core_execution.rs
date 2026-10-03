@@ -2,6 +2,8 @@
 mod accounting;
 #[path = "core_execution/artifact_storage.rs"]
 mod artifact_storage;
+#[path = "core_execution/authority.rs"]
+mod authority;
 #[path = "core_execution/budget.rs"]
 mod budget;
 #[path = "core_execution/capacity.rs"]
@@ -71,6 +73,7 @@ use tokio::sync::{Mutex, Semaphore};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 struct Harness {
+    dispatch_allowed: AtomicBool,
     store: Mutex<DurableHarness>,
     sent: Mutex<Vec<ToolExecute>>,
     cancelled: Mutex<Vec<(String, String, u64)>>,
@@ -96,6 +99,7 @@ struct Harness {
 impl Harness {
     fn new(fail_kind: Option<&'static str>, hold_kind: Option<&'static str>) -> Self {
         Self {
+            dispatch_allowed: AtomicBool::new(true),
             store: Mutex::new(DurableHarness::new(grant())),
             sent: Mutex::new(Vec::new()),
             cancelled: Mutex::new(Vec::new()),
@@ -138,6 +142,17 @@ impl Harness {
 
 #[async_trait]
 impl HarnessPort for Harness {
+    async fn authorize_dispatch(&self) -> Result<(), CoreError> {
+        if self.dispatch_allowed.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(CoreError::rejected(
+                ErrorCode::UnauthorizedScope,
+                "fixture authority revoked",
+            ))
+        }
+    }
+
     async fn read_artifact(
         &self,
         reference: &ArtifactRef,

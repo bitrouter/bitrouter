@@ -63,6 +63,16 @@ mod tool_status;
 /// delivery before ACK. Report actual outcomes separately through `tool_result`.
 #[async_trait]
 pub trait HarnessPort: Send + Sync {
+    /// Recheck the host's current authorization after durable admission waits,
+    /// before starting model/preparation work or authorizing tool delivery.
+    /// Failure fences this session. Trusted in-process hosts may retain the
+    /// default; credential-bound hosts must check revocation and expiry here.
+    /// Do not call back into session mutation: its admission lock is held.
+    /// Transports must also recheck after their own output/queue waits.
+    async fn authorize_dispatch(&self) -> Result<(), CoreError> {
+        Ok(())
+    }
+
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError>;
     async fn send(&self, message: ServerMessage) -> Result<(), CoreError>;
     /// Read a bounded range of a complete immutable artifact. Before returning
@@ -2970,6 +2980,7 @@ impl CoreSession {
             let (command, disconnected, generation) = {
                 let _input = self.shared.inputs.lock().await;
                 let _admission = self.shared.commits.lock().await;
+                self.authorize_dispatch().await?;
                 let mut live = self.shared.live.lock().await;
                 if steering::has_pending(&live.state, agent_id) {
                     return Ok(());
@@ -3134,6 +3145,21 @@ impl CoreSession {
             .await
     }
 
+    async fn authorize_dispatch(&self) -> Result<(), CoreError> {
+        let disconnected = self.shared.live.lock().await.disconnected.clone();
+        let result = tokio::select! {
+            biased;
+            _ = disconnected.cancelled() => Err(reject(
+                ErrorCode::CheckpointUnavailable, "dispatch authority disconnected",
+            )),
+            result = self.shared.harness.authorize_dispatch() => result,
+        };
+        if result.is_err() {
+            self.disconnect().await;
+        }
+        result
+    }
+
     async fn ensure_dispatch_with_budget(
         &self,
         agent_id: &str,
@@ -3146,6 +3172,7 @@ impl CoreSession {
             tokio::pin!(changed);
             changed.as_mut().enable();
             let _admission = self.shared.commits.lock().await;
+            self.authorize_dispatch().await?;
             let mut live = self.shared.live.lock().await;
             if steering::provisionally_blocked(&live, agent_id) {
                 let disconnected = live.disconnected.clone();

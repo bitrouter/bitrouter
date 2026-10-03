@@ -182,3 +182,70 @@ async fn continuation_rechecks_the_live_key_policy_without_reopening_prior_respo
     tokio::time::timeout(std::time::Duration::from_secs(10), task).await???;
     Ok(())
 }
+
+#[tokio::test]
+async fn revocation_during_upload_denies_new_input_and_completed_response_replay() -> Result<()> {
+    use tower::ServiceExt;
+    for replay in [false, true] {
+        let fixture = fixture_with_output(Some(json!([{
+            "id":"answer", "type":"message", "role":"assistant", "status":"completed",
+            "content":[{"type":"output_text","text":"done","annotations":[]}]
+        }])))
+        .await?;
+        let (send, _tools, store, task) = harness(&fixture).await?;
+        let request = create("upload");
+        if replay {
+            let completed: Value = post(&fixture, &fixture.key, &request).await?.json().await?;
+            assert_eq!(completed["status"], "completed", "{completed}");
+        }
+        let head = store.lock().await.head.clone();
+        let requests = fixture
+            .upstream
+            .received_requests()
+            .await
+            .context("upstream")?
+            .len();
+        let (started, entered) = oneshot::channel();
+        let (release, resume) = oneshot::channel();
+        let body = axum::body::Body::from_stream(futures::stream::once(async move {
+            let _ = started.send(());
+            resume.await.map_err(std::io::Error::other)?;
+            Ok::<_, std::io::Error>(request.to_string())
+        }));
+        let response = tokio::spawn(
+            fixture.router.clone().oneshot(
+                http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("authorization", format!("Bearer {}", fixture.key))
+                    .header("bitrouter-beta", "orchestrator_core=v1")
+                    .body(body)?,
+            ),
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(60), entered).await??;
+        let mut key: api_keys::ActiveModel = api_keys::Entity::find_by_id("key_owner")
+            .one(&fixture.db)
+            .await?
+            .context("key")?
+            .into();
+        key.active = Set(0);
+        key.update(&fixture.db).await?;
+        let _ = release.send(());
+        let denied = tokio::time::timeout(std::time::Duration::from_secs(60), response).await???;
+        assert_eq!(denied.status(), 401);
+        assert_eq!(store.lock().await.head, head);
+        assert_eq!(
+            fixture
+                .upstream
+                .received_requests()
+                .await
+                .context("upstream")?
+                .len(),
+            requests
+        );
+        fixture.api.shutdown().await;
+        drop(send);
+        tokio::time::timeout(std::time::Duration::from_secs(60), task).await???;
+    }
+    Ok(())
+}
