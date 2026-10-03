@@ -29,6 +29,7 @@ use crate::language_model::types::{
 };
 
 mod input_count;
+mod response_body;
 mod stream_bridge;
 
 use stream_bridge::BridgeCapture;
@@ -1845,9 +1846,9 @@ impl Executor for HttpExecutor {
             let status = response.status();
             let retry_after =
                 parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
-            let text = response.text().await.map_err(|error| {
-                error_scrubber.scrub_error(upstream_body_error("reading upstream body", error))
-            })?;
+            let text = response_body::read(response, ctx)
+                .await
+                .map_err(|error| error_scrubber.scrub_error(error))?;
 
             if status.is_success() {
                 break (text, authority, storage_allowed, effort_bound);

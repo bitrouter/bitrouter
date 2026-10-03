@@ -2484,6 +2484,10 @@ impl CoreSession {
         })
         .await?;
         let control = Arc::new(StepControl {
+            provider_response_bytes: run
+                .limits
+                .checkpoint_bytes
+                .min(self.shared.limits.checkpoint_bytes),
             session: self.clone(),
             agent_id: agent_id.to_owned(),
             step_id: Mutex::new(step_id.clone()),
@@ -3475,6 +3479,7 @@ impl CoreSession {
 }
 
 struct StepControl {
+    provider_response_bytes: u64,
     validation_gate_time: super::activity::GateTime,
     session: CoreSession,
     agent_id: String,
@@ -3493,6 +3498,10 @@ impl Drop for StepControl {
 
 #[async_trait]
 impl NativeExecutionControl for StepControl {
+    fn provider_response_byte_limit(&self) -> Option<u64> {
+        Some(self.provider_response_bytes)
+    }
+
     async fn provider_cancelled(&self) {
         self.disconnected.cancelled().await;
     }

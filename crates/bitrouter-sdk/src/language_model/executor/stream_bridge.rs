@@ -223,12 +223,9 @@ impl HttpExecutor {
                 }
                 break response;
             }
-            let text = response.text().await.map_err(|error| {
-                error_scrubber.scrub_error(upstream_body_error(
-                    "reading upstream stream error body",
-                    error,
-                ))
-            })?;
+            let text = response_body::read(response, ctx)
+                .await
+                .map_err(|error| error_scrubber.scrub_error(error))?;
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !attempted_auth_refresh
                 && self
@@ -250,11 +247,14 @@ impl HttpExecutor {
         // Parse the upstream SSE byte stream into canonical stream parts via
         // the protocol's stateful decoder.
         let mut decoder = adapter.stream_decoder();
-        let byte_stream = response.bytes_stream();
+        let limit = response_body::limit(ctx);
+        response_body::check_length(&response, limit)?;
+        let byte_stream = response_body::bounded(response.bytes_stream(), limit);
 
         let stream = async_stream::stream! {
             use eventsource_stream::Eventsource;
-            let mut events = byte_stream.eventsource();
+            let events = byte_stream.eventsource();
+            futures::pin_mut!(events);
             while let Some(event) = events.next().await {
                 match event {
                     Ok(ev) => {
@@ -283,13 +283,11 @@ impl HttpExecutor {
                         // A read-timeout that fires mid-stream arrives here as a
                         // transport error — recover the reqwest timeout signal so
                         // it maps to UpstreamTimeout (504), not a blanket 502.
-                        let is_timeout = matches!(
-                            &e,
-                            eventsource_stream::EventStreamError::Transport(re) if re.is_timeout()
-                        );
-                        yield Err(error_scrubber.scrub_error(
-                            stream_transport_error(is_timeout, &e)
-                        ));
+                        let error = match e {
+                            eventsource_stream::EventStreamError::Transport(error) => error,
+                            other => stream_transport_error(false, &other),
+                        };
+                        yield Err(error_scrubber.scrub_error(error));
                         return;
                     }
                 }

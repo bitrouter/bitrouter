@@ -141,6 +141,15 @@ impl Peer {
                     Ok(Message::Close(_))
                     | Err(Error::ConnectionClosed | Error::AlreadyClosed)
                     | Err(Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => break,
+                    Err(Error::Io(error))
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::ConnectionReset
+                        ) =>
+                    {
+                        break;
+                    }
                     Err(error) => return Err(error.into()),
                     Ok(_) => {}
                 }

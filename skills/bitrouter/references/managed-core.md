@@ -95,3 +95,18 @@ host input bound (64 KiB by default), then the negotiated session bound. Both
 managed and ordinary Responses body inspection have a twenty-second deadline.
 Ordinary inspection has four separate host slots and retains its existing
 16 MiB body bound; managed consumers cannot occupy these inspection slots.
+
+Managed model steps bound each provider HTTP response by the smaller of the
+frozen root run's and session's `checkpoint_bytes`. Descendants share that
+bound. It counts cumulative decoded entity bytes, including SSE framing,
+keepalives, deltas and terminal data; it is separate from the reusable HTTP/UI
+output window. Content-Length is only an early rejection hint: actual chunks
+are checked before buffering or SSE parsing, including unfinished events.
+Input-count responses also retain their stricter 16 KiB bound.
+
+An oversized successful response fails the attempt before its output can become
+tool actions. A rejected error body is discarded while its HTTP status still
+governs rejection, authentication refresh and Retry-After. The receipt retains
+unknown spend when usage is unavailable; exact operation replay does not retry
+the provider. This ingress bound does not establish full physical memory
+accounting or bound custom executors, preparation hooks and canonical output.
