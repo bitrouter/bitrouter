@@ -8,7 +8,7 @@ pub(super) struct FaultPort {
     kind: &'static str,
     committed: bool,
     enabled: AtomicBool,
-    proposals: Mutex<Vec<CheckpointBatch>>,
+    pub(super) proposals: Mutex<Vec<CheckpointBatch>>,
 }
 
 impl FaultPort {

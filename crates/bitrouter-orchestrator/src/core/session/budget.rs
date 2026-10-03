@@ -1,4 +1,4 @@
-//! Active-time admission and durable cleanup after the shared budget expires.
+//! Shared resource admission and durable cleanup after time or capacity expires.
 
 use super::*;
 use crate::core::checkpoint::ToolStartFence;
@@ -32,7 +32,7 @@ pub(super) fn ensure_live(live: &LiveSession) -> Result<(), CoreError> {
 }
 
 pub(super) fn start_fences(state: &SessionSnapshot, kind: &str) -> Vec<ToolStartFence> {
-    if kind != "run.limit_reached" {
+    if !matches!(kind, "run.limit_reached" | "run.capacity_reached") {
         return Vec::new();
     }
     state
@@ -138,11 +138,24 @@ async fn watch_loop(shared: std::sync::Weak<Shared>, changed: Arc<Notify>) {
 }
 
 pub(super) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
+    if state
+        .run
+        .as_ref()
+        .is_some_and(|run| run.resource_constraint.is_some() && run.resource_error.is_none())
+    {
+        return Err(reject(
+            ErrorCode::CheckpointConflict,
+            "resource constraint has no failure",
+        ));
+    }
     if let Some(run) = &state.run
         && let Some(error) = &run.resource_error
         && (error.code != ErrorCode::LimitExceeded
             || error.commit_status != CommitStatus::Committed
-            || run.active_ms < run.limits.active_seconds.saturating_mul(1000)
+            || (run.resource_constraint != Some(ResourceConstraint::CheckpointCapacity)
+                && run.active_ms < run.limits.active_seconds.saturating_mul(1000))
+            || (run.resource_constraint == Some(ResourceConstraint::CheckpointCapacity)
+                && error.message != "checkpoint capacity exhausted; run cleanup required")
             || matches!(run.status, RunStatus::Completed | RunStatus::Cancelled)
             || state
                 .agents
@@ -151,13 +164,147 @@ pub(super) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
                 .any(|turn| {
                     turn.run_id == run.run_id
                         && !turn.status.terminal()
-                        && !turn.cancellation_requested
+                        && (!turn.cancellation_requested
+                            || !matches!(
+                                turn.status,
+                                AgentStatus::Cancelling | AgentStatus::RecoveryRequired
+                            ))
                 }))
     {
         return Err(reject(
             ErrorCode::CheckpointConflict,
             "resource failure lost its budget or cleanup facts",
         ));
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+pub(super) struct ResourceHistory {
+    runs: BTreeMap<String, RunResourceHistory>,
+    seen_checkpoint: bool,
+}
+
+#[derive(Deserialize)]
+struct RunResourceHistory {
+    run_id: String,
+    #[serde(default)]
+    resource_error: Option<CoreError>,
+    #[serde(default)]
+    resource_constraint: Option<ResourceConstraint>,
+}
+
+pub(super) fn validate_history(
+    payload: &CheckpointPayload,
+    history: &mut ResourceHistory,
+) -> Result<(), CoreError> {
+    let current: Option<RunResourceHistory> = serde_json::from_value(
+        payload
+            .checkpoint
+            .state
+            .get("run")
+            .cloned()
+            .unwrap_or(Value::Null),
+    )
+    .map_err(json_error)?;
+    let events = payload
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.kind.as_str(),
+                "run.limit_reached" | "run.capacity_reached"
+            )
+        })
+        .collect::<Vec<_>>();
+    if events.len() > 1 {
+        return Err(reject(
+            ErrorCode::CheckpointConflict,
+            "multiple resource failures in one checkpoint",
+        ));
+    }
+    if let Some(event) = events.first() {
+        let run = current
+            .as_ref()
+            .ok_or_else(|| reject(ErrorCode::CheckpointConflict, "resource failure has no run"))?;
+        let valid_cause = match event.kind.as_str() {
+            "run.capacity_reached" => {
+                run.resource_constraint == Some(ResourceConstraint::CheckpointCapacity)
+            }
+            _ => run
+                .resource_constraint
+                .is_none_or(|cause| cause == ResourceConstraint::ActiveTime),
+        };
+        if !valid_cause
+            || event.run_id.as_ref() != Some(&run.run_id)
+            || run
+                .resource_error
+                .as_ref()
+                .map(encode)
+                .transpose()?
+                .as_ref()
+                != Some(&event.payload)
+        {
+            return Err(reject(
+                ErrorCode::CheckpointConflict,
+                "resource failure event and checkpoint disagree",
+            ));
+        }
+    }
+    if let Some(current) = current {
+        // Retain facts by run identity across empty snapshots and other runs.
+        // Only the supplied anchor may already contain a failure whose event
+        // predates the journal; every later first failure needs its own event.
+        if let Some(prior) = history.runs.get(&current.run_id)
+            && prior.resource_error.is_some()
+        {
+            if prior.resource_error != current.resource_error
+                || prior.resource_constraint != current.resource_constraint
+                || !events.is_empty()
+            {
+                return Err(reject(
+                    ErrorCode::CheckpointConflict,
+                    "resource failure was erased, rewritten or repeated",
+                ));
+            }
+        } else if history.seen_checkpoint && current.resource_error.is_some() && events.is_empty() {
+            return Err(reject(
+                ErrorCode::CheckpointConflict,
+                "resource failure has no acceptance event",
+            ));
+        }
+        history.runs.insert(current.run_id.clone(), current);
+    }
+    history.seen_checkpoint = true;
+    Ok(())
+}
+
+pub(super) fn capacity_failure(state: &mut SessionSnapshot) -> Result<CoreError, CoreError> {
+    let run = active_run(state)?;
+    let mut error = reject(
+        ErrorCode::LimitExceeded,
+        "checkpoint capacity exhausted; run cleanup required",
+    );
+    error.commit_status = CommitStatus::Committed;
+    run.resource_error = Some(error.clone());
+    run.resource_constraint = Some(ResourceConstraint::CheckpointCapacity);
+    request_cleanup(state)?;
+    Ok(error)
+}
+
+fn request_cleanup(state: &mut SessionSnapshot) -> Result<(), CoreError> {
+    let run_id = active_run(state)?.run_id.clone();
+    for agent in state.agents.values_mut() {
+        agent.queue.retain(|work| work.run_id != run_id);
+        if let Some(turn) = &mut agent.turn
+            && turn.run_id == run_id
+            && !turn.status.terminal()
+        {
+            if turn.status != AgentStatus::RecoveryRequired {
+                turn.status = AgentStatus::Cancelling;
+            }
+            turn.cancellation_requested = true;
+        }
     }
     Ok(())
 }
@@ -196,17 +343,8 @@ impl CoreSession {
             let mut error = reject(ErrorCode::LimitExceeded, "run active-time budget exhausted");
             error.commit_status = CommitStatus::Committed;
             run.resource_error = Some(error.clone());
-            let run_id = run.run_id.clone();
-            for agent in state.agents.values_mut() {
-                agent.queue.retain(|work| work.run_id != run_id);
-                if let Some(turn) = &mut agent.turn
-                    && turn.run_id == run_id
-                    && !turn.status.terminal()
-                {
-                    turn.status = AgentStatus::Cancelling;
-                    turn.cancellation_requested = true;
-                }
-            }
+            run.resource_constraint = Some(ResourceConstraint::ActiveTime);
+            request_cleanup(state)?;
             encode(&error)
         })
         .await?;

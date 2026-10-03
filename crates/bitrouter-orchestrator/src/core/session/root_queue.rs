@@ -339,6 +339,7 @@ pub(super) fn activate(
         active_ms: 0,
         activity_reconciliations: Vec::new(),
         resource_error: None,
+        resource_constraint: None,
         cancellation: None,
         final_answer: None,
         terminal_reason: None,
