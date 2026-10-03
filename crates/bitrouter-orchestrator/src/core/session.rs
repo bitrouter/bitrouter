@@ -49,6 +49,7 @@ mod reconnect;
 mod recovery;
 mod recovery_time;
 pub mod release;
+pub mod responses;
 pub mod restoration_activity;
 pub mod root_queue;
 pub mod steering;
@@ -355,6 +356,9 @@ pub struct SessionSnapshot {
     /// object. Public snapshots and scheduler state are always fully hydrated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_archive: Option<super::protocol::ArtifactRef>,
+    /// Managed HTTP exchanges retain their own immutable completion boundary.
+    #[serde(default, skip_serializing_if = "responses::ResponseState::is_empty")]
+    pub responses: responses::ResponseState,
 }
 
 impl SessionSnapshot {
@@ -477,6 +481,7 @@ impl CoreSession {
             steering: BTreeMap::new(),
             releases: BTreeMap::new(),
             recovery_archive: None,
+            responses: Default::default(),
         };
         let session = Self {
             shared: Arc::new(Shared {
@@ -552,10 +557,21 @@ impl CoreSession {
         expected_revision: u64,
         input: TaskInput,
     ) -> Result<OperationReceipt, CoreError> {
+        self.start_input(operation_id, expected_revision, input, false)
+            .await
+    }
+
+    async fn start_input(
+        &self,
+        operation_id: &str,
+        expected_revision: u64,
+        input: TaskInput,
+        response: bool,
+    ) -> Result<OperationReceipt, CoreError> {
         let _input = self.shared.inputs.lock().await;
         validate_id(operation_id)?;
         let fingerprint = digest(
-            &json!({"type":"start", "expected_state_revision":expected_revision,"input":input}),
+            &json!({"type":if response { "response.start" } else { "start" }, "expected_state_revision":expected_revision,"input":input}),
         )?;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
             return Ok(receipt);
@@ -572,7 +588,9 @@ impl CoreSession {
                     "root input revision is stale",
                 ));
             }
-            if state.run.as_ref().is_some_and(|run| !run.status.terminal()) {
+            if state.run.as_ref().is_some_and(|run| !run.status.terminal())
+                || responses::active_id(state).is_some()
+            {
                 return Err(reject(
                     ErrorCode::Busy,
                     "session already owns an active root run",
@@ -591,18 +609,25 @@ impl CoreSession {
                 .clone()
                 .unwrap_or_else(|| self.shared.limits.clone());
             root_queue::activate(state, &run_id, &turn_id, input, limits)?;
-            let receipt = OperationReceipt {
+            let mut receipt = OperationReceipt {
                 operation_id: operation_id.clone(),
                 request_sha256: fingerprint.clone(),
                 disposition: OperationDisposition::Accepted,
                 assigned_ids: BTreeMap::from([
-                    ("run_id".into(), run_id),
+                    ("run_id".into(), run_id.clone()),
                     ("agent_id".into(), state.agent_id.clone()),
                     ("agent_turn_id".into(), turn_id),
                 ]),
                 state_revision: head.state_revision + 1,
                 error: None,
             };
+            if response {
+                let response_id =
+                    responses::begin(state, &operation_id, &run_id, None, head.state_revision + 1)?;
+                receipt
+                    .assigned_ids
+                    .insert("response_id".into(), response_id);
+            }
             state
                 .operations
                 .insert(operation_id.clone(), receipt.clone());
@@ -928,6 +953,15 @@ impl CoreSession {
             .driver
             .try_lock()
             .map_err(|_| reject(ErrorCode::Busy, "session driver is already active"))?;
+        self.drive_inner().await.map(|(state, _)| state)
+    }
+
+    async fn drive_view(&self) -> (SessionSnapshot, u64) {
+        let live = self.shared.live.lock().await;
+        (live.state.clone(), live.gate.head().state_revision)
+    }
+
+    async fn drive_inner(&self) -> Result<(SessionSnapshot, u64), CoreError> {
         let mut jobs = tokio::task::JoinSet::new();
         let mut running = BTreeSet::new();
         let mut first_error = None;
@@ -938,9 +972,15 @@ impl CoreSession {
                 continue;
             }
             self.advance_runtime_waits().await?;
-            let state = self.snapshot().await;
+            let (state, seen_revision) = self.drive_view().await;
             if state.run.is_none() && !state.root_queue.pending.is_empty() {
-                return Ok(state);
+                return Ok((state, seen_revision));
+            }
+            if responses::awaiting_continuation(&state) && jobs.is_empty() {
+                for agent_id in state.agents.keys() {
+                    self.dispatch_tools(agent_id).await?;
+                }
+                return Ok((state, seen_revision));
             }
             let run = state
                 .run
@@ -948,7 +988,7 @@ impl CoreSession {
                 .ok_or_else(|| reject(ErrorCode::Busy, "no root task is accepted"))?;
             if run.status.terminal() || run.status == RunStatus::RecoveryRequired {
                 if jobs.is_empty() {
-                    return first_error.map_or(Ok(state), Err);
+                    return first_error.map_or(Ok((state, seen_revision)), Err);
                 }
             } else {
                 let mut progressed = false;
@@ -998,7 +1038,7 @@ impl CoreSession {
                 if progressed {
                     continue;
                 }
-                let state = self.snapshot().await;
+                let (state, seen_revision) = self.drive_view().await;
                 if jobs.is_empty() {
                     match self.finish_run_if_settled(&state).await {
                         Ok(true) => continue,
@@ -1171,8 +1211,9 @@ impl CoreSession {
                             Ok(json!({"reason":"no runnable agent or external tool producer"}))
                         })
                         .await?;
+                        continue;
                     }
-                    return first_error.map_or(Ok(self.snapshot().await), Err);
+                    return first_error.map_or(Ok((state, seen_revision)), Err);
                 }
             }
             let snapshot = self.snapshot().await;
@@ -1246,7 +1287,7 @@ impl CoreSession {
                         error.to_string().as_str(),
                     ));
                 }
-                None => return first_error.map_or(Ok(self.snapshot().await), Err),
+                None => continue,
             }
         }
     }
@@ -2581,6 +2622,7 @@ impl CoreSession {
             // A text-only or interrupted output does not need a tool reply
             // envelope. Apply admission errors only to actual workspace calls.
             let result_limits = tool_payloads::admit(state, &self.shared.limits, manifest.max_tool_output_bytes);
+            let response_id = responses::active_id(state).map(str::to_owned);
             let outstanding = state.agents.values().filter_map(|agent| agent.turn.as_ref()).flat_map(|turn| &turn.invocations).filter(|call| call.result.is_none()).count();
             let agent = agent_mut(state, agent_id)?;
             let context_revision = agent.context_revision;
@@ -2709,6 +2751,7 @@ impl CoreSession {
                             authorizing_event_seq: head.event_seq + 1,
                             verification: false,
                             result_limits: Some(result_limits.clone()?),
+                            response_id: response_id.clone(),
                         },
                         public_call_id: id("call"),
                         provider_call_id: call_id.clone(),
@@ -2778,6 +2821,7 @@ impl CoreSession {
             let manifest = state.manifest.clone();
             let result_limits =
                 tool_payloads::admit(state, &self.shared.limits, manifest.max_tool_output_bytes)?;
+            let response_id = responses::active_id(state).map(str::to_owned);
             let limit = active_run(state)?.limits.outstanding_tools as usize;
             let outstanding = state
                 .agents
@@ -2859,6 +2903,7 @@ impl CoreSession {
                     authorizing_event_seq: head.event_seq + 1,
                     verification: true,
                     result_limits: Some(result_limits),
+                    response_id,
                 },
                 public_call_id: id("verification"),
                 provider_call_id: String::new(),
@@ -2927,6 +2972,7 @@ impl CoreSession {
                         turn.invocations.iter().find(|call| {
                             call.result.is_none()
                                 && !live.sent_tools.contains(&call.dispatch.invocation_id)
+                                && responses::authorized(&live.state, &call.dispatch)
                         })
                     })
                     .filter(|call| {
@@ -2991,15 +3037,29 @@ impl CoreSession {
     async fn fail(&self, agent_id: &str, reason: &str) -> Result<(), CoreError> {
         self.transition_for(Some(agent_id), "agent.failed", |state, _| {
             let turn = agent_turn(state, agent_id)?;
+            // A rejected/failed complete attempt has no output left to apply.
+            // Keep genuinely pending provider or preparation evidence unsettled.
+            if let Some(step) = turn.steps.last_mut()
+                && step
+                    .preparation_work
+                    .iter()
+                    .all(|work| work.report.is_some())
+                && step.input_counts.iter().all(|count| count.report.is_some())
+                && step
+                    .context_validation
+                    .as_ref()
+                    .is_none_or(|work| work.report.is_some())
+                && step.attempts.iter().all(|attempt| {
+                    attempt.receipt.is_some()
+                        && attempt
+                            .provider_work
+                            .iter()
+                            .all(|work| work.report.is_some())
+                })
+            {
+                step.settled = true;
+            }
             if turn.status == AgentStatus::Cancelling {
-                if let Some(step) = turn.steps.last_mut()
-                    && step
-                        .attempts
-                        .iter()
-                        .all(|attempt| attempt.receipt.is_some())
-                {
-                    step.settled = true;
-                }
                 return Ok(json!({"reason":reason,"interrupted":true}));
             }
             turn.status = AgentStatus::Failed;
@@ -3157,6 +3217,7 @@ impl CoreSession {
     ) -> Result<(CheckpointPayload, archive::Prepared), CoreError> {
         let head = live.gate.head();
         let kind = event.kind.as_str();
+        responses::capture(next, &event)?;
         if !matches!(kind, "run.completed" | "run.failed" | "run.cancelled") {
             refresh_run(next);
         }

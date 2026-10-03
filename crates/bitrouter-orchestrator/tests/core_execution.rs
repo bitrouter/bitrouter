@@ -24,6 +24,8 @@ mod recovery;
 mod recovery_time;
 #[path = "core_execution/release.rs"]
 mod release;
+#[path = "core_execution/responses.rs"]
+mod responses;
 #[path = "core_execution/root_queue.rs"]
 mod root_queue;
 #[path = "core_execution/steering.rs"]
@@ -344,6 +346,31 @@ impl HarnessPort for Harness {
                     ErrorCode::UnauthorizedScope,
                     "tool has no exact durable dispatch authorization",
                 ));
+            }
+            if let Some(response_id) = &command.response_id {
+                let authorized =
+                    snapshot
+                        .responses
+                        .exchanges
+                        .get(response_id)
+                        .is_some_and(|response| {
+                            response
+                                .completed_state_revision
+                                .is_some_and(|revision| revision <= store.head.state_revision)
+                                && response.run_id == command.run_id
+                                && response.pending.values().any(|original| {
+                                    let mut original = original.clone();
+                                    original.execution_epoch = command.execution_epoch;
+                                    original.authorizing_event_seq = command.authorizing_event_seq;
+                                    original == command
+                                })
+                        });
+                if !authorized {
+                    return Err(CoreError::rejected(
+                        ErrorCode::UnauthorizedScope,
+                        "HTTP tool has no committed response completion",
+                    ));
+                }
             }
             if !self.wait_for_approval {
                 store.try_start_tool(bitrouter_orchestrator::core::checkpoint::ToolStartFence {

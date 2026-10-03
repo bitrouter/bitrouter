@@ -802,6 +802,10 @@ pub struct ToolExecute {
     /// intent whose limits must be derived by the restoring core.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_limits: Option<ToolResultLimits>,
+    /// Managed HTTP tools additionally require this exchange's completion ACK.
+    /// Absence retains the in-process dispatch profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -24,7 +24,7 @@ mock-provider demonstration does not establish production integration.
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission and durable capacity failure implemented; physical storage/future archive exhaustion, unknown output admission and the remaining fault matrix remain |
-| C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
+| C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable in-process response exchanges and tool-dispatch completion barrier; HTTP/SSE projection, authentication, registry and remote channel remain |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
 
@@ -2377,3 +2377,75 @@ Final validation of this increment with Rust 1.99.0:
   message variant and deferred reply admission. The remaining C4/C5/C6 and
   full acceptance obligations above are unchanged. New-commit CI is a separate
   gate.
+
+## C5 durable response exchanges (in progress)
+
+`CoreSession::start_response` accepts a root input and a core-owned response ID
+in one acknowledged checkpoint. `continue_response` creates a successor for
+the latest completed response of the same unfinished run; duplicate operation
+IDs recover the same receipt. A continuation requires a newer durable result
+or control revision. `response` reads retained state, and `drive_response` uses
+the existing scheduler, commits the exchange boundary, then releases eligible
+tools. Ordinary `start`/`drive` retain their in-process behavior.
+
+An exchange can be completed while its run is waiting. Results still enter
+the existing `tool_result` operation, but ordinary `drive` does not consume
+them or resume model work for a completed managed exchange. An explicit new
+exchange enables that work. Output carries step, turn, agent ID and display
+path attribution; the frozen pending-call map binds public call IDs to exact
+invocations and attempts. These retained messages are internal core data,
+not an implemented Responses wire projection or encrypted provider state.
+
+Managed `ToolExecute.response_id` identifies its originating exchange. The
+dispatch gate requires that exchange's committed completion and pending-call
+authorization, in addition to the existing intent, epoch, permission and
+start-fence checks. Verification calls use the same gate. The test harness
+independently checks the durable terminal mapping before executing a command.
+Completion reserves snapshot/wire capacity before output admission. Abandoned
+consumers and lost completion ACKs retain the original pending batch for
+same-owner reconciliation; process restoration preserves completed exchanges
+while reauthorizing only the current unstarted invocation's epoch/event fence.
+
+Recovery rejects rewritten/erased response records, changed completed output,
+missing acceptance/completion events, mismatched call authority, and reported
+execution before exchange completion. Ownership release waits for an open
+exchange to close. A regression also exposed complete failed model attempts
+left unsettled; failure now settles a step only when all admitted provider and
+preparation evidence is complete, allowing the failed session to release.
+
+The eleven exchange tests cover root/child attribution, verification,
+failure, immutable continuation, ACK loss on either side of persistence,
+consumer abandonment, process restoration before/after completion and forged
+history. Independent review found that abandoning a driver after an attempt's
+complete receipt but before output application could otherwise close a
+recovery-required exchange prematurely. Completion now rejects any unsettled
+model step. A held hop-end callback reproduces the exact boundary; both retry
+paths keep the exchange open, and reconnect applies its output with the original
+response authorization intact. All eleven targeted tests pass. The earlier
+orchestrator suite passed 297 tests; final workspace validation and independent
+review are recorded below when completed.
+
+This implements the in-process foundation for C5, not its public transport.
+Managed HTTP/SSE DTOs and streaming, exact HTTP/channel result normalization,
+authenticated ownership/session registry, capabilities/channel routes and
+independent remote-client conformance remain required. Remaining C4 storage,
+output admission and fault work, C6 and the full A01–A23 audit remain open.
+
+Prior commit `4b0ad40f` passed macOS/Windows tests, Linux workspace tests,
+clippy, docs and MSRV in CI run `37132142243`, but its Linux interface shard
+failed in an existing host bind-failure fixture. The fixture released sampled
+ports before allocating its occupied socket, allowing that socket to reuse
+the inference port during the control-collision case. It now reserves the
+occupied port first; no production listener behavior was changed.
+
+Final-source workspace/all-feature nextest passed 3954 tests, with 22 skipped,
+in 107.697 seconds using four test threads. This run includes the final
+unapplied-output recovery regression and the corrected listener fixture. Final
+independent read-only review confirmed the recovery fix and found no remaining
+P1/P2 within this increment; full C5/C6 and cross-stage acceptance remain open.
+
+Strict workspace/all-target/all-feature clippy passed in 30.78 seconds. Strict
+rustdoc passed in 18.44 seconds after correcting the new module's URL markup;
+workspace doctests passed 5 tests with 1 ignored. Rust 1.93.0 workspace/all-feature
+check passed in 18.54 seconds. Formatting and diff checks passed. New-commit
+remote CI is tracked separately from these local results.

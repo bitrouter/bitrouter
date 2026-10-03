@@ -24,7 +24,8 @@ fn assigned_ids(grant: &OwnershipGrant) -> BTreeMap<String, String> {
 }
 
 fn settled(state: &SessionSnapshot) -> bool {
-    root_queue::settled(state)
+    responses::active_id(state).is_none()
+        && root_queue::settled(state)
         && state.agents.values().all(|agent| {
             agent.turn.as_ref().is_none_or(|turn| {
                 turn.steps.iter().all(|step| step.settled)
