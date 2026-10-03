@@ -217,6 +217,12 @@ pub fn apply(
             json!({"message_id":message_id,"agent_id":agent_id,"started_turn":false})
         }
         Action::Followup { agent_id, task } => {
+            if run.input.max_concurrent_subagents == Some(0) {
+                return Err(reject(
+                    ErrorCode::LimitExceeded,
+                    "descendant turns are disabled",
+                ));
+            }
             if task.fresh_context || task.independent_review {
                 return Err(reject(
                     ErrorCode::NoFeasibleRoute,
@@ -227,6 +233,20 @@ pub fn apply(
                 return Err(reject(
                     ErrorCode::OperationConflict,
                     "assignment would create a dependency cycle",
+                ));
+            }
+            if actor_id != state.agent_id
+                && !has_turn_capacity(state, Some(agent_id))
+                && state.agents.get(agent_id).is_some_and(|agent| {
+                    agent
+                        .turn
+                        .as_ref()
+                        .is_none_or(|turn| turn.status.terminal())
+                })
+            {
+                return Err(reject(
+                    ErrorCode::LimitExceeded,
+                    "follow-up would wait on its assigning descendant's occupied slot",
                 ));
             }
             let assignment = assignment(state, actor_id, task)?;
@@ -313,6 +333,30 @@ pub fn apply(
     Ok(Applied::Complete(result))
 }
 
+/// Descendant-owned queued work reserves its idle target's next slot: the
+/// assigning turn cannot finish and release its own slot before that work ends.
+/// Root-owned queues may wait without reserving capacity and do not deadlock it.
+pub(super) fn has_turn_capacity(state: &SessionSnapshot, starting: Option<&str>) -> bool {
+    state.run.as_ref().is_none_or(|run| {
+        run.input.max_concurrent_subagents.is_none_or(|maximum| {
+            state
+                .agents
+                .values()
+                .filter(|agent| {
+                    agent.parent_id.is_some()
+                        && Some(agent.agent_id.as_str()) != starting
+                        && (agent.turn.as_ref().is_some_and(|turn| {
+                            turn.run_id == run.run_id && !turn.status.terminal()
+                        }) || agent.queue.iter().any(|work| {
+                            work.run_id == run.run_id && work.sender_id != state.agent_id
+                        }))
+                })
+                .count()
+                < maximum as usize
+        })
+    })
+}
+
 fn allocate(
     state: &mut SessionSnapshot,
     actor_id: &str,
@@ -320,6 +364,12 @@ fn allocate(
     intent: Intent<'_>,
     state_revision: u64,
 ) -> Result<Applied, CoreError> {
+    if !has_turn_capacity(state, None) {
+        return Err(reject(
+            ErrorCode::LimitExceeded,
+            "active descendant turn capacity reached",
+        ));
+    }
     let mut work = assignment(state, actor_id, task)?;
     let mut decision = allocation::choose(state, actor_id, task, &work, intent, state_revision)?;
     let allocation_id = decision.allocation_id.clone();

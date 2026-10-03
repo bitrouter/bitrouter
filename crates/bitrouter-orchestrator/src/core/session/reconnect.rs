@@ -5,6 +5,59 @@ use crate::core::accounting::work::{CostWorkKind, CostWorkState, report_digest};
 use crate::core::protocol::{OwnershipGrant, PendingProviderEvidence, ProviderAttemptEvidence};
 
 impl CoreSession {
+    /// Fence a retained local owner before replacing it through authenticated
+    /// restoration. Transport loss alone is not proof that SDK work has ended.
+    /// The host must retain this object if the boundary cannot be reconciled,
+    /// and transfer pending_provider_evidence before discarding a fenced owner.
+    pub async fn fence_for_restoration(
+        &self,
+        durable: &DurableHead,
+    ) -> Result<Option<super::super::protocol::RunActivityReconciliation>, CoreError> {
+        self.disconnect().await;
+        let _input = self.shared.inputs.lock().await;
+        let _driver =
+            self.shared.driver.try_lock().map_err(|_| {
+                reject(ErrorCode::Busy, "previous session driver is still settling")
+            })?;
+        let _commit = self.shared.commits.lock().await;
+        let mut live = self.shared.live.lock().await;
+        live.model_controls
+            .retain(|control| control.strong_count() > 0);
+        if !live.model_controls.is_empty() {
+            return Err(reject(
+                ErrorCode::Busy,
+                "previous SDK work is still settling",
+            ));
+        }
+        if live.provider_evidence.overflowed {
+            return Err(reject(
+                ErrorCode::RecoveryRequired,
+                "provider evidence overflow requires external reconciliation",
+            ));
+        }
+        let reconciled = live.gate.reconnect(durable);
+        live.gate.disconnect();
+        if let Some(payload) = reconciled? {
+            adopt_pending(&mut live, &payload)?;
+        }
+        if live.gate.pending().is_some() {
+            return Err(reject(
+                ErrorCode::RecoveryRequired,
+                "reconcile the retained pending checkpoint before replacement",
+            ));
+        }
+        Ok(live
+            .state
+            .run
+            .as_ref()
+            .filter(|run| !run.status.terminal())
+            .map(|run| super::super::protocol::RunActivityReconciliation {
+                run_id: run.run_id.clone(),
+                durable_head: durable.clone(),
+                active_ms: live.activity.elapsed_ms(),
+            }))
+    }
+
     /// The host authenticates/reconnects the existing HarnessPort first. A new
     /// owner or process must use restore instead. Retry Busy after the old SDK
     /// execution has finished cancellation/settlement; never infer quiescence
@@ -59,6 +112,13 @@ impl CoreSession {
             live.disconnected = CancellationToken::new();
         }
         let result = self.finish_reconnect().await;
+        drop(_input);
+        let restoring = self.shared.live.lock().await.restoration_started.is_some();
+        let result = if result.is_ok() && restoring {
+            restoration_activity::finish(self).await
+        } else {
+            result
+        };
         let mut live = self.shared.live.lock().await;
         live.reconnecting = false;
         if result.is_err() {
@@ -128,6 +188,7 @@ impl CoreSession {
                 adopt_pending(&mut live, &payload)?;
             }
         }
+        self.initialize().await?;
         if release::released(&*self.shared.live.lock().await) {
             // Acknowledging release ends this grant. Do not append a reconnect
             // record that could be mistaken for renewed scheduling authority.

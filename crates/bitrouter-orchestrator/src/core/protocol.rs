@@ -407,6 +407,10 @@ pub struct DiscardableHistory {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskInput {
+    /// Active descendant turns across the whole tree, including waits, excluding
+    /// the root. Independent from concurrent model slots and retained agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_subagents: Option<u32>,
     pub text: String,
     pub model: String,
     pub effort: Option<String>,
@@ -701,6 +705,13 @@ pub enum Command {
     },
     #[serde(rename = "checkpoint.ack")]
     Ack(CheckpointAck),
+    #[serde(rename = "artifact.chunk")]
+    ArtifactChunk {
+        request_id: String,
+        reference: ArtifactRef,
+        offset: u64,
+        content_base64: String,
+    },
     #[serde(rename = "session.head")]
     Head { durable_head: DurableHead },
     #[serde(rename = "operation.get")]
@@ -832,6 +843,13 @@ pub enum ServerMessage {
         reference: ArtifactRef,
         offset: u64,
         content_base64: String,
+    },
+    #[serde(rename = "artifact.read")]
+    ArtifactRead {
+        request_id: String,
+        reference: ArtifactRef,
+        offset: u64,
+        max_bytes: u64,
     },
     #[serde(rename = "operation.receipt")]
     Receipt(OperationReceipt),

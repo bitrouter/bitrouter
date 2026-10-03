@@ -24,7 +24,7 @@ mock-provider demonstration does not establish production integration.
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission and durable capacity failure implemented; physical storage/future archive exhaustion, unknown output admission and the remaining fault matrix remain |
-| C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable in-process response exchanges and tool-dispatch completion barrier; HTTP/SSE projection, authentication, registry and remote channel remain |
+| C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, HTTP/SSE projection and WebSocket channel connected to the service host; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
 
@@ -2449,3 +2449,77 @@ rustdoc passed in 18.44 seconds after correcting the new module's URL markup;
 workspace doctests passed 5 tests with 1 ignored. Rust 1.93.0 workspace/all-feature
 check passed in 18.54 seconds. Formatting and diff checks passed. New-commit
 remote CI is tracked separately from these local results.
+
+
+## C5 remote transport implementation in progress
+
+The service host now wraps ordinary inference with an explicitly negotiated
+managed Responses adapter and authenticated capabilities/channel routes. A
+virtual-key principal owns each registry entry, even with ordinary skip-auth
+configuration. Authentication headers remain volatile; model execution invokes
+the shared pipeline with those headers so key-bound policy is not lost through
+the trusted in-process caller shortcut. HTTP disconnect does not own execution:
+a bounded per-session job retains acceptance/driver work and duplicate consumers
+attach to that operation. Same-owner channel reconnect uses core head/batch
+reconciliation; I/O timeouts close the channel and clear transport waiters.
+
+`continue_response_with_results` atomically commits the successor response and
+all new result receipts, with individually attributed `tool.result` events.
+HTTP items name the same result operation IDs as channel delivery. Exact replay
+returns the original receipt; changed content, public-ID/attempt mismatches and
+oversized aggregate input fail before partial acceptance. The aggregate obeys
+the frozen run limit as well as the session bound. Durable response projection
+retains creation time, frozen input, provider/public-call mappings, final answer
+and attributed collaboration events; completed projection records are immutable.
+
+`TaskInput.max_concurrent_subagents` limits active descendant turns across the
+tree, including waits, independently of model slots and retained agent count.
+Finished-context followups await a slot. A descendant cannot queue work onto an
+idle agent while every slot is occupied, because its assigned-work dependency
+would otherwise prevent its own slot from being released. Restore checks the
+active count against the frozen input. An admitted descendant-owned queued
+followup reserves the target's next slot, so a subsequent root spawn cannot
+steal it and form a wait cycle.
+
+Read-only stage review found the followup capacity cycle and missing aggregate
+run input bound; regression tests accompany both fixes. The independent transport
+review found and fixed initialization cancellation before the first restoration
+proposal, lost restoration ACKs, a mutating head query and missing initial
+driver wakeup. Binding/restoration registration retains the prepared session
+and original initialization event before any interruptible checkpoint wait.
+Reconnect finishes this event before its own checkpoint; replacement transfers
+retained provider evidence before admitting execution. The cleanup projection
+also reserves response-retained child-delivery events alongside mailbox copies.
+Final workspace checks and commit reference are pending. Loopback tests
+already exercise the production model pipeline through independent HTTP and
+WebSocket clients, cross-owner rejection, completion ACK before tool delivery,
+channel/HTTP duplicate result delivery, abandoned SSE consumers and ordinary
+inference isolation. These are not live-provider or production-harness evidence.
+
+The final targeted run passed 25 tests (4.883 seconds), including seven remote
+API tests, sixteen response/core continuation tests, an exact-capacity child
+delivery regression, and cancellation during restore registration followed by
+full-journal restoration. Final-answer projection covers multipart text and
+verification success/failure without duplicate or provisional final output.
+The two focused independent re-reviews found no remaining P1/P2 in those fixes.
+SSE output deltas are currently buffered until exchange completion. Broader
+transport/authentication/pressure conformance remains required.
+
+Remaining C5 work includes the measured remote restoration clock bridge for
+running tools, authenticated takeover/release/recovery conformance, policy/key
+revocation and full output/transport pressure coverage. C4 storage/output
+admission work, C6 and the complete A01–A23 audit remain open. The earlier head's
+CI 37135530717 failed a Windows multi-step collaboration fixture's five-second
+wall-clock watchdog; that fixture now has a sixty-second deadlock guard while
+keeping all scheduling/attribution assertions and production budgets unchanged.
+
+Final-source workspace/all-feature nextest passed 3968 tests with 22 skipped
+in 109.301 seconds using four test threads. The first run stopped because an
+earlier fixture had generated runtime identity files in the repository test
+directory; the fixture now uses a temporary runtime home, and the old files
+were preserved outside that directory before the complete successful rerun.
+Strict workspace/all-target/all-feature clippy passed in 29.78 seconds after
+collapsing a nested conditional. Formatting and diff checks passed; strict
+rustdoc passed in 27.99 seconds, workspace doctests passed 5 tests with 1 ignored,
+and Rust 1.93.0 workspace/all-feature check passed in 24.81 seconds. New-commit
+remote CI is tracked independently from these local results.

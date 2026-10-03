@@ -57,7 +57,7 @@ anyhow = "1"
 tempfile.workspace = true
 thiserror.workspace = true
 http.workspace = true
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 futures.workspace = true
 agent-client-protocol.workspace = true
 tokio-util = { workspace = true, features = ["compat", "rt"] }
@@ -84,6 +84,7 @@ rustix = { workspace = true, features = ["process"] }
 serde_json.workspace = true
 
 [dev-dependencies]
+tokio-tungstenite = "0.29"
 bitrouter-guardrails = { path = "../../extensions/regex-checker/matcher" }
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock = "0.6"

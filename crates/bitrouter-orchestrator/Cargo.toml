@@ -15,6 +15,7 @@ bitrouter-sdk.workspace = true
 futures.workspace = true
 globset.workspace = true
 hex.workspace = true
+http.workspace = true
 ignore.workspace = true
 regex.workspace = true
 serde.workspace = true
