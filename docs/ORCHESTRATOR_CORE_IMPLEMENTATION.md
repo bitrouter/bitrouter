@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload bounds, cleanup projection and recovery archives implemented; capacity-exhaustion handling and the remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload bounds, cleanup projection, recovery archives and durable checkpoint-capacity failure implemented; artifact/storage exhaustion, unknown output admission and the remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -2240,3 +2240,72 @@ Validation of this increment with Rust 1.99.0:
 
 The preceding tool-payload commit `8f4edc12` completed remote CI successfully
 (run `37058260630`). New-commit CI remains a separate gate.
+
+
+## C4 durable checkpoint-capacity failure
+
+A live transition that exceeds actual or projected checkpoint/wire capacity now
+commits `run.capacity_reached` from the last acknowledged snapshot. The rejected
+candidate, its operation receipt and any unaccepted tool result are discarded.
+The replacement stores a canonical `LimitExceeded` resource error and the new
+`RootRun.resource_constraint = checkpoint_capacity`, cancels live turns without
+clearing uncertainty, pauses the root queue and includes atomic tool-start
+fences. The same cleanup/result-pairing path used for time exhaustion preserves
+late outcomes and ultimately reports a failed run. Active-time failures record
+`active_time`; legacy failures without a cause retain their old clock meaning.
+
+The caller receives `limit_exceeded / not_committed` after the failure ACK:
+only the independent failure transition advanced the durable head. A matching
+operation receipt is still required to consider the original input/result
+accepted. Missing ACKs remain `unknown`. A replacement that cannot be prepared
+fails closed. Restoration does not substitute a failure for its required
+ownership/activity checkpoint; insufficient historical cleanup capacity rejects
+before committing restoration.
+
+Independent review found two defects in the initial implementation. Discarded
+signals/cancel/interrupt candidates could strand their provisional dispatch
+blocks, and history validation only remembered the immediately previous run.
+The pending transition now retains precisely the blocks resolved by the
+rejected candidate. The matching normal ACK, reconnect adoption or exact batch
+retransmission clears those blocks; unrelated pending controls stay blocked.
+Recovery retains failure facts by run identity across all supplied checkpoints,
+checks event/cause/payload agreement, rejects erasure/rewrite/repeated failure,
+and requires cancelling or recovery-required state for nonterminal failed
+turns. A checkpoint-only anchor can contain a previously accepted failure.
+
+Regression coverage includes normal failure ACK and both lost-ACK outcomes
+with a running tool and a pending approval, exact retransmission, cancellation
+delivery, fenced approval, actual/NotExecuted outcomes and terminal failure.
+An abandoned failure request reconciles its pending identity while preserving
+a distinct provisional control block until that operation is resolved.
+Journal mutations exercise erasure, changed reason/cause/event, repeated
+failure, removed cancellation, runnable resurrection, and intervening empty or
+other-run snapshots. Existing saturated cleanup, full-sized outcomes, repeated
+running recovery, unknown effects and active-time cases remain required checks.
+Final workspace validation is recorded below when complete.
+
+This increment does not reserve artifact/storage capacity at final exhaustion,
+admit arbitrarily large provider/preparation output, migrate oversized legacy
+results, or complete child/wait saturation and the remaining recovery fault
+matrix. C4/A20, C5/C6 and the full acceptance audit remain open. The preceding
+cleanup/archive commit `9eba26ed` completed remote CI successfully (run
+`37066182902`); new-commit CI is a separate gate.
+
+
+Validation of the durable capacity-failure increment with Rust 1.99.0:
+
+- Workspace/all-feature nextest: 3938 passed, 22 skipped, in 115.075 seconds
+  with four test threads, including all three new capacity-failure integrations
+  and the existing saturation, recovery and active-time regressions.
+- Strict workspace/all-target/all-feature clippy passed in 34.13 seconds;
+  strict workspace rustdoc passed in 19.54 seconds. Workspace doctests:
+  5 passed, 1 ignored.
+- Rust 1.93.0 workspace/all-feature check passed in 20.63 seconds; formatting
+  and diff checks passed.
+- Final independent read-only review found no remaining P1/P2 for this
+  increment. The full workspace run above was restarted after the preceding
+  process handle and temporary log became unavailable; that interrupted run
+  is not counted as validation evidence.
+
+New-commit remote CI and the remaining C4–C6/full-acceptance work are separate
+required gates.

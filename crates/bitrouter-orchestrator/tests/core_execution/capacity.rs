@@ -1,5 +1,6 @@
 use super::*;
 use bitrouter_orchestrator::core::protocol::{ToolObservation, ToolStatus};
+use bitrouter_orchestrator::core::session::ResourceConstraint;
 
 struct StopDuringArchiveRead {
     harness: Arc<Harness>,
@@ -83,7 +84,19 @@ async fn fill_optional_observations(
                     (error.code, error.commit_status),
                     (ErrorCode::LimitExceeded, CommitStatus::NotCommitted)
                 );
-                assert_eq!(session.head().await, before);
+                assert_eq!(
+                    session.head().await.state_revision,
+                    before.state_revision + 1
+                );
+                let state = session.snapshot().await;
+                let run = state.run.as_ref().ok_or("run")?;
+                assert_eq!(
+                    run.resource_constraint,
+                    Some(ResourceConstraint::CheckpointCapacity)
+                );
+                assert!(run.resource_error.is_some());
+                assert!(run.active_ms < run.limits.active_seconds * 1000);
+                assert!(state.root_queue.paused);
                 assert!(session.operation(&operation).await.is_none());
                 return Ok(error);
             }
@@ -230,7 +243,7 @@ async fn cleanup_capacity_survives_saturation_full_tool_outcomes_and_release() -
             let done = tokio::time::timeout(Duration::from_secs(15), session.drive()).await??;
             assert_eq!(
                 done.run.as_ref().map(|run| run.status),
-                Some(RunStatus::Cancelled)
+                Some(RunStatus::Failed)
             );
             let retained = &done.root_turn().ok_or("turn")?.invocations[0];
             assert_eq!(retained.result.as_ref(), Some(&definite));
@@ -432,7 +445,11 @@ async fn cleanup_capacity_preserves_running_recovery_at_saturation() -> TestResu
         .await?;
     let stopped_state = with_stop.snapshot().await;
     let run = stopped_state.run.as_ref().ok_or("run")?;
-    assert!(run.active_ms < 600_000 && run.resource_error.is_none());
+    assert!(run.active_ms < 600_000);
+    assert_eq!(
+        run.resource_constraint,
+        Some(ResourceConstraint::CheckpointCapacity)
+    );
     assert!(
         stopped_state.root_turn().ok_or("turn")?.invocations[0]
             .tool_observations
@@ -461,8 +478,405 @@ async fn cleanup_capacity_preserves_running_recovery_at_saturation() -> TestResu
         .await?;
     assert_eq!(
         restored.drive().await?.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Cancelled)
+        Some(RunStatus::Failed)
     );
     assert!(replacement.sent.lock().await.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn capacity_failure_resolves_signal_fence_after_ack_or_reconnect() -> TestResult {
+    use bitrouter_orchestrator::core::checkpoint::ToolStartFence;
+    for lost_ack in [None, Some(false), Some(true)] {
+        let mut fixture = Harness::new(None, None);
+        fixture.wait_for_approval = true;
+        let harness = Arc::new(fixture);
+        let fault = lost_ack.map(|committed| {
+            Arc::new(reconnect::FaultPort::new(
+                harness.clone(),
+                "run.capacity_reached",
+                committed,
+            ))
+        });
+        let port: Arc<dyn HarnessPort> = match &fault {
+            Some(port) => port.clone(),
+            None => harness.clone(),
+        };
+        let (session, executor, _) = setup(
+            vec![output(vec![call("running"), call("approval")])],
+            port,
+            false,
+        )
+        .await?;
+        let mut task = input();
+        task.limits = Some(Limits {
+            input_bytes: 2048,
+            checkpoint_bytes: 96 * 1024,
+            unacknowledged_bytes: 192 * 1024,
+            ..Limits::default()
+        });
+        session.start("input", 1, task).await?;
+        session.drive().await?;
+        let commands = harness.sent.lock().await.clone();
+        assert_eq!(commands.len(), 2);
+        let fences = commands
+            .iter()
+            .map(|command| ToolStartFence {
+                invocation_id: command.invocation_id.clone(),
+                attempt_id: command.attempt_id.clone(),
+            })
+            .collect::<Vec<_>>();
+        assert!(harness.store.lock().await.try_start_tool(fences[0].clone()));
+        session
+            .tool_status(
+                "running",
+                ToolObservation {
+                    invocation_id: commands[0].invocation_id.clone(),
+                    attempt_id: commands[0].attempt_id.clone(),
+                    status: ToolStatus::Running,
+                    evidence: Vec::new(),
+                },
+            )
+            .await?;
+        let before = session.head().await;
+        let original_manifest = session.snapshot().await.manifest;
+        let mut update = signal_update(&session, Vec::new()).await;
+        update
+            .facts
+            .insert("large_inventory".into(), json!("x".repeat(60 * 1024)));
+        update.manifest.permission_revision += 1;
+        let error = session
+            .signals("oversized-signal", update)
+            .await
+            .err()
+            .ok_or("capacity admitted")?;
+        if let Some(committed) = lost_ack {
+            assert_eq!(
+                (error.code, error.commit_status),
+                (ErrorCode::CheckpointUnavailable, CommitStatus::Unknown)
+            );
+            assert_eq!(session.head().await, before);
+            assert_eq!(
+                harness.store.lock().await.head.state_revision,
+                before.state_revision + u64::from(committed)
+            );
+            assert!(session.drive().await.is_err());
+            assert!(harness.cancelled.lock().await.is_empty());
+            reconnect::reconnect(&session, &harness).await?;
+            let proposals = fault.as_ref().ok_or("fault")?.proposals.lock().await;
+            let failures = proposals
+                .iter()
+                .filter(|batch| {
+                    batch.decode(&Limits::default()).is_ok_and(|payload| {
+                        payload
+                            .events
+                            .iter()
+                            .any(|event| event.kind == "run.capacity_reached")
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(failures.len(), if committed { 1 } else { 2 });
+            assert!(failures.iter().all(|batch| *batch == failures[0]));
+        } else {
+            assert_eq!(
+                (error.code, error.commit_status),
+                (ErrorCode::LimitExceeded, CommitStatus::NotCommitted)
+            );
+            assert_eq!(
+                session.head().await.state_revision,
+                before.state_revision + 1
+            );
+        }
+        let state = session.snapshot().await;
+        assert_eq!(state.manifest, original_manifest);
+        assert!(state.signals.facts.is_empty());
+        assert_eq!(state.signals.revision, 0);
+        assert!(session.operation("oversized-signal").await.is_none());
+        let run = state.run.as_ref().ok_or("run")?;
+        assert_eq!(
+            run.resource_constraint,
+            Some(ResourceConstraint::CheckpointCapacity)
+        );
+        assert!(run.active_ms < run.limits.active_seconds * 1000);
+        assert_eq!(
+            harness
+                .committed_kinds()
+                .await?
+                .iter()
+                .filter(|kind| *kind == "run.capacity_reached")
+                .count(),
+            1
+        );
+        {
+            let mut store = harness.store.lock().await;
+            assert!(
+                fences
+                    .iter()
+                    .all(|fence| store.tool_start_fences.contains(fence))
+            );
+            assert!(!store.try_start_tool(fences[1].clone()));
+        }
+        // Cleanup must remain dispatchable even though the rejected signal has
+        // no operation receipt, including both uncertain-commit resolutions.
+        session.drive().await?;
+        tokio::time::timeout(Duration::from_secs(5), harness.cancel_seen.acquire_many(2))
+            .await??
+            .forget();
+        assert_eq!(harness.cancelled.lock().await.len(), 2);
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        session.tool_result("actual", result(&commands[0])).await?;
+        let mut prevented = result(&commands[1]);
+        prevented.status = ToolOutcome::NotExecuted;
+        prevented.output.clear();
+        session.tool_result("prevented", prevented).await?;
+        let done = session.drive().await?;
+        assert_eq!(
+            done.run.as_ref().map(|run| run.status),
+            Some(RunStatus::Failed)
+        );
+        assert!(
+            done.root_turn()
+                .ok_or("turn")?
+                .invocations
+                .iter()
+                .all(|call| call.consumed)
+        );
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn capacity_failure_history_cannot_be_erased_or_reclassified() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, _, _) = setup(vec![output(vec![call("read")])], harness.clone(), false).await?;
+    let mut task = input();
+    task.limits = Some(Limits {
+        input_bytes: 4096,
+        checkpoint_bytes: 96 * 1024,
+        unacknowledged_bytes: 192 * 1024,
+        ..Limits::default()
+    });
+    session.start("input", 1, task).await?;
+    session.drive().await?;
+    let mut update = signal_update(&session, Vec::new()).await;
+    update
+        .facts
+        .insert("large_inventory".into(), json!("x".repeat(60 * 1024)));
+    let error = session
+        .signals("too-large", update)
+        .await
+        .err()
+        .ok_or("capacity admitted")?;
+    assert_eq!(
+        (error.code, error.commit_status),
+        (ErrorCode::LimitExceeded, CommitStatus::NotCommitted)
+    );
+    let state = session.snapshot().await;
+    let run_id = state.run.as_ref().ok_or("run")?.run_id.clone();
+    session
+        .cancel_run("cancel", session.head().await.state_revision, &run_id)
+        .await?;
+    session.disconnect().await;
+    let mut store = harness.store.lock().await.clone();
+    // Keep only the failure anchor and following checkpoint. No unrelated
+    // history needs to fit into this authenticated restore envelope.
+    let failure = store.batches.len().checked_sub(2).ok_or("failure anchor")?;
+    store.batches.drain(..failure);
+    let anchor = store.batches[0].decode(&store.limits)?;
+    let last = store.batches[1].decode(&store.limits)?;
+    assert_eq!(anchor.events[0].kind, "run.capacity_reached");
+    for alteration in [
+        "erase",
+        "rewrite",
+        "cause",
+        "event",
+        "repeat",
+        "uncancel",
+        "runnable",
+        "across-none",
+        "across-run",
+    ] {
+        let mut altered = store.clone();
+        let mut first = anchor.clone();
+        let mut final_payload = last.clone();
+        let run = &mut final_payload.checkpoint.state["run"];
+        match alteration {
+            "erase" | "across-none" | "across-run" => {
+                run["resource_error"] = serde_json::Value::Null;
+                run.as_object_mut()
+                    .ok_or("run object")?
+                    .remove("resource_constraint");
+            }
+            "rewrite" => run["resource_error"]["message"] = json!("changed"),
+            "cause" => run["resource_constraint"] = json!("active_time"),
+            "event" => first.events[0].payload["message"] = json!("changed"),
+            "repeat" => {
+                final_payload.events[0] = bitrouter_orchestrator::core::checkpoint::DurableEvent {
+                    event_seq: final_payload.events[0].event_seq,
+                    ..first.events[0].clone()
+                }
+            }
+            "uncancel" => {
+                final_payload.checkpoint.state["agents"][&state.agent_id]["turn"]["cancellation_requested"] =
+                    json!(false)
+            }
+            "runnable" => {
+                final_payload.checkpoint.state["agents"][&state.agent_id]["turn"]["status"] =
+                    json!("runnable")
+            }
+            _ => return Err("unknown fixture".into()),
+        }
+        altered.batches = vec![CheckpointBatch::encode(&first, &altered.limits)?];
+        if matches!(alteration, "across-none" | "across-run") {
+            let mut middle = last.clone();
+            middle.identity.batch_id = "intermediate".into();
+            if alteration == "across-none" {
+                middle.checkpoint.state["run"] = serde_json::Value::Null;
+            } else {
+                middle.checkpoint.state["run"]["run_id"] = json!("another-run");
+                middle.checkpoint.state["run"]["resource_error"] = serde_json::Value::Null;
+                middle.checkpoint.state["run"]
+                    .as_object_mut()
+                    .ok_or("run object")?
+                    .remove("resource_constraint");
+            }
+            altered
+                .batches
+                .push(CheckpointBatch::encode(&middle, &altered.limits)?);
+            final_payload.base_state_revision += 1;
+            final_payload.base_event_seq += 1;
+            final_payload.checkpoint.state_revision += 1;
+            final_payload.events[0].event_seq += 1;
+        }
+        let batch = CheckpointBatch::encode(&final_payload, &altered.limits)?;
+        let mut ack = altered
+            .acknowledgements
+            .get(&batch.identity.batch_id)
+            .ok_or("ack")?
+            .clone();
+        ack.payload_sha256 = batch.payload_sha256.clone();
+        ack.state_revision = final_payload.checkpoint.state_revision;
+        ack.through_event_seq = final_payload.events.last().ok_or("event")?.event_seq;
+        altered.head = ack.head();
+        altered
+            .acknowledgements
+            .insert(batch.identity.batch_id.clone(), ack);
+        altered.batches.push(batch);
+        let replacement = recovery::harness_at(altered).await;
+        let before = replacement.store.lock().await.head.clone();
+        let request = recovery::request(&*replacement.store.lock().await, true)?;
+        let error = recovery::restore(request, replacement.clone(), Vec::new())
+            .await
+            .err()
+            .ok_or("tampering accepted")?;
+        let error = error.downcast_ref::<CoreError>().ok_or("core error")?;
+        assert_eq!(
+            error.code,
+            ErrorCode::CheckpointConflict,
+            "{alteration}: {error}"
+        );
+        assert!(
+            error.message.contains("resource failure"),
+            "{alteration}: {error}"
+        );
+        assert_eq!(replacement.store.lock().await.head, before);
+    }
+    // A checkpoint-only anchor still restores an already accepted capacity
+    // failure when the originating event predates the supplied journal.
+    let replacement = recovery::harness_at(store).await;
+    let request = recovery::request(&*replacement.store.lock().await, false)?;
+    let (restored, executor) = recovery::restore(request, replacement, Vec::new()).await?;
+    assert_eq!(
+        restored
+            .snapshot()
+            .await
+            .run
+            .as_ref()
+            .and_then(|run| run.resource_constraint),
+        Some(ResourceConstraint::CheckpointCapacity)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn capacity_failure_keeps_unrelated_blocks_and_recovers_abandoned_request() -> TestResult {
+    for abandon in [false, true] {
+        let harness = Arc::new(Harness::new(None, Some("run.capacity_reached")));
+        let (session, executor, _) =
+            setup(vec![output(vec![call("read")])], harness.clone(), false).await?;
+        let mut task = input();
+        task.limits = Some(Limits {
+            input_bytes: 4096,
+            checkpoint_bytes: 96 * 1024,
+            unacknowledged_bytes: 192 * 1024,
+            ..Limits::default()
+        });
+        session.start("input", 1, task).await?;
+        session.drive().await?;
+        let command = harness.sent.lock().await.first().ok_or("tool")?.clone();
+        let mut large = signal_update(&session, Vec::new()).await;
+        large
+            .facts
+            .insert("inventory".into(), json!("x".repeat(60 * 1024)));
+        let update = {
+            let session = session.clone();
+            tokio::spawn(async move { session.signals("too-large", large).await })
+        };
+        tokio::time::timeout(Duration::from_secs(5), harness.seen.acquire())
+            .await??
+            .forget();
+        let unrelated = signal_update(&session, Vec::new()).await;
+        {
+            // Poll a distinct control while the first holds input serialization.
+            // It installs its own provisional block but has no proposed batch.
+            let pending = session.signals("unrelated", unrelated.clone());
+            tokio::pin!(pending);
+            tokio::select! {
+                biased;
+                _ = &mut pending => return Err("unrelated control bypassed input serialization".into()),
+                _ = tokio::task::yield_now() => {}
+            }
+        }
+        harness.hold_enabled.store(false, Ordering::SeqCst);
+        if abandon {
+            update.abort();
+            assert!(update.await.is_err_and(|error| error.is_cancelled()));
+            reconnect::reconnect(&session, &harness).await?;
+        } else {
+            harness.resume.add_permits(1);
+            let error = update.await?.err().ok_or("capacity admitted")?;
+            assert_eq!(error.commit_status, CommitStatus::NotCommitted);
+        }
+        assert!(session.operation("too-large").await.is_none());
+        let error = session
+            .drive()
+            .await
+            .err()
+            .ok_or("unrelated block cleared")?;
+        assert_eq!(error.code, ErrorCode::CheckpointUnavailable);
+        assert!(harness.cancelled.lock().await.is_empty());
+        session.signals("unrelated", unrelated).await?;
+        session.drive().await?;
+        tokio::time::timeout(Duration::from_secs(5), harness.cancel_seen.acquire())
+            .await??
+            .forget();
+        session.tool_result("actual", result(&command)).await?;
+        assert_eq!(
+            session.drive().await?.run.as_ref().map(|run| run.status),
+            Some(RunStatus::Failed)
+        );
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            harness
+                .committed_kinds()
+                .await?
+                .iter()
+                .filter(|kind| *kind == "run.capacity_reached")
+                .count(),
+            1
+        );
+    }
     Ok(())
 }

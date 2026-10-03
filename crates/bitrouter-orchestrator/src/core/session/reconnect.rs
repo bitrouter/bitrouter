@@ -72,16 +72,7 @@ impl CoreSession {
             let resolved = live
                 .provisional_blocks
                 .iter()
-                .filter(|id| {
-                    live.state.operations.contains_key(*id)
-                        || live
-                            .state
-                            .agents
-                            .values()
-                            .filter_map(|agent| agent.turn.as_ref())
-                            .flat_map(|turn| &turn.core_calls)
-                            .any(|call| &call.invocation_id == *id && call.result.is_some())
-                })
+                .filter(|id| resolves_dispatch_block(&live.state, id))
                 .cloned()
                 .collect::<Vec<_>>();
             for id in resolved {
@@ -108,7 +99,7 @@ impl CoreSession {
                     live.disconnected.clone(),
                     live.pending
                         .as_ref()
-                        .map(|state| archive::prepare(state, false, &self.shared.limits))
+                        .map(|pending| archive::prepare(&pending.state, false, &self.shared.limits))
                         .transpose()?,
                 )
             };
@@ -337,13 +328,23 @@ impl CoreSession {
     }
 }
 
-fn adopt_pending(live: &mut LiveSession, payload: &CheckpointPayload) -> Result<(), CoreError> {
-    live.state = live.pending.take().ok_or_else(|| {
+pub(super) fn adopt_pending(
+    live: &mut LiveSession,
+    payload: &CheckpointPayload,
+) -> Result<(), CoreError> {
+    let pending = live.pending.take().ok_or_else(|| {
         reject(
             ErrorCode::CheckpointConflict,
             "reconciled batch has no retained candidate",
         )
     })?;
+    live.state = pending.state;
+    for id in pending.superseded_blocks {
+        live.provisional_blocks.remove(&id);
+    }
+    if live.provisional_blocks.is_empty() && !live.reconnecting {
+        live.gate.clear_dispatch_block();
+    }
     if payload
         .events
         .iter()
@@ -519,6 +520,7 @@ impl StepControl {
         if live
             .pending
             .as_ref()
+            .map(|pending| &pending.state)
             .into_iter()
             .chain(std::iter::once(&live.state))
             .flat_map(|state| state.agents.values())

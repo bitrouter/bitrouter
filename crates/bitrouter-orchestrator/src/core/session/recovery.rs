@@ -226,9 +226,11 @@ async fn restore_snapshot(
     let mut final_payload = None;
     let mut releases = BTreeMap::new();
     let mut activity_history = None;
+    let mut resource_history = budget::ResourceHistory::default();
     for (batch, mut payload) in payloads {
         archive::hydrate(&mut payload, harness, &binding.limits).await?;
         release::validate_history(&payload, &mut releases)?;
+        budget::validate_history(&payload, &mut resource_history)?;
         recovery_time::validate_history(
             &payload,
             CheckpointAck::for_batch(batch, &payload).head(),

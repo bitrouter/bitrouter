@@ -243,9 +243,20 @@ pub struct RootRun {
     /// remain admissible. It does not turn unknown effects into known results.
     #[serde(default)]
     pub resource_error: Option<CoreError>,
+    /// Missing on legacy active-time failures. Capacity failures retain an
+    /// explicit cause so restoration never treats them as an exhausted clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_constraint: Option<ResourceConstraint>,
     pub cancellation: Option<String>,
     pub final_answer: Option<String>,
     pub terminal_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceConstraint {
+    ActiveTime,
+    CheckpointCapacity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -356,7 +367,7 @@ impl SessionSnapshot {
 struct LiveSession {
     state: SessionSnapshot,
     gate: CommitGate,
-    pending: Option<SessionSnapshot>,
+    pending: Option<PendingTransition>,
     sent_tools: BTreeSet<String>,
     unresolved_tool_deliveries: BTreeSet<String>,
     cancelled_tools: BTreeSet<String>,
@@ -372,6 +383,23 @@ struct LiveSession {
     budget_watching: bool,
     restoration_started: Option<Instant>,
     restoration_stops: BTreeMap<String, (String, super::protocol::ToolObservation)>,
+}
+
+struct PendingTransition {
+    state: SessionSnapshot,
+    // Only blockers resolved by the discarded candidate belong to its failure
+    // replacement. Keep them tied to the pending batch until its ACK is proven.
+    superseded_blocks: BTreeSet<String>,
+}
+
+fn resolves_dispatch_block(state: &SessionSnapshot, id: &str) -> bool {
+    state.operations.contains_key(id)
+        || state
+            .agents
+            .values()
+            .filter_map(|agent| agent.turn.as_ref())
+            .flat_map(|turn| &turn.core_calls)
+            .any(|call| call.invocation_id == id && call.result.is_some())
 }
 
 struct Shared {
@@ -870,7 +898,7 @@ impl CoreSession {
         let receipt = live.state.operations.get(operation_id).or_else(|| {
             live.pending
                 .as_ref()
-                .and_then(|state| state.operations.get(operation_id))
+                .and_then(|pending| pending.state.operations.get(operation_id))
         });
         if let Some(receipt) = receipt {
             if receipt.request_sha256 != fingerprint {
@@ -3118,6 +3146,77 @@ impl CoreSession {
         self.transition_scoped(agent_id, None, kind, change).await
     }
 
+    fn prepare_checkpoint(
+        &self,
+        live: &LiveSession,
+        next: &mut SessionSnapshot,
+        event: DurableEvent,
+    ) -> Result<(CheckpointPayload, archive::Prepared), CoreError> {
+        let head = live.gate.head();
+        let kind = event.kind.as_str();
+        if !matches!(kind, "run.completed" | "run.failed" | "run.cancelled") {
+            refresh_run(next);
+        }
+        steering::cancel_inactive(next, head.state_revision + 1);
+        if next.run.as_ref().is_some_and(|run| {
+            matches!(
+                run.status,
+                RunStatus::Failed
+                    | RunStatus::Cancelled
+                    | RunStatus::Cancelling
+                    | RunStatus::RecoveryRequired
+            ) && live
+                .state
+                .run
+                .as_ref()
+                .is_none_or(|prior| prior.run_id != run.run_id || prior.status != run.status)
+        }) {
+            next.root_queue.paused = true;
+        }
+        super::accounting::work::synchronize(next)?;
+        let mut prepared = archive::prepare(next, false, &self.shared.limits)?;
+        let mut proposed = CheckpointPayload {
+            identity: BatchIdentity {
+                batch_id: id("batch"),
+                session_id: next.session_id.clone(),
+                execution_epoch: live.gate.grant().execution_epoch,
+                core_instance_id: live.gate.grant().core_instance_id.clone(),
+            },
+            base_event_seq: head.event_seq,
+            base_state_revision: head.state_revision,
+            tool_start_fences: next
+                .steering
+                .values()
+                .filter(|record| record.received_state_revision == head.state_revision + 1)
+                .flat_map(|record| record.tool_start_fences.iter().cloned())
+                .chain(budget::start_fences(next, kind))
+                .collect(),
+            events: vec![event],
+            checkpoint: Checkpoint {
+                schema_version: VERSION,
+                state_revision: head.state_revision + 1,
+                artifact_refs: recovery::artifacts(&prepared.state)?
+                    .into_values()
+                    .collect(),
+                state: encode(&prepared.state)?,
+            },
+        };
+        if let Err(error) = capacity::check(next, &proposed, &self.shared.limits, live.gate.grant())
+        {
+            if error.code != ErrorCode::LimitExceeded || prepared.blob.is_some() {
+                return Err(error);
+            }
+            prepared = archive::prepare(next, true, &self.shared.limits)?;
+            proposed.checkpoint.state = encode(&prepared.state)?;
+            proposed.checkpoint.artifact_refs = recovery::artifacts(&prepared.state)?
+                .into_values()
+                .collect();
+            capacity::check(next, &proposed, &self.shared.limits, live.gate.grant())?;
+        }
+        next.recovery_archive = prepared.state.recovery_archive.clone();
+        Ok((proposed, prepared))
+    }
+
     async fn transition_scoped<F>(
         &self,
         agent_id: Option<&str>,
@@ -3129,103 +3228,107 @@ impl CoreSession {
         F: FnOnce(&mut SessionSnapshot, &DurableHead, bool) -> Result<Value, CoreError> + Send,
     {
         let _commit = self.shared.commits.lock().await;
-        let (batch, disconnected, archive, manifest) =
+        let (batch, disconnected, archive, manifest, rejection) = {
+            let mut live = self.shared.live.lock().await;
+            let mut next = live.state.clone();
+            let head = live.gate.head().clone();
+            // During restoration, delayed stop reports can still correct
+            // the open interval. Seal only the authenticated entry baseline
+            // until output replay and the lifecycle drain have finished.
+            if let Some(run) = &mut next.run
+                && live.restoration_started.is_none()
             {
-                let mut live = self.shared.live.lock().await;
-                let mut next = live.state.clone();
-                let head = live.gate.head().clone();
-                // During restoration, delayed stop reports can still correct
-                // the open interval. Seal only the authenticated entry baseline
-                // until output replay and the lifecycle drain have finished.
-                if let Some(run) = &mut next.run
-                    && live.restoration_started.is_none()
-                {
-                    run.active_ms = run.active_ms.max(live.activity.elapsed_ms());
-                }
-                let payload = change(&mut next, &head, live.gate.can_dispatch())?;
-                if !matches!(kind, "run.completed" | "run.failed" | "run.cancelled") {
-                    refresh_run(&mut next);
-                }
-                steering::cancel_inactive(&mut next, head.state_revision + 1);
-                if next.run.as_ref().is_some_and(|run| {
-                    matches!(
-                        run.status,
-                        RunStatus::Failed
-                            | RunStatus::Cancelled
-                            | RunStatus::Cancelling
-                            | RunStatus::RecoveryRequired
-                    ) && live.state.run.as_ref().is_none_or(|prior| {
-                        prior.run_id != run.run_id || prior.status != run.status
-                    })
-                }) {
-                    next.root_queue.paused = true;
-                }
-                super::accounting::work::synchronize(&mut next)?;
-                let mut prepared = archive::prepare(&next, false, &self.shared.limits)?;
-                let artifacts = recovery::artifacts(&prepared.state)?;
-                let mut proposed = CheckpointPayload {
-                    identity: BatchIdentity {
-                        batch_id: id("batch"),
-                        session_id: next.session_id.clone(),
-                        execution_epoch: live.gate.grant().execution_epoch,
-                        core_instance_id: live.gate.grant().core_instance_id.clone(),
-                    },
-                    base_event_seq: head.event_seq,
-                    base_state_revision: head.state_revision,
-                    tool_start_fences: next
-                        .steering
-                        .values()
-                        .filter(|record| record.received_state_revision == head.state_revision + 1)
-                        .flat_map(|record| record.tool_start_fences.iter().cloned())
-                        .chain(budget::start_fences(&next, kind))
-                        .collect(),
-                    events: vec![DurableEvent {
-                        event_seq: head.event_seq + 1,
-                        kind: kind.to_owned(),
-                        run_id: run_id
-                            .map(str::to_owned)
-                            .or_else(|| next.run.as_ref().map(|run| run.run_id.clone())),
-                        agent_id: Some(agent_id.unwrap_or(&next.agent_id).to_owned()),
-                        payload,
-                    }],
-                    checkpoint: Checkpoint {
-                        schema_version: VERSION,
-                        state_revision: head.state_revision + 1,
-                        artifact_refs: artifacts.into_values().collect(),
-                        state: encode(&prepared.state)?,
-                    },
-                };
-                if let Err(error) =
-                    capacity::check(&next, &proposed, &self.shared.limits, live.gate.grant())
-                {
-                    if error.code != ErrorCode::LimitExceeded || prepared.blob.is_some() {
-                        return Err(error);
-                    }
-                    prepared = archive::prepare(&next, true, &self.shared.limits)?;
-                    proposed.checkpoint.state = encode(&prepared.state)?;
-                    proposed.checkpoint.artifact_refs = recovery::artifacts(&prepared.state)?
-                        .into_values()
-                        .collect();
-                    capacity::check(&next, &proposed, &self.shared.limits, live.gate.grant())?;
-                }
-                next.recovery_archive = prepared.state.recovery_archive;
-                let batch = live.gate.propose(proposed)?.clone();
-                // Status/result receipt establishes a local observation time,
-                // independent of the later durable ACK. Keep confirmed running
-                // tools in the same union clock as concurrent model work.
-                let tools = tool_status::activity_ids(&next)
-                    .into_iter()
-                    .filter(|id| {
-                        !live
-                            .restoration_stops
-                            .contains_key(id.strip_prefix("tool/").unwrap_or(id))
-                    })
-                    .collect();
-                live.activity.synchronize_tools(&tools);
-                let manifest = next.manifest.clone();
-                live.pending = Some(next);
-                (batch, live.disconnected.clone(), prepared.blob, manifest)
+                run.active_ms = run.active_ms.max(live.activity.elapsed_ms());
+            }
+            let payload = change(&mut next, &head, live.gate.can_dispatch())?;
+            let event = DurableEvent {
+                event_seq: head.event_seq + 1,
+                kind: kind.to_owned(),
+                run_id: run_id
+                    .map(str::to_owned)
+                    .or_else(|| next.run.as_ref().map(|run| run.run_id.clone())),
+                agent_id: Some(agent_id.unwrap_or(&next.agent_id).to_owned()),
+                payload,
             };
+            let mut rejection = None;
+            let mut superseded_blocks = BTreeSet::new();
+            let (proposed, prepared) = match self.prepare_checkpoint(&live, &mut next, event) {
+                Ok(prepared) => prepared,
+                Err(mut error)
+                    if error.code == ErrorCode::LimitExceeded
+                        && live.restoration_started.is_none()
+                        && live.state.run.as_ref().is_some_and(|run| {
+                            !run.status.terminal() && run.resource_error.is_none()
+                        }) =>
+                {
+                    // The rejected candidate is never accepted. Use only
+                    // acknowledged state to commit an independent failure
+                    // and revoke unstarted tool authority in the same ACK.
+                    superseded_blocks = live
+                        .provisional_blocks
+                        .iter()
+                        .filter(|id| {
+                            !resolves_dispatch_block(&live.state, id)
+                                && resolves_dispatch_block(&next, id)
+                        })
+                        .cloned()
+                        .collect();
+                    next = live.state.clone();
+                    if let Some(run) = &mut next.run {
+                        run.active_ms = run.active_ms.max(live.activity.elapsed_ms());
+                    }
+                    let failure = budget::capacity_failure(&mut next)?;
+                    let event = DurableEvent {
+                        event_seq: head.event_seq + 1,
+                        kind: "run.capacity_reached".into(),
+                        run_id: next.run.as_ref().map(|run| run.run_id.clone()),
+                        agent_id: Some(next.agent_id.clone()),
+                        payload: encode(&failure)?,
+                    };
+                    let prepared = match self.prepare_checkpoint(&live, &mut next, event) {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            // A legacy/corrupt capacity promise must not
+                            // leave scheduling enabled after cleanup fails.
+                            live.gate.disconnect();
+                            live.disconnected.cancel();
+                            return Err(error);
+                        }
+                    };
+                    // This ACK commits the failure boundary, not the rejected
+                    // caller operation. Its result must still be retained/retried.
+                    error.commit_status = CommitStatus::NotCommitted;
+                    rejection = Some(error);
+                    prepared
+                }
+                Err(error) => return Err(error),
+            };
+            let batch = live.gate.propose(proposed)?.clone();
+            // Status/result receipt establishes a local observation time,
+            // independent of the later durable ACK. Keep confirmed running
+            // tools in the same union clock as concurrent model work.
+            let tools = tool_status::activity_ids(&next)
+                .into_iter()
+                .filter(|id| {
+                    !live
+                        .restoration_stops
+                        .contains_key(id.strip_prefix("tool/").unwrap_or(id))
+                })
+                .collect();
+            live.activity.synchronize_tools(&tools);
+            let manifest = next.manifest.clone();
+            live.pending = Some(PendingTransition {
+                state: next,
+                superseded_blocks,
+            });
+            (
+                batch,
+                live.disconnected.clone(),
+                prepared.blob,
+                manifest,
+                rejection,
+            )
+        };
         let acknowledgement = tokio::select! {
             biased;
             _ = disconnected.cancelled() => Err(reject(ErrorCode::CheckpointUnavailable, "durable authority disconnected during commit")),
@@ -3237,14 +3340,8 @@ impl CoreSession {
         let mut live = self.shared.live.lock().await;
         let result = match acknowledgement {
             Ok(ack) => match live.gate.acknowledge(&ack) {
-                Ok(Some(_)) => {
-                    live.state = live.pending.take().ok_or_else(|| {
-                        reject(ErrorCode::CheckpointConflict, "missing tentative state")
-                    })?;
-                    if kind == "input.accepted" {
-                        live.activity = Activity::default();
-                    }
-                    release::fence(&mut live);
+                Ok(Some(payload)) => {
+                    reconnect::adopt_pending(&mut live, &payload)?;
                     budget::watch(self, &mut live);
                     self.shared.changed.notify_one();
                     Ok(())
@@ -3265,7 +3362,8 @@ impl CoreSession {
             // can resolve that uncertainty.
             error.commit_status = CommitStatus::Unknown;
             error
-        })
+        })?;
+        rejection.map_or(Ok(()), Err)
     }
 }
 

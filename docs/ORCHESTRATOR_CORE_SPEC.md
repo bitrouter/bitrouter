@@ -641,6 +641,27 @@ its advertised manifest and checked at bind time. Active-time accounting
 excludes intervals with no running model/tool work, such as pure approval or
 commit waits; it does not sum overlapping work as wall time.
 
+Checkpoint admission checks both the candidate and a conservative cleanup
+projection. If a live run cannot admit the candidate, core discards it and
+proposes an independent `run.capacity_reached` transition from acknowledged
+state. Its checkpoint records `resource_constraint: checkpoint_capacity` and a
+committed `resource_error`, pauses queued roots, requests cancellation of live
+turns, and atomically fences unstarted tool invocations. The original request
+has no acceptance receipt and returns `limit_exceeded / not_committed` after
+the failure ACK; the changed head records the independent failure. Missing ACKs
+remain `unknown` until exact head/batch reconciliation. A failed replacement
+commit cannot reopen dispatch. Rejected tool evidence remains the harness's
+responsibility until an operation receipt confirms acceptance.
+
+Capacity failures do not imply elapsed-time exhaustion. Active-time failures
+use `resource_constraint: active_time`; absent causes on legacy failures retain
+that meaning. Both failures preserve uncertain effects and accept bounded
+settlement evidence. Cleanup ends the run as failed, including after a later
+explicit cancellation. Restore validates the failure event against its
+checkpoint and preserves each run's failure facts across the supplied journal,
+including intervening runs. Historical snapshots without cleanup capacity are
+rejected before a replacement ownership checkpoint.
+
 Record estimated, provider-reported, reconciled and unknown cost separately.
 Hard monetary admission requires conservative reservations from supported
 pricing/output bounds; unavailable bounds block that policy rather than imply

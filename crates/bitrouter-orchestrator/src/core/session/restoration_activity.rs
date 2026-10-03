@@ -63,7 +63,10 @@ impl RestorationActivity {
                 "stop is outside the restoration clock interval",
             ));
         }
-        let state = live.pending.as_ref().unwrap_or(&live.state);
+        let state = live
+            .pending
+            .as_ref()
+            .map_or(&live.state, |pending| &pending.state);
         let call = state
             .agents
             .values()

@@ -189,6 +189,7 @@ pub(super) fn check(
         run.status = RunStatus::RecoveryRequired;
         run.active_ms = u64::MAX;
         if run.resource_error.is_none() {
+            run.resource_constraint = Some(ResourceConstraint::CheckpointCapacity);
             run.resource_error = Some(CoreError {
                 code: ErrorCode::LimitExceeded,
                 message: "x".repeat(128),
