@@ -56,3 +56,9 @@ Descendant-assigned queued followups reserve their next slot so another spawn
 cannot block the assigning agent's completion indefinitely. SSE currently emits
 output deltas after the exchange has reached its durable boundary; it does not
 provide live provider-token streaming.
+
+HTTP consumer slots remain occupied while the server body or downstream byte
+chunks retain the response, even after execution has finished. Retry a busy
+consumer with the same operation identity. Key-bound policy is checked by the
+shared model pipeline on each new exchange; changing a policy does not reopen
+an already completed response.

@@ -3,8 +3,9 @@
 
 use std::collections::VecDeque;
 use std::convert::Infallible;
+use std::sync::Arc;
 
-use axum::body::{Body, to_bytes};
+use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::sse::{Event, KeepAlive};
@@ -16,6 +17,7 @@ use bitrouter_orchestrator::core::protocol::{
 use bitrouter_orchestrator::core::session::responses::{ResponseExchange, ResponseToolResult};
 use bitrouter_orchestrator::core::session::{CoreSession, RunStatus};
 use bitrouter_sdk::language_model::types::Content;
+use futures::StreamExt;
 use http::{Method, header};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -187,10 +189,13 @@ pub(super) async fn intercept(
         let stream = create.stream;
         let progress = start(&api, principal, session.clone(), create).await?;
         if stream {
-            Ok(stream_response(session, progress, permit))
+            Ok(retain_consumer(stream_response(session, progress), permit))
         } else {
             let exchange = wait(session, progress).await?;
-            Ok(axum::Json(project(&exchange)?).into_response())
+            Ok(retain_consumer(
+                axum::Json(project(&exchange)?).into_response(),
+                permit,
+            ))
         }
     }
     .await;
@@ -536,7 +541,33 @@ struct Streaming {
     terminal: bool,
     events: VecDeque<Value>,
     sequence: u64,
-    _permit: OwnedSemaphorePermit,
+}
+
+struct ConsumerChunk {
+    bytes: Bytes,
+    _lease: Arc<OwnedSemaphorePermit>,
+}
+
+impl AsRef<[u8]> for ConsumerChunk {
+    fn as_ref(&self) -> &[u8] {
+        self.bytes.as_ref()
+    }
+}
+
+// Bytes ownership follows downstream clones, including a final frame retained
+// after the body stream reaches EOF. See <https://docs.rs/bytes/latest/bytes/struct.Bytes.html#method.from_owner>.
+fn retain_consumer(response: Response, permit: OwnedSemaphorePermit) -> Response {
+    let lease = Arc::new(permit);
+    let (parts, body) = response.into_parts();
+    let stream = body.into_data_stream().map(move |result| {
+        result.map(|bytes| {
+            Bytes::from_owner(ConsumerChunk {
+                bytes,
+                _lease: lease.clone(),
+            })
+        })
+    });
+    Response::from_parts(parts, Body::from_stream(stream))
 }
 
 fn lifecycle(exchange: &ResponseExchange) -> Result<Value, ApiError> {
@@ -634,11 +665,7 @@ impl Streaming {
     }
 }
 
-fn stream_response(
-    session: CoreSession,
-    progress: watch::Receiver<Progress>,
-    permit: OwnedSemaphorePermit,
-) -> Response {
+fn stream_response(session: CoreSession, progress: watch::Receiver<Progress>) -> Response {
     let state = Streaming {
         session,
         progress,
@@ -646,7 +673,6 @@ fn stream_response(
         terminal: false,
         events: VecDeque::new(),
         sequence: 0,
-        _permit: permit,
     };
     let stream = futures::stream::unfold(state, |mut state| async move {
         if state.events.is_empty()
@@ -674,4 +700,36 @@ fn stream_response(
         http::HeaderValue::from_static("no-store"),
     );
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::Semaphore;
+
+    #[tokio::test]
+    async fn consumer_capacity_follows_buffered_chunks_after_body_drop()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let capacity = Arc::new(Semaphore::new(1));
+        let permit = capacity.clone().acquire_owned().await?;
+        let body = Body::from_stream(futures::stream::iter([
+            Ok::<_, Infallible>(Bytes::from_static(b"first")),
+            Ok(Bytes::from_static(b"last")),
+        ]));
+        let response = retain_consumer(Response::new(body), permit);
+        assert_eq!(capacity.available_permits(), 0);
+        let mut stream = response.into_body().into_data_stream();
+        let first = stream.next().await.ok_or("first chunk")??;
+        let last = stream.next().await.ok_or("last chunk")??;
+        assert!(stream.next().await.is_none());
+        drop(stream);
+        assert_eq!(capacity.available_permits(), 0);
+        let retained = last.clone();
+        drop(last);
+        drop(first);
+        assert_eq!(capacity.available_permits(), 0);
+        drop(retained);
+        assert_eq!(capacity.available_permits(), 1);
+        Ok(())
+    }
 }

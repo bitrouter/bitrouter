@@ -2490,8 +2490,8 @@ and original initialization event before any interruptible checkpoint wait.
 Reconnect finishes this event before its own checkpoint; replacement transfers
 retained provider evidence before admitting execution. The cleanup projection
 also reserves response-retained child-delivery events alongside mailbox copies.
-Final workspace checks and commit reference are pending. Loopback tests
-already exercise the production model pipeline through independent HTTP and
+The implementation is committed as `d6e5f2bf`. Loopback tests
+exercise the production model pipeline through independent HTTP and
 WebSocket clients, cross-owner rejection, completion ACK before tool delivery,
 channel/HTTP duplicate result delivery, abandoned SSE consumers and ordinary
 inference isolation. These are not live-provider or production-harness evidence.
@@ -2521,5 +2521,41 @@ were preserved outside that directory before the complete successful rerun.
 Strict workspace/all-target/all-feature clippy passed in 29.78 seconds after
 collapsing a nested conditional. Formatting and diff checks passed; strict
 rustdoc passed in 27.99 seconds, workspace doctests passed 5 tests with 1 ignored,
-and Rust 1.93.0 workspace/all-feature check passed in 24.81 seconds. New-commit
-remote CI is tracked independently from these local results.
+and Rust 1.93.0 workspace/all-feature check passed in 24.81 seconds. Commit
+`d6e5f2bf` passed every job of remote CI `37142668620`, including
+Linux/macOS/Windows tests.
+
+## C5 authentication and HTTP consumer lifetime
+
+Independent HTTP/WebSocket clients now verify that a key-bound model policy
+rejects managed execution before any upstream preparation, revoked/expired
+credentials reject new HTTP/upgrade requests and work on an existing channel,
+and a live policy reload is applied on the next response exchange. Replaying
+an earlier success or failure keeps its original response even after policy
+changes; replay does not rerun model preparation or generation.
+
+HTTP consumer admission now follows the response body and every emitted byte
+chunk, including downstream clones. Previously a non-streaming handler released
+its permit before the network finished retaining its body; an SSE body could
+also reach EOF while its final frame remained buffered. A shared byte owner
+keeps the permit until the final retained chunk is dropped. Consumer loss still
+does not cancel accepted core execution. The ownership regression exercises EOF,
+body drop, two retained chunks and a cloned final chunk.
+
+The ten remote API tests and this ownership regression passed (11 total,
+2.557 seconds). Independent read-only review found no P1/P2 in this increment.
+Final-source workspace/all-feature nextest passed 3972 tests with 22 skipped
+in 110.366 seconds using four test threads. Strict workspace/all-target/
+all-feature clippy passed in 24.70 seconds, strict rustdoc in 17.31 seconds,
+and Rust 1.93.0 workspace/all-feature check in 16.48 seconds. Workspace doctests
+passed five tests with one ignored; formatting and diff checks passed.
+Previous head `d6e5f2bf` passed every job of CI `37142668620`, including
+Linux/macOS/Windows tests. The new commit's remote CI remains a separate gate.
+
+This closes these specific authentication and consumer-lifetime cases, not the
+entire transport pressure requirement. HTTP currently materializes response
+projection, and SSE eagerly queues multiple copies of output values without a
+shared per-session byte admission ledger. That path still needs incremental
+serialization/projection and pressure tests. Mid-operation authorization races,
+authenticated replacement/release conformance, measured remote running-tool
+clock handoff, remaining C4/C6 work and full acceptance remain open.
