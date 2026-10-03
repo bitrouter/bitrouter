@@ -29,24 +29,32 @@ always yields one clean JSON value. A failed command emits a uniform error envel
 
 > Non-reporting commands are exempt: `serve` is a long-running server; `acp serve` is a stdio JSON-RPC bridge; foreground `run` and `task run` stream NDJSON; `code`, `launch`, bare `agents`, and `agents attach` own the terminal; and `cloud api` streams the remote response body. `run --background` and `agents sessions|stop|remove` remain ordinary structured reports.
 
-## BRO native coding tasks
+## BRO native coding conversations
 
 ```console
 bro task run "fix the failing test" --model openai/gpt-5 --check "cargo test"
-bro task run "inspect this project" --model openai/gpt-5 --workspace /path/to/project
 bro task run "inspect this project" --model openai/gpt-5 --read-only
+bro code --model openai/gpt-5 --workspace /path/to/project
+bro code --thread-id THREAD_ID
 ```
 
 `task run` starts or connects to the local `bro serve` process through its
-owner-restricted task socket. It submits a BRO-owned task and waits for a final
-answer. Standard output is NDJSON: an `accepted` record, ordered `event`
-records with per-task sequence numbers, and a `terminal` record with status,
-verification, final answer, and cursor. Failed, cancelled, or interrupted tasks
-exit nonzero. `--check` is a bounded shell command in the server workspace;
-without it verification is `not_requested`. `--effort`, `--workspace`, and
-`--config` are optional. This local headless client approves its own tool
-requests. `--read-only` restricts the entire task to inspection tools and
-cannot be combined with `--check`. Explicit remote contexts fail without local fallback.
+owner-restricted native socket. The client creates a Thread, starts one Turn,
+and waits for that Turn's result. Each call uses its own stable durable
+acceptance key. A lost reply is retried once with the original key and server
+instance; an unresolved outcome reports its identity for inspection.
+A known start rejection reports the created Thread ID; creating a Thread alone
+never executes a model or tool. There is no independent Task execution API.
+
+Standard output is NDJSON: `accepted` includes `thread_id` and `turn_id`,
+`snapshot` carries a Thread view, durable `event` records use Thread cursors,
+`live` carries bounded volatile output, and `terminal` includes status,
+verification, final answer, and cursor. Failed, cancelled, interrupted, or
+recovery-blocked Turns exit nonzero. This local headless client approves its
+own identified tool requests. `--check` supplies bounded workspace verification;
+without it verification is `not_requested`. `--read-only` forbids effectful
+tools and cannot be combined with `--check`. Explicit remote contexts fail
+without local fallback. `bro run <agent>` remains the separate ACP harness path.
 
 BRO coding tasks expose `read(path, offset?, limit?)`, `ls(path?, limit?)`,
 `find(pattern, path?, limit?)`, `grep(pattern, path?, glob?, ignoreCase?, literal?, limit?)`,
@@ -67,10 +75,24 @@ untouched text, a UTF-8 BOM, and the file's line-ending style. Shell commands st
 in the workspace, default to a 30-second timeout, and accept at most 120
 seconds. The workspace path check is not an OS sandbox for shell commands.
 
-`bro run <agent>` remains the separate ACP harness path. The native task
-service never imports a harness-native transcript as a BRO task.
+The local native protocol is **v14**, bound to the negotiated server instance.
+Older daemons fail the handshake before submission. `command_id` correlates
+transport replies; durable `idempotency_key` identifies accepted operations.
+Every Thread operation checks its authenticated caller, stored permission
+profile, current workspace grant, and instance. Local and HTTP callers have
+distinct ownership. Knowing a Thread ID does not authorize access.
 
-The same task service can expose a separate HTTP listener when configured:
+Bare `bro code` keeps one Thread across prompts and inherits settled context.
+Enter starts a Turn when idle, and enqueues FIFO input while busy or paused.
+Ctrl-Enter explicitly steers the active Turn; Ctrl-R explicitly resumes a
+paused queue. `y`/`n` answers a pending identified approval only with an empty
+composer. Ctrl-C cancels the identified active Turn; Ctrl-D detaches. The draft
+clears only after acceptance. Same-instance reconnect uses the Thread cursor
+and preserves the in-process draft; instance loss never resubmits input.
+`--thread-id` reattaches stored configuration and permissions; `--task-id` has
+been removed. No draft persistence across process exit is provided.
+
+The same Thread service can expose an optional HTTP listener:
 
 ```yaml
 agent_api:
@@ -80,102 +102,78 @@ agent_api:
   workspaces: [/absolute/server/project]
 ```
 
-The server requires an environment value of at least 24 bytes at `token_env`,
-binds only to loopback, and admits only the listed exact workspaces. Every
-`/agent/v1` request needs `Authorization: Bearer <token>`.
-`GET /agent/v1/capabilities` advertises the current `runtime.server_instance_id`
-and limits. Other task requests require `X-Bro-Server-Instance` with that
-identity. Submission is `POST /agent/v1/tasks` with `Idempotency-Key` and JSON fields `prompt`,
-`workspace`, `model`, optional `effort`, optional `read_only`, and optional
-`verification_command`. Read-only tasks reject verification commands.
-`GET /agent/v1/tasks/{id}` reads the snapshot;
-`GET /agent/v1/tasks/{id}/events?after=N` replays ordered events after a
-cursor. `GET /agent/v1/tasks/{id}/observe?after=N` streams SSE: an atomic
-snapshot with a cutoff and optional retained catchup, then newer events.
-Expired cursors or slow subscriptions get a snapshot with `resynchronized: true`.
-Catchup events precede the snapshot cutoff and must not be applied again to
-that snapshot. `POST /agent/v1/tasks/{id}/inputs` accepts `request_id` and
-`approved`; `POST /agent/v1/tasks/{id}/cancel` requests cancellation. The
-listener is disabled by default and ignores inference `server.skip_auth` and
-read-only control credentials.
-While a task runs, its snapshot may include a bounded `live` projection with
-`kind`, `text`, and a `truncated` flag. It contains assistant text or shell output still in progress;
-it is cleared when the complete message or tool result arrives. Assistant and
-shell deltas also carry sequenced events. Pending approvals include the request
-ID, tool ID/name, and arguments in the snapshot. The first valid response
-resolves an approval for all observers; cancellation resolves it as denied.
+The token environment value must contain at least 24 bytes. The listener binds
+only to loopback and authorizes exact canonical workspaces. Every `/agent/v2`
+request requires `Authorization: Bearer <token>`. Read `/agent/v2/capabilities`
+first and send its `runtime.server_instance_id` as `X-Bro-Server-Instance` on
+all other operations. Every mutation requires `Idempotency-Key`.
 
-Live task state is owned by one `bro serve` process. The local protocol is
-version 13; CLI/TUI subscribe to snapshots and events instead of polling.
-Detaching keeps the task running. On shutdown the server stops admission,
-cancels tasks, and waits for Agent and verification cleanup. A restart creates
-a new instance. The server commits admission, model snapshots/full responses,
-tool execution intents/results and settlement to dedicated records in its
-configured database. The Rust core can reconstruct continuous Threads in a
-bounded read-only recovery view. Safe restart continuation remains under
-implementation; clients must report instance loss and must not
-automatically repeat a submission. The Rust runtime now retains Thread context and
-durable FIFO/control keys, steering and bounded history/observation/reconnect;
-these Thread operations are not yet published through
-the CLI, HTTP or local transport. Legacy task submission still uses instance-local
-idempotency. A storage failure blocks the task as
-`recovery_required` and retains its workspace exclusion.
+| Route under `/agent/v2` | Body or result |
+| --- | --- |
+| `POST /threads` | `workspace`, `model`, optional `effort`, `read_only`, `verification_command`; returns Thread |
+| `GET /threads/{id}` | Thread view, including latest Turn and queue |
+| `POST /threads/{id}/turns` | `prompt`, `mode: "start"` or `"enqueue"`; returns receipt |
+| `GET /threads/{id}/turns/{turn_id}` | Targeted stored Turn snapshot |
+| `POST /threads/{id}/turns/{turn_id}/cancel` | `mode: "active"` or `"queued"`; explicit scope remains stable on retry |
+| `POST /threads/{id}/steer` | `expected_turn_id`, `text` |
+| `POST /threads/{id}/inputs` | `turn_id`, `request_id`, `approved` |
+| `POST /threads/{id}/resume` | Explicit queue resumption; no body |
+| `GET /threads/{id}/history?after=N&cutoff=C&limit=L` | Bounded durable public history; cutoff and limit optional |
+| `GET /threads/{id}/observe?after=N` | SSE Thread snapshot/catchup, durable events and volatile live output |
 
-Accepted user messages and assistant attempts have stable Item IDs. Assistant
-start, delta, full-message and interrupted events share the same ID; live
-snapshots retain it too. Cancelled, truncated or rejected model streams retain
-bounded interrupted evidence without entering model context or executing calls.
+The old `/agent/v1/tasks` routes are removed. The listener is disabled by
+default and does not inherit inference `server.skip_auth` or read-only control
+credentials. Slow subscribers or unavailable hot cursors get a fresh snapshot
+with `resynchronized: true`. Catchup precedes the snapshot cutoff; do not apply
+it again to that snapshot. Live deltas do not advance durable cursors or enter
+settled model context. Complete assistant/tool results are projected from the
+same transaction that saves their canonical execution facts.
 
-Default runtime limits are 8 active tasks, 32 retained terminal tasks / 64 MiB for up to
-30 minutes, 256 cached events / 2 MiB per task, 8 observers per task, and a
-32-event subscriber queue. Live snapshot output retains at most 32 KiB. Tasks
-and their idempotency entries may expire earlier under retention pressure;
-idempotency is scoped to the caller and current instance. The local adapter
-admits at most 64 connections plus one bounded rejection reply; HTTP admits 64
-concurrent handlers. Overload, instance mismatch, expired task IDs, and cursor
-resynchronization use identified error codes.
+The database retains Thread identities, context, history and acceptance keys.
+Idle or safely settled empty paused Threads can leave the hot cache. Pressure
+reclaims the oldest eligible hot Thread; active workers, queues, approvals,
+subscribers, commit references, recovery blockers and workspace leases prevent
+unload. Cold public reads do not install SDK context or run work. Clean
+same-instance reload preserves cursor/configuration/context without journal
+writes. Cross-instance inspection remains separate from explicit safe recovery;
+loading or reconnecting never resumes a stored queue. No operator recovery
+command is published.
 
-Core recovery scans allow 2 readers, 64 records / 4 MiB per page and 1,000,000
-records per Thread. These capability limits do not expose a CLI recovery command.
-Loaded Threads remain `recovery_required` until execution ownership, termination
-and effects are confirmed; reconstruction alone cannot resume work.
+Defaults: 8 active Turns, 32 hot Threads, 32 queued inputs per Thread, 2 MiB
+context per Thread / 64 MiB hot context, and 32 settled Turn snapshots / 64 MiB
+for up to 30 minutes. Thread observation caches retain 256 events / 2 MiB,
+with 8 subscribers and 32 queued events per subscriber. Live snapshots retain
+at most 32 KiB. Evicting a snapshot or hot Thread does not remove durable keys
+or history. Local connections and HTTP handlers each admit at most 64 requests.
+All-ineligible capacity returns `overloaded`.
 
-Native startup claims a database execution owner. Protocol v13 capabilities
-report its instance/generation or a recovery blocker. Normal shutdown joins
-execution, persists queue pauses and a stopped proof before a later instance
-can claim. An active lost owner or legacy unfenced facts block new native work
-as `recovery_required`; inference remains available. Owner/effect resolution is
-still under implementation, with no published recovery command. Do not clear
-the blocker by deleting owner records or automatically repeating work.
+Read batches use at most 4 workers per Turn and 16 globally. Write/edit/shell
+and verification preserve ordered workspace barriers. Requests, full responses,
+execution intents/results and settlement commit before dependent advancement.
+Verification asks for its own identified approval; denial reports `denied`.
+Cancellation joins started work before clean release. Storage failures and
+unknown effects retain workspace exclusion as `recovery_required`.
 
-Native execution also requires a writable parent for its canonical workspace.
-The local v13 handshake rejects an older daemon before task submission.
-Shared `.bro-workspace-<sha256(canonical UTF-8 path)>.lock` / `.json` sidecars
-live in that parent, outside the workspace, and coordinate runtimes even when
-configured with different databases. A live owner reports conflict; an active
-marker without confirmed release reports `recovery_required` after process loss.
-Only joined work with committed release preparation can write an idle marker.
-Do not delete these files to clear a blocker: the lock inode must stay stable,
-and marker deletion cannot prove termination or effects. This is cooperating
-local-runtime exclusion; it is not an OS sandbox or power-loss guarantee.
+Startup claims one database owner and completes bounded cold discovery before
+admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
+Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
+records per Thread. Capabilities expose aggregate progress, not root identities
+or prompts. New roots use runtime format 2. Migration adds metadata with
+**default 0** for old roots; unsupported formats fail before payload decoding
+or execution, with `recovery_required` / `unsupported_runtime_format`.
+They are not converted or marked safe.
 
-Native initialization also completes bounded cold discovery before admitting work.
-Defaults are 1024 stored roots, 1,000,000 scanned records and 4 MiB of cold metadata.
-Protocol v13 capabilities report aggregate scan progress/completion and failure;
-root identities and prompts are not exposed there. An incomplete scan blocks
-admission. Unknown cold execution blocks its workspace even before explicit load,
-including old Task submissions. Discovery creates no model request, runnable
-approval or hot context and does not automatically resume stored queues. Legacy
-Task conversion and safe same-Turn continuation remain under implementation.
+Normal shutdown joins execution and commits release/stopped evidence. An active
+lost owner, unsupported root, or unconfirmed effect remains blocked; PID loss
+and a new instance do not prove safe termination. Workspace coordination uses
+stable `.bro-workspace-<sha256(canonical UTF-8 path)>.lock` / `.json` sidecars
+in the writable parent, including across different databases. An unreleased
+marker remains blocked after process loss. Never delete owner records, database
+roots or markers to bypass this state. This cooperating runtime exclusion is
+not an OS sandbox or a power-loss guarantee.
 
-Each task runs up to 4 read workers and the server admits up to 16 tool workers
-globally. Contiguous `read`/`ls`/`find`/`grep` calls may overlap; write, edit, shell
-and verification wait for preceding reads and preserve their ordered barriers.
-Results commit as they finish, while model messages retain original call order.
-Configured verification uses an identified approval and the same global worker
-budget. Denial reports `denied`; interrupted effects block safe continuation.
-
-Per-provider credential commands are under `bro providers (login|logout)`; BitRouter Cloud sign-in is `bro cloud (login|logout|whoami)`.
+Per-provider credential commands are under `bro providers (login|logout)`;
+BitRouter Cloud sign-in is `bro cloud (login|logout|whoami)`.
 
 ## Logging (`RUST_LOG`)
 
@@ -902,23 +900,22 @@ for migration. BitRouter keeps no session records.
 ### `bro code` — coding conversation
 
 ```bash
-bro code [--model <id>] [--task-id <id>] [--check <command>] [--workspace <path>] [-c <path>]
+bro code [--model <id>] [--thread-id <id>] [--check <command>|--read-only] [--workspace <path>] [-c <path>]
 bro code <agent> [--load <id>|--resume <id>] [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
 bro code --socket <path>
 bro --context <name> code
 ```
 
-Bare local `code` opens BRO's native task view. It chooses a model from
-`--model` or `chat.model`, or asks for one in the editor. Enter submits a new
-task to the server; `--task-id` reattaches to a saved task without replaying
-effects. The view shows assistant text and `bash` output as they arrive, then
-projects complete assistant and tool events. It answers a pending tool
-request with `y` or `n`, requests cancellation with Ctrl-C, and detaches with
-Ctrl-D. `--check` supplies a bounded project verification command for newly
-submitted tasks. The status header shows task state and verification, including
-`unavailable` when no check ran. `--socket` alone keeps the read-only local
-operations view; with native task flags it chooses an already-running local
-task server. An explicit remote context keeps its operations-only view.
+Bare local `code` opens a native Thread conversation. It chooses a model from
+`--model` or `chat.model`, or asks in the editor. Subsequent prompts reuse that
+Thread's settled context. Enter starts or enqueues; Ctrl-Enter steers; Ctrl-R
+resumes a paused queue. With an empty composer, `y`/`n` answers an identified
+approval. Ctrl-C cancels the active Turn and Ctrl-D detaches. `--thread-id`
+reattaches stored configuration without replaying effects. The header shows
+Thread/Turn state and verification, including `not_requested` without a check.
+`--socket` alone keeps the read-only operations view; native flags select an
+already-running local native server. Explicit remote contexts keep the
+operations view. See the native section above for recovery and draft behavior.
 
 The rest of this section describes explicit ACP `bro code <agent>` sessions.
 Those sessions preserve harness-native IDs and history.

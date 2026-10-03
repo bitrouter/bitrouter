@@ -36,6 +36,7 @@ pub mod m20240101_000022_create_bro_execution_records;
 pub mod m20240101_000023_create_bro_acceptance_keys;
 pub mod m20240101_000024_create_bro_runtime_ownership;
 pub mod m20240101_000025_create_bro_execution_index;
+mod m20240101_000026_bro_runtime_format;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -71,6 +72,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000023_create_bro_acceptance_keys::Migration),
             Box::new(m20240101_000024_create_bro_runtime_ownership::Migration),
             Box::new(m20240101_000025_create_bro_execution_index::Migration),
+            Box::new(m20240101_000026_bro_runtime_format::Migration),
         ]
     }
 }

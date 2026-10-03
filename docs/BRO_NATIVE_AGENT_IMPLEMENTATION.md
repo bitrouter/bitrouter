@@ -1,5 +1,13 @@
 # BRO native agent implementation record
 
+**2026-10-02 contract update:** the approved
+[Thread/Turn unification spec](BRO_THREAD_TURN_UNIFICATION_SPEC.md) supersedes
+all Task compatibility, v13/v1 transport, duplicate completion events and
+process-lifetime hot-capacity assumptions below. The body preserves its earlier
+baseline. New validation belongs to the separate
+[unification implementation record](BRO_THREAD_TURN_UNIFICATION_IMPLEMENTATION.md).
+Core integration and lost-owner operator resolution remain separate tracks.
+
 Design status (2026-10-01): the old native-agent and shared-session specs are
 deprecated in favor of [BRO agent runtime MVP](BRO_AGENT_RUNTIME_SPEC.md).
 That replacement is v0.2: concurrency, queue/steer, persistence and safe recovery

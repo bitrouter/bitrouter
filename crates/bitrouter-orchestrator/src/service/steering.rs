@@ -9,7 +9,7 @@ pub(super) struct SteeringInput {
     pub(super) text: String,
 }
 
-impl TaskService {
+impl ThreadService {
     async fn existing_steering(
         &self,
         key: &crate::store::AcceptedKey,
@@ -68,9 +68,9 @@ impl TaskService {
         let fence = {
             let state = self.lock_state();
             let task = state
-                .tasks
+                .turns
                 .get(&request.expected_turn_id)
-                .ok_or_else(unknown_task)?;
+                .ok_or_else(unknown_turn)?;
             if task.cancel.is_cancelled() {
                 return Err(ServiceError::new(ErrorCode::Conflict, "Turn is cancelling"));
             }
@@ -92,9 +92,9 @@ impl TaskService {
         };
         let order = self
             .lock_state()
-            .tasks
+            .turns
             .get(&request.expected_turn_id)
-            .ok_or_else(unknown_task)?
+            .ok_or_else(unknown_turn)?
             .steering
             .len() as u64
             + 1;
@@ -119,7 +119,7 @@ impl TaskService {
         fence.set(true);
         self.append_facts_serialized(
             &request.expected_turn_id,
-            TaskEventPayload::SteeringUpdated {
+            TurnEventPayload::SteeringUpdated {
                 receipt: receipt.clone(),
                 text: Some(request.text.clone()),
             },
@@ -135,9 +135,9 @@ impl TaskService {
         .await?;
         let mut state = self.lock_state();
         let task = state
-            .tasks
+            .turns
             .get_mut(&request.expected_turn_id)
-            .ok_or_else(unknown_task)?;
+            .ok_or_else(unknown_turn)?;
         task.steering.push(SteeringInput {
             receipt: receipt.clone(),
             text: request.text,
@@ -150,19 +150,19 @@ impl TaskService {
 
     pub(super) async fn prepare_model(
         &self,
-        task_id: &str,
+        turn_id: &str,
         request: &mut ModelBoundary,
     ) -> Result<(bitrouter_sdk::language_model::Prompt, u64), String> {
         let gate = self
-            .commit_gate(task_id)
+            .commit_gate(turn_id)
             .map_err(|error| error.to_string())?;
         let _guard = gate.lock().await;
         let pending = {
             let state = self.lock_state();
             let task = state
-                .tasks
-                .get(task_id)
-                .ok_or_else(unknown_task)
+                .turns
+                .get(turn_id)
+                .ok_or_else(unknown_turn)
                 .map_err(|error| error.to_string())?;
             if task.cancel.is_cancelled() {
                 return Err("Turn cancelled before model step".into());
@@ -187,7 +187,7 @@ impl TaskService {
             facts.push(ExecutionRecord::SteeringResolved {
                 receipt: receipt.clone(),
             });
-            payloads.push(TaskEventPayload::SteeringUpdated {
+            payloads.push(TurnEventPayload::SteeringUpdated {
                 receipt,
                 text: None,
             });
@@ -209,17 +209,17 @@ impl TaskService {
         let events = {
             let state = self.lock_state();
             let task = state
-                .tasks
-                .get(task_id)
-                .ok_or_else(unknown_task)
+                .turns
+                .get(turn_id)
+                .ok_or_else(unknown_turn)
                 .map_err(|error| error.to_string())?;
             payloads
                 .into_iter()
                 .enumerate()
-                .map(|(index, payload)| TaskEvent {
+                .map(|(index, payload)| TurnEvent {
                     thread_id: task.thread_id.clone(),
                     server_instance_id: self.inner.instance_id.clone(),
-                    task_id: task_id.into(),
+                    turn_id: turn_id.into(),
                     seq: task.snapshot.cursor + index as u64 + 1,
                     timestamp_ms: now_ms(),
                     payload,
@@ -230,15 +230,15 @@ impl TaskService {
             events
                 .iter()
                 .cloned()
-                .map(|event| ExecutionRecord::Event { event }),
+                .filter_map(|event| lifecycle_fact(&event)),
         );
-        self.commit_serialized(task_id, &facts)
+        self.commit_serialized(turn_id, &facts)
             .await
             .map_err(|error| error.to_string())?;
         let mut state = self.lock_state();
         for fact in &facts {
             if let ExecutionRecord::SteeringResolved { receipt } = fact
-                && let Some(task) = state.tasks.get_mut(task_id)
+                && let Some(task) = state.turns.get_mut(turn_id)
                 && let Some(entry) = task
                     .steering
                     .iter_mut()
@@ -248,10 +248,10 @@ impl TaskService {
             }
         }
         for event in events {
-            self.append_locked(&mut state, task_id, event.payload)
+            self.append_locked(&mut state, turn_id, event.payload)
                 .map_err(|error| error.to_string())?;
         }
-        if let Some(task) = state.tasks.get(task_id) {
+        if let Some(task) = state.turns.get(turn_id) {
             task.fence.set(false);
         }
         Ok((request.prompt.clone(), request.context_version))

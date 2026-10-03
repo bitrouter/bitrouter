@@ -426,7 +426,7 @@ fn storage(error: impl ToString) -> ServiceError {
     ServiceError::new(ErrorCode::StorageUnavailable, error.to_string())
 }
 
-impl TaskService {
+impl ThreadService {
     /// Register blocking coordination I/O before shutdown closes and joins the
     /// tracker. A disconnected caller cannot detach an untracked lock acquisition.
     pub(super) async fn workspace_io<T, F>(
@@ -479,9 +479,9 @@ impl TaskService {
             ));
         }
         let id = state.active_workspaces.get(workspace)?;
-        let known_active = state.tasks.get(id).is_some_and(|task| {
+        let known_active = state.turns.get(id).is_some_and(|task| {
             !task.snapshot.status.terminal()
-                && task.snapshot.status != TaskStatus::RecoveryRequired
+                && task.snapshot.status != TurnStatus::RecoveryRequired
                 && task.storage_error.is_none()
         });
         let recovery = state.threads.values().any(|thread| {
@@ -543,15 +543,15 @@ impl TaskService {
         Ok(())
     }
 
-    pub(super) async fn prepare_workspace_finish(&self, task_id: &str) -> Result<(), ServiceError> {
+    pub(super) async fn prepare_workspace_finish(&self, turn_id: &str) -> Result<(), ServiceError> {
         let (workspace, fence) = {
             let state = self.lock_state();
-            let task = state.tasks.get(task_id).ok_or_else(unknown_task)?;
+            let task = state.turns.get(turn_id).ok_or_else(unknown_turn)?;
             let workspace = task.snapshot.workspace.clone();
             if state
                 .active_workspaces
                 .get(&workspace)
-                .is_none_or(|id| id != task_id)
+                .is_none_or(|id| id != turn_id)
             {
                 return Ok(());
             }
@@ -572,10 +572,10 @@ impl TaskService {
             claim.lease_id.clone()
         };
         self.commit_serialized(
-            task_id,
+            turn_id,
             &[ExecutionRecord::WorkspaceReleasePrepared {
                 workspace,
-                execution_id: task_id.into(),
+                execution_id: turn_id.into(),
                 lease_id,
             }],
         )
@@ -584,22 +584,17 @@ impl TaskService {
         Ok(())
     }
 
-    pub(super) fn workspace_finish_failed(&self, task_id: &str, error: &ServiceError) {
+    pub(super) fn workspace_finish_failed(&self, turn_id: &str, error: &ServiceError) {
         self.inner
             .cleanup_unconfirmed
             .store(true, std::sync::atomic::Ordering::Release);
         let mut state = self.lock_state();
-        let thread_id = if let Some(task) = state.tasks.get_mut(task_id) {
+        let thread_id = if let Some(task) = state.turns.get_mut(turn_id) {
             task.cancel.cancel();
             task.storage_error = Some(error.to_string());
-            task.snapshot.status = TaskStatus::RecoveryRequired;
+            task.snapshot.status = TurnStatus::RecoveryRequired;
             task.snapshot.detail = Some(format!("workspace release failed: {error}"));
-            let _ = task.publisher.send(Observation::Snapshot {
-                snapshot: Box::new(task.snapshot.clone()),
-                resynchronized: true,
-                catchup: Vec::new(),
-            });
-            task.thread_id.clone()
+            Some(task.thread_id.clone())
         } else {
             None
         };

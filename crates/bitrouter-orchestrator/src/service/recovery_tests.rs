@@ -28,7 +28,7 @@ async fn stopped_terminal_thread_reopens_with_original_context_and_idempotent_re
     let workspace = TempDir::new()?;
     std::fs::write(workspace.path().join("evidence"), "original evidence")?;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![
             turn(vec![tool_call(
                 "call",
@@ -53,9 +53,9 @@ async fn stopped_terminal_thread_reopens_with_original_context_and_idempotent_re
             input("inspect evidence", "first"),
         )
         .await?;
-    wait_for(&source, &first.turn_id, TaskStatus::Completed).await?;
+    wait_for(&source, &first.turn_id, TurnStatus::Completed).await?;
     source.shutdown().await;
-    let destination = TaskService::with_store(
+    let destination = ThreadService::with_store(
         app(vec![final_turn()])?,
         &[workspace.path().into()],
         memory.clone(),
@@ -77,7 +77,7 @@ async fn stopped_terminal_thread_reopens_with_original_context_and_idempotent_re
         recovered
             .latest_turn
             .as_ref()
-            .map(|turn| turn.task_id.as_str()),
+            .map(|turn| turn.turn_id.as_str()),
         Some(first.turn_id.as_str())
     );
     let cursor = recovered.thread.cursor;
@@ -110,7 +110,7 @@ async fn stopped_terminal_thread_reopens_with_original_context_and_idempotent_re
             input("continue from the evidence", "second"),
         )
         .await?;
-    wait_for(&destination, &second.turn_id, TaskStatus::Completed).await?;
+    wait_for(&destination, &second.turn_id, TurnStatus::Completed).await?;
     let prompts =
         super::thread_tests::prompts(memory.as_ref(), &created.thread_id, &second.turn_id).await?;
     let prompt = prompts.first().ok_or("continuation prompt missing")?;
@@ -121,7 +121,7 @@ async fn stopped_terminal_thread_reopens_with_original_context_and_idempotent_re
     assert_eq!(encoded.matches("continue from the evidence").count(), 1);
     destination.shutdown().await;
     // A subsequent cold scan must validate the new writer and recovery record.
-    let third = TaskService::with_store(app(vec![])?, &[workspace.path().into()], memory)?;
+    let third = ThreadService::with_store(app(vec![])?, &[workspace.path().into()], memory)?;
     third.initialize_execution().await?;
     let rebound = crate::thread::ThreadTarget {
         thread_id: created.thread_id,
@@ -148,7 +148,7 @@ async fn terminal_recovery_preserves_paused_fifo_and_refuses_lost_owner_or_forei
         permission_profiles: vec![PermissionProfile::AllowEffects],
     }];
     let source =
-        TaskService::with_workspace_grants(app(vec![final_turn()])?, &grants, memory.clone())?;
+        ThreadService::with_workspace_grants(app(vec![final_turn()])?, &grants, memory.clone())?;
     let mut definition = thread_request(&workspace, "create-paused-recovery");
     definition.permission_profile = PermissionProfile::AllowEffects;
     definition.verification_command = Some("exit 1".into());
@@ -162,7 +162,7 @@ async fn terminal_recovery_preserves_paused_fifo_and_refuses_lost_owner_or_forei
             input("first", "first"),
         )
         .await?;
-    wait_for(&source, &first.turn_id, TaskStatus::Failed).await?;
+    wait_for(&source, &first.turn_id, TurnStatus::Failed).await?;
     let queued = source
         .enqueue_turn(
             &target(&created),
@@ -171,7 +171,7 @@ async fn terminal_recovery_preserves_paused_fifo_and_refuses_lost_owner_or_forei
         )
         .await?;
     let destination =
-        TaskService::with_workspace_grants(app(vec![final_turn()])?, &grants, memory.clone())?;
+        ThreadService::with_workspace_grants(app(vec![final_turn()])?, &grants, memory.clone())?;
     let rebound = crate::thread::ThreadTarget {
         thread_id: created.thread_id.clone(),
         server_instance_id: destination.inner.instance_id.clone(),
@@ -206,7 +206,7 @@ async fn terminal_recovery_preserves_paused_fifo_and_refuses_lost_owner_or_forei
     drop(destination);
     source.shutdown().await;
     let destination =
-        TaskService::with_workspace_grants(app(vec![final_turn()])?, &grants, memory.clone())?;
+        ThreadService::with_workspace_grants(app(vec![final_turn()])?, &grants, memory.clone())?;
     let rebound = crate::thread::ThreadTarget {
         thread_id: created.thread_id.clone(),
         server_instance_id: destination.inner.instance_id.clone(),
@@ -235,7 +235,7 @@ async fn terminal_recovery_preserves_paused_fifo_and_refuses_lost_owner_or_forei
     destination
         .resume_queue(&rebound, &CallerContext::local(), "resume-restored".into())
         .await?;
-    wait_for(&destination, &queued.turn_id, TaskStatus::Failed).await?;
+    wait_for(&destination, &queued.turn_id, TurnStatus::Failed).await?;
     assert_eq!(
         super::thread_tests::prompts(memory.as_ref(), &created.thread_id, &queued.turn_id)
             .await?
@@ -355,7 +355,7 @@ async fn recovery_commit_failure_stays_blocked_and_lost_ack_adopts_only_the_exac
         let workspace = TempDir::new()?;
         let memory = Arc::new(MemoryExecutionStore::default());
         let source =
-            TaskService::with_store(app(vec![])?, &[workspace.path().into()], memory.clone())?;
+            ThreadService::with_store(app(vec![])?, &[workspace.path().into()], memory.clone())?;
         let created = source
             .create_thread(
                 &source.inner.instance_id,
@@ -371,7 +371,8 @@ async fn recovery_commit_failure_stays_blocked_and_lost_ack_adopts_only_the_exac
             committed: tokio::sync::Notify::new(),
             release: tokio::sync::Notify::new(),
         });
-        let destination = TaskService::with_store(app(vec![])?, &[workspace.path().into()], store)?;
+        let destination =
+            ThreadService::with_store(app(vec![])?, &[workspace.path().into()], store)?;
         let rebound = crate::thread::ThreadTarget {
             thread_id: created.thread_id.clone(),
             server_instance_id: destination.inner.instance_id.clone(),
@@ -439,7 +440,8 @@ async fn recovery_operation_survives_caller_disconnect_and_serializes_duplicate_
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(app(vec![])?, &[workspace.path().into()], memory.clone())?;
+    let source =
+        ThreadService::with_store(app(vec![])?, &[workspace.path().into()], memory.clone())?;
     let created = source
         .create_thread(
             &source.inner.instance_id,
@@ -456,7 +458,7 @@ async fn recovery_operation_survives_caller_disconnect_and_serializes_duplicate_
         release: tokio::sync::Notify::new(),
     });
     let destination =
-        TaskService::with_store(app(vec![])?, &[workspace.path().into()], store.clone())?;
+        ThreadService::with_store(app(vec![])?, &[workspace.path().into()], store.clone())?;
     let rebound = crate::thread::ThreadTarget {
         thread_id: created.thread_id.clone(),
         server_instance_id: destination.inner.instance_id.clone(),
@@ -528,7 +530,7 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
             permission_profiles: vec![PermissionProfile::AllowEffects],
         }];
         let source_memory = Arc::new(MemoryExecutionStore::default());
-        let source = TaskService::with_workspace_grants(
+        let source = ThreadService::with_workspace_grants(
             app(vec![final_turn()])?,
             &grants,
             source_memory.clone(),
@@ -547,9 +549,9 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
             )
             .await?;
         let expected = if verification.is_some_and(|command| command.contains("exit 1")) {
-            TaskStatus::Failed
+            TurnStatus::Failed
         } else {
-            TaskStatus::Completed
+            TurnStatus::Completed
         };
         wait_for(&source, &first.turn_id, expected).await?;
         source.shutdown().await;
@@ -588,15 +590,9 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
                 u64::try_from(cutoff)?,
                 &[ExecutionRecord::TurnRecord {
                     turn_id: first.turn_id.clone(),
-                    fact: Box::new(ExecutionRecord::Event {
-                        event: TaskEvent {
-                            thread_id: Some(created.thread_id.clone()),
-                            server_instance_id: source.inner.instance_id.clone(),
-                            task_id: first.turn_id.clone(),
-                            seq: source.read(&first.turn_id)?.cursor + 1,
-                            timestamp_ms: now_ms(),
-                            payload: TaskEventPayload::CancelRequested,
-                        },
+                    fact: Box::new(ExecutionRecord::TurnLifecycle {
+                        turn_id: first.turn_id.clone(),
+                        lifecycle: crate::thread::TurnLifecycle::CancelRequested,
                     }),
                 }],
             )?;
@@ -606,7 +602,7 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
         }
         memory.stop_owner(&owner).await?;
         let destination =
-            TaskService::with_workspace_grants(app(vec![])?, &grants, memory.clone())?;
+            ThreadService::with_workspace_grants(app(vec![])?, &grants, memory.clone())?;
         let rebound = crate::thread::ThreadTarget {
             thread_id: created.thread_id.clone(),
             server_instance_id: destination.inner.instance_id.clone(),
@@ -630,7 +626,7 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
             &destination,
             &first.turn_id,
             if cancelled {
-                TaskStatus::Cancelled
+                TurnStatus::Cancelled
             } else {
                 expected
             },
@@ -689,7 +685,7 @@ async fn continuation_checkpoint_keeps_the_turn_budget_and_confirmed_results_wit
         let workspace = TempDir::new()?;
         std::fs::write(workspace.path().join("evidence"), "original evidence")?;
         let source_memory = Arc::new(MemoryExecutionStore::default());
-        let source = TaskService::with_store(
+        let source = ThreadService::with_store(
             app(vec![
                 turn(vec![tool_call(
                     "call",
@@ -714,9 +710,9 @@ async fn continuation_checkpoint_keeps_the_turn_budget_and_confirmed_results_wit
             )
             .await?;
         let expected = if max_steps == 1 {
-            TaskStatus::Failed
+            TurnStatus::Failed
         } else {
-            TaskStatus::Completed
+            TurnStatus::Completed
         };
         wait_for(&source, &first.turn_id, expected).await?;
         source.shutdown().await;
@@ -740,7 +736,7 @@ async fn continuation_checkpoint_keeps_the_turn_budget_and_confirmed_results_wit
             .await?;
         memory.stop_owner(&owner).await?;
         std::fs::write(workspace.path().join("evidence"), "must not be reread")?;
-        let destination = TaskService::with_store(
+        let destination = ThreadService::with_store(
             app(if max_steps == 1 {
                 vec![]
             } else {
@@ -773,7 +769,7 @@ async fn continuation_checkpoint_keeps_the_turn_budget_and_confirmed_results_wit
             )
             .await?;
         let done = wait_for(&destination, &first.turn_id, expected).await?;
-        assert_eq!(done.task_id, first.turn_id);
+        assert_eq!(done.turn_id, first.turn_id);
         let prompts =
             super::thread_tests::prompts(memory.as_ref(), &created.thread_id, &first.turn_id)
                 .await?;
@@ -790,7 +786,8 @@ async fn continuation_checkpoint_keeps_the_turn_budget_and_confirmed_results_wit
             .ok_or("recovered records missing")?;
         assert_eq!(recovered.records.iter().filter(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::ToolIntent { .. }))).count(), 1);
         destination.shutdown().await;
-        let inspector = TaskService::with_store(app(vec![])?, &[workspace.path().into()], memory)?;
+        let inspector =
+            ThreadService::with_store(app(vec![])?, &[workspace.path().into()], memory)?;
         let view = inspector
             .load_thread(
                 &crate::thread::ThreadTarget {
@@ -816,7 +813,7 @@ async fn pending_steering_at_checkpoint_keeps_its_target_and_is_applied_once_aft
     let workspace = TempDir::new()?;
     let source_memory = Arc::new(MemoryExecutionStore::default());
     let model = Arc::new(super::steering_tests::HeldModel::new());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app_with_executor(model.clone())?,
         &[workspace.path().into()],
         source_memory.clone(),
@@ -844,7 +841,7 @@ async fn pending_steering_at_checkpoint_keeps_its_target_and_is_applied_once_aft
         .steer(&target(&created), &CallerContext::local(), correction())
         .await?;
     model.release.add_permits(1);
-    wait_for(&source, &first.turn_id, TaskStatus::Completed).await?;
+    wait_for(&source, &first.turn_id, TurnStatus::Completed).await?;
     source.shutdown().await;
     let saved = source_memory
         .load(&created.thread_id)
@@ -863,7 +860,7 @@ async fn pending_steering_at_checkpoint_keeps_its_target_and_is_applied_once_aft
         .commit_owned(&owner, &created.thread_id, 0, &saved.records[..cutoff])
         .await?;
     memory.stop_owner(&owner).await?;
-    let destination = TaskService::with_store(
+    let destination = ThreadService::with_store(
         app(vec![final_turn()])?,
         &[workspace.path().into()],
         memory.clone(),
@@ -891,7 +888,7 @@ async fn pending_steering_at_checkpoint_keeps_its_target_and_is_applied_once_aft
             recovery_request(&loaded, "recover-steering")?,
         )
         .await?;
-    let done = wait_for(&destination, &first.turn_id, TaskStatus::Completed).await?;
+    let done = wait_for(&destination, &first.turn_id, TurnStatus::Completed).await?;
     assert_eq!(done.steering.len(), 1);
     assert_eq!(done.steering[0].input_id, received.input_id);
     assert_eq!(done.steering[0].turn_id, first.turn_id);
@@ -939,7 +936,8 @@ async fn empty_thread_inspection_releases_a_valid_marker_after_confirmed_recover
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(app(vec![])?, &[workspace.path().into()], memory.clone())?;
+    let source =
+        ThreadService::with_store(app(vec![])?, &[workspace.path().into()], memory.clone())?;
     let created = source
         .create_thread(
             &source.inner.instance_id,
@@ -947,7 +945,7 @@ async fn empty_thread_inspection_releases_a_valid_marker_after_confirmed_recover
         )
         .await?;
     source.shutdown().await;
-    let destination = TaskService::with_store(
+    let destination = ThreadService::with_store(
         app(vec![final_turn()])?,
         &[workspace.path().into()],
         memory.clone(),
@@ -976,151 +974,11 @@ async fn empty_thread_inspection_releases_a_valid_marker_after_confirmed_recover
             input("first input", "first"),
         )
         .await?;
-    wait_for(&destination, &next.turn_id, TaskStatus::Completed).await?;
+    wait_for(&destination, &next.turn_id, TurnStatus::Completed).await?;
     destination.shutdown().await;
     Ok(())
 }
 
-#[tokio::test]
-async fn completed_legacy_task_converts_without_rewriting_ids_or_replaying_its_effects()
--> Result<(), Box<dyn std::error::Error>> {
-    let workspace = TempDir::new()?;
-    std::fs::write(workspace.path().join("evidence"), "legacy evidence")?;
-    let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
-        app(vec![
-            turn(vec![tool_call(
-                "legacy-call",
-                "read",
-                serde_json::json!({"path":"evidence"}),
-            )]),
-            final_turn(),
-        ])?,
-        &[workspace.path().into()],
-        memory.clone(),
-    )?;
-    let original = source
-        .submit(TaskRequest {
-            caller: CallerContext::local(),
-            workspace: workspace.path().into(),
-            config: AgentConfig::fixed("fixture-model", None).read_only(),
-            prompt: "inspect legacy evidence".into(),
-            verification_command: None,
-            idempotency_key: Some("original-task".into()),
-        })
-        .await?;
-    wait_for(&source, &original.task_id, TaskStatus::Completed).await?;
-    source.shutdown().await;
-    let before = memory
-        .load(&original.task_id)
-        .await?
-        .ok_or("legacy records missing")?;
-    let original_json = serde_json::to_value(&before.records)?;
-    std::fs::write(workspace.path().join("evidence"), "current file")?;
-    let destination = TaskService::with_store(
-        app(vec![final_turn()])?,
-        &[workspace.path().into()],
-        memory.clone(),
-    )?;
-    let rebound = crate::thread::ThreadTarget {
-        thread_id: original.task_id.clone(),
-        server_instance_id: destination.inner.instance_id.clone(),
-    };
-    let loaded = destination
-        .load_thread(&rebound, &CallerContext::local())
-        .await?;
-    assert!(
-        loaded
-            .recovery
-            .as_ref()
-            .is_some_and(|report| report.source_is_legacy_task)
-    );
-    let recovered = destination
-        .recover_thread(
-            &rebound,
-            &CallerContext::local(),
-            recovery_request(&loaded, "convert")?,
-        )
-        .await?;
-    assert_eq!(recovered.thread.thread_id, original.task_id);
-    assert_eq!(
-        recovered.thread.permission_profile,
-        PermissionProfile::ReadOnly
-    );
-    assert_eq!(
-        recovered
-            .latest_turn
-            .as_ref()
-            .map(|turn| turn.task_id.as_str()),
-        Some(original.task_id.as_str())
-    );
-    assert!(recovered.recovery.is_none());
-    let next = destination
-        .start_turn(
-            &rebound,
-            &CallerContext::local(),
-            input("follow up", "follow-up"),
-        )
-        .await?;
-    assert_ne!(next.turn_id, original.task_id);
-    wait_for(&destination, &next.turn_id, TaskStatus::Completed).await?;
-    let prompts =
-        super::thread_tests::prompts(memory.as_ref(), &original.task_id, &next.turn_id).await?;
-    assert!(
-        serde_json::to_string(&prompts.first().ok_or("new prompt missing")?.messages)?
-            .contains("legacy evidence")
-    );
-    let after = memory
-        .load(&original.task_id)
-        .await?
-        .ok_or("converted records missing")?;
-    assert_eq!(
-        serde_json::to_value(&after.records[..before.records.len()])?,
-        original_json
-    );
-    assert_eq!(
-        std::fs::read_to_string(workspace.path().join("evidence"))?,
-        "current file"
-    );
-    let history = memory
-        .thread_history(
-            &original.task_id,
-            before.version,
-            after.version,
-            1000,
-            4 * 1024 * 1024,
-        )
-        .await?;
-    assert!(
-        history
-            .events
-            .iter()
-            .any(|event| event.changes.iter().any(|change| matches!(
-                change,
-                crate::thread::ThreadChange::Recovered {
-                    legacy_converted: true,
-                    ..
-                }
-            )))
-    );
-    assert!(!serde_json::to_string(&history.events)?.contains("\"messages\""));
-    destination.shutdown().await;
-    let third = TaskService::with_store(app(vec![])?, &[workspace.path().into()], memory)?;
-    let rebound = crate::thread::ThreadTarget {
-        thread_id: original.task_id,
-        server_instance_id: third.inner.instance_id.clone(),
-    };
-    let view = third.load_thread(&rebound, &CallerContext::local()).await?;
-    assert!(
-        view.recovery
-            .as_ref()
-            .is_some_and(|report| !report.source_is_legacy_task
-                && report.context_valid
-                && report.terminal_checkpoint)
-    );
-    third.shutdown().await;
-    Ok(())
-}
 #[async_trait::async_trait]
 impl bitrouter_sdk::language_model::Executor for PartialModel {
     async fn execute(
@@ -1349,7 +1207,7 @@ async fn recovery_reader_limit_does_not_hold_admission_and_releases_after_loadin
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![])?,
         &[workspace.path().to_path_buf()],
         memory.clone(),
@@ -1368,7 +1226,7 @@ async fn recovery_reader_limit_does_not_hold_admission_and_releases_after_loadin
         blocked: std::sync::atomic::AtomicBool::new(false),
         page_bounds: None,
     });
-    let service = TaskService::with_limits_and_store(
+    let service = ThreadService::with_limits_and_store(
         app(vec![])?,
         &[workspace.path().to_path_buf()],
         RuntimeLimits {
@@ -1461,8 +1319,8 @@ fn boundary(
 fn reader(
     workspace: &TempDir,
     store: Arc<PrefixStore>,
-) -> Result<TaskService, Box<dyn std::error::Error>> {
-    Ok(TaskService::with_limits_and_store(
+) -> Result<ThreadService, Box<dyn std::error::Error>> {
+    Ok(ThreadService::with_limits_and_store(
         app(vec![])?,
         &[workspace.path().to_path_buf()],
         RuntimeLimits {
@@ -1474,285 +1332,11 @@ fn reader(
 }
 
 #[tokio::test]
-async fn legacy_task_prefixes_load_original_identities_controls_budgets_and_history_without_replay()
--> Result<(), Box<dyn std::error::Error>> {
-    let workspace = TempDir::new()?;
-    let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
-        app(vec![
-            turn(vec![tool_call(
-                "provider-write",
-                "write",
-                serde_json::json!({
-                    "path": "legacy.txt", "content": "written once"
-                }),
-            )]),
-            final_turn(),
-        ])?,
-        &[workspace.path().to_path_buf()],
-        memory.clone(),
-    )?;
-    let original = source
-        .submit(TaskRequest {
-            prompt: "legacy coding input".into(),
-            workspace: workspace.path().into(),
-            caller: CallerContext::local(),
-            config: AgentConfig::fixed("fixture-model", None),
-            verification_command: None,
-            idempotency_key: Some("old-key".into()),
-        })
-        .await?;
-    let waiting = wait_for(&source, &original.task_id, TaskStatus::WaitingForInput).await?;
-    let approval_cutoff = memory
-        .load(&original.task_id)
-        .await?
-        .ok_or("legacy root missing")?
-        .version;
-    let approval = waiting.pending_input_id.ok_or("approval missing")?;
-    source
-        .answer_input(&original.task_id, &approval, true)
-        .await?;
-    wait_for(&source, &original.task_id, TaskStatus::Completed).await?;
-    source.shutdown().await;
-    let stored = memory
-        .load(&original.task_id)
-        .await?
-        .ok_or("legacy root missing")?;
-    let written_at = std::fs::metadata(workspace.path().join("legacy.txt"))?.modified()?;
-    let user_item_id = match stored.records.first() {
-        Some(ExecutionRecord::Accepted { event, .. }) => match &event.payload {
-            TaskEventPayload::Accepted { user_item_id, .. } => user_item_id.clone(),
-            _ => return Err("accepted payload missing".into()),
-        },
-        _ => return Err("legacy header missing".into()),
-    };
-    let intent = stored
-        .records
-        .iter()
-        .enumerate()
-        .find_map(|(index, record)| match record {
-            ExecutionRecord::ToolIntent { call, .. } => Some((index as u64 + 1, call.clone())),
-            _ => None,
-        })
-        .ok_or("tool intent missing")?;
-    for cutoff in [approval_cutoff, intent.0, stored.version] {
-        let service = reader(
-            &workspace,
-            Arc::new(PrefixStore {
-                memory: memory.clone(),
-                cutoff,
-                reads: AtomicUsize::new(0),
-            }),
-        )?;
-        let target = crate::thread::ThreadTarget {
-            thread_id: original.task_id.clone(),
-            server_instance_id: service.inner.instance_id.clone(),
-        };
-        assert_eq!(
-            service
-                .load_thread(&target, &CallerContext::new("other", "owner"))
-                .await
-                .err()
-                .ok_or("foreign owner loaded legacy task")?
-                .code,
-            ErrorCode::Unauthorized
-        );
-        let view = service
-            .load_thread(&target, &CallerContext::local())
-            .await?;
-        assert_eq!(view.thread.status, ThreadStatus::RecoveryRequired);
-        assert_eq!(view.thread.thread_id, original.task_id);
-        assert_eq!(view.thread.cursor, cutoff);
-        assert_eq!(view.thread.permission_profile, PermissionProfile::Ask);
-        let latest = view.latest_turn.as_ref().ok_or("legacy Turn missing")?;
-        assert_eq!(latest.task_id, original.task_id);
-        assert_eq!(latest.thread_id.as_deref(), Some(original.task_id.as_str()));
-        let report = view.recovery.as_ref().ok_or("recovery report missing")?;
-        assert!(report.source_is_legacy_task);
-        assert_eq!(report.source_cursor, cutoff);
-        let active = report.turn.as_ref().ok_or("legacy recovery Turn missing")?;
-        assert_eq!(active.user_item_id, user_item_id);
-        if cutoff == approval_cutoff {
-            assert_eq!(latest.pending_input_id.as_deref(), Some(approval.as_str()));
-            assert!(
-                service
-                    .answer_input(&original.task_id, &approval, true)
-                    .await
-                    .is_err()
-            );
-        } else if cutoff == intent.0 {
-            assert!(report.blockers.iter().any(|blocker| matches!(blocker,
-                RecoveryBlocker::EffectUnconfirmed { item_id, .. } if item_id == &intent.1.item_id)));
-            assert!(active.budget.tool_calls_unknown);
-        } else {
-            assert!(report.context_valid && report.terminal_checkpoint);
-            assert_eq!(report.stored_status, ThreadStatus::Idle);
-            assert_eq!(latest.status, TaskStatus::Completed);
-            assert_eq!(active.budget.model_steps, 2);
-            assert_eq!(active.budget.tool_calls_known, 1);
-            assert!(!active.budget.tool_calls_unknown && !active.budget.active_duration_unknown);
-        }
-        let mut after = 0;
-        let mut events = Vec::new();
-        loop {
-            let page = service
-                .thread_history(
-                    &target,
-                    &CallerContext::local(),
-                    ThreadHistoryRequest {
-                        after,
-                        cutoff: Some(cutoff),
-                        limit: 1,
-                    },
-                )
-                .await?;
-            assert!(page.events.len() <= 1);
-            events.extend(page.events);
-            let Some(next) = page.next_after else {
-                break;
-            };
-            assert!(next > after);
-            after = next;
-        }
-        assert_eq!(events.first().ok_or("legacy history empty")?.seq, 1);
-        assert!(events.windows(2).all(|pair| pair[0].seq < pair[1].seq));
-        assert!(
-            events
-                .iter()
-                .all(|event| event.server_instance_id == source.inner.instance_id)
-        );
-        let encoded = serde_json::to_string(&events)?;
-        assert!(encoded.contains(&user_item_id) && encoded.contains(&intent.1.item_id));
-        assert!(!encoded.contains("\"messages\":"));
-        assert_eq!(
-            memory
-                .load(&original.task_id)
-                .await?
-                .ok_or("root missing")?
-                .version,
-            stored.version
-        );
-        assert_eq!(
-            std::fs::read_to_string(workspace.path().join("legacy.txt"))?,
-            "written once"
-        );
-        assert_eq!(
-            std::fs::metadata(workspace.path().join("legacy.txt"))?.modified()?,
-            written_at
-        );
-        assert!(service.inner.workers.is_empty());
-        {
-            let state = service.lock_state();
-            let task = state
-                .tasks
-                .get(&original.task_id)
-                .ok_or("Task projection missing")?;
-            assert!(task.pending.is_none() && task.cancel.is_cancelled());
-            assert!(
-                !state
-                    .threads
-                    .get(&original.task_id)
-                    .ok_or("Thread missing")?
-                    .caller
-                    .is_local()
-            );
-        }
-        service.shutdown().await;
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn legacy_missing_input_identity_or_settings_mismatch_withholds_settled_context()
--> Result<(), Box<dyn std::error::Error>> {
-    let workspace = TempDir::new()?;
-    let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
-        app(vec![final_turn()])?,
-        &[workspace.path().into()],
-        memory.clone(),
-    )?;
-    let original = source
-        .submit(TaskRequest {
-            prompt: "old input".into(),
-            workspace: workspace.path().into(),
-            caller: CallerContext::local(),
-            config: AgentConfig::fixed("fixture-model", None).read_only(),
-            verification_command: None,
-            idempotency_key: None,
-        })
-        .await?;
-    wait_for(&source, &original.task_id, TaskStatus::Completed).await?;
-    source.shutdown().await;
-    let original_records = memory
-        .load(&original.task_id)
-        .await?
-        .ok_or("legacy root missing")?
-        .records;
-    for missing_id in [true, false] {
-        let mut records = original_records.clone();
-        if let Some(ExecutionRecord::Accepted { event, .. }) = records.first_mut()
-            && let TaskEventPayload::Accepted {
-                user_item_id,
-                tool_mode,
-                ..
-            } = &mut event.payload
-        {
-            if missing_id {
-                user_item_id.clear();
-            } else {
-                *tool_mode = ToolMode::Coding;
-            }
-        }
-        let memory = Arc::new(MemoryExecutionStore::default());
-        let cutoff = memory.commit(&original.task_id, 0, &records).await?;
-        let service = reader(
-            &workspace,
-            Arc::new(PrefixStore {
-                memory,
-                cutoff,
-                reads: AtomicUsize::new(0),
-            }),
-        )?;
-        let target = crate::thread::ThreadTarget {
-            thread_id: original.task_id.clone(),
-            server_instance_id: service.inner.instance_id.clone(),
-        };
-        let view = service
-            .load_thread(&target, &CallerContext::local())
-            .await?;
-        assert_eq!(view.thread.permission_profile, PermissionProfile::ReadOnly);
-        let report = view.recovery.ok_or("report missing")?;
-        assert!(!report.context_valid && !report.terminal_checkpoint);
-        assert!(
-            report
-                .blockers
-                .iter()
-                .any(|blocker| matches!(blocker, RecoveryBlocker::InvalidRecord { .. }))
-        );
-        if missing_id {
-            assert!(report.turn.ok_or("Turn missing")?.user_item_id.is_empty());
-        }
-        assert!(
-            service
-                .lock_state()
-                .tasks
-                .get(&original.task_id)
-                .ok_or("task missing")?
-                .settled
-                .is_none()
-        );
-        service.shutdown().await;
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn later_writer_epoch_checkpoint_rebuilds_status_and_preserves_historical_epochs()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![])?,
         &[workspace.path().to_path_buf()],
         memory.clone(),
@@ -1850,7 +1434,7 @@ async fn later_writer_epoch_checkpoint_rebuilds_status_and_preserves_historical_
             .iter()
             .any(|event| event.server_instance_id == second_epoch)
     );
-    assert!(service.lock_state().tasks.is_empty());
+    assert!(service.lock_state().turns.is_empty());
     assert_eq!(service.lock_state().threads.len(), 1);
     service.shutdown().await;
     Ok(())
@@ -1861,7 +1445,7 @@ async fn committed_windows_rebuild_calls_context_and_budgets_without_replaying_c
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![
             turn(vec![tool_call(
                 "write",
@@ -1883,7 +1467,7 @@ async fn committed_windows_rebuild_calls_context_and_budgets_without_replaying_c
     let receipt = source
         .start_turn(&target(&thread), &caller, input("work", "turn"))
         .await?;
-    let waiting = wait_for(&source, &receipt.turn_id, TaskStatus::WaitingForInput).await?;
+    let waiting = wait_for(&source, &receipt.turn_id, TurnStatus::WaitingForInput).await?;
     source
         .answer_thread_input(
             &target(&thread),
@@ -1896,7 +1480,7 @@ async fn committed_windows_rebuild_calls_context_and_budgets_without_replaying_c
             },
         )
         .await?;
-    let completed = wait_for(&source, &receipt.turn_id, TaskStatus::Completed).await?;
+    let completed = wait_for(&source, &receipt.turn_id, TurnStatus::Completed).await?;
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("effect.txt"))?,
         "one effect"
@@ -2056,7 +1640,7 @@ async fn load_restores_fifo_pause_cancel_and_pending_approval_but_old_reply_cann
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![turn(vec![tool_call(
             "write",
             "write",
@@ -2076,7 +1660,7 @@ async fn load_restores_fifo_pause_cancel_and_pending_approval_but_old_reply_cann
     let active = source
         .start_turn(&source_target, &caller, input("active", "active"))
         .await?;
-    let waiting = wait_for(&source, &active.turn_id, TaskStatus::WaitingForInput).await?;
+    let waiting = wait_for(&source, &active.turn_id, TurnStatus::WaitingForInput).await?;
     let approval = waiting.pending_input_id.ok_or("approval missing")?;
     let queued = source
         .enqueue_turn(&source_target, &caller, input("queued input", "queued"))
@@ -2096,7 +1680,7 @@ async fn load_restores_fifo_pause_cancel_and_pending_approval_but_old_reply_cann
             },
         )
         .await?;
-    wait_for(&source, &active.turn_id, TaskStatus::Cancelled).await?;
+    wait_for(&source, &active.turn_id, TurnStatus::Cancelled).await?;
     source.shutdown().await;
     let stored = memory
         .load(&thread.thread_id)
@@ -2188,7 +1772,7 @@ async fn steering_application_rebuild_uses_committed_prompt_once_and_preserves_t
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![
             turn(vec![tool_call(
                 "old",
@@ -2211,7 +1795,7 @@ async fn steering_application_rebuild_uses_committed_prompt_once_and_preserves_t
     let active = source
         .start_turn(&source_target, &caller, input("initial", "turn"))
         .await?;
-    wait_for(&source, &active.turn_id, TaskStatus::WaitingForInput).await?;
+    wait_for(&source, &active.turn_id, TurnStatus::WaitingForInput).await?;
     let input = source
         .steer(
             &source_target,
@@ -2223,7 +1807,7 @@ async fn steering_application_rebuild_uses_committed_prompt_once_and_preserves_t
             },
         )
         .await?;
-    wait_for(&source, &active.turn_id, TaskStatus::Completed).await?;
+    wait_for(&source, &active.turn_id, TurnStatus::Completed).await?;
     source.shutdown().await;
     let stored = memory
         .load(&thread.thread_id)
@@ -2258,7 +1842,7 @@ async fn steering_application_rebuild_uses_committed_prompt_once_and_preserves_t
         {
             let state = service.lock_state();
             let task = state
-                .tasks
+                .turns
                 .get(&active.turn_id)
                 .ok_or("restored Turn missing")?;
             if let Some((messages, _)) = &task.settled {
@@ -2281,7 +1865,7 @@ async fn cold_load_rechecks_owner_grants_epoch_and_record_capacity_without_parti
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![])?,
         &[workspace.path().to_path_buf()],
         memory.clone(),
@@ -2337,7 +1921,7 @@ async fn cold_load_rechecks_owner_grants_epoch_and_record_capacity_without_parti
     );
     assert!(service.lock_state().threads.is_empty());
     assert!(service.lock_state().active_workspaces.is_empty());
-    let bounded = TaskService::with_limits_and_store(
+    let bounded = ThreadService::with_limits_and_store(
         app(vec![])?,
         &[workspace.path().to_path_buf()],
         RuntimeLimits {
@@ -2367,7 +1951,7 @@ async fn interrupted_stream_recovery_keeps_display_evidence_out_of_context_and_u
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let memory = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app_with_executor(Arc::new(PartialModel))?,
         &[workspace.path().to_path_buf()],
         memory.clone(),
@@ -2405,7 +1989,36 @@ async fn interrupted_stream_recovery_keeps_display_evidence_out_of_context_and_u
             },
         )
         .await?;
-    wait_for(&source, &active.turn_id, TaskStatus::Cancelled).await?;
+    wait_for(&source, &active.turn_id, TurnStatus::Cancelled).await?;
+    // Same-owner cache reload preserves known joined interruptions; the later
+    // cross-owner assertions still require lost-run accounting proof.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while source
+            .lock_state()
+            .running_turns
+            .contains_key(&active.turn_id)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let before_reload = memory
+        .load(&thread.thread_id)
+        .await?
+        .ok_or("Thread missing")?
+        .version;
+    source.unload_thread(&target(&thread), &caller).await?;
+    let reloaded = source.load_thread(&target(&thread), &caller).await?;
+    assert_eq!(reloaded.thread.status, ThreadStatus::Paused);
+    assert!(reloaded.recovery.is_none());
+    assert_eq!(
+        memory
+            .load(&thread.thread_id)
+            .await?
+            .ok_or("Thread missing")?
+            .version,
+        before_reload
+    );
     source.shutdown().await;
     let cutoff = memory
         .load(&thread.thread_id)
@@ -2448,7 +2061,7 @@ async fn interrupted_stream_recovery_keeps_display_evidence_out_of_context_and_u
     {
         let state = service.lock_state();
         let context = state
-            .tasks
+            .turns
             .get(&active.turn_id)
             .and_then(|task| task.settled.as_ref())
             .ok_or("settled context missing")?;
@@ -2470,7 +2083,7 @@ async fn missing_stable_identity_is_reported_as_invalid_and_never_regenerated()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let source_store = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![final_turn()])?,
         &[workspace.path().to_path_buf()],
         source_store.clone(),
@@ -2488,7 +2101,7 @@ async fn missing_stable_identity_is_reported_as_invalid_and_never_regenerated()
             input("work", "turn"),
         )
         .await?;
-    wait_for(&source, &active.turn_id, TaskStatus::Completed).await?;
+    wait_for(&source, &active.turn_id, TurnStatus::Completed).await?;
     source.shutdown().await;
     let mut stored = source_store
         .load(&thread.thread_id)
@@ -2503,7 +2116,8 @@ async fn missing_stable_identity_is_reported_as_invalid_and_never_regenerated()
     }
     let store = Arc::new(MemoryExecutionStore::default());
     store.commit(&thread.thread_id, 0, &stored.records).await?;
-    let service = TaskService::with_store(app(vec![])?, &[workspace.path().to_path_buf()], store)?;
+    let service =
+        ThreadService::with_store(app(vec![])?, &[workspace.path().to_path_buf()], store)?;
     let target = crate::thread::ThreadTarget {
         thread_id: thread.thread_id,
         server_instance_id: service.inner.instance_id.clone(),
@@ -2517,7 +2131,7 @@ async fn missing_stable_identity_is_reported_as_invalid_and_never_regenerated()
     assert!(
         service
             .lock_state()
-            .tasks
+            .turns
             .get(&active.turn_id)
             .and_then(|task| task.settled.as_ref())
             .is_none()
@@ -2531,7 +2145,7 @@ async fn recovered_verification_result_must_match_the_exact_committed_invocation
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let source_store = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![final_turn()])?,
         &[workspace.path().to_path_buf()],
         source_store.clone(),
@@ -2548,7 +2162,7 @@ async fn recovered_verification_result_must_match_the_exact_committed_invocation
             input("work", "turn"),
         )
         .await?;
-    let waiting = wait_for(&source, &active.turn_id, TaskStatus::WaitingForInput).await?;
+    let waiting = wait_for(&source, &active.turn_id, TurnStatus::WaitingForInput).await?;
     source
         .answer_thread_input(
             &target(&thread),
@@ -2561,7 +2175,7 @@ async fn recovered_verification_result_must_match_the_exact_committed_invocation
             },
         )
         .await?;
-    wait_for(&source, &active.turn_id, TaskStatus::Completed).await?;
+    wait_for(&source, &active.turn_id, TurnStatus::Completed).await?;
     source.shutdown().await;
     let mut stored = source_store
         .load(&thread.thread_id)
@@ -2579,7 +2193,8 @@ async fn recovered_verification_result_must_match_the_exact_committed_invocation
     assert!(modified);
     let store = Arc::new(MemoryExecutionStore::default());
     store.commit(&thread.thread_id, 0, &stored.records).await?;
-    let service = TaskService::with_store(app(vec![])?, &[workspace.path().to_path_buf()], store)?;
+    let service =
+        ThreadService::with_store(app(vec![])?, &[workspace.path().to_path_buf()], store)?;
     let view = service
         .load_thread(
             &crate::thread::ThreadTarget {
@@ -2595,7 +2210,7 @@ async fn recovered_verification_result_must_match_the_exact_committed_invocation
     assert!(
         service
             .lock_state()
-            .tasks
+            .turns
             .get(&active.turn_id)
             .and_then(|task| task.settled.as_ref())
             .is_none()
@@ -2616,7 +2231,7 @@ async fn acceptance_retry_pages_share_reader_limits_without_holding_admission()
         blocked: std::sync::atomic::AtomicBool::new(false),
         page_bounds: Some((2, 64 * 1024)),
     });
-    let service = TaskService::with_limits_and_store(
+    let service = ThreadService::with_limits_and_store(
         app(vec![final_turn()])?,
         &[workspace.path().into()],
         RuntimeLimits {
@@ -2641,7 +2256,7 @@ async fn acceptance_retry_pages_share_reader_limits_without_holding_admission()
             input("first", "retry-turn"),
         )
         .await?;
-    wait_for(&service, &first.turn_id, TaskStatus::Completed).await?;
+    wait_for(&service, &first.turn_id, TurnStatus::Completed).await?;
     let cloned = service.clone();
     let retry_target = target.clone();
     let retry = tokio::spawn(async move {
@@ -2678,12 +2293,12 @@ async fn acceptance_retry_pages_share_reader_limits_without_holding_admission()
     let receipt = tokio::time::timeout(Duration::from_secs(2), retry).await???;
     assert_eq!(receipt.turn_id, first.turn_id);
     assert_eq!(receipt.queue_order, first.queue_order);
-    assert_eq!(receipt.status, TaskStatus::Completed);
+    assert_eq!(receipt.status, TurnStatus::Completed);
     let reader = service.inner.recovery_readers.try_acquire()?;
     drop(reader);
     service.shutdown().await;
     // A cold create retry uses the same bounded scan rather than load().
-    let cold = TaskService::with_limits_and_store(
+    let cold = ThreadService::with_limits_and_store(
         app(vec![])?,
         &[workspace.path().into()],
         RuntimeLimits {
@@ -2701,7 +2316,7 @@ async fn acceptance_retry_pages_share_reader_limits_without_holding_admission()
         .await?;
     assert_eq!(snapshot.thread_id, created.thread_id);
     assert_eq!(snapshot.status, ThreadStatus::RecoveryRequired);
-    let bounded = TaskService::with_limits_and_store(
+    let bounded = ThreadService::with_limits_and_store(
         app(vec![])?,
         &[workspace.path().into()],
         RuntimeLimits {
@@ -2739,7 +2354,7 @@ async fn steering_retries_use_bounded_receipt_pages() -> Result<(), Box<dyn std:
         blocked: std::sync::atomic::AtomicBool::new(true),
         page_bounds: Some((2, 64 * 1024)),
     });
-    let service = TaskService::with_limits_and_store(
+    let service = ThreadService::with_limits_and_store(
         app(vec![
             turn(vec![tool_call(
                 "approval",
@@ -2770,7 +2385,7 @@ async fn steering_retries_use_bounded_receipt_pages() -> Result<(), Box<dyn std:
             input("work", "steer-turn"),
         )
         .await?;
-    wait_for(&service, &accepted.turn_id, TaskStatus::WaitingForInput).await?;
+    wait_for(&service, &accepted.turn_id, TurnStatus::WaitingForInput).await?;
     let request = || SteeringRequest {
         expected_turn_id: accepted.turn_id.clone(),
         text: "inspect instead".into(),

@@ -152,16 +152,16 @@ struct CodeArgs {
     /// Explicit local control socket for read-only operations.
     #[arg(long)]
     socket: Option<PathBuf>,
-    /// Reattach a BRO native task by its ID (bare `bro code` only).
+    /// Reattach a BRO native Thread by its ID (bare `bro code` only).
     #[arg(long)]
-    task_id: Option<String>,
-    /// Bounded project verification command for new BRO native tasks.
+    thread_id: Option<String>,
+    /// Bounded project verification command for new BRO native Threads.
     #[arg(long)]
     check: Option<String>,
-    /// Restrict new BRO native tasks to read, ls, find, and grep.
-    #[arg(long, conflicts_with_all = ["check", "task_id"])]
+    /// Restrict new BRO native Threads to read, ls, find, and grep.
+    #[arg(long, conflicts_with_all = ["check", "thread_id"])]
     read_only: bool,
-    /// Workspace for new BRO native tasks.
+    /// Workspace for new BRO native Threads.
     #[arg(long)]
     workspace: Option<PathBuf>,
 }
@@ -176,7 +176,7 @@ struct TaskRunArgs {
     /// Fixed reasoning effort for each model turn.
     #[arg(long)]
     effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
-    /// Bounded project verification command. Without one, verification is unavailable.
+    /// Bounded project verification command. Without one, verification is not_requested.
     #[arg(long)]
     check: Option<String>,
     /// Restrict this task to read, ls, find, and grep.
@@ -198,7 +198,7 @@ enum TaskAction {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run a BRO-owned native coding task through the task server.
+    /// Run a BRO-owned native coding task through the Thread server.
     Task {
         #[command(subcommand)]
         action: TaskAction,
@@ -2527,7 +2527,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     routing,
                     config,
                     socket: None,
-                    task_id: None,
+                    thread_id: None,
                     check: None,
                     read_only: false,
                     workspace: None,
@@ -2569,7 +2569,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
 async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
     use bitrouter::agent_local::{Operation, ReplyResult};
-    use bitrouter_orchestrator::service::TaskStatus;
+    use bitrouter_orchestrator::service::TurnStatus;
 
     anyhow::ensure!(
         !remote,
@@ -2583,63 +2583,95 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
         Some(workspace) => workspace,
         None => std::env::current_dir()?,
     };
-    let client = bitrouter::agent_local::TaskClient::connect(&task_socket).await?;
-    let accepted = match client
-        .request(Operation::Submit {
-            prompt: args.prompt,
+    let client = bitrouter::agent_local::ThreadClient::connect(&task_socket).await?;
+    let (thread, accepted) = client
+        .create_and_start(
             workspace,
-            model: args.model,
-            effort: args.effort,
-            read_only: args.read_only,
-            verification_command: args.check,
-            idempotency_key: Some(uuid::Uuid::new_v4().to_string()),
+            args.model,
+            args.effort,
+            args.read_only,
+            args.check,
+            args.prompt,
+        )
+        .await?;
+    emit_task_json(
+        serde_json::json!({ "type": "accepted", "thread_id": thread.thread_id, "turn_id": accepted.turn_id, "host": "local", "server_instance_id": thread.server_instance_id, "workspace": thread.workspace, "permission_profile": thread.permission_profile, "cursor": thread.cursor }),
+    )?;
+    let mut stream = client
+        .observe(&thread.thread_id, Some(thread.cursor))
+        .await?;
+    let mut view = match client
+        .request(Operation::ReadThread {
+            thread_id: thread.thread_id.clone(),
         })
         .await?
     {
-        ReplyResult::Task { snapshot } => snapshot,
-        _ => anyhow::bail!("BRO task server returned an unexpected submit response"),
+        ReplyResult::View { view } => *view,
+        _ => anyhow::bail!("unexpected Thread view"),
     };
-    emit_task_json(serde_json::json!({
-        "type": "accepted", "task_id": accepted.task_id, "host": "local",
-        "server_instance_id": accepted.server_instance_id, "workspace": accepted.workspace,
-        "tool_mode": accepted.tool_mode, "cursor": accepted.cursor,
-    }))?;
-    let mut stream = client
-        .observe(&accepted.task_id, Some(accepted.cursor))
-        .await?;
-    let mut snapshot = *accepted;
     let mut answered = None;
     let mut cancelling = false;
     loop {
         let observation = tokio::select! {
             signal = tokio::signal::ctrl_c(), if !cancelling => {
                 signal?;
-                client.request(Operation::Cancel { task_id: snapshot.task_id.clone() }).await?;
+                client.request(Operation::CancelTurn { thread_id: thread.thread_id.clone(), turn_id: accepted.turn_id.clone(), idempotency_key: "headless-cancel".into() }).await?;
                 cancelling = true;
                 continue;
             }
-            next = stream.next() => next?.ok_or_else(|| anyhow::anyhow!("task observation disconnected; task {} may still be running; no task was resubmitted", snapshot.task_id))?,
+            next = stream.next() => next?.ok_or_else(|| anyhow::anyhow!("task observation disconnected; task {} may still be running; no task was resubmitted", accepted.turn_id))?,
         };
         match observation {
-            bitrouter_orchestrator::service::Observation::Snapshot {
-                snapshot: fresh,
+            bitrouter_orchestrator::thread::ThreadObservation::Snapshot {
+                view: fresh,
                 resynchronized,
                 catchup,
             } => {
                 for event in catchup {
-                    emit_task_json(serde_json::json!({"type": "event", "event": event}))?;
+                    emit_task_json(serde_json::json!({"type":"event", "event":event}))?;
                 }
-                snapshot = *fresh;
+                view = *fresh;
                 emit_task_json(
-                    serde_json::json!({"type": "snapshot", "snapshot": snapshot, "resynchronized": resynchronized}),
+                    serde_json::json!({"type":"snapshot", "view":view, "resynchronized":resynchronized}),
                 )?;
             }
-            bitrouter_orchestrator::service::Observation::Event { event } => {
-                snapshot.apply(&event);
-                emit_task_json(serde_json::json!({"type": "event", "event": event}))?;
+            bitrouter_orchestrator::thread::ThreadObservation::Event { event } => {
+                view.apply(&event);
+                emit_task_json(serde_json::json!({"type":"event", "event":event}))?;
+            }
+            bitrouter_orchestrator::thread::ThreadObservation::Live {
+                event,
+                after_cursor,
+            } => {
+                emit_task_json(
+                    serde_json::json!({"type":"live", "event":event, "after_cursor":after_cursor}),
+                )?;
             }
         }
-        if snapshot.status == TaskStatus::WaitingForInput
+        // Another local client can enqueue on this Thread. The one-shot client
+        // observes and approves only the Turn it accepted, even after resync.
+        let historical = if view
+            .latest_turn
+            .as_ref()
+            .is_some_and(|turn| turn.turn_id != accepted.turn_id)
+        {
+            match client
+                .request(Operation::ReadTurn {
+                    thread_id: thread.thread_id.clone(),
+                    turn_id: accepted.turn_id.clone(),
+                })
+                .await?
+            {
+                ReplyResult::Turn { snapshot } => Some(snapshot),
+                _ => anyhow::bail!("unexpected targeted Turn reply"),
+            }
+        } else {
+            None
+        };
+        let Some(snapshot) = historical.as_deref().or(view.latest_turn.as_ref()) else {
+            continue;
+        };
+        if snapshot.status == TurnStatus::WaitingForInput
             && let Some(request_id) = snapshot.pending_input_id.as_ref()
             && answered.as_ref() != Some(request_id)
             && !cancelling
@@ -2647,9 +2679,11 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
             // Explicit headless coding tasks approve their own identified tools.
             let result = client
                 .request(Operation::Input {
-                    task_id: snapshot.task_id.clone(),
+                    thread_id: thread.thread_id.clone(),
+                    turn_id: snapshot.turn_id.clone(),
                     request_id: request_id.clone(),
                     approved: true,
+                    idempotency_key: request_id.clone(),
                 })
                 .await;
             if let Err(error) = result
@@ -2663,20 +2697,26 @@ async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
             }
             answered = Some(request_id.clone());
         }
-        if snapshot.status == TaskStatus::RecoveryRequired {
+        if snapshot.status == TurnStatus::RecoveryRequired {
             emit_task_json(serde_json::json!({"type": "blocked", "snapshot": snapshot}))?;
             anyhow::bail!("BRO execution is blocked; inspect recovery state before continuing");
         }
         if snapshot.status.terminal() {
             emit_task_json(serde_json::json!({
-                "type": "terminal", "task_id": snapshot.task_id, "status": snapshot.status,
+                "type": "terminal", "thread_id": thread.thread_id, "turn_id": snapshot.turn_id, "status": snapshot.status,
                 "server_instance_id": snapshot.server_instance_id,
                 "verification": snapshot.verification, "verification_evidence": snapshot.verification_evidence,
                 "final_answer": snapshot.final_answer, "detail": snapshot.detail, "unknown_effect": snapshot.unknown_effect,
                 "host": "local", "workspace": snapshot.workspace, "cursor": snapshot.cursor,
             }))?;
+            drop(stream);
+            let _ = client
+                .request(Operation::UnloadThread {
+                    thread_id: thread.thread_id.clone(),
+                })
+                .await;
             anyhow::ensure!(
-                snapshot.status == TaskStatus::Completed,
+                snapshot.status == TurnStatus::Completed,
                 "BRO task ended with {:?}",
                 snapshot.status
             );
@@ -5748,7 +5788,7 @@ async fn run_code(
         routing,
         config,
         socket,
-        task_id,
+        thread_id,
         check,
         read_only,
         workspace,
@@ -5756,7 +5796,7 @@ async fn run_code(
     if agent.is_none() && remote_context.is_none() {
         if socket.is_some()
             && routing.model.is_none()
-            && task_id.is_none()
+            && thread_id.is_none()
             && check.is_none()
             && !read_only
             && workspace.is_none()
@@ -5775,7 +5815,7 @@ async fn run_code(
             config.as_deref(),
             socket.as_deref(),
             routing.model,
-            task_id,
+            thread_id,
             check,
             read_only,
             workspace,
@@ -5783,8 +5823,8 @@ async fn run_code(
         .await;
     }
     anyhow::ensure!(
-        task_id.is_none() && check.is_none() && !read_only && workspace.is_none(),
-        "--task-id, --check, --read-only, and --workspace apply only to local bare `bro code`"
+        thread_id.is_none() && check.is_none() && !read_only && workspace.is_none(),
+        "--thread-id, --check, --read-only, and --workspace apply only to local bare `bro code`"
     );
     let initial_session = if let Some(agent) = agent {
         if remote_context.is_some() {

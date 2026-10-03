@@ -12,7 +12,7 @@ pub(super) struct Presentation {
     events: VecDeque<(ThreadEvent, usize)>,
     bytes: usize,
     evicted_through: u64,
-    publisher: broadcast::Sender<ThreadObservation>,
+    pub(super) publisher: broadcast::Sender<ThreadObservation>,
     finished_items: std::collections::HashSet<String>,
 }
 
@@ -48,7 +48,7 @@ impl Presentation {
                         .view
                         .latest_turn
                         .as_ref()
-                        .is_none_or(|turn| &turn.task_id != turn_id) =>
+                        .is_none_or(|turn| &turn.turn_id != turn_id) =>
                 {
                     self.finished_items.clear()
                 }
@@ -82,17 +82,17 @@ impl Presentation {
         });
     }
 
-    pub(super) fn live(&mut self, event: &TaskEvent) {
+    pub(super) fn live(&mut self, event: &TurnEvent) {
         let item_id = match &event.payload {
-            TaskEventPayload::AssistantDelta { item_id, .. } => item_id,
-            TaskEventPayload::ToolOutputDelta { id, .. } => id,
+            TurnEventPayload::AssistantDelta { item_id, .. } => item_id,
+            TurnEventPayload::ToolOutputDelta { id, .. } => id,
             _ => return,
         };
         if self.finished_items.contains(item_id) {
             return;
         }
         if let Some(turn) = &mut self.view.latest_turn
-            && turn.task_id == event.task_id
+            && turn.turn_id == event.turn_id
         {
             turn.apply(event);
         }
@@ -108,7 +108,7 @@ impl Presentation {
         if let Some(turn) = &mut self.view.latest_turn
             && !turn.status.terminal()
         {
-            turn.status = TaskStatus::RecoveryRequired;
+            turn.status = TurnStatus::RecoveryRequired;
             turn.unknown_effect = true;
             turn.detail = Some(reason.into());
         }
@@ -151,7 +151,7 @@ impl Presentation {
 
 /// A caller-bound attachment; dropping it never cancels or answers an input.
 pub struct ThreadSubscription {
-    service: TaskService,
+    service: ThreadService,
     target: ThreadTarget,
     caller: CallerContext,
     receiver: broadcast::Receiver<ThreadObservation>,
@@ -193,23 +193,25 @@ impl ThreadSubscription {
     }
 }
 
-impl TaskService {
+impl ThreadService {
     pub fn read_thread_view(
         &self,
         target: &ThreadTarget,
         caller: &CallerContext,
     ) -> Result<ThreadView, ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
-        let state = self.lock_state();
+        let mut state = self.lock_state();
         let thread = state
             .threads
-            .get(&target.thread_id)
+            .get_mut(&target.thread_id)
             .ok_or_else(threads::unknown_thread)?;
         thread.authorize(caller)?;
-        self.check_thread_grant(&state, thread)?;
+        thread.last_used = Instant::now();
         let mut view = thread.presentation.view.clone();
         // Capacity waiting is transient scheduler state, without new context.
         view.thread.waiting_for_capacity = thread.snapshot.waiting_for_capacity;
+        drop(state);
+        self.check_snapshot_grant(&view.thread)?;
         Ok(view)
     }
 
@@ -256,7 +258,7 @@ impl TaskService {
         caller: &CallerContext,
         request: ThreadHistoryRequest,
     ) -> Result<ThreadHistoryPage, ServiceError> {
-        let view = self.read_thread_view(target, caller)?;
+        let view = self.read_stored_thread_view(target, caller).await?;
         let cutoff = request.cutoff.unwrap_or(view.thread.cursor);
         if request.limit == 0
             || request.limit > MAX_EVENT_PAGE
@@ -276,8 +278,8 @@ impl TaskService {
                 self.inner.limits.history_page_bytes,
             )
             .await
-            .map_err(|error| ServiceError::new(ErrorCode::StorageUnavailable, error))?;
-        self.read_thread_view(target, caller)?;
+            .map_err(ServiceError::storage)?;
+        self.check_snapshot_grant(&view.thread)?;
         let next_after = if chunk.more {
             Some(
                 chunk
@@ -376,7 +378,7 @@ pub(crate) fn project(
                 thread_id: thread_id.into(),
                 turn_id: turn_id.clone(),
                 queue_order: *queue_order,
-                status: TaskStatus::Queued,
+                status: TurnStatus::Queued,
             },
             user_item_id: user_item_id.clone(),
             prompt: prompt.clone(),
@@ -395,11 +397,9 @@ pub(crate) fn project(
         ExecutionRecord::ThreadRecovered {
             source_server_instance_id,
             source_cursor,
-            legacy_converted,
         } => ThreadChange::Recovered {
             source_server_instance_id: source_server_instance_id.clone(),
             source_cursor: *source_cursor,
-            legacy_converted: *legacy_converted,
         },
         ExecutionRecord::ThreadCheckpoint { snapshot, .. } => ThreadChange::Checkpoint {
             snapshot: snapshot.clone(),
@@ -408,8 +408,9 @@ pub(crate) fn project(
             project(fact, thread_id, Some(turn_id), changes);
             return;
         }
-        ExecutionRecord::Event { event } => ThreadChange::TurnEvent {
-            event: Box::new(event.clone()),
+        ExecutionRecord::TurnLifecycle { turn_id, lifecycle } => ThreadChange::TurnLifecycle {
+            turn_id: turn_id.clone(),
+            lifecycle: lifecycle.clone(),
         },
         ExecutionRecord::ModelRequest {
             step_id,
@@ -532,51 +533,16 @@ impl ThreadView {
                     if self
                         .latest_turn
                         .as_ref()
-                        .is_none_or(|turn| &turn.task_id != turn_id)
+                        .is_none_or(|turn| &turn.turn_id != turn_id)
                     {
                         self.latest_turn = Some(empty_turn(&self.thread, &self.config, turn_id));
                     }
                 }
-                ThreadChange::TurnEvent { event } => {
-                    // A start acceptance can precede activation in its batch.
-                    if matches!(event.payload, TaskEventPayload::Accepted { .. })
-                        && self
-                            .latest_turn
-                            .as_ref()
-                            .is_none_or(|turn| turn.task_id != event.task_id)
-                    {
-                        self.latest_turn =
-                            Some(empty_turn(&self.thread, &self.config, &event.task_id));
-                    }
+                ThreadChange::TurnLifecycle { turn_id, lifecycle } => {
                     if let Some(turn) = &mut self.latest_turn
-                        && turn.task_id == event.task_id
+                        && &turn.turn_id == turn_id
                     {
-                        turn.apply(event);
-                    }
-                    // Legacy projection aliases its first Turn to the root Task
-                    // identity. Native Turns have their own identity and rely on
-                    // their committed Thread checkpoint for these transitions.
-                    if event.task_id == self.thread.thread_id
-                        && let TaskEventPayload::TaskFinished {
-                            status,
-                            detail,
-                            unknown_effect,
-                            ..
-                        } = &event.payload
-                    {
-                        if *unknown_effect || *status == TaskStatus::RecoveryRequired {
-                            self.thread.status = ThreadStatus::RecoveryRequired;
-                            self.thread.pause_reason = Some(detail.clone());
-                        } else if status.terminal() {
-                            self.thread.active_turn_id = None;
-                            self.thread.status = if *status == TaskStatus::Completed {
-                                ThreadStatus::Idle
-                            } else {
-                                ThreadStatus::Paused
-                            };
-                            self.thread.pause_reason =
-                                (*status != TaskStatus::Completed).then(|| detail.clone());
-                        }
+                        turn.apply_payload(&lifecycle.payload());
                     }
                 }
                 ThreadChange::ModelStep {
@@ -589,7 +555,7 @@ impl ThreadView {
                 | ThreadChange::AssistantInterrupted { turn_id, .. }
                 | ThreadChange::ToolResult { turn_id, .. } => {
                     if let Some(turn) = &mut self.latest_turn
-                        && &turn.task_id == turn_id
+                        && &turn.turn_id == turn_id
                     {
                         turn.live = None;
                     }
@@ -601,7 +567,7 @@ impl ThreadView {
                     ..
                 } => {
                     if let Some(turn) = &mut self.latest_turn
-                        && &turn.task_id == turn_id
+                        && &turn.turn_id == turn_id
                     {
                         turn.verification_evidence = Some(evidence.clone());
                         turn.unknown_effect |= *effect == EffectStatus::Unknown;
@@ -611,6 +577,9 @@ impl ThreadView {
                 ThreadChange::ToolIntent { .. } => {}
             }
         }
+        if let Some(turn) = &mut self.latest_turn {
+            turn.cursor = event.seq;
+        }
         self.thread.cursor = event.seq;
     }
 }
@@ -619,14 +588,14 @@ pub(super) fn empty_turn(
     thread: &ThreadSnapshot,
     config: &AgentConfig,
     turn_id: &str,
-) -> TaskSnapshot {
-    TaskSnapshot {
+) -> TurnSnapshot {
+    TurnSnapshot {
         steering: Vec::new(),
-        thread_id: Some(thread.thread_id.clone()),
+        thread_id: thread.thread_id.clone(),
         server_instance_id: thread.server_instance_id.clone(),
         model: thread.model.clone(),
-        task_id: turn_id.into(),
-        status: TaskStatus::Accepted,
+        turn_id: turn_id.into(),
+        status: TurnStatus::Accepted,
         cursor: 0,
         workspace: thread.workspace.clone(),
         tool_mode: config.tool_mode(),

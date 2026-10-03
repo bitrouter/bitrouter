@@ -204,9 +204,9 @@ async fn simultaneous_local_clients_join_one_server() -> Result<()> {
         .map(serde_json::from_str::<Value>)
         .collect::<Result<Vec<_>, _>>()?;
     ensure!(
-        first_events
-            .iter()
-            .any(|line| { line["type"] == "accepted" && line["tool_mode"] == "read_only" }),
+        first_events.iter().any(|line| {
+            line["type"] == "accepted" && line["permission_profile"] == "read_only"
+        }),
         "read-only task mode missing from events: {first_events:?}"
     );
     Ok(())
@@ -245,9 +245,19 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_raw(text_sse("Done."), "text/event-stream"),
-        )
+        .respond_with(|request: &wiremock::Request| {
+            let body = if String::from_utf8_lossy(&request.body).contains("Wait for approval") {
+                tool_sse(vec![tool_call(
+                    0,
+                    "blocked-write",
+                    "write",
+                    json!({"path":"never.txt","content":"never"}),
+                )])
+            } else {
+                text_sse("Done.")
+            };
+            ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")
+        })
         .mount(&upstream)
         .await;
     let home = tempfile::tempdir()?;
@@ -277,7 +287,7 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
         .kill_on_drop(true)
         .spawn()?;
     let client = reqwest::Client::builder().no_proxy().build()?;
-    let base = format!("http://{api_address}/agent/v1");
+    let base = format!("http://{api_address}/agent/v2");
     let control = bitrouter::daemon::socket_path_for(
         &bitrouter::paths::ConfigSource::File(config.clone()),
         &bitrouter::paths::load_config(&bitrouter::paths::ConfigSource::File(config.clone()))
@@ -309,110 +319,101 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
         .as_str()
         .context("server instance")?
         .to_string();
-    let body = json!({"prompt": "Say done", "workspace": workspace, "model": "test-model"});
-    let invalid_read_only = client
-        .post(format!("{base}/tasks"))
-        .bearer_auth(API_TOKEN)
-        .header("X-Bro-Server-Instance", &instance)
-        .header("Idempotency-Key", "read-only-with-check")
-        .json(&json!({"prompt": "Inspect", "workspace": workspace, "model": "test-model", "read_only": true, "verification_command": "echo forbidden"}))
-        .send()
-        .await?;
-    ensure!(invalid_read_only.status() == reqwest::StatusCode::BAD_REQUEST);
+    let body = json!({"workspace":workspace, "model":"test-model", "read_only":true});
     let unauthorized = client
-        .post(format!("{base}/tasks"))
-        .header("Idempotency-Key", "same-task")
+        .post(format!("{base}/threads"))
+        .header("Idempotency-Key", "create")
         .json(&body)
         .send()
         .await?;
     ensure!(unauthorized.status() == reqwest::StatusCode::UNAUTHORIZED);
-    let accepted = client
-        .post(format!("{base}/tasks"))
-        .bearer_auth(API_TOKEN)
-        .header("X-Bro-Server-Instance", &instance)
-        .header("Idempotency-Key", "same-task")
-        .json(&body)
-        .send()
-        .await?;
-    ensure!(
-        accepted.status() == reqwest::StatusCode::ACCEPTED,
-        "API rejected authorized submit: {}",
-        accepted.text().await?
-    );
+    let invalid = client.post(format!("{base}/threads")).bearer_auth(API_TOKEN).header("X-Bro-Server-Instance",&instance).header("Idempotency-Key","invalid").json(&json!({"workspace":workspace,"model":"test-model","read_only":true,"verification_command":"echo forbidden"})).send().await?;
+    ensure!(invalid.status() == reqwest::StatusCode::BAD_REQUEST);
+    let create = || {
+        client
+            .post(format!("{base}/threads"))
+            .bearer_auth(API_TOKEN)
+            .header("X-Bro-Server-Instance", &instance)
+            .header("Idempotency-Key", "create")
+            .json(&body)
+    };
+    let accepted = create().send().await?;
+    ensure!(accepted.status() == reqwest::StatusCode::CREATED);
     let accepted: Value = accepted.json().await?;
-    let task_id = accepted["task"]["task_id"]
+    let thread_id = accepted["thread"]["thread_id"]
         .as_str()
-        .context("task id")?
-        .to_string();
-    let duplicate: Value = client
-        .post(format!("{base}/tasks"))
-        .bearer_auth(API_TOKEN)
-        .header("X-Bro-Server-Instance", &instance)
-        .header("Idempotency-Key", "same-task")
-        .json(&body)
-        .send()
-        .await?
-        .json()
-        .await?;
-    ensure!(duplicate["task"]["task_id"] == task_id);
+        .context("Thread id")?;
+    let duplicate: Value = create().send().await?.json().await?;
+    ensure!(duplicate["thread"]["thread_id"] == thread_id);
+    let turn_url = format!("{base}/threads/{thread_id}/turns");
+    let submit = || {
+        client
+            .post(&turn_url)
+            .bearer_auth(API_TOKEN)
+            .header("X-Bro-Server-Instance", &instance)
+            .header("Idempotency-Key", "turn")
+            .json(&json!({"mode":"start","prompt":"Say done"}))
+    };
+    let accepted = submit().send().await?;
+    ensure!(accepted.status() == reqwest::StatusCode::ACCEPTED);
+    let accepted: Value = accepted.json().await?;
+    let turn_id = accepted["receipt"]["turn_id"].as_str().context("Turn id")?;
+    let duplicate: Value = submit().send().await?.json().await?;
+    ensure!(duplicate["receipt"]["turn_id"] == turn_id);
     let conflict = client
-        .post(format!("{base}/tasks"))
+        .post(&turn_url)
         .bearer_auth(API_TOKEN)
         .header("X-Bro-Server-Instance", &instance)
-        .header("Idempotency-Key", "same-task")
-        .json(&json!({"prompt": "Different", "workspace": workspace, "model": "test-model"}))
+        .header("Idempotency-Key", "turn")
+        .json(&json!({"mode":"start","prompt":"Different"}))
         .send()
         .await?;
     ensure!(conflict.status() == reqwest::StatusCode::CONFLICT);
     let stale = client
-        .post(format!("{base}/tasks/{task_id}/inputs"))
+        .post(format!("{base}/threads/{thread_id}/inputs"))
         .bearer_auth(API_TOKEN)
         .header("X-Bro-Server-Instance", &instance)
-        .json(&json!({"request_id": "stale", "approved": true}))
+        .header("Idempotency-Key", "stale")
+        .json(&json!({"turn_id":turn_id,"request_id":"stale","approved":true}))
         .send()
         .await?;
     ensure!(stale.status() == reqwest::StatusCode::CONFLICT);
-    let mut snapshot;
+    let local_client = bitrouter::agent_local::ThreadClient::connect(&local_socket).await?;
+    ensure!(local_client.server_instance_id == instance);
+    let denied = local_client
+        .request(Operation::ReadThread {
+            thread_id: thread_id.into(),
+        })
+        .await
+        .err()
+        .context("caller ownership should be checked")?;
+    ensure!(
+        denied
+            .downcast_ref::<bitrouter_orchestrator::service::ServiceError>()
+            .is_some_and(
+                |error| error.code == bitrouter_orchestrator::service::ErrorCode::Unauthorized
+            )
+    );
     loop {
-        snapshot = match bitrouter::agent_local::request(
-            &local_socket,
-            Operation::Read {
-                task_id: task_id.clone(),
-            },
-        )
-        .await?
-        {
-            ReplyResult::Task { snapshot } => snapshot,
-            _ => anyhow::bail!("unexpected local task reply"),
-        };
-        if matches!(
-            snapshot.status,
-            bitrouter_orchestrator::service::TaskStatus::Completed
-        ) {
+        let snapshot: Value = client
+            .get(format!("{base}/threads/{thread_id}/turns/{turn_id}"))
+            .bearer_auth(API_TOKEN)
+            .header("X-Bro-Server-Instance", &instance)
+            .send()
+            .await?
+            .json()
+            .await?;
+        if snapshot["turn"]["status"] == "completed" {
             break;
         }
         ensure!(
             tokio::time::Instant::now() < deadline,
-            "task did not finish: {:?}: {:?}",
-            snapshot.status,
-            snapshot.detail
+            "Turn did not finish: {snapshot}"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let local_events = match bitrouter::agent_local::request(
-        &local_socket,
-        Operation::Events {
-            task_id: task_id.clone(),
-            after: 1,
-        },
-    )
-    .await?
-    {
-        ReplyResult::Events { events } => events,
-        _ => anyhow::bail!("unexpected local event reply"),
-    };
-    let http_events: Value = client
-        .get(format!("{base}/tasks/{task_id}/events?after=1"))
+    let history: Value = client
+        .get(format!("{base}/threads/{thread_id}/history?after=0"))
         .bearer_auth(API_TOKEN)
         .header("X-Bro-Server-Instance", &instance)
         .send()
@@ -420,28 +421,16 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
         .json()
         .await?;
     ensure!(
-        http_events["events"]
+        history["history"]["events"]
             .as_array()
-            .is_some_and(|events| events.len() == local_events.len())
+            .is_some_and(|events| events.iter().any(|event| event["changes"]
+                .as_array()
+                .is_some_and(|changes| changes
+                    .iter()
+                    .any(|change| change["kind"] == "assistant_response"))))
     );
-    ensure!(http_events["events"].as_array().is_some_and(|events| {
-        events.last().and_then(|event| event["seq"].as_u64()) == Some(snapshot.cursor)
-    }));
-    let resumed: Value = client
-        .get(format!("{base}/tasks/{task_id}/events?after=2"))
-        .bearer_auth(API_TOKEN)
-        .header("X-Bro-Server-Instance", &instance)
-        .send()
-        .await?
-        .json()
-        .await?;
-    ensure!(resumed["events"].as_array().is_some_and(|events| {
-        events
-            .iter()
-            .all(|event| event["seq"].as_u64().is_some_and(|seq| seq > 2))
-    }));
-    let observed = client
-        .get(format!("{base}/tasks/{task_id}/observe?after=1"))
+    let mut observed = client
+        .get(format!("{base}/threads/{thread_id}/observe?after=0"))
         .bearer_auth(API_TOKEN)
         .header("X-Bro-Server-Instance", &instance)
         .send()
@@ -452,57 +441,142 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
             .get("content-type")
             .is_some_and(|header| header == "text/event-stream")
     );
-    let stream_text = observed.text().await?;
-    ensure!(
-        stream_text.contains("snapshot")
-            && stream_text.contains(&instance)
-            && stream_text.contains(&task_id)
-    );
-    let stale_instance = client
-        .post(format!("{base}/tasks"))
+    let chunk = tokio::time::timeout(Duration::from_secs(5), observed.chunk())
+        .await??
+        .context("SSE snapshot")?;
+    ensure!(String::from_utf8_lossy(&chunk).contains("snapshot"));
+    drop(observed);
+    // A queued withdrawal keeps its scope and original receipt after retry.
+    let blocking: Value = client
+        .post(format!("{base}/threads"))
         .bearer_auth(API_TOKEN)
-        .header("X-Bro-Server-Instance", "previous-boot")
-        .header("Idempotency-Key", "no-retry")
+        .header("X-Bro-Server-Instance", &instance)
+        .header("Idempotency-Key", "blocking-thread")
+        .json(&json!({"workspace":workspace,"model":"test-model"}))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let blocking_id = blocking["thread"]["thread_id"]
+        .as_str()
+        .context("blocking Thread")?;
+    let blocking_url = format!("{base}/threads/{blocking_id}/turns");
+    let active: Value = client
+        .post(&blocking_url)
+        .bearer_auth(API_TOKEN)
+        .header("X-Bro-Server-Instance", &instance)
+        .header("Idempotency-Key", "blocking-turn")
+        .json(&json!({"mode":"start","prompt":"Wait for approval"}))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let active_id = active["receipt"]["turn_id"]
+        .as_str()
+        .context("active Turn")?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let snapshot: Value = client
+            .get(format!("{blocking_url}/{active_id}"))
+            .bearer_auth(API_TOKEN)
+            .header("X-Bro-Server-Instance", &instance)
+            .send()
+            .await?
+            .json()
+            .await?;
+        if snapshot["turn"]["status"] == "waiting_for_input" {
+            break;
+        }
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "approval did not appear: {snapshot}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let queued: Value = client
+        .post(&blocking_url)
+        .bearer_auth(API_TOKEN)
+        .header("X-Bro-Server-Instance", &instance)
+        .header("Idempotency-Key", "queued-turn")
+        .json(&json!({"mode":"enqueue","prompt":"Do not execute"}))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let queued_id = queued["receipt"]["turn_id"]
+        .as_str()
+        .context("queued Turn")?;
+    let withdraw = || {
+        client
+            .post(format!("{blocking_url}/{queued_id}/cancel"))
+            .bearer_auth(API_TOKEN)
+            .header("X-Bro-Server-Instance", &instance)
+            .header("Idempotency-Key", "withdraw-queued")
+            .json(&json!({"mode":"queued"}))
+    };
+    let original = withdraw().send().await?;
+    ensure!(original.status().is_success());
+    let original: Value = original.json().await?;
+    let retry = withdraw().send().await?;
+    ensure!(
+        retry.status().is_success(),
+        "withdrawal retry changed cancellation scope"
+    );
+    ensure!(retry.json::<Value>().await? == original);
+    let cancelled = client
+        .post(format!("{blocking_url}/{active_id}/cancel"))
+        .bearer_auth(API_TOKEN)
+        .header("X-Bro-Server-Instance", &instance)
+        .header("Idempotency-Key", "cancel-active")
+        .json(&json!({"mode":"active"}))
+        .send()
+        .await?;
+    ensure!(cancelled.status().is_success());
+    ensure!(!workspace.join("never.txt").exists());
+    let old_route = client
+        .post(format!("http://{api_address}/agent/v1/tasks"))
+        .bearer_auth(API_TOKEN)
         .json(&body)
         .send()
         .await?;
-    ensure!(stale_instance.status() == reqwest::StatusCode::CONFLICT);
-    let stale_instance: Value = stale_instance.json().await?;
-    ensure!(stale_instance["code"] == "instance_changed");
+    ensure!(old_route.status() == reqwest::StatusCode::NOT_FOUND);
+    let stale = client
+        .post(&turn_url)
+        .bearer_auth(API_TOKEN)
+        .header("X-Bro-Server-Instance", "previous-boot")
+        .header("Idempotency-Key", "no-retry")
+        .json(&json!({"mode":"start","prompt":"never"}))
+        .send()
+        .await?;
+    ensure!(stale.status() == reqwest::StatusCode::CONFLICT);
     let unlisted = home.path().join("local-only");
     std::fs::create_dir(&unlisted)?;
-    let local_only = match bitrouter::agent_local::request(
-        &local_socket,
-        Operation::Submit {
-            prompt: "Local inspection".into(),
-            workspace: unlisted.clone(),
-            model: "test-model".into(),
-            effort: None,
-            read_only: true,
-            verification_command: None,
-            idempotency_key: None,
-        },
-    )
-    .await?
-    {
-        ReplyResult::Task { snapshot } => snapshot,
-        _ => anyhow::bail!("unexpected local submit reply"),
-    };
-    // Registering a workspace locally must not expand the HTTP allowlist.
-    let forbidden = client.post(format!("{base}/tasks"))
-        .bearer_auth(API_TOKEN).header("X-Bro-Server-Instance", &instance)
-        .header("Idempotency-Key", "outside-http-workspaces")
-        .json(&json!({"prompt":"Inspect", "workspace":unlisted, "model":"test-model", "read_only":true}))
-        .send().await?;
+    let (local_thread, _) = local_client
+        .create_and_start(
+            unlisted.clone(),
+            "test-model".into(),
+            None,
+            true,
+            None,
+            "Local inspection".into(),
+        )
+        .await?;
+    let forbidden = client
+        .post(format!("{base}/threads"))
+        .bearer_auth(API_TOKEN)
+        .header("X-Bro-Server-Instance", &instance)
+        .header("Idempotency-Key", "outside")
+        .json(&json!({"workspace":unlisted,"model":"test-model","read_only":true}))
+        .send()
+        .await?;
     ensure!(forbidden.status() == reqwest::StatusCode::FORBIDDEN);
     let forbidden_read = client
-        .get(format!("{base}/tasks/{}", local_only.task_id))
+        .get(format!("{base}/threads/{}", local_thread.thread_id))
         .bearer_auth(API_TOKEN)
         .header("X-Bro-Server-Instance", &instance)
         .send()
         .await?;
     ensure!(forbidden_read.status() == reqwest::StatusCode::FORBIDDEN);
-    ensure!(!home.path().join("agent-tasks").exists());
     let _ = Command::new(binary)
         .arg("stop")
         .arg("--config")

@@ -9,144 +9,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use crate::agent::AgentConfig;
-use crate::service::{TaskEvent, TaskEventPayload, VerificationEvidence};
-use crate::thread::{
-    PermissionProfile, SteeringReceipt, ThreadChange, ThreadEvent, ThreadSnapshot, ThreadStatus,
-    ThreadView,
-};
-
-/// Read-only compatibility projection. Original Task identity is the Thread and
-/// first Turn identity; root record positions remain the history cursors. This
-/// neither writes a conversion record nor grants continuation authority.
-#[derive(Serialize)]
-pub struct LegacyTaskProjection {
-    view: ThreadView,
-}
-
-impl LegacyTaskProjection {
-    pub fn from_header(record: &ExecutionRecord, id: &str) -> Result<Option<Self>, String> {
-        let ExecutionRecord::Accepted {
-            config,
-            verification_command,
-            event,
-            ..
-        } = record
-        else {
-            return Ok(None);
-        };
-        let TaskEventPayload::Accepted {
-            workspace, model, ..
-        } = &event.payload
-        else {
-            return Err("legacy execution has no accepted input/workspace".into());
-        };
-        if id.is_empty()
-            || id.len() > 128
-            || event.task_id != id
-            || event.seq != 1
-            || event.server_instance_id.is_empty()
-            || event.server_instance_id.len() > 128
-            || event.thread_id.as_ref().is_some_and(|thread| thread != id)
-        {
-            return Err("invalid legacy execution header identity or epoch".into());
-        }
-        Ok(Some(Self {
-            view: ThreadView {
-                recovery: None,
-                thread: ThreadSnapshot {
-                    server_instance_id: event.server_instance_id.clone(),
-                    thread_id: id.into(),
-                    status: ThreadStatus::Busy,
-                    workspace: workspace.clone(),
-                    model: model.clone(),
-                    permission_profile: if config.tool_mode() == crate::agent::ToolMode::ReadOnly {
-                        PermissionProfile::ReadOnly
-                    } else {
-                        PermissionProfile::Ask
-                    },
-                    context_version: 0,
-                    cursor: 0,
-                    active_turn_id: Some(id.into()),
-                    queued: Vec::new(),
-                    pause_reason: None,
-                    waiting_for_capacity: false,
-                },
-                config: config.as_ref().clone(),
-                verification_command: verification_command.clone(),
-                latest_turn: None,
-            },
-        }))
-    }
-
-    pub(crate) fn view(&self) -> &ThreadView {
-        &self.view
-    }
-
-    /// Facts without a recorded timestamp use zero, not an invented wall clock.
-    /// A legacy Task has one writer epoch; changed epochs require a separately
-    /// recorded conversion contract and are rejected by recovery validation.
-    pub fn project(
-        &self,
-        record: &ExecutionRecord,
-        seq: u64,
-    ) -> Result<Option<ThreadEvent>, String> {
-        let id = &self.view.thread.thread_id;
-        let mut changes = Vec::new();
-        let mut epoch = self.view.thread.server_instance_id.clone();
-        let mut timestamp_ms = 0;
-        let event = match record {
-            ExecutionRecord::Accepted { event, .. } => {
-                if seq != 1 {
-                    return Err("duplicate legacy acceptance header".into());
-                }
-                changes.push(ThreadChange::Created {
-                    view: Box::new(self.view.clone()),
-                });
-                changes.push(ThreadChange::TurnActivated {
-                    turn_id: id.clone(),
-                    context_version: 0,
-                });
-                Some(event)
-            }
-            ExecutionRecord::Event { event } => Some(event),
-            _ => None,
-        };
-        if let Some(event) = event {
-            if event.task_id != *id
-                || event.thread_id.as_ref().is_some_and(|thread| thread != id)
-                || event.server_instance_id != self.view.thread.server_instance_id
-                || event.seq == 0
-            {
-                return Err("legacy event identity or writer epoch mismatch".into());
-            }
-            epoch = event.server_instance_id.clone();
-            timestamp_ms = event.timestamp_ms;
-            let mut event = event.clone();
-            event.thread_id = Some(id.clone());
-            changes.push(ThreadChange::TurnEvent {
-                event: Box::new(event),
-            });
-        } else if matches!(
-            record,
-            ExecutionRecord::ModelRequest { .. }
-                | ExecutionRecord::ModelResponse { .. }
-                | ExecutionRecord::ModelInterrupted { .. }
-                | ExecutionRecord::ToolIntent { .. }
-                | ExecutionRecord::ToolResult { .. }
-                | ExecutionRecord::VerificationResult { .. }
-                | ExecutionRecord::Settled { .. }
-        ) {
-            crate::service::observation::project(record, id, Some(id), &mut changes);
-        }
-        Ok((!changes.is_empty()).then_some(ThreadEvent {
-            server_instance_id: epoch,
-            thread_id: id.clone(),
-            seq,
-            timestamp_ms,
-            changes,
-        }))
-    }
-}
+use crate::service::VerificationEvidence;
+use crate::thread::{SteeringReceipt, ThreadEvent, ThreadSnapshot};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AcceptedKey {
@@ -247,8 +111,6 @@ pub enum ExecutionRecord {
     ThreadRecovered {
         source_server_instance_id: String,
         source_cursor: u64,
-        #[serde(default)]
-        legacy_converted: bool,
     },
     SteeringReceived {
         receipt: SteeringReceipt,
@@ -267,16 +129,9 @@ pub enum ExecutionRecord {
         turn_id: String,
         fact: Box<ExecutionRecord>,
     },
-    Accepted {
-        owner_key_id: String,
-        owner_user_id: String,
-        fingerprint: String,
-        config: Box<AgentConfig>,
-        verification_command: Option<String>,
-        event: TaskEvent,
-    },
-    Event {
-        event: TaskEvent,
+    TurnLifecycle {
+        turn_id: String,
+        lifecycle: crate::thread::TurnLifecycle,
     },
     ModelRequest {
         step_id: String,
@@ -354,8 +209,19 @@ pub enum EffectStatus {
     Unknown,
 }
 
+pub const RUNTIME_FORMAT_VERSION: u32 = 2;
+
+pub fn validate_runtime_format(version: u32) -> Result<(), String> {
+    if version != RUNTIME_FORMAT_VERSION {
+        return Err(format!("unsupported_runtime_format: {version}"));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredExecution {
+    #[serde(default)]
+    pub format_version: u32,
     pub execution_id: String,
     pub version: u64,
     pub records: Vec<ExecutionRecord>,
@@ -435,6 +301,7 @@ pub trait ExecutionStore: Send + Sync {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExecutionHead {
+    pub format_version: u32,
     pub position: u64,
     pub execution_id: String,
     pub version: u64,
@@ -495,6 +362,22 @@ struct MemoryState {
     owners: HashMap<String, ExecutionOwner>,
 }
 
+#[cfg(test)]
+impl MemoryExecutionStore {
+    pub(crate) fn set_format_for_test(&self, id: &str, version: u32) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "execution store lock poisoned")?;
+        state
+            .records
+            .get_mut(id)
+            .ok_or("unknown root")?
+            .format_version = version;
+        Ok(())
+    }
+}
+
 #[async_trait::async_trait]
 impl ExecutionStore for MemoryExecutionStore {
     async fn read_index(
@@ -531,6 +414,7 @@ impl ExecutionStore for MemoryExecutionStore {
                 .get(id)
                 .ok_or("execution index points to missing root")?;
             let value = ExecutionHead {
+                format_version: entry.format_version,
                 position: *position,
                 execution_id: id.clone(),
                 version: entry.version,
@@ -669,6 +553,7 @@ impl ExecutionStore for MemoryExecutionStore {
         let Some(stored) = state.records.get(execution_id) else {
             return Ok(None);
         };
+        validate_runtime_format(stored.format_version)?;
         let cutoff = cutoff.unwrap_or(stored.version);
         if after > cutoff || cutoff > stored.version {
             return Err("invalid execution page cutoff".into());
@@ -720,18 +605,13 @@ impl ExecutionStore for MemoryExecutionStore {
             .lock()
             .map_err(|_| "execution store lock poisoned")?;
         let stored = state.records.get(execution_id).ok_or("unknown execution")?;
+        validate_runtime_format(stored.format_version)?;
         if cutoff > stored.version {
             return Err("history cutoff is ahead of execution".into());
         }
         let mut events = Vec::new();
         let mut bytes = 0;
         let mut more = false;
-        let legacy = stored
-            .records
-            .first()
-            .map(|header| LegacyTaskProjection::from_header(header, execution_id))
-            .transpose()?
-            .flatten();
         for (index, record) in stored
             .records
             .iter()
@@ -752,11 +632,7 @@ impl ExecutionStore for MemoryExecutionStore {
                     }
                     Some(event.clone())
                 }
-                _ => legacy
-                    .as_ref()
-                    .map(|projection| projection.project(record, seq))
-                    .transpose()?
-                    .flatten(),
+                _ => None,
             };
             let Some(event) = event else {
                 continue;
@@ -788,13 +664,14 @@ impl ExecutionStore for MemoryExecutionStore {
     }
 
     async fn load(&self, execution_id: &str) -> Result<Option<StoredExecution>, String> {
-        Ok(self
+        let state = self
             .state
             .lock()
-            .map_err(|_| "execution store lock poisoned".to_string())?
-            .records
-            .get(execution_id)
-            .cloned())
+            .map_err(|_| "execution store lock poisoned")?;
+        if let Some(root) = state.records.get(execution_id) {
+            validate_runtime_format(root.format_version)?;
+        }
+        Ok(state.records.get(execution_id).cloned())
     }
 
     async fn find_key(&self, scope: &str, key: &str) -> Result<Option<AcceptedKey>, String> {
@@ -826,6 +703,9 @@ fn commit_memory(
     expected_version: u64,
     records: &[ExecutionRecord],
 ) -> Result<u64, String> {
+    if let Some(root) = state.records.get(execution_id) {
+        validate_runtime_format(root.format_version)?;
+    }
     let actual = state
         .records
         .get(execution_id)
@@ -866,6 +746,7 @@ fn commit_memory(
         .records
         .entry(execution_id.to_string())
         .or_insert_with(|| StoredExecution {
+            format_version: RUNTIME_FORMAT_VERSION,
             execution_id: execution_id.into(),
             version: 0,
             records: Vec::new(),
@@ -950,7 +831,7 @@ mod tests {
                         thread_id: "thread".into(),
                         turn_id: format!("turn-{seq}"),
                         queue_order: seq,
-                        status: crate::service::TaskStatus::Queued,
+                        status: crate::service::TurnStatus::Queued,
                     },
                     user_item_id: format!("user-{seq}"),
                     prompt: text.into(),

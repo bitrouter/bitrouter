@@ -9,7 +9,6 @@ pub struct StartupDiscovery {
     pub writer_fenced: bool,
     pub index_cutoff: u64,
     pub inspected_roots: usize,
-    pub legacy_tasks: usize,
     pub blocked_workspaces: usize,
     pub scanned_records: u64,
     pub error: Option<ErrorCode>,
@@ -19,7 +18,6 @@ pub struct StartupDiscovery {
 pub(super) struct ColdExecution {
     workspace: PathBuf,
     head: ExecutionHead,
-    legacy: bool,
     requires_recovery: bool,
 }
 impl ColdExecution {
@@ -28,7 +26,7 @@ impl ColdExecution {
     }
 }
 
-impl TaskService {
+impl ThreadService {
     pub(super) async fn discover_startup(&self, writer_fenced: bool) -> Result<(), ServiceError> {
         let result = self.scan_startup(writer_fenced).await;
         if let Err(error) = &result {
@@ -36,6 +34,11 @@ impl TaskService {
             let report = state
                 .startup_discovery
                 .get_or_insert_with(StartupDiscovery::default);
+            if error.message.contains("unsupported_runtime_format") {
+                self.inner
+                    .cleanup_unconfirmed
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
             report.complete = false;
             report.error = Some(error.code);
         }
@@ -73,6 +76,7 @@ impl TaskService {
             cutoff = Some(page.cutoff);
             report.index_cutoff = page.cutoff;
             for head in page.entries {
+                crate::store::validate_runtime_format(head.format_version).map_err(storage)?;
                 if head.position <= after
                     || head.position > page.cutoff
                     || head.execution_id.is_empty()
@@ -122,7 +126,6 @@ impl TaskService {
                 if !workspace.is_absolute() || workspace.to_str().is_none() {
                     return Err(storage("invalid stored startup workspace identity"));
                 }
-                let legacy = audit.legacy();
                 let mut cursor = 1;
                 report.scanned_records = report
                     .scanned_records
@@ -200,7 +203,6 @@ impl TaskService {
                     .map_err(storage)?;
                 let entry = ColdExecution {
                     workspace,
-                    legacy,
                     requires_recovery: !writer_fenced || !audit.known_clean(owner.as_ref()),
                     head,
                 };
@@ -212,7 +214,6 @@ impl TaskService {
                         "startup metadata byte bound exceeded",
                     ));
                 }
-                report.legacy_tasks += usize::from(legacy);
                 report.inspected_roots += 1;
                 if cold
                     .insert(entry.head.execution_id.clone(), entry)
@@ -242,5 +243,5 @@ impl TaskService {
     }
 }
 fn storage(error: impl ToString) -> ServiceError {
-    ServiceError::new(ErrorCode::StorageUnavailable, error.to_string())
+    ServiceError::storage(error)
 }

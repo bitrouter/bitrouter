@@ -1,5 +1,12 @@
 # BRO runtime v0.2 implementation evidence
 
+**2026-10-02:** this is retained evidence for the earlier runtime head. The
+[approved unification spec](BRO_THREAD_TURN_UNIFICATION_SPEC.md) removes its
+Task compatibility and migrates native clients to Thread/Turn. New U1-U5
+results are recorded separately in the
+[unification implementation record](BRO_THREAD_TURN_UNIFICATION_IMPLEMENTATION.md).
+Do not interpret the phase ledger below as the current client delivery status.
+
 Updated: 2026-10-01. Status: **the user-confirmed standalone runtime/crate gate passes local validation; full product MVP incomplete**.
 Implemented scope: R1/R2, R3 context/queue/steering/history/observation, bounded
 native/legacy reconstruction, fencing/discovery and explicit safe checkpoints.

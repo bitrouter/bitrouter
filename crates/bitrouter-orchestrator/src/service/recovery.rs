@@ -22,6 +22,7 @@ struct Step {
     item_id: String,
     context_version: u64,
     complete: bool,
+    interrupted: bool,
     usage_known: bool,
 }
 
@@ -56,14 +57,6 @@ struct Rebuild {
     source_owner: Option<crate::store::ExecutionOwner>,
     sequence: u64,
     limits: RuntimeLimits,
-    legacy: Option<LegacyState>,
-}
-
-#[derive(Serialize)]
-struct LegacyState {
-    projection: crate::store::LegacyTaskProjection,
-    event_cursor: u64,
-    finished: bool,
 }
 
 struct RecoveredRun {
@@ -75,7 +68,7 @@ struct RecoveredRun {
     cancel: CancellationToken,
 }
 
-impl TaskService {
+impl ThreadService {
     /// Accept an inspected checkpoint with a stopped source, known effects and
     /// accounting. The owned operation survives caller detachment. FIFO remains
     /// paused; an active fully settled Turn continues with its original budget.
@@ -206,12 +199,6 @@ impl TaskService {
             let continuation = if report.terminal_checkpoint {
                 None
             } else {
-                if report.source_is_legacy_task {
-                    return Err(ServiceError::new(
-                        ErrorCode::RecoveryRequired,
-                        "active legacy Task needs explicit settlement before conversion",
-                    ));
-                }
                 let turn = report
                     .turn
                     .as_ref()
@@ -222,7 +209,7 @@ impl TaskService {
                         "checkpoint active Turn differs from its durable input",
                     ));
                 }
-                let task = state.tasks.get(&turn.turn_id).ok_or_else(unknown_task)?;
+                let task = state.turns.get(&turn.turn_id).ok_or_else(unknown_turn)?;
                 if task.snapshot.status.terminal() {
                     return Err(ServiceError::new(
                         ErrorCode::RecoveryRequired,
@@ -264,7 +251,7 @@ impl TaskService {
                 .map_err(storage)?
                 .with_tool_workers(
                     self.inner.tool_workers.clone(),
-                    self.inner.limits.tools_per_task,
+                    self.inner.limits.tools_per_turn,
                 );
                 Some(RecoveredRun {
                     turn_id: turn.turn_id.clone(),
@@ -421,7 +408,6 @@ impl TaskService {
                 ExecutionRecord::ThreadRecovered {
                     source_server_instance_id: request.source_server_instance_id.clone(),
                     source_cursor: request.source_cursor,
-                    legacy_converted: report.source_is_legacy_task,
                 },
                 ExecutionRecord::AcceptedKey { entry: key.clone() },
                 ExecutionRecord::ThreadCheckpoint {
@@ -487,24 +473,24 @@ impl TaskService {
         thread.storage_error = None;
         thread.presentation.publish(event, &self.inner.limits);
         for task in state
-            .tasks
+            .turns
             .values_mut()
-            .filter(|task| task.thread_id.as_deref() == Some(&target.thread_id))
+            .filter(|task| task.thread_id == target.thread_id)
         {
             task.storage_error = None;
-            if task.snapshot.status == TaskStatus::Queued {
+            if task.snapshot.status == TurnStatus::Queued {
                 task.cancel = CancellationToken::new();
             }
         }
         if let Some(run) = &continuation {
-            let task = state.tasks.get_mut(&run.turn_id).ok_or_else(unknown_task)?;
+            let task = state.turns.get_mut(&run.turn_id).ok_or_else(unknown_turn)?;
             task.cancel = run.cancel.clone();
             task.fence.set(
                 task.steering
                     .iter()
                     .any(|input| input.receipt.status == SteeringStatus::Received),
             );
-            task.snapshot.status = TaskStatus::Accepted;
+            task.snapshot.status = TurnStatus::Accepted;
             task.snapshot.detail = None;
             task.snapshot.unknown_effect = false;
             task.snapshot.pending_input_id = None;
@@ -516,7 +502,7 @@ impl TaskService {
         state.cold_executions.remove(&target.thread_id);
         drop(state);
         if let Some(run) = continuation {
-            self.inner.workers.spawn(self.run_task(
+            self.inner.workers.spawn(self.run_turn(
                 run.turn_id,
                 run.agent,
                 run.input,
@@ -531,6 +517,142 @@ impl TaskService {
     /// Rebuild durable state for inspection and reconnect. Execution remains
     /// blocked until ownership, termination and effects are separately resolved.
     pub async fn load_thread(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+    ) -> Result<ThreadView, ServiceError> {
+        self.load_thread_owned(target, caller).await
+    }
+
+    pub async fn read_stored_thread_view(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+    ) -> Result<ThreadView, ServiceError> {
+        self.ensure_instance(Some(&target.server_instance_id))?;
+        if caller.is_anonymous() || target.thread_id.is_empty() || target.thread_id.len() > 128 {
+            return Err("authenticated caller and bounded Thread identity required".into());
+        }
+        if self.lock_state().threads.contains_key(&target.thread_id) {
+            return self.read_thread_view(target, caller);
+        }
+        let _reader = self.inner.recovery_readers.try_acquire().map_err(|_| {
+            ServiceError::new(
+                ErrorCode::Overloaded,
+                "Thread query reader capacity is full",
+            )
+        })?;
+        let first = self
+            .inner
+            .store
+            .read_records(
+                &target.thread_id,
+                0,
+                None,
+                1,
+                self.inner.limits.recovery_page_bytes,
+            )
+            .await
+            .map_err(storage)?
+            .ok_or_else(threads::unknown_thread)?;
+        if first.cutoff == 0 || first.cutoff > self.inner.limits.recovery_records_per_thread {
+            return Err(ServiceError::new(
+                ErrorCode::Overloaded,
+                "Thread query record bound exceeded",
+            ));
+        }
+        let header = Rebuild::new(
+            first.records.first().ok_or("missing Thread header")?,
+            &target.thread_id,
+            self.inner.limits.clone(),
+        )?;
+        header.authorize(caller)?;
+        self.check_snapshot_grant(&header.view.thread)?;
+        let mut view = header.view;
+        let mut after = 0;
+        loop {
+            let page = self
+                .inner
+                .store
+                .thread_history(
+                    &target.thread_id,
+                    after,
+                    first.cutoff,
+                    128,
+                    self.inner.limits.history_page_bytes,
+                )
+                .await
+                .map_err(storage)?;
+            for event in &page.events {
+                if event.thread_id != target.thread_id
+                    || event.seq <= after
+                    || event.seq > first.cutoff
+                    || event.server_instance_id.is_empty()
+                    || event.server_instance_id.len() > 128
+                {
+                    return Err(storage("invalid Thread public history"));
+                }
+                // Public history preserves writer epochs. Querying it grants no
+                // execution authority and never reconstructs SDK model context.
+                view.thread.server_instance_id = event.server_instance_id.clone();
+                if let Some(turn) = &mut view.latest_turn {
+                    turn.server_instance_id = event.server_instance_id.clone();
+                }
+                view.apply(event);
+                after = event.seq;
+            }
+            if !page.more {
+                break;
+            }
+            if page.events.is_empty() {
+                return Err(storage("Thread query made no progress"));
+            }
+        }
+        if after != first.cutoff {
+            return Err(storage("Thread root lacks its committed public cutoff"));
+        }
+        self.check_snapshot_grant(&view.thread)?;
+        let source_epoch = view.thread.server_instance_id.clone();
+        let owner = self
+            .inner
+            .store
+            .read_owner(&source_epoch)
+            .await
+            .map_err(storage)?;
+        let current_owner = source_epoch == self.inner.instance_id
+            && matches!(&self.lock_state().execution_ownership,Some(crate::store::OwnerClaim::Acquired { owner:current }) if owner.as_ref() == Some(current) && current.stopped_at_ms.is_none());
+        if !current_owner {
+            view.recovery = Some(RecoveryState {
+                source_server_instance_id: source_epoch,
+                source_execution_owner: owner,
+                source_cursor: first.cutoff,
+                stored_status: view.thread.status,
+                stored_pause_reason: view.thread.pause_reason.clone(),
+                context_valid: false,
+                terminal_checkpoint: false,
+                turn: None,
+                blockers: vec![RecoveryBlocker::OwnershipUnconfirmed],
+            });
+            view.thread.status = ThreadStatus::RecoveryRequired;
+            view.thread.pause_reason = Some(
+                "cold inspection grants no execution authority; load for full recovery assessment"
+                    .into(),
+            );
+        }
+        view.thread.server_instance_id = self.inner.instance_id.clone();
+        if let Some(turn) = &mut view.latest_turn {
+            turn.server_instance_id = self.inner.instance_id.clone();
+            turn.live = None;
+            if !current_owner && !turn.status.terminal() {
+                turn.status = TurnStatus::RecoveryRequired;
+                turn.pending_input = None;
+                turn.pending_input_id = None;
+            }
+        }
+        Ok(view)
+    }
+
+    async fn load_thread_owned(
         &self,
         target: &ThreadTarget,
         caller: &CallerContext,
@@ -622,7 +744,112 @@ impl TaskService {
             .read_owner(&rebuild.source_epoch)
             .await
             .map_err(storage)?;
+        let known_interruptions = rebuild.active.as_ref().is_some_and(|active| {
+            active
+                .steps
+                .values()
+                .all(|step| step.complete || step.interrupted)
+        });
         let (mut thread, tasks) = rebuild.finish(&self.inner.instance_id, &self.inner.limits)?;
+        let clean_current_owner = {
+            let state = self.lock_state();
+            let report = thread
+                .presentation
+                .view
+                .recovery
+                .as_ref()
+                .ok_or("missing reconstruction report")?;
+            // Optional historical usage cannot block a new Turn under the
+            // same live owner. Lost/active continuation still needs every budget fact.
+            let optional_usage_only = thread.config.max_spend_microusd.is_none()
+                && report.turn.as_ref().is_some_and(|turn| {
+                    !turn.budget.active_duration_unknown
+                        && !turn.budget.tool_calls_unknown
+                        && !turn.budget.usage_unknown_steps.is_empty()
+                });
+            report.source_server_instance_id == self.inner.instance_id
+                && matches!(&state.execution_ownership, Some(crate::store::OwnerClaim::Acquired { owner }) if report.source_execution_owner.as_ref() == Some(owner) && owner.stopped_at_ms.is_none())
+                && report.terminal_checkpoint
+                && report.context_valid
+                && matches!(
+                    report.stored_status,
+                    ThreadStatus::Idle | ThreadStatus::Paused
+                )
+                && thread.queued.is_empty()
+                && thread.snapshot.active_turn_id.is_none()
+                && report.blockers.iter().all(|blocker| {
+                    matches!(blocker, RecoveryBlocker::OwnershipUnconfirmed)
+                        || (optional_usage_only
+                            && (matches!(blocker, RecoveryBlocker::BudgetUncertain { .. })
+                                || (known_interruptions
+                                    && matches!(
+                                        blocker,
+                                        RecoveryBlocker::ModelRequestIncomplete { .. }
+                                    ))))
+                })
+                && thread
+                    .presentation
+                    .view
+                    .latest_turn
+                    .as_ref()
+                    .is_none_or(|turn| {
+                        turn.pending_input_id.is_none()
+                            && turn.status.terminal()
+                            && !turn.unknown_effect
+                    })
+        };
+        if clean_current_owner {
+            let report = thread
+                .presentation
+                .view
+                .recovery
+                .take()
+                .ok_or("missing reconstruction report")?;
+            thread.snapshot.status = report.stored_status;
+            thread.snapshot.pause_reason = report.stored_pause_reason;
+            thread.presentation.view.thread = thread.snapshot.clone();
+            thread.storage_error = None;
+        }
+        let _admission = self.inner.admission.lock().await;
+        if self.lock_state().threads.contains_key(&target.thread_id) {
+            return self.read_thread_view(target, caller);
+        }
+        let current = self
+            .inner
+            .store
+            .read_records(
+                &target.thread_id,
+                cutoff,
+                None,
+                1,
+                self.inner.limits.recovery_page_bytes,
+            )
+            .await
+            .map_err(storage)?
+            .ok_or_else(threads::unknown_thread)?;
+        if current.cutoff != cutoff {
+            return Err(ServiceError::new(
+                ErrorCode::Conflict,
+                "Thread changed during cold reconstruction; retry the same operation",
+            ));
+        }
+        self.reclaim_hot_capacity(thread.bytes())?;
+        if clean_current_owner {
+            let view = thread.presentation.view.clone();
+            let mut state = self.lock_state();
+            if state.closing {
+                return Err(ServiceError::new(
+                    ErrorCode::ShuttingDown,
+                    "runtime is shutting down",
+                ));
+            }
+            for (turn_id, mut turn) in tasks {
+                turn.storage_error = None;
+                state.turns.insert(turn_id, turn);
+            }
+            state.threads.insert(target.thread_id.clone(), thread);
+            return Ok(view);
+        }
         let workspace = thread.snapshot.workspace.clone();
         let epoch = self.inner.instance_id.clone();
         let execution_id = thread
@@ -688,7 +915,7 @@ impl TaskService {
                 .unwrap_or_else(|| target.thread_id.clone()),
         );
         for (turn_id, task) in tasks {
-            state.tasks.insert(turn_id, task);
+            state.turns.insert(turn_id, task);
         }
         thread.snapshot.cursor = cutoff;
         let view = thread.presentation.view.clone();
@@ -698,7 +925,7 @@ impl TaskService {
 }
 
 fn storage(error: impl ToString) -> ServiceError {
-    ServiceError::new(ErrorCode::StorageUnavailable, error.to_string())
+    ServiceError::storage(error)
 }
 
 impl Rebuild {
@@ -707,82 +934,6 @@ impl Rebuild {
         thread_id: &str,
         limits: RuntimeLimits,
     ) -> Result<Self, ServiceError> {
-        if let ExecutionRecord::Accepted {
-            owner_key_id,
-            owner_user_id,
-            fingerprint,
-            config,
-            event,
-            ..
-        } = record
-        {
-            let projection = crate::store::LegacyTaskProjection::from_header(record, thread_id)
-                .map_err(storage)?
-                .ok_or("missing legacy projection")?;
-            let TaskEventPayload::Accepted {
-                user_item_id,
-                prompt,
-                model,
-                tool_mode,
-                request_fingerprint,
-                ..
-            } = &event.payload
-            else {
-                return Err(storage("legacy execution has no accepted input"));
-            };
-            let caller = CallerContext::new(owner_key_id, owner_user_id);
-            if caller.is_anonymous() {
-                return Err(storage(
-                    "legacy execution has no authenticated owner identity",
-                ));
-            }
-            let invalid = user_item_id.is_empty()
-                || model != &config.model
-                || *tool_mode != config.tool_mode()
-                || request_fingerprint
-                    .as_ref()
-                    .is_some_and(|accepted| accepted != fingerprint);
-            return Ok(Self {
-                caller,
-                view: projection.view().clone(),
-                messages: Vec::new(),
-                queued: VecDeque::new(),
-                next_order: 1,
-                active: Some(Active {
-                    turn_id: thread_id.into(),
-                    user_item_id: user_item_id.clone(),
-                    messages: vec![Message::text(Role::User, prompt.clone())],
-                    version: 0,
-                    steps: HashMap::new(),
-                    calls: Vec::new(),
-                    group: Vec::new(),
-                    steering: Vec::new(),
-                    cancel_requested: false,
-                    budget: RecoveryBudget::default(),
-                    exact_budget: false,
-                    settled: false,
-                    checkpointed: false,
-                    outcome: None,
-                    confirmed_verification: None,
-                }),
-                blockers: if invalid {
-                    vec![RecoveryBlocker::InvalidRecord {
-                        detail: "invalid legacy input identity or settings".into(),
-                    }]
-                } else {
-                    Vec::new()
-                },
-                source_epoch: event.server_instance_id.clone(),
-                source_owner: None,
-                sequence: 0,
-                limits,
-                legacy: Some(LegacyState {
-                    projection,
-                    event_cursor: 1,
-                    finished: false,
-                }),
-            });
-        }
         let ExecutionRecord::ThreadCreated {
             caller,
             snapshot,
@@ -826,7 +977,6 @@ impl Rebuild {
             },
             sequence: 0,
             limits,
-            legacy: None,
         })
     }
 
@@ -875,14 +1025,6 @@ impl Rebuild {
                 if event.seq != self.sequence || event.thread_id != self.view.thread.thread_id {
                     self.invalid("public Thread event has a mismatched durable cursor or identity");
                 }
-            } else if let Some(legacy) = &self.legacy {
-                if let Some(event) = legacy
-                    .projection
-                    .project(&record, self.sequence)
-                    .map_err(storage)?
-                {
-                    self.view.apply(&event);
-                }
             } else {
                 let mut changes = Vec::new();
                 super::observation::project(
@@ -905,176 +1047,153 @@ impl Rebuild {
     }
 
     fn consume(&mut self, record: &ExecutionRecord) -> Result<(), ServiceError> {
-        if let ExecutionRecord::ThreadRecovered {
-            source_server_instance_id,
-            source_cursor,
-            legacy_converted: true,
-        } = record
-        {
-            if self.legacy.as_ref().is_none_or(|legacy| !legacy.finished)
-                || source_server_instance_id != &self.source_epoch
-                || source_cursor.checked_add(1) != Some(self.sequence)
-                || self.view.thread.active_turn_id.is_some()
-                || self.active.as_ref().is_none_or(|active| !active.settled)
-            {
-                self.invalid("legacy conversion has no complete source checkpoint");
-            } else {
-                self.legacy = None;
+        match record {
+            ExecutionRecord::ThreadCreated { .. } if self.sequence != 1 => {
+                self.invalid("duplicate Thread header")
             }
-        }
-        if self.legacy.is_some() {
-            self.consume_legacy(record);
-        } else {
-            match record {
-                ExecutionRecord::ThreadCreated { .. } if self.sequence != 1 => {
-                    self.invalid("duplicate Thread header")
+            ExecutionRecord::TurnQueued {
+                turn_id,
+                user_item_id,
+                prompt,
+                queue_order,
+            } => {
+                if turn_id.is_empty() || user_item_id.is_empty() || *queue_order <= self.next_order
+                {
+                    self.invalid("invalid admission identity or FIFO order");
                 }
-                ExecutionRecord::TurnQueued {
-                    turn_id,
-                    user_item_id,
-                    prompt,
-                    queue_order,
-                } => {
-                    if turn_id.is_empty()
-                        || user_item_id.is_empty()
-                        || *queue_order <= self.next_order
-                    {
-                        self.invalid("invalid admission identity or FIFO order");
-                    }
-                    self.next_order = *queue_order;
-                    self.queued.push_back(threads::QueuedTurn {
-                        turn_id: turn_id.clone(),
-                        user_item_id: user_item_id.clone(),
-                        prompt: prompt.clone(),
-                        order: *queue_order,
-                    });
+                self.next_order = *queue_order;
+                self.queued.push_back(threads::QueuedTurn {
+                    turn_id: turn_id.clone(),
+                    user_item_id: user_item_id.clone(),
+                    prompt: prompt.clone(),
+                    order: *queue_order,
+                });
+            }
+            ExecutionRecord::TurnActivated {
+                turn_id,
+                context_version,
+            } => {
+                if self
+                    .active
+                    .as_ref()
+                    .is_some_and(|active| !active.settled && !active.steps.is_empty())
+                {
+                    self.invalid("Turn activation preceded settlement of earlier execution");
                 }
-                ExecutionRecord::TurnActivated {
-                    turn_id,
-                    context_version,
-                } => {
-                    if self
-                        .active
-                        .as_ref()
-                        .is_some_and(|active| !active.settled && !active.steps.is_empty())
-                    {
-                        self.invalid("Turn activation preceded settlement of earlier execution");
-                    }
-                    let position = self
-                        .queued
+                let position = self
+                    .queued
+                    .iter()
+                    .position(|entry| &entry.turn_id == turn_id)
+                    .ok_or("activation has no accepted input")?;
+                let entry = self
+                    .queued
+                    .remove(position)
+                    .ok_or("activation input disappeared")?;
+                let mut messages = self.messages.clone();
+                messages.push(Message::text(Role::User, entry.prompt));
+                self.active = Some(Active {
+                    turn_id: turn_id.clone(),
+                    user_item_id: entry.user_item_id,
+                    messages,
+                    version: *context_version,
+                    steps: HashMap::new(),
+                    calls: Vec::new(),
+                    group: Vec::new(),
+                    steering: Vec::new(),
+                    cancel_requested: false,
+                    budget: RecoveryBudget::default(),
+                    exact_budget: false,
+                    settled: false,
+                    checkpointed: false,
+                    outcome: None,
+                    confirmed_verification: None,
+                });
+            }
+            ExecutionRecord::QueuedTurnCancelled { turn_id } => {
+                self.queued.retain(|entry| &entry.turn_id != turn_id)
+            }
+            ExecutionRecord::ThreadRecovered {
+                source_server_instance_id,
+                source_cursor,
+                ..
+            } => {
+                if source_server_instance_id != &self.source_epoch
+                    || source_cursor.checked_add(1) != Some(self.sequence)
+                    || (self.view.thread.active_turn_id.is_some()
+                        && self
+                            .active
+                            .as_ref()
+                            .is_none_or(|active| !active.settled && !active.checkpointed))
+                {
+                    self.invalid("recovery acceptance has the wrong source checkpoint");
+                }
+            }
+            ExecutionRecord::ThreadCheckpoint { snapshot, messages } => {
+                if snapshot.thread_id != self.view.thread.thread_id {
+                    self.invalid("checkpoint belongs to another Thread");
+                }
+                if let Err(error) = crate::context::validate_history(messages) {
+                    self.invalid(format!("invalid retained checkpoint: {error}"));
+                }
+                self.messages = messages.clone();
+            }
+            ExecutionRecord::SteeringReceived { receipt, text, .. } => {
+                if let Some(active) = &mut self.active
+                    && active.turn_id == receipt.turn_id
+                {
+                    if active
+                        .steering
                         .iter()
-                        .position(|entry| &entry.turn_id == turn_id)
-                        .ok_or("activation has no accepted input")?;
-                    let entry = self
-                        .queued
-                        .remove(position)
-                        .ok_or("activation input disappeared")?;
-                    let mut messages = self.messages.clone();
-                    messages.push(Message::text(Role::User, entry.prompt));
-                    self.active = Some(Active {
-                        turn_id: turn_id.clone(),
-                        user_item_id: entry.user_item_id,
-                        messages,
-                        version: *context_version,
-                        steps: HashMap::new(),
-                        calls: Vec::new(),
-                        group: Vec::new(),
-                        steering: Vec::new(),
-                        cancel_requested: false,
-                        budget: RecoveryBudget::default(),
-                        exact_budget: false,
-                        settled: false,
-                        checkpointed: false,
-                        outcome: None,
-                        confirmed_verification: None,
-                    });
-                }
-                ExecutionRecord::QueuedTurnCancelled { turn_id } => {
-                    self.queued.retain(|entry| &entry.turn_id != turn_id)
-                }
-                ExecutionRecord::ThreadRecovered {
-                    source_server_instance_id,
-                    source_cursor,
-                    ..
-                } => {
-                    if source_server_instance_id != &self.source_epoch
-                        || source_cursor.checked_add(1) != Some(self.sequence)
-                        || (self.view.thread.active_turn_id.is_some()
-                            && self
-                                .active
-                                .as_ref()
-                                .is_none_or(|active| !active.settled && !active.checkpointed))
+                        .any(|input| input.receipt.input_id == receipt.input_id)
                     {
-                        self.invalid("recovery acceptance has the wrong source checkpoint");
-                    }
-                }
-                ExecutionRecord::ThreadCheckpoint { snapshot, messages } => {
-                    if snapshot.thread_id != self.view.thread.thread_id {
-                        self.invalid("checkpoint belongs to another Thread");
-                    }
-                    if let Err(error) = crate::context::validate_history(messages) {
-                        self.invalid(format!("invalid retained checkpoint: {error}"));
-                    }
-                    self.messages = messages.clone();
-                }
-                ExecutionRecord::SteeringReceived { receipt, text, .. } => {
-                    if let Some(active) = &mut self.active
-                        && active.turn_id == receipt.turn_id
-                    {
-                        if active
-                            .steering
-                            .iter()
-                            .any(|input| input.receipt.input_id == receipt.input_id)
-                        {
-                            self.invalid("duplicate steering input identity");
-                        } else {
-                            active.steering.push(RecoveredSteering {
-                                receipt: receipt.clone(),
-                                text: text.clone(),
-                            });
-                        }
+                        self.invalid("duplicate steering input identity");
                     } else {
-                        self.invalid("steering targets an inactive or unknown Turn");
+                        active.steering.push(RecoveredSteering {
+                            receipt: receipt.clone(),
+                            text: text.clone(),
+                        });
                     }
+                } else {
+                    self.invalid("steering targets an inactive or unknown Turn");
                 }
-                ExecutionRecord::SteeringResolved { receipt } => {
-                    if let Some(active) = &mut self.active
-                        && active.turn_id == receipt.turn_id
-                        && let Some(input) = active
-                            .steering
-                            .iter_mut()
-                            .find(|input| input.receipt.input_id == receipt.input_id)
-                    {
-                        input.receipt = receipt.clone();
-                    } else {
-                        self.invalid("steering resolution has no received input");
-                    }
-                }
-                ExecutionRecord::TurnRecord { turn_id, fact } => {
-                    if let ExecutionRecord::WorkspaceReleasePrepared {
-                        workspace,
-                        execution_id,
-                        lease_id,
-                    } = fact.as_ref()
-                        && (workspace != &self.view.thread.workspace
-                            || execution_id != turn_id
-                            || lease_id.is_empty()
-                            || lease_id.len() > 128)
-                    {
-                        self.invalid("workspace release preparation has the wrong identity");
-                    }
-                    if let Some(active) = &mut self.active
-                        && &active.turn_id == turn_id
-                    {
-                        if let Err(error) = active.consume(fact) {
-                            self.invalid(error);
-                        }
-                    } else if !matches!(fact.as_ref(), ExecutionRecord::Event { .. }) {
-                        self.invalid("execution fact targets a Turn without activation");
-                    }
-                }
-                _ => {}
             }
+            ExecutionRecord::SteeringResolved { receipt } => {
+                if let Some(active) = &mut self.active
+                    && active.turn_id == receipt.turn_id
+                    && let Some(input) = active
+                        .steering
+                        .iter_mut()
+                        .find(|input| input.receipt.input_id == receipt.input_id)
+                {
+                    input.receipt = receipt.clone();
+                } else {
+                    self.invalid("steering resolution has no received input");
+                }
+            }
+            ExecutionRecord::TurnRecord { turn_id, fact } => {
+                if let ExecutionRecord::WorkspaceReleasePrepared {
+                    workspace,
+                    execution_id,
+                    lease_id,
+                } = fact.as_ref()
+                    && (workspace != &self.view.thread.workspace
+                        || execution_id != turn_id
+                        || lease_id.is_empty()
+                        || lease_id.len() > 128)
+                {
+                    self.invalid("workspace release preparation has the wrong identity");
+                }
+                if let Some(active) = &mut self.active
+                    && &active.turn_id == turn_id
+                {
+                    if let Err(error) = active.consume(fact) {
+                        self.invalid(error);
+                    }
+                } else if !matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { .. }) {
+                    self.invalid("execution fact targets a Turn without activation");
+                }
+            }
+            _ => {}
         }
         let context_bytes = serde_json::to_vec(&self.messages)
             .map_err(|error| error.to_string())?
@@ -1086,16 +1205,8 @@ impl Rebuild {
                 serde_json::to_vec(active).map(|encoded| encoded.len())
             })
             .map_err(|error| error.to_string())?;
-        let legacy_bytes = self
-            .legacy
-            .as_ref()
-            .map_or(Ok(0), |legacy| {
-                serde_json::to_vec(legacy).map(|encoded| encoded.len())
-            })
-            .map_err(storage)?;
         if context_bytes > self.limits.context_bytes_per_thread
-            || active_bytes.saturating_add(legacy_bytes)
-                > self.limits.context_bytes_per_thread.saturating_mul(2)
+            || active_bytes > self.limits.context_bytes_per_thread.saturating_mul(2)
             || self.queued.len() > self.limits.queued_turns_per_thread
             || self.active.as_ref().is_some_and(|active| {
                 active.steps.len() > 256
@@ -1111,66 +1222,11 @@ impl Rebuild {
         Ok(())
     }
 
-    fn consume_legacy(&mut self, record: &ExecutionRecord) {
-        let Some(mut legacy) = self.legacy.take() else {
-            return;
-        };
-        if legacy.finished {
-            self.invalid("legacy execution has facts after its final outcome");
-        }
-        match record {
-            ExecutionRecord::Accepted { .. } if self.sequence == 1 => {}
-            ExecutionRecord::Event { event } => {
-                if event.task_id != self.view.thread.thread_id
-                    || event.seq <= legacy.event_cursor
-                    || event.server_instance_id
-                        != legacy.projection.view().thread.server_instance_id
-                {
-                    self.invalid("legacy event identity, cursor or writer epoch mismatch");
-                }
-                legacy.event_cursor = event.seq;
-                legacy.finished = matches!(event.payload, TaskEventPayload::TaskFinished { .. });
-            }
-            ExecutionRecord::WorkspaceReleasePrepared {
-                workspace,
-                execution_id,
-                lease_id,
-            } => {
-                if workspace != &self.view.thread.workspace
-                    || execution_id != &self.view.thread.thread_id
-                    || lease_id.is_empty()
-                    || lease_id.len() > 128
-                {
-                    self.invalid("legacy workspace release preparation has the wrong identity");
-                }
-            }
-            ExecutionRecord::ModelRequest { .. }
-            | ExecutionRecord::ModelResponse { .. }
-            | ExecutionRecord::ModelInterrupted { .. }
-            | ExecutionRecord::ToolIntent { .. }
-            | ExecutionRecord::ToolResult { .. }
-            | ExecutionRecord::VerificationResult { .. }
-            | ExecutionRecord::RunCheckpoint { .. }
-            | ExecutionRecord::Settled { .. } => {}
-            _ => self.invalid("unexpected record in legacy execution"),
-        }
-        if let Some(active) = &mut self.active {
-            let outcome = active.consume(record);
-            if active.settled {
-                self.messages = active.messages.clone();
-            }
-            if let Err(error) = outcome {
-                self.invalid(error);
-            }
-        }
-        self.legacy = Some(legacy);
-    }
-
     fn finish(
         mut self,
         epoch: &str,
         limits: &RuntimeLimits,
-    ) -> Result<(threads::ThreadRecord, Vec<(String, TaskRecord)>), ServiceError> {
+    ) -> Result<(threads::ThreadRecord, Vec<(String, TurnRecord)>), ServiceError> {
         let stored_status = self.view.thread.status;
         let stored_pause_reason = self.view.thread.pause_reason.clone();
         let mut context_valid = crate::context::validate_history(&self.messages).is_ok();
@@ -1300,7 +1356,6 @@ impl Rebuild {
         self.blockers
             .insert(0, RecoveryBlocker::OwnershipUnconfirmed);
         self.view.recovery = Some(RecoveryState {
-            source_is_legacy_task: self.legacy.is_some(),
             source_server_instance_id: self.source_epoch,
             source_execution_owner: self.source_owner,
             source_cursor: self.sequence,
@@ -1322,7 +1377,7 @@ impl Rebuild {
             turn.server_instance_id = epoch.into();
             turn.live = None;
             if !turn.status.terminal() {
-                turn.status = TaskStatus::RecoveryRequired;
+                turn.status = TurnStatus::RecoveryRequired;
                 turn.detail = Some(reason.clone());
                 turn.unknown_effect = self.view.recovery.as_ref().is_some_and(|report| {
                     report
@@ -1335,7 +1390,7 @@ impl Rebuild {
         let gate = Arc::new(tokio::sync::Mutex::new(()));
         let mut tasks = Vec::new();
         if let Some(snapshot) = self.view.latest_turn.clone() {
-            let mut record = recovered_task(snapshot.clone(), &self.view, &gate, &reason, limits);
+            let mut record = recovered_task(snapshot.clone(), &self.view, &reason);
             record.settled = settled;
             record.steering = self.active.as_ref().map_or_else(Vec::new, |active| {
                 active
@@ -1347,7 +1402,7 @@ impl Rebuild {
                     })
                     .collect()
             });
-            tasks.push((snapshot.task_id, record));
+            tasks.push((snapshot.turn_id, record));
         }
         for entry in &self.queued {
             let mut snapshot = super::observation::empty_turn(
@@ -1355,10 +1410,10 @@ impl Rebuild {
                 &self.view.config,
                 &entry.turn_id,
             );
-            snapshot.status = TaskStatus::Queued;
+            snapshot.status = TurnStatus::Queued;
             tasks.push((
                 entry.turn_id.clone(),
-                recovered_task(snapshot, &self.view, &gate, &reason, limits),
+                recovered_task(snapshot, &self.view, &reason),
             ));
         }
         let thread = threads::ThreadRecord {
@@ -1373,36 +1428,26 @@ impl Rebuild {
             commit_lock: gate,
             store_version: self.sequence,
             storage_error: Some(reason),
+            last_used: Instant::now(),
         };
         Ok((thread, tasks))
     }
 }
 
-fn recovered_task(
-    snapshot: TaskSnapshot,
-    view: &ThreadView,
-    gate: &Arc<tokio::sync::Mutex<()>>,
-    reason: &str,
-    limits: &RuntimeLimits,
-) -> TaskRecord {
+fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> TurnRecord {
     let cancel = CancellationToken::new();
     cancel.cancel();
-    TaskRecord {
+    TurnRecord {
         fence: Arc::new(crate::control::LaunchFence::default()),
         steering: Vec::new(),
         verification_budget: None,
-        thread_id: Some(view.thread.thread_id.clone()),
+        thread_id: view.thread.thread_id.clone(),
         permission_profile: view.thread.permission_profile,
         settled: None,
         terminal_at: snapshot.status.terminal().then(Instant::now),
         snapshot,
-        events: VecDeque::new(),
-        event_bytes: 0,
-        publisher: broadcast::channel(limits.subscriber_queue).0,
         cancel,
         pending: None,
-        commit_lock: Arc::clone(gate),
-        store_version: 0,
         storage_error: Some(reason.into()),
     }
 }
@@ -1447,6 +1492,7 @@ impl Active {
                         item_id: item_id.clone(),
                         context_version: *context_version,
                         complete: false,
+                        interrupted: false,
                         usage_known: false,
                     },
                 );
@@ -1526,11 +1572,12 @@ impl Active {
             } => {
                 let step = self
                     .steps
-                    .get(step_id)
+                    .get_mut(step_id)
                     .ok_or("interrupted stream has no request")?;
-                if &step.item_id != item_id {
+                if &step.item_id != item_id || step.complete || step.interrupted {
                     return Err("interrupted stream has wrong Item identity".into());
                 }
+                step.interrupted = true;
                 // Partial evidence never becomes a complete context message or
                 // proof of final provider usage.
             }
@@ -1723,11 +1770,10 @@ impl Active {
                 }
                 self.outcome = outcome.clone();
             }
-            ExecutionRecord::Event { event }
-                if matches!(event.payload, TaskEventPayload::CancelRequested) =>
-            {
-                self.cancel_requested = true
-            }
+            ExecutionRecord::TurnLifecycle {
+                lifecycle: crate::thread::TurnLifecycle::CancelRequested,
+                ..
+            } => self.cancel_requested = true,
             _ => {}
         }
         Ok(())
@@ -1785,10 +1831,6 @@ impl StartupAudit {
     pub(super) fn epoch(&self) -> &str {
         &self.rebuild.source_epoch
     }
-    pub(super) fn legacy(&self) -> bool {
-        self.rebuild.legacy.is_some()
-    }
-
     pub(super) fn consume(&mut self, records: Vec<ExecutionRecord>) -> Result<(), ServiceError> {
         for record in records {
             if self.valid {
@@ -1843,9 +1885,6 @@ fn record_epoch(record: &ExecutionRecord) -> Option<&str> {
     match record {
         ExecutionRecord::ThreadCreated { snapshot, .. }
         | ExecutionRecord::ThreadCheckpoint { snapshot, .. } => Some(&snapshot.server_instance_id),
-        ExecutionRecord::Accepted { event, .. } | ExecutionRecord::Event { event } => {
-            Some(&event.server_instance_id)
-        }
         ExecutionRecord::ThreadEvent { event } => Some(&event.server_instance_id),
         ExecutionRecord::TurnRecord { fact, .. } => record_epoch(fact),
         _ => None,

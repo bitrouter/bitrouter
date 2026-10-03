@@ -163,7 +163,7 @@ async fn native_crash_fixture() -> Result<(), Box<dyn std::error::Error>> {
         ready: root.join("ready"),
         point: point.clone(),
     });
-    let service = TaskService::with_workspace_grants(
+    let service = ThreadService::with_workspace_grants(
         app(vec![
             turn(vec![tool_call(
                 "write",
@@ -284,7 +284,7 @@ async fn native_process_loss_at_commit_windows_never_retires_owner_or_replays_wo
             permission_profiles: vec![PermissionProfile::AllowEffects],
         }];
         let destination =
-            TaskService::with_workspace_grants(app(vec![])?, &grants, memory.clone())?;
+            ThreadService::with_workspace_grants(app(vec![])?, &grants, memory.clone())?;
         let target = ThreadTarget {
             thread_id: image.execution.execution_id.clone(),
             server_instance_id: destination.inner.instance_id.clone(),

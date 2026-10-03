@@ -101,15 +101,15 @@ Background runs survive client exit. Attach with `bro agents attach <run-id>`; s
 remove are separate. Foreground `run` denies unmatched permissions; background asks.
 Same-worktree runs require the warned override. Read `references/sessions.md` first.
 
-`bro task run` joins `bro serve`, subscribes to NDJSON events, requires `--model`, and
-approves its own tools. `--check` adds verification; otherwise it is unavailable.
-Bare `bro code` streams assistant and shell output and asks before effects.
-`--read-only` on either native entry point permits `read`, `ls`, `find`, `grep`.
-Coding tasks also expose `write`, `edit` (unique `edits: [{oldText, newText}]`),
-and `bash` on Unix or `powershell` on Windows. `code <agent>` and `run <agent>`
-stay ACP. Native tasks are held in server memory: detach keeps them running;
-restart loses them. Never automatically resubmit after instance loss.
-See `references/cli.md` for reattach, task API, and interface details.
+`bro task run` joins `bro serve`, creates a Thread and starts one Turn, streams NDJSON,
+requires `--model`, and approves its own tools. `--check` adds verification; otherwise
+it is `not_requested`. Bare `bro code` keeps one Thread: Enter starts/enqueues,
+Ctrl-Enter steers, Ctrl-R resumes a paused queue, empty-composer `y`/`n` approves,
+and Ctrl-D detaches. Reattach with `--thread-id`; `--task-id` is removed.
+`--read-only` permits `read`, `ls`, `find`, `grep`; coding adds `write`, unique-span
+`edit`, and Unix `bash` or Windows `powershell`. `code <agent>` / `run <agent>` remain ACP. Local protocol is v14; opt-in HTTP uses `/agent/v2`. Durable history/keys
+survive hot unload. Lost instances/unknown effects never trigger automatic resubmission.
+See `references/cli.md` for permissions, controls, retries and recovery.
 
 Built-in ACP adapters require Node.js 22+ and `npx`. For the harness's native
 interface, use the reversible per-process launcher:

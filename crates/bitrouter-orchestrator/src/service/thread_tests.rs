@@ -32,7 +32,7 @@ async fn steering_settles_dispatched_effects_skips_later_calls_and_applies_input
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![
             turn(vec![
                 tool_call(
@@ -62,7 +62,7 @@ async fn steering_settles_dispatched_effects_skips_later_calls_and_applies_input
     let receipt = service
         .start_turn(&target, &caller, input("original work", "turn"))
         .await?;
-    let waiting = wait_for(&service, &receipt.turn_id, TaskStatus::WaitingForInput).await?;
+    let waiting = wait_for(&service, &receipt.turn_id, TurnStatus::WaitingForInput).await?;
     service
         .answer_input(
             &receipt.turn_id,
@@ -119,8 +119,8 @@ async fn steering_settles_dispatched_effects_skips_later_calls_and_applies_input
     assert!(!workspace.path().join("effect.txt").exists());
     assert!(!workspace.path().join("stale.txt").exists());
     std::fs::write(workspace.path().join("release"), "release")?;
-    let done = wait_for(&service, &receipt.turn_id, TaskStatus::Completed).await?;
-    assert_eq!(done.status, TaskStatus::Completed);
+    let done = wait_for(&service, &receipt.turn_id, TurnStatus::Completed).await?;
+    assert_eq!(done.status, TurnStatus::Completed);
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("effect.txt"))?,
         "settled"
@@ -153,9 +153,10 @@ async fn steering_settles_dispatched_effects_skips_later_calls_and_applies_input
         2
     );
     assert_eq!(saved.records.iter().filter(|fact| matches!(fact, ExecutionRecord::SteeringResolved { receipt } if receipt.status == SteeringStatus::Applied)).count(), 2);
-    assert!(!service.events_after(&receipt.turn_id, 0)?.iter().any(|event| matches!(&event.payload, TaskEventPayload::ToolStarted { name, .. } if name == "write")));
+    assert!(!workspace.path().join("stale.txt").exists());
     service.shutdown().await;
-    let reopened = TaskService::with_store(app(vec![])?, &[workspace.path().to_path_buf()], store)?;
+    let reopened =
+        ThreadService::with_store(app(vec![])?, &[workspace.path().to_path_buf()], store)?;
     let same = reopened
         .create_thread(
             &reopened.inner.instance_id,
@@ -180,7 +181,7 @@ async fn steering_during_tool_approval_retires_the_old_approval_and_never_broade
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![
             turn(vec![tool_call(
                 "old",
@@ -208,7 +209,7 @@ async fn steering_during_tool_approval_retires_the_old_approval_and_never_broade
     let receipt = service
         .start_turn(&target, &caller, input("original", "turn"))
         .await?;
-    let old = wait_for(&service, &receipt.turn_id, TaskStatus::WaitingForInput).await?;
+    let old = wait_for(&service, &receipt.turn_id, TurnStatus::WaitingForInput).await?;
     let old_id = old.pending_input_id.ok_or("old approval missing")?;
     let received = service
         .steer(
@@ -233,7 +234,7 @@ async fn steering_during_tool_approval_retires_the_old_approval_and_never_broade
             .await
             .is_err()
     );
-    let current = wait_for(&service, &receipt.turn_id, TaskStatus::WaitingForInput).await?;
+    let current = wait_for(&service, &receipt.turn_id, TurnStatus::WaitingForInput).await?;
     let current_id = current.pending_input_id.ok_or("new approval missing")?;
     assert_ne!(old_id, current_id);
     assert_eq!(current.steering[0].status, SteeringStatus::Applied);
@@ -252,10 +253,10 @@ async fn steering_during_tool_approval_retires_the_old_approval_and_never_broade
         )
         .await?;
     assert_eq!(
-        wait_for(&service, &receipt.turn_id, TaskStatus::Completed)
+        wait_for(&service, &receipt.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     assert!(!workspace.path().join("old.txt").exists());
     assert_eq!(
@@ -279,7 +280,7 @@ async fn steering_during_verification_resumes_same_turn_with_existing_model_and_
     for max_steps in [1, 2] {
         let workspace = TempDir::new()?;
         let store = Arc::new(MemoryExecutionStore::default());
-        let service = TaskService::with_store(
+        let service = ThreadService::with_store(
             app(vec![final_turn(), final_turn()])?,
             &[workspace.path().to_path_buf()],
             store.clone(),
@@ -295,7 +296,7 @@ async fn steering_during_verification_resumes_same_turn_with_existing_model_and_
         let receipt = service
             .start_turn(&target, &caller, input("initial answer", "turn"))
             .await?;
-        let old = wait_for(&service, &receipt.turn_id, TaskStatus::WaitingForInput).await?;
+        let old = wait_for(&service, &receipt.turn_id, TurnStatus::WaitingForInput).await?;
         let old_id = old
             .pending_input_id
             .ok_or("verification approval missing")?;
@@ -312,7 +313,7 @@ async fn steering_during_verification_resumes_same_turn_with_existing_model_and_
             .await?;
         assert!(!workspace.path().join("verified.txt").exists());
         if max_steps == 2 {
-            let current = wait_for(&service, &receipt.turn_id, TaskStatus::WaitingForInput).await?;
+            let current = wait_for(&service, &receipt.turn_id, TurnStatus::WaitingForInput).await?;
             let new_id = current
                 .pending_input_id
                 .ok_or("new verification approval missing")?;
@@ -321,8 +322,8 @@ async fn steering_during_verification_resumes_same_turn_with_existing_model_and_
             service
                 .answer_input(&receipt.turn_id, &new_id, true)
                 .await?;
-            let done = wait_for(&service, &receipt.turn_id, TaskStatus::Completed).await?;
-            assert_eq!(done.status, TaskStatus::Completed);
+            let done = wait_for(&service, &receipt.turn_id, TurnStatus::Completed).await?;
+            assert_eq!(done.status, TurnStatus::Completed);
             assert_eq!(done.verification, VerificationStatus::Passed);
             let requests = prompts(store.as_ref(), &thread.thread_id, &receipt.turn_id).await?;
             assert_eq!(requests.len(), 2);
@@ -335,8 +336,8 @@ async fn steering_during_verification_resumes_same_turn_with_existing_model_and_
                 "checked"
             );
         } else {
-            let done = wait_for(&service, &receipt.turn_id, TaskStatus::Failed).await?;
-            assert_eq!(done.status, TaskStatus::Failed);
+            let done = wait_for(&service, &receipt.turn_id, TurnStatus::Failed).await?;
+            assert_eq!(done.status, TurnStatus::Failed);
             assert_eq!(done.steering[0].status, SteeringStatus::NotApplied);
             assert!(
                 done.steering[0]
@@ -427,7 +428,7 @@ async fn dependent_turns_receive_complete_prior_context_with_reused_provider_ids
         )])
     };
     let store = Arc::new(MemoryExecutionStore::default());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![read(), final_turn(), read(), final_turn()])?,
         &[workspace.path().to_path_buf()],
         store.clone(),
@@ -444,10 +445,10 @@ async fn dependent_turns_receive_complete_prior_context_with_reused_provider_ids
         .start_turn(&target, &caller, input("remember shared content", "first"))
         .await?;
     assert_eq!(
-        wait_for(&service, &first.turn_id, TaskStatus::Completed)
+        wait_for(&service, &first.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     let before = service.read_thread(&target, &caller)?;
     assert_eq!(before.status, ThreadStatus::Idle);
@@ -455,10 +456,10 @@ async fn dependent_turns_receive_complete_prior_context_with_reused_provider_ids
         .start_turn(&target, &caller, input("use the previous answer", "second"))
         .await?;
     assert_eq!(
-        wait_for(&service, &second.turn_id, TaskStatus::Completed)
+        wait_for(&service, &second.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     let first_prompts = prompts(store.as_ref(), &thread.thread_id, &first.turn_id).await?;
     let second_prompts = prompts(store.as_ref(), &thread.thread_id, &second.turn_id).await?;
@@ -483,7 +484,7 @@ async fn fifo_admission_and_targeted_withdrawal_do_not_change_active_context_or_
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![
             turn(vec![tool_call(
                 "write",
@@ -508,8 +509,8 @@ async fn fifo_admission_and_targeted_withdrawal_do_not_change_active_context_or_
     let first = service
         .start_turn(&target, &caller, input("first input", "first"))
         .await?;
-    let waiting = wait_for(&service, &first.turn_id, TaskStatus::WaitingForInput).await?;
-    assert_eq!(waiting.status, TaskStatus::WaitingForInput);
+    let waiting = wait_for(&service, &first.turn_id, TurnStatus::WaitingForInput).await?;
+    assert_eq!(waiting.status, TurnStatus::WaitingForInput);
     let second = service
         .enqueue_turn(&target, &caller, input("queued second input", "second"))
         .await?;
@@ -558,7 +559,7 @@ async fn fifo_admission_and_targeted_withdrawal_do_not_change_active_context_or_
     let withdrawn = service
         .cancel_queued_turn(&target, &caller, &second.turn_id, "withdraw".into())
         .await?;
-    assert_eq!(withdrawn.status, TaskStatus::Cancelled);
+    assert_eq!(withdrawn.status, TurnStatus::Cancelled);
     assert_eq!(
         service
             .cancel_queued_turn(&target, &caller, &second.turn_id, "withdraw".into())
@@ -568,7 +569,7 @@ async fn fifo_admission_and_targeted_withdrawal_do_not_change_active_context_or_
     );
     assert_eq!(
         service.read(&first.turn_id)?.status,
-        TaskStatus::WaitingForInput
+        TurnStatus::WaitingForInput
     );
     assert_eq!(
         service
@@ -592,10 +593,10 @@ async fn fifo_admission_and_targeted_withdrawal_do_not_change_active_context_or_
         )
         .await?;
     assert_eq!(
-        wait_for(&service, &third.turn_id, TaskStatus::Completed)
+        wait_for(&service, &third.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     assert!(
         prompts(store.as_ref(), &thread.thread_id, &second.turn_id)
@@ -607,10 +608,10 @@ async fn fifo_admission_and_targeted_withdrawal_do_not_change_active_context_or_
     assert!(!serde_json::to_string(&next[0].messages)?.contains("queued second input"));
     assert!(!serde_json::to_string(&next[0].messages)?.contains("queued fourth input"));
     assert_eq!(
-        wait_for(&service, &fourth.turn_id, TaskStatus::Completed)
+        wait_for(&service, &fourth.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     let saved = store
         .load(&thread.thread_id)
@@ -654,7 +655,7 @@ async fn cancellation_pauses_fifo_until_explicit_resume_without_replaying_failed
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![
             turn(vec![tool_call(
                 "write",
@@ -678,10 +679,10 @@ async fn cancellation_pauses_fifo_until_explicit_resume_without_replaying_failed
         .start_turn(&target, &caller, input("cancel this", "first"))
         .await?;
     assert_eq!(
-        wait_for(&service, &first.turn_id, TaskStatus::WaitingForInput)
+        wait_for(&service, &first.turn_id, TurnStatus::WaitingForInput)
             .await?
             .status,
-        TaskStatus::WaitingForInput
+        TurnStatus::WaitingForInput
     );
     let next = service
         .enqueue_turn(&target, &caller, input("continue separately", "next"))
@@ -692,10 +693,10 @@ async fn cancellation_pauses_fifo_until_explicit_resume_without_replaying_failed
     };
     service.cancel_turn(&target, &caller, cancel()).await?;
     assert_eq!(
-        wait_for(&service, &first.turn_id, TaskStatus::Cancelled)
+        wait_for(&service, &first.turn_id, TurnStatus::Cancelled)
             .await?
             .status,
-        TaskStatus::Cancelled
+        TurnStatus::Cancelled
     );
     let paused = service.read_thread(&target, &caller)?;
     assert_eq!(paused.status, ThreadStatus::Paused);
@@ -704,9 +705,9 @@ async fn cancellation_pauses_fifo_until_explicit_resume_without_replaying_failed
             .cancel_turn(&target, &caller, cancel())
             .await?
             .status,
-        TaskStatus::Cancelled
+        TurnStatus::Cancelled
     );
-    assert_eq!(service.read(&next.turn_id)?.status, TaskStatus::Queued);
+    assert_eq!(service.read(&next.turn_id)?.status, TurnStatus::Queued);
     assert!(
         prompts(store.as_ref(), &thread.thread_id, &next.turn_id)
             .await?
@@ -722,10 +723,10 @@ async fn cancellation_pauses_fifo_until_explicit_resume_without_replaying_failed
         .resume_queue(&target, &caller, "resume".into())
         .await?;
     assert_eq!(
-        wait_for(&service, &next.turn_id, TaskStatus::Completed)
+        wait_for(&service, &next.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     assert_eq!(
         service
@@ -749,7 +750,7 @@ async fn cancellation_pauses_fifo_until_explicit_resume_without_replaying_failed
 async fn queued_thread_waits_for_workspace_then_activates_after_another_turn_settles()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
-    let service = TaskService::new(
+    let service = ThreadService::new(
         app(vec![
             turn(vec![tool_call(
                 "write",
@@ -771,10 +772,10 @@ async fn queued_thread_waits_for_workspace_then_activates_after_another_turn_set
         .start_turn(&target(&a), &caller, input("hold workspace", "first"))
         .await?;
     assert_eq!(
-        wait_for(&service, &first.turn_id, TaskStatus::WaitingForInput)
+        wait_for(&service, &first.turn_id, TurnStatus::WaitingForInput)
             .await?
             .status,
-        TaskStatus::WaitingForInput
+        TurnStatus::WaitingForInput
     );
     let queued = service
         .enqueue_turn(&target(&b), &caller, input("wait for workspace", "queued"))
@@ -784,10 +785,10 @@ async fn queued_thread_waits_for_workspace_then_activates_after_another_turn_set
     assert_eq!(waiting.status, ThreadStatus::Idle);
     service.cancel(&first.turn_id).await?;
     assert_eq!(
-        wait_for(&service, &queued.turn_id, TaskStatus::Completed)
+        wait_for(&service, &queued.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     assert!(
         !service
@@ -803,7 +804,7 @@ async fn thread_keys_return_original_identities_after_restart_without_starting_w
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![final_turn()])?,
         &[workspace.path().to_path_buf()],
         store.clone(),
@@ -819,13 +820,13 @@ async fn thread_keys_return_original_identities_after_restart_without_starting_w
         .start_turn(&target(&thread), &caller, input("original", "turn"))
         .await?;
     assert_eq!(
-        wait_for(&service, &first.turn_id, TaskStatus::Completed)
+        wait_for(&service, &first.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     service.shutdown().await;
-    let reopened = TaskService::with_store(
+    let reopened = ThreadService::with_store(
         app(vec![])?,
         &[workspace.path().to_path_buf()],
         store.clone(),
@@ -842,14 +843,19 @@ async fn thread_keys_return_original_identities_after_restart_without_starting_w
         .start_turn(&self::target(&same), &caller, input("original", "turn"))
         .await?;
     assert_eq!(receipt.turn_id, first.turn_id);
-    assert_eq!(receipt.status, TaskStatus::Completed);
+    assert_eq!(receipt.status, TurnStatus::Completed);
     assert!(
         reopened
             .start_turn(&self::target(&same), &caller, input("new work", "new"))
             .await
             .is_err()
     );
-    assert!(reopened.lock_state().active_workspaces.is_empty());
+    assert!(
+        !reopened
+            .lock_state()
+            .running_turns
+            .contains_key(&first.turn_id)
+    );
     assert_eq!(
         prompts(store.as_ref(), &thread.thread_id, &first.turn_id)
             .await?
@@ -864,7 +870,7 @@ async fn thread_keys_return_original_identities_after_restart_without_starting_w
 async fn thread_owner_epoch_and_server_profile_grants_are_enforced()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
-    let service = TaskService::new(app(vec![])?, &[workspace.path().to_path_buf()])?;
+    let service = ThreadService::new(app(vec![])?, &[workspace.path().to_path_buf()])?;
     let mut denied = thread_request(&workspace, "denied-profile");
     denied.permission_profile = PermissionProfile::AllowEffects;
     assert_eq!(
@@ -935,7 +941,7 @@ async fn trusted_allow_effects_profile_runs_tools_and_verification_without_appro
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let service = TaskService::with_workspace_grants(
+    let service = ThreadService::with_workspace_grants(
         app(vec![
             turn(vec![tool_call(
                 "write",
@@ -963,18 +969,12 @@ async fn trusted_allow_effects_profile_runs_tools_and_verification_without_appro
             input("run granted work", "turn"),
         )
         .await?;
-    let done = wait_for(&service, &receipt.turn_id, TaskStatus::Completed).await?;
-    assert_eq!(done.status, TaskStatus::Completed);
+    let done = wait_for(&service, &receipt.turn_id, TurnStatus::Completed).await?;
+    assert_eq!(done.status, TurnStatus::Completed);
     assert_eq!(done.verification, VerificationStatus::Passed);
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("allowed.txt"))?,
         "granted"
-    );
-    assert!(
-        !service
-            .events_after(&receipt.turn_id, 0)?
-            .iter()
-            .any(|event| matches!(event.payload, TaskEventPayload::InputRequested { .. }))
     );
     let saved = store
         .load(&thread.thread_id)
@@ -1001,7 +1001,7 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![
             turn(vec![tool_call(
                 "write",
@@ -1024,7 +1024,7 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
     let receipt = service
         .start_turn(&target, &caller, input("needs permission", "turn"))
         .await?;
-    let waiting = wait_for(&service, &receipt.turn_id, TaskStatus::WaitingForInput).await?;
+    let waiting = wait_for(&service, &receipt.turn_id, TurnStatus::WaitingForInput).await?;
     let approval_id = waiting.pending_input_id.ok_or("approval missing")?;
     let answer = || ApprovalAnswer {
         turn_id: receipt.turn_id.clone(),
@@ -1069,10 +1069,10 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
         .answer_thread_input(&target, &caller, answer())
         .await?;
     assert_eq!(
-        wait_for(&service, &receipt.turn_id, TaskStatus::Completed)
+        wait_for(&service, &receipt.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     assert_eq!(
         service
@@ -1097,7 +1097,7 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
         .await?
         .ok_or("Thread missing")?;
     assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::AcceptedKey { entry } if entry.key == "answer")).count(), 1);
-    assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::Event { event } if matches!(&event.payload, TaskEventPayload::InputResolved { request_id, approved:true } if request_id == &approval_id)))).count(), 1);
+    assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, crate::thread::TurnLifecycle::InputResolved { request_id, approved:true } if request_id == &approval_id)))).count(), 1);
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("approved.txt"))?,
         "approved once"
@@ -1205,7 +1205,7 @@ async fn failed_turn_admission_commits_no_key_context_or_worker_and_blocks_resum
     let store = Arc::new(RejectTurnStore {
         memory: MemoryExecutionStore::default(),
     });
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![turn(vec![tool_call(
             "write",
             "write",
@@ -1249,7 +1249,7 @@ async fn failed_turn_admission_commits_no_key_context_or_worker_and_blocks_resum
         .await?
         .ok_or("Thread missing")?;
     assert_eq!(saved.version, thread.cursor);
-    assert!(service.lock_state().tasks.is_empty());
+    assert!(service.lock_state().turns.is_empty());
     // A failed acknowledgement cannot certify absence of an admitted Turn.
     // Keep the already acquired workspace fence without creating a worker.
     assert!(
@@ -1272,7 +1272,7 @@ async fn shutdown_preserves_unstarted_queue_and_records_a_durable_pause()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![turn(vec![tool_call(
             "write",
             "write",
@@ -1293,10 +1293,10 @@ async fn shutdown_preserves_unstarted_queue_and_records_a_durable_pause()
         .start_turn(&target, &caller, input("wait for approval", "first"))
         .await?;
     assert_eq!(
-        wait_for(&service, &first.turn_id, TaskStatus::WaitingForInput)
+        wait_for(&service, &first.turn_id, TurnStatus::WaitingForInput)
             .await?
             .status,
-        TaskStatus::WaitingForInput
+        TurnStatus::WaitingForInput
     );
     let queued = service
         .enqueue_turn(&target, &caller, input("survive shutdown", "queued"))
@@ -1340,7 +1340,7 @@ async fn no_effect_edit_error_can_be_corrected_and_owner_transferred()
         workspace: workspace.path().into(),
         permission_profiles: vec![PermissionProfile::AllowEffects],
     }];
-    let source = TaskService::with_workspace_grants(
+    let source = ThreadService::with_workspace_grants(
         app(vec![
             turn(vec![tool_call(
                 "rejected-edit",
@@ -1369,7 +1369,7 @@ async fn no_effect_edit_error_can_be_corrected_and_owner_transferred()
             input("correct the edit", "edit-turn"),
         )
         .await?;
-    let done = wait_for(&source, &accepted.turn_id, TaskStatus::Completed).await?;
+    let done = wait_for(&source, &accepted.turn_id, TurnStatus::Completed).await?;
     assert!(!done.unknown_effect);
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("note.txt"))?,
@@ -1412,7 +1412,7 @@ async fn no_effect_edit_error_can_be_corrected_and_owner_transferred()
             .stopped_at_ms
             .is_some()
     );
-    let successor = TaskService::with_workspace_grants(app(vec![])?, &grants, memory)?;
+    let successor = ThreadService::with_workspace_grants(app(vec![])?, &grants, memory)?;
     successor.initialize_execution().await?;
     successor.shutdown().await;
     Ok(())

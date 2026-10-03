@@ -472,10 +472,6 @@ impl Agent {
         attempt.collector.finish(request_id)
     }
 
-    pub(crate) fn model(&self) -> &str {
-        &self.config.model
-    }
-
     pub(crate) fn verification_limits(&self) -> (Duration, u32) {
         (self.config.max_duration, self.config.max_tool_calls)
     }

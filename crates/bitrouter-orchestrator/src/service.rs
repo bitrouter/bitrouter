@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{Message, ToolResultOutput, Usage};
+use bitrouter_sdk::language_model::{Message, ToolResultOutput};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -44,6 +44,8 @@ mod steering_tests;
 #[cfg(test)]
 mod thread_tests;
 mod threads;
+#[cfg(test)]
+mod unification_tests;
 mod workspace;
 
 const MAX_EVENT_PAGE: usize = 1000;
@@ -51,7 +53,7 @@ const MAX_LIVE_BYTES: usize = 32 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TaskStatus {
+pub enum TurnStatus {
     Queued,
     Accepted,
     Running,
@@ -63,7 +65,7 @@ pub enum TaskStatus {
     RecoveryRequired,
 }
 
-impl TaskStatus {
+impl TurnStatus {
     pub fn terminal(self) -> bool {
         matches!(
             self,
@@ -96,7 +98,7 @@ pub struct VerificationEvidence {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum TaskEventPayload {
+pub enum TurnEventPayload {
     SteeringUpdated {
         receipt: crate::thread::SteeringReceipt,
         text: Option<String>,
@@ -119,30 +121,7 @@ pub enum TaskEventPayload {
         #[serde(default)]
         request_fingerprint: Option<String>,
     },
-    TaskStarted,
-    AssistantStarted {
-        step_id: String,
-        item_id: String,
-    },
-    ModelTurn {
-        #[serde(default)]
-        step_id: String,
-        #[serde(default)]
-        item_id: String,
-        request_id: String,
-        requested_model: String,
-        usage: Option<Usage>,
-    },
-    AssistantMessage {
-        #[serde(default)]
-        item_id: String,
-        message: Message,
-    },
-    AssistantInterrupted {
-        item_id: String,
-        partial: Message,
-        detail: String,
-    },
+    Started,
     AssistantDelta {
         #[serde(default)]
         item_id: String,
@@ -152,19 +131,6 @@ pub enum TaskEventPayload {
         id: String,
         source: String,
         text: String,
-    },
-    ToolStarted {
-        #[serde(default)]
-        origin: crate::store::CallOrigin,
-        id: String,
-        name: String,
-    },
-    ToolFinished {
-        #[serde(default)]
-        origin: crate::store::CallOrigin,
-        id: String,
-        name: String,
-        output: ToolResultOutput,
     },
     InputRequested {
         request_id: String,
@@ -177,8 +143,8 @@ pub enum TaskEventPayload {
         approved: bool,
     },
     CancelRequested,
-    TaskFinished {
-        status: TaskStatus,
+    Finished {
+        status: TurnStatus,
         detail: String,
         final_answer: Option<String>,
         verification: VerificationStatus,
@@ -188,26 +154,24 @@ pub enum TaskEventPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskEvent {
-    #[serde(default)]
-    pub thread_id: Option<String>,
+pub struct TurnEvent {
+    pub thread_id: String,
     pub server_instance_id: String,
-    pub task_id: String,
+    pub turn_id: String,
     pub seq: u64,
     pub timestamp_ms: u64,
-    pub payload: TaskEventPayload,
+    pub payload: TurnEventPayload,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskSnapshot {
+pub struct TurnSnapshot {
     #[serde(default)]
     pub steering: Vec<crate::thread::SteeringReceipt>,
-    #[serde(default)]
-    pub thread_id: Option<String>,
+    pub thread_id: String,
     pub server_instance_id: String,
     pub model: String,
-    pub task_id: String,
-    pub status: TaskStatus,
+    pub turn_id: String,
+    pub status: TurnStatus,
     pub cursor: u64,
     pub workspace: PathBuf,
     #[serde(default)]
@@ -271,15 +235,12 @@ pub struct RuntimeLimits {
     pub queued_turns_per_thread: usize,
     pub context_bytes_per_thread: usize,
     pub hot_context_bytes: usize,
-    pub tools_per_task: usize,
+    pub tools_per_turn: usize,
     pub global_tools: usize,
-    pub active_tasks: usize,
-    pub retained_tasks: usize,
+    pub active_turns: usize,
+    pub retained_turns: usize,
     pub retained_bytes: usize,
     pub retention_seconds: u64,
-    pub events_per_task: usize,
-    pub event_bytes_per_task: usize,
-    pub subscribers_per_task: usize,
     pub subscriber_queue: usize,
     pub request_bytes: usize,
 }
@@ -305,15 +266,12 @@ impl Default for RuntimeLimits {
             queued_turns_per_thread: 32,
             context_bytes_per_thread: 2 * 1024 * 1024,
             hot_context_bytes: 64 * 1024 * 1024,
-            tools_per_task: 4,
+            tools_per_turn: 4,
             global_tools: 16,
-            active_tasks: 8,
-            retained_tasks: 32,
+            active_turns: 8,
+            retained_turns: 32,
             retained_bytes: 64 * 1024 * 1024,
             retention_seconds: 1800,
-            events_per_task: 256,
-            event_bytes_per_task: 2 * 1024 * 1024,
-            subscribers_per_task: 8,
             subscriber_queue: 32,
             request_bytes: 64 * 1024,
         }
@@ -327,7 +285,7 @@ pub enum ErrorCode {
     Unauthorized,
     RecoveryRequired,
     InvalidRequest,
-    UnknownTask,
+    UnknownTurn,
     Conflict,
     Overloaded,
     ShuttingDown,
@@ -343,6 +301,16 @@ pub struct ServiceError {
 }
 
 impl ServiceError {
+    fn storage(error: impl ToString) -> Self {
+        let message = error.to_string();
+        let code = if message.contains("unsupported_runtime_format") {
+            ErrorCode::RecoveryRequired
+        } else {
+            ErrorCode::StorageUnavailable
+        };
+        Self::new(code, message)
+    }
+
     fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -368,78 +336,15 @@ impl From<&str> for ServiceError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum Observation {
-    Snapshot {
-        snapshot: Box<TaskSnapshot>,
-        resynchronized: bool,
-        catchup: Vec<TaskEvent>,
-    },
-    Event {
-        event: Box<TaskEvent>,
-    },
-}
-
-/// A subscription holds no execution authority. Dropping it only detaches.
-pub struct TaskSubscription {
-    service: TaskService,
-    task_id: String,
-    receiver: broadcast::Receiver<Observation>,
-    initial: Option<Observation>,
-    finished: bool,
-}
-
-impl TaskSubscription {
-    pub async fn next(&mut self) -> Result<Option<Observation>, ServiceError> {
-        if let Some(initial) = self.initial.take() {
-            return Ok(Some(initial));
-        }
-        if self.finished {
-            return Ok(None);
-        }
-        match self.receiver.recv().await {
-            Ok(observation) => {
-                self.finished = match &observation {
-                    Observation::Event { event } => {
-                        matches!(event.payload, TaskEventPayload::TaskFinished { .. })
-                    }
-                    Observation::Snapshot { snapshot, .. } => {
-                        snapshot.status.terminal()
-                            || snapshot.status == TaskStatus::RecoveryRequired
-                    }
-                };
-                Ok(Some(observation))
-            }
-            Err(broadcast::error::RecvError::Lagged(_)) => {
-                let mut state = self.service.lock_state();
-                let record = state
-                    .tasks
-                    .get_mut(&self.task_id)
-                    .ok_or_else(unknown_task)?;
-                // Registration and snapshot cutoff are atomic with publication.
-                self.receiver = record.publisher.subscribe();
-                self.finished = record.snapshot.status.terminal()
-                    || record.snapshot.status == TaskStatus::RecoveryRequired;
-                Ok(Some(Observation::Snapshot {
-                    snapshot: Box::new(record.snapshot.clone()),
-                    resynchronized: true,
-                    catchup: Vec::new(),
-                }))
-            }
-            Err(broadcast::error::RecvError::Closed) => Ok(None),
-        }
-    }
-}
-
-fn unknown_task() -> ServiceError {
+fn unknown_turn() -> ServiceError {
     ServiceError::new(
-        ErrorCode::UnknownTask,
-        "task is unknown or expired in this server instance",
+        ErrorCode::UnknownTurn,
+        "Turn is unknown or no longer cached; use the stored Thread query",
     )
 }
 
-pub struct TaskRequest {
+#[cfg(test)]
+struct TurnFixture {
     pub prompt: String,
     pub workspace: PathBuf,
     pub caller: CallerContext,
@@ -459,22 +364,17 @@ struct VerificationBudget {
     max_calls: u32,
 }
 
-struct TaskRecord {
+struct TurnRecord {
     fence: Arc<crate::control::LaunchFence>,
     steering: Vec<steering::SteeringInput>,
     verification_budget: Option<(u64, u32)>,
-    thread_id: Option<String>,
+    thread_id: String,
     permission_profile: PermissionProfile,
     settled: Option<(Vec<Message>, u64)>,
-    snapshot: TaskSnapshot,
-    events: VecDeque<TaskEvent>,
-    event_bytes: usize,
-    publisher: broadcast::Sender<Observation>,
+    snapshot: TurnSnapshot,
     terminal_at: Option<Instant>,
     cancel: CancellationToken,
     pending: Option<PendingInput>,
-    commit_lock: Arc<tokio::sync::Mutex<()>>,
-    store_version: u64,
     storage_error: Option<String>,
 }
 
@@ -485,11 +385,11 @@ struct State {
     execution_ownership: Option<crate::store::OwnerClaim>,
     threads: HashMap<String, threads::ThreadRecord>,
     ready_threads: VecDeque<String>,
+    running_turns: HashMap<String, String>,
     workspace_profiles: HashMap<PathBuf, Vec<PermissionProfile>>,
-    tasks: HashMap<String, TaskRecord>,
+    turns: HashMap<String, TurnRecord>,
     active_workspaces: HashMap<PathBuf, String>,
     allowed_workspaces: Vec<PathBuf>,
-    idempotency: HashMap<(String, String, String), (String, String)>,
     closing: bool,
 }
 
@@ -509,11 +409,24 @@ struct Inner {
 }
 
 #[derive(Clone)]
-pub struct TaskService {
+pub struct ThreadService {
     inner: Arc<Inner>,
 }
 
-impl TaskService {
+struct TurnWorker {
+    service: ThreadService,
+    turn_id: String,
+}
+impl Drop for TurnWorker {
+    fn drop(&mut self) {
+        self.service
+            .lock_state()
+            .running_turns
+            .remove(&self.turn_id);
+    }
+}
+
+impl ThreadService {
     pub fn new(app: Arc<App>, allowed_workspaces: &[PathBuf]) -> Result<Self, ServiceError> {
         Self::with_store(
             app,
@@ -556,7 +469,7 @@ impl TaskService {
             || limits.startup_records > 10_000_000
             || limits.startup_metadata_bytes == 0
             || limits.startup_metadata_bytes > 64 * 1024 * 1024
-            || limits.active_tasks == 0
+            || limits.active_turns == 0
             || limits.recovery_readers == 0
             || !(1..=128).contains(&limits.recovery_page_records)
             || !(1..=4 * 1024 * 1024).contains(&limits.recovery_page_bytes)
@@ -573,13 +486,10 @@ impl TaskService {
             || limits.queued_turns_per_thread == 0
             || limits.context_bytes_per_thread == 0
             || limits.hot_context_bytes < limits.context_bytes_per_thread
-            || limits.tools_per_task == 0
+            || limits.tools_per_turn == 0
             || limits.global_tools == 0
-            || limits.retained_tasks == 0
-            || limits.events_per_task == 0
+            || limits.retained_turns == 0
             || limits.subscriber_queue == 0
-            || limits.subscribers_per_task == 0
-            || limits.event_bytes_per_task < limits.request_bytes
         {
             return Err("invalid runtime limits".into());
         }
@@ -607,6 +517,7 @@ impl TaskService {
                     execution_ownership: None,
                     threads: HashMap::new(),
                     ready_threads: VecDeque::new(),
+                    running_turns: HashMap::new(),
                     workspace_profiles: allowed_workspaces
                         .iter()
                         .cloned()
@@ -617,10 +528,9 @@ impl TaskService {
                             )
                         })
                         .collect(),
-                    tasks: HashMap::new(),
+                    turns: HashMap::new(),
                     active_workspaces: HashMap::new(),
                     allowed_workspaces,
-                    idempotency: HashMap::new(),
                     closing: false,
                 }),
             }),
@@ -652,7 +562,7 @@ impl TaskService {
             let _admission = self.inner.admission.lock().await;
             let mut state = self.lock_state();
             state.closing = true;
-            for record in state.tasks.values() {
+            for record in state.turns.values() {
                 record.cancel.cancel();
             }
             // Spawn and close are serialized under the same state lock.
@@ -663,70 +573,22 @@ impl TaskService {
         self.stop_execution_owner().await;
     }
 
-    pub fn observe(
-        &self,
-        task_id: &str,
-        after: Option<u64>,
-    ) -> Result<TaskSubscription, ServiceError> {
-        let mut state = self.lock_state();
-        self.prune(&mut state);
-        let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
-        if record.publisher.receiver_count() >= self.inner.limits.subscribers_per_task {
-            return Err(ServiceError::new(
-                ErrorCode::Overloaded,
-                "too many task observers",
-            ));
-        }
-        if after.is_some_and(|cursor| cursor > record.snapshot.cursor) {
-            return Err("cursor is ahead of task".into());
-        }
-        let resynchronized = after.is_some_and(|cursor| {
-            record
-                .events
-                .front()
-                .map_or(cursor < record.snapshot.cursor, |event| {
-                    cursor < event.seq.saturating_sub(1)
-                })
-        });
-        let catchup = match after {
-            Some(cursor) if !resynchronized => record
-                .events
-                .iter()
-                .filter(|event| event.seq > cursor)
-                .cloned()
-                .collect(),
-            _ => Vec::new(),
-        };
-        Ok(TaskSubscription {
-            service: self.clone(),
-            task_id: task_id.into(),
-            receiver: record.publisher.subscribe(),
-            initial: Some(Observation::Snapshot {
-                snapshot: Box::new(record.snapshot.clone()),
-                resynchronized,
-                catchup,
-            }),
-            finished: record.snapshot.status.terminal()
-                || record.snapshot.status == TaskStatus::RecoveryRequired,
-        })
-    }
-
     fn prune(&self, state: &mut State) {
         let mut terminal: Vec<_> = state
-            .tasks
+            .turns
             .iter()
             .filter_map(|(id, record)| {
                 record.terminal_at.map(|at| {
                     let bytes = serde_json::to_vec(&record.snapshot)
                         .map_or(usize::MAX, |encoded| encoded.len());
-                    (id.clone(), at, record.event_bytes.saturating_add(bytes))
+                    (id.clone(), at, bytes)
                 })
             })
             .collect();
         terminal.sort_by_key(|(_, at, _)| *at);
         let excess = terminal
             .len()
-            .saturating_sub(self.inner.limits.retained_tasks);
+            .saturating_sub(self.inner.limits.retained_turns);
         let mut retained_bytes = terminal
             .iter()
             .fold(0_usize, |total, (_, _, bytes)| total.saturating_add(*bytes));
@@ -735,8 +597,7 @@ impl TaskService {
                 || retained_bytes > self.inner.limits.retained_bytes
                 || at.elapsed() >= Duration::from_secs(self.inner.limits.retention_seconds)
             {
-                state.tasks.remove(&id);
-                state.idempotency.retain(|_, (_, task)| task != &id);
+                state.turns.remove(&id);
                 retained_bytes = retained_bytes.saturating_sub(bytes);
             }
         }
@@ -774,319 +635,85 @@ impl TaskService {
         Ok(workspace)
     }
 
-    pub async fn submit(&self, request: TaskRequest) -> Result<TaskSnapshot, ServiceError> {
-        let _admission = self.inner.admission.lock().await;
-        if request.prompt.len()
-            + request.config.instructions.len()
-            + request.config.model.len()
-            + request.verification_command.as_ref().map_or(0, String::len)
-            > self.inner.limits.request_bytes
-        {
-            return Err("task request is too large".into());
-        }
-        if request.config.max_steps > 256
-            || request.config.max_tool_calls > 1024
-            || request.config.max_context_bytes > 2 * 1024 * 1024
-            || request.config.max_duration > Duration::from_secs(86400)
-        {
-            return Err("agent bounds exceed runtime limits".into());
-        }
-        let key = request.idempotency_key.as_ref().map(|key| {
-            (
-                request.caller.api_key_id().to_string(),
-                request.caller.user_id().to_string(),
-                key.clone(),
-            )
-        });
-        if key
-            .as_ref()
-            .is_some_and(|(_, _, key)| key.is_empty() || key.len() > 128)
-        {
-            return Err("invalid idempotency key".into());
-        }
-        let tool_mode = request.config.tool_mode();
-        if tool_mode == ToolMode::ReadOnly && request.verification_command.is_some() {
-            return Err("read-only tasks cannot run a verification command".into());
-        }
-        let workspace = request
-            .workspace
-            .canonicalize()
-            .map_err(|error| error.to_string())?;
-        if !self.lock_state().allowed_workspaces.contains(&workspace) {
-            return Err("workspace is not registered with this server".into());
-        }
-        let fingerprint = serde_json::to_string(&(
-            &request.prompt,
-            &workspace,
-            &request.config.model,
-            &request.config.effort,
-            tool_mode,
-            &request.verification_command,
-            &request.config.instructions,
-            request.config.max_steps,
-            request.config.max_tool_calls,
-            request.config.max_duration.as_millis(),
-            request.config.max_context_bytes,
-            request.config.max_spend_microusd,
-            request
-                .config
-                .estimate_rates
-                .as_ref()
-                .map(|rates| (rates.prompt, rates.completion)),
-        ))
-        .map_err(|error| error.to_string())?;
-        let owner_key_id = request.caller.api_key_id().to_string();
-        let owner_user_id = request.caller.user_id().to_string();
-        let stored_config = request.config.clone();
-        let agent = Agent::new(
-            Arc::clone(&self.inner.app),
-            request.caller,
-            &workspace,
-            request.config,
-        )?
-        .with_tool_workers(
-            Arc::clone(&self.inner.tool_workers),
-            self.inner.limits.tools_per_task,
-        );
-        let task_id = uuid::Uuid::new_v4().to_string();
-        let cancel = CancellationToken::new();
-        {
-            let mut state = self.lock_state();
-            self.prune(&mut state);
-            if state.closing {
-                return Err(ServiceError::new(
-                    ErrorCode::ShuttingDown,
-                    "runtime is shutting down",
-                ));
-            }
-            if let Some(key) = key.as_ref()
-                && let Some((existing_fingerprint, existing_id)) = state.idempotency.get(key)
-            {
-                if existing_fingerprint != &fingerprint {
-                    return Err(ServiceError::new(
-                        ErrorCode::Conflict,
-                        "idempotency key already belongs to a different task",
-                    ));
-                }
-                return state
-                    .tasks
-                    .get(existing_id)
-                    .map(|record| record.snapshot.clone())
-                    .ok_or_else(|| "idempotent task disappeared".into());
-            }
-            if state.active_workspaces.len() >= self.inner.limits.active_tasks {
-                return Err(ServiceError::new(
-                    ErrorCode::Overloaded,
-                    "active task limit reached",
-                ));
-            }
-            if let Some(error) = self.workspace_owner_error(&state, &workspace) {
-                return Err(error);
-            }
-        }
-        let user_item_id = uuid::Uuid::new_v4().to_string();
-        self.initialize_execution().await?;
-        self.reserve_workspace(&workspace, &task_id).await?;
-        let event = TaskEvent {
-            thread_id: None,
-            server_instance_id: self.inner.instance_id.clone(),
-            task_id: task_id.clone(),
-            seq: 1,
-            timestamp_ms: now_ms(),
-            payload: TaskEventPayload::Accepted {
-                user_item_id: user_item_id.clone(),
-                prompt: request.prompt.clone(),
-                workspace: workspace.clone(),
-                model: agent.model().into(),
-                tool_mode,
-                idempotency_key: request.idempotency_key.clone(),
-                request_fingerprint: request
-                    .idempotency_key
-                    .as_ref()
-                    .map(|_| fingerprint.clone()),
-            },
+    // Test fixture: exercise the same two native admission operations as CLI.
+    #[cfg(test)]
+    async fn submit_fixture(&self, request: TurnFixture) -> Result<TurnSnapshot, ServiceError> {
+        use crate::thread::{ThreadRequest, ThreadTarget, TurnRequest};
+        let caller = request.caller.clone();
+        let key = request
+            .idempotency_key
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let permission_profile = if request.config.tool_mode() == ToolMode::ReadOnly {
+            PermissionProfile::ReadOnly
+        } else {
+            PermissionProfile::Ask
         };
-        let store_version = self
-            .commit_fenced(
-                &task_id,
-                0,
-                &[ExecutionRecord::Accepted {
-                    owner_key_id,
-                    owner_user_id,
-                    fingerprint: fingerprint.clone(),
-                    config: Box::new(stored_config),
-                    verification_command: request.verification_command.clone(),
-                    event,
-                }],
+        let thread = self
+            .create_thread(
+                &self.inner.instance_id,
+                ThreadRequest {
+                    caller: request.caller,
+                    workspace: request.workspace,
+                    config: request.config,
+                    permission_profile,
+                    verification_command: request.verification_command,
+                    idempotency_key: key.clone(),
+                },
             )
+            .await?;
+        let target = ThreadTarget {
+            thread_id: thread.thread_id,
+            server_instance_id: thread.server_instance_id,
+        };
+        let receipt = self
+            .start_turn(
+                &target,
+                &caller,
+                TurnRequest {
+                    prompt: request.prompt,
+                    idempotency_key: key,
+                },
+            )
+            .await?;
+        self.read_stored_turn(&target, &caller, &receipt.turn_id)
             .await
-            .map_err(|error| ServiceError::new(ErrorCode::StorageUnavailable, error))?;
-        let accepted = {
-            let mut state = self.lock_state();
-            let snapshot = TaskSnapshot {
-                steering: Vec::new(),
-                thread_id: None,
-                server_instance_id: self.inner.instance_id.clone(),
-                model: agent.model().to_string(),
-                task_id: task_id.clone(),
-                status: TaskStatus::Accepted,
-                cursor: 0,
-                workspace: workspace.clone(),
-                tool_mode,
-                final_answer: None,
-                detail: None,
-                unknown_effect: false,
-                verification: VerificationStatus::Unavailable,
-                verification_evidence: None,
-                pending_input_id: None,
-                pending_input: None,
-                live: None,
-            };
-            state.tasks.insert(
-                task_id.clone(),
-                TaskRecord {
-                    fence: Arc::new(crate::control::LaunchFence::default()),
-                    steering: Vec::new(),
-                    verification_budget: None,
-                    thread_id: None,
-                    permission_profile: if tool_mode == ToolMode::ReadOnly {
-                        PermissionProfile::ReadOnly
-                    } else {
-                        PermissionProfile::Ask
-                    },
-                    settled: None,
-                    snapshot,
-                    events: VecDeque::new(),
-                    event_bytes: 0,
-                    publisher: broadcast::channel(self.inner.limits.subscriber_queue).0,
-                    terminal_at: None,
-                    cancel: cancel.clone(),
-                    pending: None,
-                    commit_lock: Arc::new(tokio::sync::Mutex::new(())),
-                    store_version,
-                    storage_error: None,
-                },
-            );
-            if let Err(error) = self.append_locked(
-                &mut state,
-                &task_id,
-                TaskEventPayload::Accepted {
-                    user_item_id: user_item_id.clone(),
-                    prompt: request.prompt.clone(),
-                    workspace: workspace.clone(),
-                    model: agent.model().to_string(),
-                    tool_mode,
-                    idempotency_key: request.idempotency_key.clone(),
-                    request_fingerprint: request
-                        .idempotency_key
-                        .as_ref()
-                        .map(|_| fingerprint.clone()),
-                },
-            ) {
-                state.tasks.remove(&task_id);
-                return Err(error);
-            }
-            state.active_workspaces.insert(workspace, task_id.clone());
-            if let Some(key) = key.as_ref() {
-                state
-                    .idempotency
-                    .insert(key.clone(), (fingerprint, task_id.clone()));
-            }
-            state
-                .tasks
-                .get(&task_id)
-                .map(|record| record.snapshot.clone())
-                .ok_or_else(|| "accepted task disappeared".to_string())?
-        };
-        let service = self.clone();
-        let prompt = RunInput {
-            prompt: request.prompt,
-            user_item_id,
-            messages: Vec::new(),
-            context_version: 0,
-            checkpoint: None,
-            complete_checkpoint: false,
-            restored_verification: None,
-        };
-        let verification_command = request.verification_command;
-        let workspace_for_worker = accepted.workspace.clone();
-        let worker_id = task_id.clone();
-        self.inner.workers.spawn(async move {
-            service
-                .run_task(
-                    worker_id,
-                    agent,
-                    prompt,
-                    verification_command,
-                    workspace_for_worker,
-                    cancel,
-                )
-                .await;
-        });
-        Ok(accepted)
     }
 
-    pub fn read(&self, task_id: &str) -> Result<TaskSnapshot, ServiceError> {
+    #[cfg(test)]
+    fn read(&self, turn_id: &str) -> Result<TurnSnapshot, ServiceError> {
         let mut state = self.lock_state();
         self.prune(&mut state);
         state
-            .tasks
-            .get(task_id)
+            .turns
+            .get(turn_id)
             .map(|record| record.snapshot.clone())
-            .ok_or_else(unknown_task)
+            .ok_or_else(unknown_turn)
     }
 
-    pub fn events_after(&self, task_id: &str, after: u64) -> Result<Vec<TaskEvent>, ServiceError> {
-        let mut state = self.lock_state();
-        self.prune(&mut state);
-        let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
-        if after > record.snapshot.cursor {
-            return Err("cursor is ahead of task".into());
-        }
-        if record
-            .events
-            .front()
-            .map_or(after < record.snapshot.cursor, |event| {
-                after < event.seq.saturating_sub(1)
-            })
-        {
-            return Err(ServiceError::new(
-                ErrorCode::ResyncRequired,
-                "event cursor expired; observe a fresh snapshot",
-            ));
-        }
-        Ok(record
-            .events
-            .iter()
-            .filter(|event| event.seq > after)
-            .take(MAX_EVENT_PAGE)
-            .cloned()
-            .collect())
-    }
-
-    pub async fn answer_input(
+    #[cfg(test)]
+    async fn answer_input(
         &self,
-        task_id: &str,
+        turn_id: &str,
         request_id: &str,
         approved: bool,
     ) -> Result<(), ServiceError> {
-        let gate = self.commit_gate(task_id)?;
+        let gate = self.commit_gate(turn_id)?;
         let _guard = gate.lock().await;
-        self.answer_input_serialized(task_id, request_id, approved, &[])
+        self.answer_input_serialized(turn_id, request_id, approved, &[])
             .await
     }
 
     async fn answer_input_serialized(
         &self,
-        task_id: &str,
+        turn_id: &str,
         request_id: &str,
         approved: bool,
         extra_facts: &[ExecutionRecord],
     ) -> Result<(), ServiceError> {
         {
             let state = self.lock_state();
-            let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
-            if record.snapshot.status != TaskStatus::WaitingForInput
+            let record = state.turns.get(turn_id).ok_or_else(unknown_turn)?;
+            if record.snapshot.status != TurnStatus::WaitingForInput
                 || record.snapshot.pending_input_id.as_deref() != Some(request_id)
                 || record.cancel.is_cancelled()
             {
@@ -1097,8 +724,8 @@ impl TaskService {
             }
         }
         self.append_facts_serialized(
-            task_id,
-            TaskEventPayload::InputResolved {
+            turn_id,
+            TurnEventPayload::InputResolved {
                 request_id: request_id.into(),
                 approved,
             },
@@ -1107,8 +734,8 @@ impl TaskService {
         .await?;
         let sender = self
             .lock_state()
-            .tasks
-            .get_mut(task_id)
+            .turns
+            .get_mut(turn_id)
             .and_then(|record| record.pending.take())
             .ok_or_else(|| "pending input channel is unavailable".to_string())?
             .response;
@@ -1117,16 +744,17 @@ impl TaskService {
         })
     }
 
-    pub async fn cancel(&self, task_id: &str) -> Result<(), ServiceError> {
-        let gate = self.commit_gate(task_id)?;
+    #[cfg(test)]
+    async fn cancel(&self, turn_id: &str) -> Result<(), ServiceError> {
+        let gate = self.commit_gate(turn_id)?;
         let _guard = gate.lock().await;
         let token = {
             let state = self.lock_state();
-            let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
+            let record = state.turns.get(turn_id).ok_or_else(unknown_turn)?;
             if record.snapshot.status.terminal() || record.cancel.is_cancelled() {
                 return Ok(());
             }
-            if record.snapshot.status == TaskStatus::Queued {
+            if record.snapshot.status == TurnStatus::Queued {
                 return Err(ServiceError::new(
                     ErrorCode::Conflict,
                     "use targeted queued withdrawal for an unstarted Turn",
@@ -1134,18 +762,18 @@ impl TaskService {
             }
             record.cancel.clone()
         };
-        self.append_serialized(task_id, TaskEventPayload::CancelRequested)
+        self.append_serialized(turn_id, TurnEventPayload::CancelRequested)
             .await?;
         token.cancel();
         let pending = self
             .lock_state()
-            .tasks
-            .get(task_id)
+            .turns
+            .get(turn_id)
             .and_then(|record| record.snapshot.pending_input_id.clone());
         if let Some(request_id) = pending {
             self.append_serialized(
-                task_id,
-                TaskEventPayload::InputResolved {
+                turn_id,
+                TurnEventPayload::InputResolved {
                     request_id,
                     approved: false,
                 },
@@ -1153,8 +781,8 @@ impl TaskService {
             .await?;
             if let Some(pending) = self
                 .lock_state()
-                .tasks
-                .get_mut(task_id)
+                .turns
+                .get_mut(turn_id)
                 .and_then(|record| record.pending.take())
             {
                 let _ = pending.response.send(false);
@@ -1163,20 +791,31 @@ impl TaskService {
         Ok(())
     }
 
-    fn run_task(
+    fn run_turn(
         &self,
-        task_id: String,
+        turn_id: String,
         agent: Agent,
         prompt: RunInput,
         verification_command: Option<String>,
         workspace: PathBuf,
         cancel: CancellationToken,
     ) -> futures::future::BoxFuture<'static, ()> {
+        {
+            let mut state = self.lock_state();
+            if let Some(thread_id) = state.turns.get(&turn_id).map(|turn| turn.thread_id.clone()) {
+                state.running_turns.insert(turn_id.clone(), thread_id);
+            }
+        }
         let service = self.clone();
+        let worker = TurnWorker {
+            service: self.clone(),
+            turn_id: turn_id.clone(),
+        };
         Box::pin(async move {
+            let _worker = worker;
             service
-                .run_task_inner(
-                    task_id,
+                .run_turn_inner(
+                    turn_id,
                     agent,
                     prompt,
                     verification_command,
@@ -1187,9 +826,9 @@ impl TaskService {
         })
     }
 
-    async fn run_task_inner(
+    async fn run_turn_inner(
         &self,
-        task_id: String,
+        turn_id: String,
         agent: Agent,
         prompt: RunInput,
         verification_command: Option<String>,
@@ -1197,7 +836,7 @@ impl TaskService {
         cancel: CancellationToken,
     ) {
         if self
-            .append(&task_id, TaskEventPayload::TaskStarted)
+            .append(&turn_id, TurnEventPayload::Started)
             .await
             .is_err()
         {
@@ -1211,19 +850,19 @@ impl TaskService {
             let (approval_tx, mut approval_rx) = mpsc::channel(1);
             let (commit_tx, mut commit_rx) = mpsc::channel::<CommitRequest>(1);
             let (model_tx, mut model_rx) = mpsc::channel::<crate::control::ModelBoundary>(1);
-            let controls = self.lock_state().tasks.get(&task_id).and_then(|task| {
-                task.thread_id
-                    .as_ref()
-                    .map(|_| crate::control::TurnControl {
-                        fence: Arc::clone(&task.fence),
+            let controls =
+                self.lock_state()
+                    .turns
+                    .get(&turn_id)
+                    .map(|turn| crate::control::TurnControl {
+                        fence: Arc::clone(&turn.fence),
                         models: model_tx,
-                    })
-            });
+                    });
             let run_cancel = cancel.clone();
             let profile = self
                 .lock_state()
-                .tasks
-                .get(&task_id)
+                .turns
+                .get(&turn_id)
                 .map_or(PermissionProfile::Ask, |record| record.permission_profile);
             let verification_limits = agent.verification_limits();
             let runner = agent.clone();
@@ -1248,17 +887,17 @@ impl TaskService {
             let report = loop {
                 tokio::select! {
                     Some(mut request) = model_rx.recv() => {
-                        let result = self.prepare_model(&task_id, &mut request).await;
+                        let result = self.prepare_model(&turn_id, &mut request).await;
                         let _ = request.response.send(result);
                     }
                     Some(request) = commit_rx.recv() => {
-                        let result = self.commit_records(&task_id, &request.records).await.map_err(|error| error.to_string());
+                        let result = self.commit_records(&turn_id, &request.records).await.map_err(|error| error.to_string());
                         let failed = result.is_err();
                         let _ = request.response.send(result);
                         if failed { cancel.cancel(); }
                     }
                     Some(event) = event_rx.recv() => {
-                        if self.append_agent_event(&task_id, event).await.is_err() {
+                        if self.append_agent_event(&turn_id, event).await.is_err() {
                             break None;
                         }
                     }
@@ -1266,11 +905,11 @@ impl TaskService {
                         // Agent control events precede its approval handoff. Drain
                         // that finite prefix before publishing the input request.
                         while let Ok(event) = event_rx.try_recv() {
-                            if self.append_agent_event(&task_id, event).await.is_err() {
+                            if self.append_agent_event(&turn_id, event).await.is_err() {
                                 cancel.cancel();
                             }
                         }
-                        if self.request_approval(&task_id, request).await.is_err() {
+                        if self.request_approval(&turn_id, request).await.is_err() {
                             break None;
                         }
                     }
@@ -1278,8 +917,8 @@ impl TaskService {
                         Ok(report) => break Some(report),
                         Err(error) => {
                             cancel.cancel();
-                            let _ = self.append(&task_id, TaskEventPayload::TaskFinished {
-                                status: TaskStatus::Interrupted, detail: format!("agent execution lost: {error}; effects may have occurred"),
+                            let _ = self.append(&turn_id, TurnEventPayload::Finished {
+                                status: TurnStatus::Interrupted, detail: format!("agent execution lost: {error}; effects may have occurred"),
                                 final_answer: None, verification: VerificationStatus::Unavailable, verification_evidence: None, unknown_effect: true,
                             }).await;
                             return;
@@ -1301,9 +940,9 @@ impl TaskService {
                 }
                 let _ = self
                     .append(
-                        &task_id,
-                        TaskEventPayload::TaskFinished {
-                            status: TaskStatus::Interrupted,
+                        &turn_id,
+                        TurnEventPayload::Finished {
+                            status: TurnStatus::Interrupted,
                             detail:
                                 "agent execution stopped unexpectedly; effects may have occurred"
                                     .into(),
@@ -1318,23 +957,23 @@ impl TaskService {
             }
             if let Some(mut report) = report {
                 while let Ok(event) = event_rx.try_recv() {
-                    if self.append_agent_event(&task_id, event).await.is_err() {
+                    if self.append_agent_event(&turn_id, event).await.is_err() {
                         return;
                     }
                 }
                 let mut status = match report.status {
-                    RunStatus::Completed => TaskStatus::Completed,
-                    RunStatus::Cancelled => TaskStatus::Cancelled,
-                    RunStatus::Failed | RunStatus::BoundExceeded => TaskStatus::Failed,
+                    RunStatus::Completed => TurnStatus::Completed,
+                    RunStatus::Cancelled => TurnStatus::Cancelled,
+                    RunStatus::Failed | RunStatus::BoundExceeded => TurnStatus::Failed,
                 };
                 if cancel.is_cancelled() {
-                    status = TaskStatus::Cancelled;
+                    status = TurnStatus::Cancelled;
                 }
                 if report.unknown_effect {
-                    status = TaskStatus::RecoveryRequired;
+                    status = TurnStatus::RecoveryRequired;
                 }
                 let mut unknown_effect = report.unknown_effect;
-                let (verification, evidence) = if status == TaskStatus::Completed {
+                let (verification, evidence) = if status == TurnStatus::Completed {
                     match (restored_verification, verification_command.clone()) {
                         (Some((verification, evidence)), _) => (verification, Some(evidence)),
                         (None, Some(command)) => {
@@ -1347,7 +986,7 @@ impl TaskService {
                                 max_calls: verification_limits.1,
                             };
                             let (verification, evidence, uncertain) = match self
-                                .run_verification(&task_id, &workspace, command, &cancel, budget)
+                                .run_verification(&turn_id, &workspace, command, &cancel, budget)
                                 .await
                             {
                                 Ok(result) => result,
@@ -1356,11 +995,11 @@ impl TaskService {
                             unknown_effect |= uncertain;
                             if verification != VerificationStatus::Passed {
                                 status = if uncertain {
-                                    TaskStatus::RecoveryRequired
+                                    TurnStatus::RecoveryRequired
                                 } else if cancel.is_cancelled() {
-                                    TaskStatus::Cancelled
+                                    TurnStatus::Cancelled
                                 } else {
-                                    TaskStatus::Failed
+                                    TurnStatus::Failed
                                 };
                             }
                             (verification, Some(evidence))
@@ -1373,27 +1012,27 @@ impl TaskService {
                         |(status, evidence)| (status, Some(evidence)),
                     )
                 };
-                if status == TaskStatus::Completed
+                if status == TurnStatus::Completed
                     && !matches!(
                         verification,
                         VerificationStatus::Passed | VerificationStatus::NotRequested
                     )
                 {
                     status = if unknown_effect {
-                        TaskStatus::RecoveryRequired
+                        TurnStatus::RecoveryRequired
                     } else {
-                        TaskStatus::Failed
+                        TurnStatus::Failed
                     };
                 }
-                let gate = match self.commit_gate(&task_id) {
+                let gate = match self.commit_gate(&turn_id) {
                     Ok(gate) => gate,
                     Err(_) => return,
                 };
                 let guard = gate.lock().await;
                 let pending = self
                     .lock_state()
-                    .tasks
-                    .get(&task_id)
+                    .turns
+                    .get(&turn_id)
                     .is_some_and(|task| task.fence.pending());
                 if pending
                     && report.status == RunStatus::Completed
@@ -1402,8 +1041,8 @@ impl TaskService {
                 {
                     if let Some((duration, calls)) = self
                         .lock_state()
-                        .tasks
-                        .get(&task_id)
+                        .turns
+                        .get(&turn_id)
                         .and_then(|task| task.verification_budget)
                     {
                         report.active_duration_ms = duration;
@@ -1432,8 +1071,8 @@ impl TaskService {
                 }
                 let _ = self
                     .append_serialized(
-                        &task_id,
-                        TaskEventPayload::TaskFinished {
+                        &turn_id,
+                        TurnEventPayload::Finished {
                             status,
                             detail: if matches!(
                                 verification,
@@ -1458,7 +1097,7 @@ impl TaskService {
 
     async fn run_verification(
         &self,
-        task_id: &str,
+        turn_id: &str,
         workspace: &Path,
         command: String,
         cancel: &CancellationToken,
@@ -1466,10 +1105,10 @@ impl TaskService {
     ) -> Result<(VerificationStatus, VerificationEvidence, bool), ServiceError> {
         let fence = self
             .lock_state()
-            .tasks
-            .get(task_id)
+            .turns
+            .get(turn_id)
             .map(|task| Arc::clone(&task.fence))
-            .ok_or_else(unknown_task)?;
+            .ok_or_else(unknown_turn)?;
         let name = if cfg!(windows) { "powershell" } else { "bash" };
         let arguments = serde_json::json!({"command":command}).to_string();
         WorkspaceTools::validate(name, &arguments)?;
@@ -1498,7 +1137,7 @@ impl TaskService {
                 }
             } else {
                 let allow_effects =
-                    self.lock_state().tasks.get(task_id).is_some_and(|task| {
+                    self.lock_state().turns.get(turn_id).is_some_and(|task| {
                         task.permission_profile == PermissionProfile::AllowEffects
                     });
                 let approved = if allow_effects {
@@ -1507,7 +1146,7 @@ impl TaskService {
                     let (response, receiver) = oneshot::channel();
                     let wait_started = Instant::now();
                     self.request_approval(
-                        task_id,
+                        turn_id,
                         ApprovalRequest {
                             id: uuid::Uuid::new_v4().to_string(),
                             tool_id: call.item_id.clone(),
@@ -1560,7 +1199,7 @@ impl TaskService {
                                 }
                             };
                             self.commit_records(
-                                task_id,
+                                turn_id,
                                 &[ExecutionRecord::ToolIntent {
                                     step_id: uuid::Uuid::new_v4().to_string(),
                                     call: call.clone(),
@@ -1596,21 +1235,6 @@ impl TaskService {
                                     value: serde_json::json!({"execution_status":"not_executed","error":"not_executed_due_to_steer"}),
                                 };
                             };
-                            if let Err(error) = self
-                                .append(
-                                    task_id,
-                                    TaskEventPayload::ToolStarted {
-                                        id: call.item_id.clone(),
-                                        name: call.name.clone(),
-                                        origin: CallOrigin::Verification,
-                                    },
-                                )
-                                .await
-                            {
-                                drop(start);
-                                let _ = run.await;
-                                return Err(error);
-                            }
                             let _ = start.send(());
                             let remaining = budget
                                 .duration
@@ -1624,13 +1248,13 @@ impl TaskService {
                                         value: serde_json::json!({"error":format!("verification worker lost: {error}"),"worker_lost":true}),
                                     }),
                                     _ = &mut deadline, if !expired => { expired = true; worker_cancel.cancel(); },
-                                    Some(event) = receiver.recv() => if storage_error.is_none() && let Err(error) = self.append_agent_event(task_id, event).await { storage_error = Some(error); worker_cancel.cancel(); },
+                                    Some(event) = receiver.recv() => if storage_error.is_none() && let Err(error) = self.append_agent_event(turn_id, event).await { storage_error = Some(error); worker_cancel.cancel(); },
                                 }
                             };
                             while let Ok(event) = receiver.try_recv() {
                                 if storage_error.is_none()
                                     && let Err(error) =
-                                        self.append_agent_event(task_id, event).await
+                                        self.append_agent_event(turn_id, event).await
                                 {
                                     storage_error = Some(error);
                                 }
@@ -1673,7 +1297,7 @@ impl TaskService {
                 .unwrap_or(u64::MAX),
         );
         self.commit_records(
-            task_id,
+            turn_id,
             &[ExecutionRecord::VerificationResult {
                 status: Some(verification),
                 call: call.clone(),
@@ -1686,29 +1310,19 @@ impl TaskService {
             }],
         )
         .await?;
-        self.append(
-            task_id,
-            TaskEventPayload::ToolFinished {
-                id: call.item_id,
-                name: call.name,
-                output,
-                origin: CallOrigin::Verification,
-            },
-        )
-        .await?;
         Ok((verification, evidence, effect == EffectStatus::Unknown))
     }
 
     async fn request_approval(
         &self,
-        task_id: &str,
+        turn_id: &str,
         request: ApprovalRequest,
     ) -> Result<(), ServiceError> {
-        let gate = self.commit_gate(task_id)?;
+        let gate = self.commit_gate(turn_id)?;
         let _guard = gate.lock().await;
         {
             let mut state = self.lock_state();
-            let record = state.tasks.get_mut(task_id).ok_or_else(unknown_task)?;
+            let record = state.turns.get_mut(turn_id).ok_or_else(unknown_turn)?;
             if record.cancel.is_cancelled() || record.fence.pending() {
                 let _ = request.response.send(false);
                 return Ok(());
@@ -1721,8 +1335,8 @@ impl TaskService {
             });
         }
         self.append_serialized(
-            task_id,
-            TaskEventPayload::InputRequested {
+            turn_id,
+            TurnEventPayload::InputRequested {
                 request_id: request.id,
                 tool_id: request.tool_id,
                 tool_name: request.tool_name,
@@ -1732,86 +1346,46 @@ impl TaskService {
         .await
     }
 
-    async fn append_agent_event(&self, task_id: &str, event: RunEvent) -> Result<(), ServiceError> {
+    async fn append_agent_event(&self, turn_id: &str, event: RunEvent) -> Result<(), ServiceError> {
         let payload = match event {
-            RunEvent::UserMessage { .. } | RunEvent::Finished { .. } => return Ok(()),
-            RunEvent::AssistantStarted { step_id, item_id } => {
-                TaskEventPayload::AssistantStarted { step_id, item_id }
-            }
             RunEvent::AssistantDelta { item_id, text } => {
-                TaskEventPayload::AssistantDelta { item_id, text }
+                TurnEventPayload::AssistantDelta { item_id, text }
             }
-            RunEvent::AssistantInterrupted {
-                item_id,
-                partial,
-                detail,
-            } => TaskEventPayload::AssistantInterrupted {
-                item_id,
-                partial,
-                detail,
-            },
             RunEvent::ToolOutputDelta { id, source, text } => {
-                TaskEventPayload::ToolOutputDelta { id, source, text }
+                TurnEventPayload::ToolOutputDelta { id, source, text }
             }
-            RunEvent::ModelTurn {
-                step_id,
-                item_id,
-                request_id,
-                requested_model,
-                usage,
-            } => TaskEventPayload::ModelTurn {
-                step_id,
-                item_id,
-                request_id,
-                requested_model,
-                usage,
-            },
-            RunEvent::AssistantMessage { item_id, message } => {
-                TaskEventPayload::AssistantMessage { item_id, message }
-            }
-            RunEvent::ToolStarted { id, name } => TaskEventPayload::ToolStarted {
-                id,
-                name,
-                origin: crate::store::CallOrigin::Model,
-            },
-            RunEvent::ToolFinished { id, name, output } => TaskEventPayload::ToolFinished {
-                id,
-                name,
-                output,
-                origin: crate::store::CallOrigin::Model,
-            },
+            // Complete items and their start identities are published by the
+            // acknowledged canonical transaction, never a second event commit.
+            _ => return Ok(()),
         };
-        self.append(task_id, payload).await
+        self.append(turn_id, payload).await
     }
 
-    fn commit_gate(&self, task_id: &str) -> Result<Arc<tokio::sync::Mutex<()>>, ServiceError> {
+    fn commit_gate(&self, turn_id: &str) -> Result<Arc<tokio::sync::Mutex<()>>, ServiceError> {
         let state = self.lock_state();
-        let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
-        match &record.thread_id {
-            Some(thread_id) => state
-                .threads
-                .get(thread_id)
-                .map(|thread| Arc::clone(&thread.commit_lock))
-                .ok_or_else(unknown_task),
-            None => Ok(Arc::clone(&record.commit_lock)),
-        }
+        let record = state.turns.get(turn_id).ok_or_else(unknown_turn)?;
+        state
+            .threads
+            .get(&record.thread_id)
+            .map(|thread| Arc::clone(&thread.commit_lock))
+            .ok_or_else(unknown_turn)
     }
 
     async fn commit_records(
         &self,
-        task_id: &str,
+        turn_id: &str,
         records: &[ExecutionRecord],
     ) -> Result<(), ServiceError> {
-        let gate = self.commit_gate(task_id)?;
+        let gate = self.commit_gate(turn_id)?;
         let _guard = gate.lock().await;
-        self.commit_serialized(task_id, records).await?;
+        self.commit_serialized(turn_id, records).await?;
         for record in records {
             if let ExecutionRecord::VerificationResult {
                 active_duration_ms,
                 tool_calls,
                 ..
             } = record
-                && let Some(task) = self.lock_state().tasks.get_mut(task_id)
+                && let Some(task) = self.lock_state().turns.get_mut(turn_id)
             {
                 task.verification_budget = Some((*active_duration_ms, *tool_calls));
             }
@@ -1821,125 +1395,82 @@ impl TaskService {
 
     async fn commit_serialized(
         &self,
-        task_id: &str,
+        turn_id: &str,
         records: &[ExecutionRecord],
     ) -> Result<(), ServiceError> {
         let thread_id = self
             .lock_state()
-            .tasks
-            .get(task_id)
-            .and_then(|record| record.thread_id.clone());
-        if let Some(thread_id) = thread_id {
-            return self
-                .commit_turn_serialized(&thread_id, task_id, records)
-                .await;
-        }
-        let version = {
-            let state = self.lock_state();
-            let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
-            if let Some(error) = &record.storage_error {
-                return Err(ServiceError::new(
-                    ErrorCode::StorageUnavailable,
-                    error.clone(),
-                ));
-            }
-            record.store_version
-        };
-        match self.commit_fenced(task_id, version, records).await {
-            Ok(version) => {
-                self.lock_state()
-                    .tasks
-                    .get_mut(task_id)
-                    .ok_or_else(unknown_task)?
-                    .store_version = version;
-                Ok(())
-            }
-            Err(error) => {
-                if let Some(record) = self.lock_state().tasks.get_mut(task_id) {
-                    record.cancel.cancel();
-                    record.storage_error = Some(error.clone());
-                    record.snapshot.status = TaskStatus::RecoveryRequired;
-                    record.snapshot.unknown_effect = true;
-                    record.snapshot.detail = Some(format!(
-                        "execution storage failed; recovery required: {error}"
-                    ));
-                    // Storage failure cannot be represented by a committed
-                    // event. Resynchronize observers to current blocked state
-                    // without inventing a durable sequence or terminal result.
-                    let _ = record.publisher.send(Observation::Snapshot {
-                        snapshot: Box::new(record.snapshot.clone()),
-                        resynchronized: true,
-                        catchup: Vec::new(),
-                    });
-                }
-                Err(ServiceError::new(ErrorCode::StorageUnavailable, error))
-            }
-        }
+            .turns
+            .get(turn_id)
+            .map(|record| record.thread_id.clone())
+            .ok_or_else(unknown_turn)?;
+        self.commit_turn_serialized(&thread_id, turn_id, records)
+            .await
     }
 
-    async fn append(&self, task_id: &str, payload: TaskEventPayload) -> Result<(), ServiceError> {
-        let gate = self.commit_gate(task_id)?;
+    async fn append(&self, turn_id: &str, payload: TurnEventPayload) -> Result<(), ServiceError> {
+        let gate = self.commit_gate(turn_id)?;
         let _guard = gate.lock().await;
-        self.append_serialized(task_id, payload).await
+        self.append_serialized(turn_id, payload).await
     }
 
     async fn append_serialized(
         &self,
-        task_id: &str,
-        payload: TaskEventPayload,
+        turn_id: &str,
+        payload: TurnEventPayload,
     ) -> Result<(), ServiceError> {
-        self.append_facts_serialized(task_id, payload, &[]).await
+        self.append_facts_serialized(turn_id, payload, &[]).await
     }
 
     async fn append_facts_serialized(
         &self,
-        task_id: &str,
-        mut payload: TaskEventPayload,
+        turn_id: &str,
+        mut payload: TurnEventPayload,
         extra_facts: &[ExecutionRecord],
     ) -> Result<(), ServiceError> {
-        if let TaskEventPayload::TaskFinished {
+        if let TurnEventPayload::Finished {
             status,
             unknown_effect: true,
             ..
         } = &mut payload
         {
-            *status = TaskStatus::RecoveryRequired;
+            *status = TurnStatus::RecoveryRequired;
         }
         if matches!(
             payload,
-            TaskEventPayload::AssistantDelta { .. } | TaskEventPayload::ToolOutputDelta { .. }
+            TurnEventPayload::AssistantDelta { .. } | TurnEventPayload::ToolOutputDelta { .. }
         ) {
-            return self.append_locked(&mut self.lock_state(), task_id, payload);
+            return self.append_locked(&mut self.lock_state(), turn_id, payload);
         }
-        if matches!(payload, TaskEventPayload::TaskFinished { status, .. } if status.terminal())
-            && let Err(error) = self.prepare_workspace_finish(task_id).await
+        if matches!(payload, TurnEventPayload::Finished { status, .. } if status.terminal())
+            && let Err(error) = self.prepare_workspace_finish(turn_id).await
         {
-            self.workspace_finish_failed(task_id, &error);
+            self.workspace_finish_failed(turn_id, &error);
             return Err(error);
         }
         let events = {
             let state = self.lock_state();
-            let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
+            let record = state.turns.get(turn_id).ok_or_else(unknown_turn)?;
             let mut payloads = Vec::new();
             if matches!(
                 payload,
-                TaskEventPayload::TaskFinished { .. }
-                    | TaskEventPayload::CancelRequested
-                    | TaskEventPayload::SteeringUpdated { .. }
+                TurnEventPayload::Finished { .. }
+                    | TurnEventPayload::CancelRequested
+                    | TurnEventPayload::SteeringUpdated { .. }
             ) && let Some(request_id) = record.snapshot.pending_input_id.clone()
             {
-                payloads.push(TaskEventPayload::InputResolved {
+                payloads.push(TurnEventPayload::InputResolved {
                     request_id,
                     approved: false,
                 });
             }
-            if let TaskEventPayload::TaskFinished { detail, .. } = &payload {
+            if let TurnEventPayload::Finished { detail, .. } = &payload {
                 for entry in &record.steering {
                     if entry.receipt.status == crate::thread::SteeringStatus::Received {
                         let mut receipt = entry.receipt.clone();
                         receipt.status = crate::thread::SteeringStatus::NotApplied;
                         receipt.reason = Some(detail.clone());
-                        payloads.push(TaskEventPayload::SteeringUpdated {
+                        payloads.push(TurnEventPayload::SteeringUpdated {
                             receipt,
                             text: None,
                         });
@@ -1950,10 +1481,10 @@ impl TaskService {
             payloads
                 .into_iter()
                 .enumerate()
-                .map(|(offset, payload)| TaskEvent {
+                .map(|(offset, payload)| TurnEvent {
                     thread_id: record.thread_id.clone(),
                     server_instance_id: self.inner.instance_id.clone(),
-                    task_id: task_id.into(),
+                    turn_id: turn_id.into(),
                     seq: record.snapshot.cursor + offset as u64 + 1,
                     timestamp_ms: now_ms(),
                     payload,
@@ -1963,11 +1494,11 @@ impl TaskService {
         let mut facts = events
             .iter()
             .cloned()
-            .map(|event| ExecutionRecord::Event { event })
+            .filter_map(|event| lifecycle_fact(&event))
             .collect::<Vec<_>>();
         facts.extend_from_slice(extra_facts);
         for event in &events {
-            if let TaskEventPayload::SteeringUpdated {
+            if let TurnEventPayload::SteeringUpdated {
                 receipt,
                 text: None,
             } = &event.payload
@@ -1978,14 +1509,14 @@ impl TaskService {
             }
         }
 
-        if let Some(fact) = self.terminal_thread_checkpoint(task_id, &events, facts.len())? {
+        if let Some(fact) = self.terminal_thread_checkpoint(turn_id, &events, facts.len())? {
             facts.push(fact);
         }
-        self.commit_serialized(task_id, &facts).await?;
+        self.commit_serialized(turn_id, &facts).await?;
         let mut state = self.lock_state();
         for fact in &facts {
             if let ExecutionRecord::SteeringResolved { receipt } = fact
-                && let Some(task) = state.tasks.get_mut(task_id)
+                && let Some(task) = state.turns.get_mut(turn_id)
                 && let Some(entry) = task
                     .steering
                     .iter_mut()
@@ -1995,28 +1526,28 @@ impl TaskService {
             }
         }
         for event in events {
-            self.append_locked(&mut state, task_id, event.payload)?;
+            self.append_locked(&mut state, turn_id, event.payload)?;
         }
         Ok(())
     }
 
-    fn resolve_pending(&self, state: &mut State, task_id: &str) -> Result<(), ServiceError> {
+    fn resolve_pending(&self, state: &mut State, turn_id: &str) -> Result<(), ServiceError> {
         if let Some(id) = state
-            .tasks
-            .get(task_id)
+            .turns
+            .get(turn_id)
             .and_then(|record| record.snapshot.pending_input_id.clone())
         {
             self.append_locked(
                 state,
-                task_id,
-                TaskEventPayload::InputResolved {
+                turn_id,
+                TurnEventPayload::InputResolved {
                     request_id: id,
                     approved: false,
                 },
             )?;
             if let Some(pending) = state
-                .tasks
-                .get_mut(task_id)
+                .turns
+                .get_mut(turn_id)
                 .and_then(|record| record.pending.take())
             {
                 let _ = pending.response.send(false);
@@ -2028,10 +1559,10 @@ impl TaskService {
     fn append_locked(
         &self,
         state: &mut State,
-        task_id: &str,
-        mut payload: TaskEventPayload,
+        turn_id: &str,
+        mut payload: TurnEventPayload,
     ) -> Result<(), ServiceError> {
-        if let TaskEventPayload::TaskFinished { detail, .. } = &mut payload
+        if let TurnEventPayload::Finished { detail, .. } = &mut payload
             && detail.len() > MAX_LIVE_BYTES
         {
             let mut end = MAX_LIVE_BYTES;
@@ -2041,28 +1572,28 @@ impl TaskService {
             detail.truncate(end);
             detail.push_str(" (detail truncated)");
         }
-        if matches!(payload, TaskEventPayload::TaskFinished { .. }) {
-            self.resolve_pending(state, task_id)?;
+        if matches!(payload, TurnEventPayload::Finished { .. }) {
+            self.resolve_pending(state, turn_id)?;
         }
-        let record = state.tasks.get(task_id).ok_or_else(unknown_task)?;
-        let event = TaskEvent {
+        let record = state.turns.get(turn_id).ok_or_else(unknown_turn)?;
+        let event = TurnEvent {
             thread_id: record.thread_id.clone(),
             server_instance_id: self.inner.instance_id.clone(),
-            task_id: task_id.into(),
+            turn_id: turn_id.into(),
             seq: record.snapshot.cursor + 1,
             timestamp_ms: now_ms(),
             payload,
         };
-        let encoded_bytes = serde_json::to_vec(&event)
-            .map_err(|error| error.to_string())?
-            .len();
-        let record = state.tasks.get_mut(task_id).ok_or_else(unknown_task)?;
+        let record = state.turns.get_mut(turn_id).ok_or_else(unknown_turn)?;
         record.snapshot.apply(&event);
+        if let Some(thread) = state.threads.get(&record.thread_id) {
+            record.snapshot.cursor = thread.store_version;
+        }
         if record.snapshot.status.terminal() {
             if state
                 .active_workspaces
                 .get(&record.snapshot.workspace)
-                .is_some_and(|owner| owner == task_id)
+                .is_some_and(|owner| owner == turn_id)
             {
                 state.active_workspaces.remove(&record.snapshot.workspace);
                 state.workspace_fences.remove(&record.snapshot.workspace);
@@ -2070,29 +1601,10 @@ impl TaskService {
             record.pending.take();
             record.terminal_at = Some(Instant::now());
         }
-        record.event_bytes += encoded_bytes;
-        record.events.push_back(event.clone());
-        while record.events.len() > self.inner.limits.events_per_task
-            || record.event_bytes > self.inner.limits.event_bytes_per_task
-        {
-            if let Some(old) = record.events.pop_front() {
-                record.event_bytes = record.event_bytes.saturating_sub(
-                    serde_json::to_vec(&old)
-                        .map_err(|error| error.to_string())?
-                        .len(),
-                );
-            } else {
-                break;
-            }
-        }
-        let _ = record.publisher.send(Observation::Event {
-            event: Box::new(event.clone()),
-        });
         if matches!(
             event.payload,
-            TaskEventPayload::AssistantDelta { .. } | TaskEventPayload::ToolOutputDelta { .. }
-        ) && let Some(thread_id) = &event.thread_id
-            && let Some(thread) = state.threads.get_mut(thread_id)
+            TurnEventPayload::AssistantDelta { .. } | TurnEventPayload::ToolOutputDelta { .. }
+        ) && let Some(thread) = state.threads.get_mut(&event.thread_id)
         {
             thread.presentation.live(&event);
         }
@@ -2108,18 +1620,83 @@ impl TaskService {
     }
 }
 
-impl TaskSnapshot {
-    pub fn apply(&mut self, event: &TaskEvent) {
+fn lifecycle_fact(event: &TurnEvent) -> Option<ExecutionRecord> {
+    use crate::thread::TurnLifecycle as L;
+    let lifecycle = match &event.payload {
+        TurnEventPayload::Started => L::Started,
+        TurnEventPayload::InputRequested {
+            request_id,
+            tool_id,
+            tool_name,
+            arguments,
+        } => L::InputRequested {
+            request_id: request_id.clone(),
+            tool_id: tool_id.clone(),
+            tool_name: tool_name.clone(),
+            arguments: arguments.clone(),
+        },
+        TurnEventPayload::InputResolved {
+            request_id,
+            approved,
+        } => L::InputResolved {
+            request_id: request_id.clone(),
+            approved: *approved,
+        },
+        TurnEventPayload::CancelRequested => L::CancelRequested,
+        TurnEventPayload::SteeringUpdated { receipt, text } => L::SteeringUpdated {
+            receipt: receipt.clone(),
+            text: text.clone(),
+        },
+        TurnEventPayload::Finished {
+            status,
+            detail,
+            final_answer,
+            verification,
+            verification_evidence,
+            unknown_effect,
+        } => L::Finished {
+            status: *status,
+            detail: detail.clone(),
+            final_answer: final_answer.clone(),
+            verification: *verification,
+            verification_evidence: verification_evidence.clone(),
+            unknown_effect: *unknown_effect,
+        },
+        _ => return None,
+    };
+    Some(ExecutionRecord::TurnLifecycle {
+        turn_id: event.turn_id.clone(),
+        lifecycle,
+    })
+}
+
+impl TurnSnapshot {
+    pub fn apply(&mut self, event: &TurnEvent) {
         if event.server_instance_id != self.server_instance_id
-            || event.task_id != self.task_id
+            || event.turn_id != self.turn_id
+            || event.thread_id != self.thread_id
             || event.seq <= self.cursor
+                && !matches!(
+                    event.payload,
+                    TurnEventPayload::AssistantDelta { .. }
+                        | TurnEventPayload::ToolOutputDelta { .. }
+                )
         {
             return;
         }
-        self.cursor = event.seq;
-        match &event.payload {
-            TaskEventPayload::TurnQueued { .. } => self.status = TaskStatus::Queued,
-            TaskEventPayload::SteeringUpdated { receipt, .. } => {
+        if !matches!(
+            event.payload,
+            TurnEventPayload::AssistantDelta { .. } | TurnEventPayload::ToolOutputDelta { .. }
+        ) {
+            self.cursor = event.seq;
+        }
+        self.apply_payload(&event.payload);
+    }
+
+    pub(crate) fn apply_payload(&mut self, payload: &TurnEventPayload) {
+        match payload {
+            TurnEventPayload::TurnQueued { .. } => self.status = TurnStatus::Queued,
+            TurnEventPayload::SteeringUpdated { receipt, .. } => {
                 if let Some(current) = self
                     .steering
                     .iter_mut()
@@ -2130,19 +1707,19 @@ impl TaskSnapshot {
                     self.steering.push(receipt.clone());
                 }
             }
-            TaskEventPayload::Accepted { .. } => self.status = TaskStatus::Accepted,
-            TaskEventPayload::TaskStarted | TaskEventPayload::InputResolved { .. } => {
-                self.status = TaskStatus::Running;
+            TurnEventPayload::Accepted { .. } => self.status = TurnStatus::Accepted,
+            TurnEventPayload::Started | TurnEventPayload::InputResolved { .. } => {
+                self.status = TurnStatus::Running;
                 self.pending_input_id = None;
                 self.pending_input = None;
             }
-            TaskEventPayload::InputRequested {
+            TurnEventPayload::InputRequested {
                 request_id,
                 tool_id,
                 tool_name,
                 arguments,
             } => {
-                self.status = TaskStatus::WaitingForInput;
+                self.status = TurnStatus::WaitingForInput;
                 self.pending_input_id = Some(request_id.clone());
                 self.pending_input = Some(InputRequest {
                     request_id: request_id.clone(),
@@ -2151,7 +1728,7 @@ impl TaskSnapshot {
                     arguments: arguments.clone(),
                 });
             }
-            TaskEventPayload::TaskFinished {
+            TurnEventPayload::Finished {
                 status,
                 detail,
                 final_answer,
@@ -2169,26 +1746,15 @@ impl TaskSnapshot {
                 self.pending_input = None;
                 self.live = None;
             }
-            TaskEventPayload::AssistantMessage { .. }
-            | TaskEventPayload::AssistantInterrupted { .. }
-            | TaskEventPayload::ToolFinished { .. } => {
-                self.live = None;
-            }
-            TaskEventPayload::AssistantStarted { item_id, .. } => {
-                self.live = None;
-                self.live(Some(item_id), "assistant", "");
-            }
-            TaskEventPayload::AssistantDelta { item_id, text } => {
+            TurnEventPayload::AssistantDelta { item_id, text } => {
                 self.live(Some(item_id), "assistant", text)
             }
-            TaskEventPayload::ToolOutputDelta { id, source, text } => self.live(
+            TurnEventPayload::ToolOutputDelta { id, source, text } => self.live(
                 Some(id),
                 &format!("shell {id}"),
                 &format!("[{source}] {text}"),
             ),
-            TaskEventPayload::ModelTurn { .. }
-            | TaskEventPayload::ToolStarted { .. }
-            | TaskEventPayload::CancelRequested => {}
+            TurnEventPayload::CancelRequested => {}
         }
     }
     fn live(&mut self, item_id: Option<&str>, kind: &str, text: &str) {
@@ -2276,6 +1842,14 @@ fn verification_evidence(command: String, result: &ToolResultOutput) -> Verifica
         _ => evidence.error = Some("unexpected verification output".into()),
     }
     evidence
+}
+
+#[cfg(test)]
+fn turn_fact(record: &ExecutionRecord) -> &ExecutionRecord {
+    match record {
+        ExecutionRecord::TurnRecord { fact, .. } => turn_fact(fact),
+        _ => record,
+    }
 }
 
 #[cfg(test)]
@@ -2401,8 +1975,8 @@ mod tests {
         }])
     }
 
-    fn request(workspace: &TempDir) -> TaskRequest {
-        TaskRequest {
+    fn request(workspace: &TempDir) -> TurnFixture {
+        TurnFixture {
             prompt: "change the file".into(),
             workspace: workspace.path().to_path_buf(),
             caller: CallerContext::local(),
@@ -2413,13 +1987,13 @@ mod tests {
     }
 
     pub(super) async fn wait_for(
-        service: &TaskService,
-        task_id: &str,
-        status: TaskStatus,
-    ) -> Result<TaskSnapshot, String> {
+        service: &ThreadService,
+        turn_id: &str,
+        status: TurnStatus,
+    ) -> Result<TurnSnapshot, String> {
         tokio::time::timeout(std::time::Duration::from_secs(3), async {
             loop {
-                let snapshot = service.read(task_id).map_err(|error| error.to_string())?;
+                let snapshot = service.read(turn_id).map_err(|error| error.to_string())?;
                 if snapshot.status == status || snapshot.status.terminal() {
                     return Ok(snapshot);
                 }
@@ -2428,67 +2002,6 @@ mod tests {
         })
         .await
         .map_err(|error| error.to_string())?
-    }
-
-    #[tokio::test]
-    async fn task_observation_is_ordered_and_instance_local()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let workspace = TempDir::new()?;
-        std::fs::write(workspace.path().join("note.txt"), "hello")?;
-        let app = app(vec![
-            turn(vec![tool_call(
-                "read",
-                "read",
-                serde_json::json!({"path":"note.txt"}),
-            )]),
-            final_turn(),
-        ])?;
-        let service = TaskService::new(Arc::clone(&app), &[workspace.path().to_path_buf()])
-            .map_err(std::io::Error::other)?;
-        let mut submitted = request(&workspace);
-        submitted.idempotency_key = Some("same-task".into());
-        let accepted = service
-            .submit(submitted)
-            .await
-            .map_err(std::io::Error::other)?;
-        let mut duplicate = request(&workspace);
-        duplicate.idempotency_key = Some("same-task".into());
-        assert_eq!(
-            service
-                .submit(duplicate)
-                .await
-                .map_err(std::io::Error::other)?
-                .task_id,
-            accepted.task_id
-        );
-        assert_eq!(accepted.status, TaskStatus::Accepted);
-        assert_eq!(accepted.cursor, 1);
-        let completed = wait_for(&service, &accepted.task_id, TaskStatus::Completed)
-            .await
-            .map_err(std::io::Error::other)?;
-        assert_eq!(completed.status, TaskStatus::Completed);
-        assert_eq!(completed.final_answer.as_deref(), Some("done"));
-        assert_eq!(completed.verification, VerificationStatus::NotRequested);
-        let all = service
-            .events_after(&accepted.task_id, 0)
-            .map_err(std::io::Error::other)?;
-        assert_eq!(all.len() as u64, completed.cursor);
-        assert!(
-            all.iter()
-                .enumerate()
-                .all(|(index, event)| event.seq == index as u64 + 1)
-        );
-        let tail = service
-            .events_after(&accepted.task_id, 3)
-            .map_err(std::io::Error::other)?;
-        assert_eq!(tail.first().map(|event| event.seq), Some(4));
-        let old_instance = service.capabilities().server_instance_id;
-        service.shutdown().await;
-        let reopened = TaskService::new(app, &[workspace.path().to_path_buf()])?;
-        assert_ne!(old_instance, reopened.capabilities().server_instance_id);
-        assert!(reopened.ensure_instance(Some(&old_instance)).is_err());
-        assert!(reopened.read(&accepted.task_id).is_err());
-        Ok(())
     }
 
     #[tokio::test]
@@ -2503,42 +2016,42 @@ mod tests {
             )]),
             final_turn(),
         ])?;
-        let service = TaskService::new(app, &[workspace.path().to_path_buf()])
+        let service = ThreadService::new(app, &[workspace.path().to_path_buf()])
             .map_err(std::io::Error::other)?;
-        assert!(service.submit(request(&other)).await.is_err());
+        assert!(service.submit_fixture(request(&other)).await.is_err());
         let accepted = service
-            .submit(request(&workspace))
+            .submit_fixture(request(&workspace))
             .await
             .map_err(std::io::Error::other)?;
-        assert!(service.submit(request(&workspace)).await.is_err());
-        let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput)
+        assert!(service.submit_fixture(request(&workspace)).await.is_err());
+        let waiting = wait_for(&service, &accepted.turn_id, TurnStatus::WaitingForInput)
             .await
             .map_err(std::io::Error::other)?;
-        assert_eq!(waiting.status, TaskStatus::WaitingForInput);
+        assert_eq!(waiting.status, TurnStatus::WaitingForInput);
         let input_id = waiting
             .pending_input_id
             .ok_or_else(|| std::io::Error::other("missing pending input"))?;
         assert!(
             service
-                .answer_input(&accepted.task_id, "wrong", true)
+                .answer_input(&accepted.turn_id, "wrong", true)
                 .await
                 .is_err()
         );
         assert!(!workspace.path().join("created.txt").exists());
         service
-            .answer_input(&accepted.task_id, &input_id, true)
+            .answer_input(&accepted.turn_id, &input_id, true)
             .await
             .map_err(std::io::Error::other)?;
         assert!(
             service
-                .answer_input(&accepted.task_id, &input_id, true)
+                .answer_input(&accepted.turn_id, &input_id, true)
                 .await
                 .is_err()
         );
-        let completed = wait_for(&service, &accepted.task_id, TaskStatus::Completed)
+        let completed = wait_for(&service, &accepted.turn_id, TurnStatus::Completed)
             .await
             .map_err(std::io::Error::other)?;
-        assert_eq!(completed.status, TaskStatus::Completed);
+        assert_eq!(completed.status, TurnStatus::Completed);
         assert_eq!(
             std::fs::read_to_string(workspace.path().join("created.txt"))?,
             "created"
@@ -2550,7 +2063,7 @@ mod tests {
     async fn cancellation_while_waiting_never_authorizes_a_write()
     -> Result<(), Box<dyn std::error::Error>> {
         let workspace = TempDir::new()?;
-        let service = TaskService::new(
+        let service = ThreadService::new(
             app(vec![turn(vec![tool_call(
                 "write",
                 "write",
@@ -2560,138 +2073,29 @@ mod tests {
         )
         .map_err(std::io::Error::other)?;
         let accepted = service
-            .submit(request(&workspace))
+            .submit_fixture(request(&workspace))
             .await
             .map_err(std::io::Error::other)?;
-        let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput)
+        let waiting = wait_for(&service, &accepted.turn_id, TurnStatus::WaitingForInput)
             .await
             .map_err(std::io::Error::other)?;
         let input_id = waiting
             .pending_input_id
             .ok_or_else(|| std::io::Error::other("missing pending input"))?;
         service
-            .cancel(&accepted.task_id)
+            .cancel(&accepted.turn_id)
             .await
             .map_err(std::io::Error::other)?;
         assert!(
             service
-                .answer_input(&accepted.task_id, &input_id, true)
+                .answer_input(&accepted.turn_id, &input_id, true)
                 .await
                 .is_err()
         );
-        let cancelled = wait_for(&service, &accepted.task_id, TaskStatus::Cancelled)
+        let cancelled = wait_for(&service, &accepted.turn_id, TurnStatus::Cancelled)
             .await
             .map_err(std::io::Error::other)?;
-        assert_eq!(cancelled.status, TaskStatus::Cancelled);
-        assert!(!workspace.path().join("created.txt").exists());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn detach_and_lag_preserve_approval_and_snapshot_cutoff()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let workspace = TempDir::new()?;
-        let limits = RuntimeLimits {
-            events_per_task: 2,
-            event_bytes_per_task: 64 * 1024,
-            subscriber_queue: 2,
-            subscribers_per_task: 1,
-            ..RuntimeLimits::default()
-        };
-        let service = TaskService::with_limits(
-            app(vec![turn(vec![tool_call(
-                "write",
-                "write",
-                serde_json::json!({"path":"created.txt", "content":"created"}),
-            )])])?,
-            &[workspace.path().to_path_buf()],
-            limits,
-        )?;
-        let accepted = service.submit(request(&workspace)).await?;
-        let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
-        let mut observer = service.observe(&accepted.task_id, Some(0))?;
-        assert!(matches!(
-            observer.next().await?,
-            Some(Observation::Snapshot {
-                resynchronized: true,
-                ..
-            })
-        ));
-        assert_eq!(
-            service
-                .observe(&accepted.task_id, None)
-                .err()
-                .map(|error| error.code),
-            Some(ErrorCode::Overloaded)
-        );
-        drop(observer);
-        assert_eq!(
-            service.read(&accepted.task_id)?.status,
-            TaskStatus::WaitingForInput
-        );
-        let mut observer = service.observe(&accepted.task_id, None)?;
-        let cutoff = match observer.next().await? {
-            Some(Observation::Snapshot { snapshot, .. }) => snapshot.cursor,
-            _ => return Err("missing initial snapshot".into()),
-        };
-        for _ in 0..10 {
-            service
-                .append(
-                    &accepted.task_id,
-                    TaskEventPayload::AssistantDelta {
-                        item_id: "assistant-test".into(),
-                        text: "live".repeat(16_384),
-                    },
-                )
-                .await?;
-        }
-        let refreshed = match observer.next().await? {
-            Some(Observation::Snapshot {
-                snapshot,
-                resynchronized: true,
-                ..
-            }) => snapshot,
-            _ => return Err("slow observer did not resynchronize".into()),
-        };
-        assert!(refreshed.cursor > cutoff);
-        assert_eq!(
-            refreshed
-                .pending_input
-                .as_ref()
-                .map(|input| input.tool_name.as_str()),
-            Some("write")
-        );
-        assert!(
-            refreshed
-                .live
-                .as_ref()
-                .is_some_and(|live| live.text.len() <= MAX_LIVE_BYTES)
-        );
-        {
-            let state = service.lock_state();
-            let record = state
-                .tasks
-                .get(&accepted.task_id)
-                .ok_or("task disappeared")?;
-            assert!(record.events.len() <= 2);
-            assert!(record.event_bytes <= service.inner.limits.event_bytes_per_task);
-        }
-        service.cancel(&accepted.task_id).await?;
-        let resolved = observer.next().await?.ok_or("missing resolution")?;
-        assert!(
-            matches!(resolved, Observation::Event { event } if event.seq == refreshed.cursor + 1 && matches!(event.payload, TaskEventPayload::InputResolved { approved: false, .. }))
-        );
-        assert!(
-            service
-                .answer_input(
-                    &accepted.task_id,
-                    waiting.pending_input_id.as_deref().ok_or("missing input")?,
-                    true
-                )
-                .await
-                .is_err()
-        );
-        service.shutdown().await;
+        assert_eq!(cancelled.status, TurnStatus::Cancelled);
         assert!(!workspace.path().join("created.txt").exists());
         Ok(())
     }
@@ -2702,10 +2106,10 @@ mod tests {
         let workspace = TempDir::new()?;
         let other = TempDir::new()?;
         let limits = RuntimeLimits {
-            active_tasks: 1,
+            active_turns: 1,
             ..RuntimeLimits::default()
         };
-        let service = TaskService::with_limits(
+        let service = ThreadService::with_limits(
             app(vec![turn(vec![tool_call(
                 "write",
                 "write",
@@ -2714,11 +2118,11 @@ mod tests {
             &[workspace.path().to_path_buf(), other.path().to_path_buf()],
             limits,
         )?;
-        let accepted = service.submit(request(&workspace)).await?;
-        wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+        let accepted = service.submit_fixture(request(&workspace)).await?;
+        wait_for(&service, &accepted.turn_id, TurnStatus::WaitingForInput).await?;
         assert_eq!(
             service
-                .submit(request(&other))
+                .submit_fixture(request(&other))
                 .await
                 .err()
                 .map(|error| error.code),
@@ -2726,15 +2130,15 @@ mod tests {
         );
         tokio::time::timeout(Duration::from_secs(2), service.shutdown()).await?;
         assert_eq!(
-            service.read(&accepted.task_id)?.status,
-            TaskStatus::Cancelled
+            service.read(&accepted.turn_id)?.status,
+            TurnStatus::Cancelled
         );
-        assert!(service.read(&accepted.task_id)?.pending_input.is_none());
+        assert!(service.read(&accepted.turn_id)?.pending_input.is_none());
         assert!(service.inner.workers.is_empty());
         assert!(service.lock_state().active_workspaces.is_empty());
         assert_eq!(
             service
-                .submit(request(&workspace))
+                .submit_fixture(request(&workspace))
                 .await
                 .err()
                 .map(|error| error.code),
@@ -2745,30 +2149,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_retention_evicts_tasks_and_their_idempotency_keys()
+    async fn terminal_cache_eviction_preserves_durable_acceptance_keys()
     -> Result<(), Box<dyn std::error::Error>> {
         let workspace = TempDir::new()?;
-        let service = TaskService::with_limits(
+        let service = ThreadService::with_limits(
             app(vec![final_turn(), final_turn(), final_turn()])?,
             &[workspace.path().to_path_buf()],
             RuntimeLimits {
-                retained_tasks: 1,
+                retained_turns: 1,
                 ..RuntimeLimits::default()
             },
         )?;
         let mut first = request(&workspace);
         first.idempotency_key = Some("first".into());
-        let first = service.submit(first).await?;
-        wait_for(&service, &first.task_id, TaskStatus::Completed).await?;
-        let second = service.submit(request(&workspace)).await?;
-        wait_for(&service, &second.task_id, TaskStatus::Completed).await?;
+        let first = service.submit_fixture(first).await?;
+        wait_for(&service, &first.turn_id, TurnStatus::Completed).await?;
+        let second = service.submit_fixture(request(&workspace)).await?;
+        wait_for(&service, &second.turn_id, TurnStatus::Completed).await?;
         assert_eq!(
-            service.read(&first.task_id).err().map(|error| error.code),
-            Some(ErrorCode::UnknownTask)
+            service.read(&first.turn_id).err().map(|error| error.code),
+            Some(ErrorCode::UnknownTurn)
         );
         let mut reused = request(&workspace);
         reused.idempotency_key = Some("first".into());
-        assert_ne!(service.submit(reused).await?.task_id, first.task_id);
+        assert_eq!(service.submit_fixture(reused).await?.turn_id, first.turn_id);
         service.shutdown().await;
         Ok(())
     }
@@ -2779,14 +2183,14 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let workspace = TempDir::new()?;
         let service =
-            TaskService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
+            ThreadService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
         let mut submitted = request(&workspace);
         submitted.verification_command = Some("touch started; sleep 30; touch leaked".into());
-        let accepted = service.submit(submitted).await?;
-        let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+        let accepted = service.submit_fixture(submitted).await?;
+        let waiting = wait_for(&service, &accepted.turn_id, TurnStatus::WaitingForInput).await?;
         service
             .answer_input(
-                &accepted.task_id,
+                &accepted.turn_id,
                 waiting
                     .pending_input_id
                     .as_deref()
@@ -2803,10 +2207,10 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(3), service.shutdown()).await?;
         assert!(service.inner.workers.is_empty());
         assert_eq!(
-            service.read(&accepted.task_id)?.status,
-            TaskStatus::RecoveryRequired
+            service.read(&accepted.turn_id)?.status,
+            TurnStatus::RecoveryRequired
         );
-        assert!(service.read(&accepted.task_id)?.unknown_effect);
+        assert!(service.read(&accepted.turn_id)?.unknown_effect);
         assert!(!workspace.path().join("leaked").exists());
         Ok(())
     }
@@ -2815,7 +2219,7 @@ mod tests {
     async fn configured_verification_records_exit_status_and_controls_outcome()
     -> Result<(), Box<dyn std::error::Error>> {
         let workspace = TempDir::new()?;
-        let service = TaskService::new(
+        let service = ThreadService::new(
             app(vec![final_turn(), final_turn()])?,
             &[workspace.path().to_path_buf()],
         )
@@ -2823,21 +2227,21 @@ mod tests {
         let mut read_only = request(&workspace);
         read_only.config = read_only.config.read_only();
         read_only.verification_command = Some("echo forbidden".into());
-        assert!(service.submit(read_only).await.is_err());
+        assert!(service.submit_fixture(read_only).await.is_err());
         let mut passing = request(&workspace);
         passing.verification_command = Some("echo verified".into());
         let accepted = service
-            .submit(passing)
+            .submit_fixture(passing)
             .await
             .map_err(std::io::Error::other)?;
-        let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+        let waiting = wait_for(&service, &accepted.turn_id, TurnStatus::WaitingForInput).await?;
         assert_eq!(
             service.inner.tool_workers.available_permits(),
             service.inner.limits.global_tools
         );
         service
             .answer_input(
-                &accepted.task_id,
+                &accepted.turn_id,
                 waiting
                     .pending_input_id
                     .as_deref()
@@ -2845,19 +2249,19 @@ mod tests {
                 true,
             )
             .await?;
-        let passed = wait_for(&service, &accepted.task_id, TaskStatus::Completed)
+        let passed = wait_for(&service, &accepted.turn_id, TurnStatus::Completed)
             .await
             .map_err(std::io::Error::other)?;
-        assert_eq!(passed.status, TaskStatus::Completed);
+        assert_eq!(passed.status, TurnStatus::Completed);
         assert_eq!(passed.verification, VerificationStatus::Passed);
         let stored = service
             .inner
             .store
-            .load(&accepted.task_id)
+            .load(&accepted.thread_id)
             .await?
             .ok_or("execution records missing")?;
-        assert!(stored.records.iter().any(|record| matches!(record, ExecutionRecord::ToolIntent { call, .. } if call.origin == CallOrigin::Verification)));
-        assert!(stored.records.iter().any(|record| matches!(record, ExecutionRecord::VerificationResult { call, effect: EffectStatus::Completed, evidence, .. } if call.origin == CallOrigin::Verification && evidence.exit_status == Some(0))));
+        assert!(stored.records.iter().any(|record| matches!(turn_fact(record), ExecutionRecord::ToolIntent { call, .. } if call.origin == CallOrigin::Verification)));
+        assert!(stored.records.iter().any(|record| matches!(turn_fact(record), ExecutionRecord::VerificationResult { call, effect: EffectStatus::Completed, evidence, .. } if call.origin == CallOrigin::Verification && evidence.exit_status == Some(0))));
         assert_eq!(
             passed
                 .verification_evidence
@@ -2868,13 +2272,13 @@ mod tests {
         let mut failing = request(&workspace);
         failing.verification_command = Some("exit 7".into());
         let accepted = service
-            .submit(failing)
+            .submit_fixture(failing)
             .await
             .map_err(std::io::Error::other)?;
-        let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+        let waiting = wait_for(&service, &accepted.turn_id, TurnStatus::WaitingForInput).await?;
         service
             .answer_input(
-                &accepted.task_id,
+                &accepted.turn_id,
                 waiting
                     .pending_input_id
                     .as_deref()
@@ -2882,10 +2286,10 @@ mod tests {
                 true,
             )
             .await?;
-        let failed = wait_for(&service, &accepted.task_id, TaskStatus::Failed)
+        let failed = wait_for(&service, &accepted.turn_id, TurnStatus::Failed)
             .await
             .map_err(std::io::Error::other)?;
-        assert_eq!(failed.status, TaskStatus::Failed);
+        assert_eq!(failed.status, TurnStatus::Failed);
         assert_eq!(failed.verification, VerificationStatus::Failed);
         assert_eq!(
             failed
@@ -2901,7 +2305,7 @@ mod tests {
     async fn verification_denial_and_permit_cancellation_never_launch_a_command()
     -> Result<(), Box<dyn std::error::Error>> {
         let workspace = TempDir::new()?;
-        let service = TaskService::new(
+        let service = ThreadService::new(
             app(vec![final_turn(), final_turn()])?,
             &[workspace.path().to_path_buf()],
         )?;
@@ -2911,27 +2315,27 @@ mod tests {
         for approved in [false, true] {
             let mut submitted = request(&workspace);
             submitted.verification_command = Some("echo blocked > created".into());
-            let accepted = service.submit(submitted).await?;
+            let accepted = service.submit_fixture(submitted).await?;
             let waiting =
-                wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+                wait_for(&service, &accepted.turn_id, TurnStatus::WaitingForInput).await?;
             let input = waiting
                 .pending_input
                 .as_ref()
                 .ok_or("verification approval missing")?;
             assert!(input.arguments.contains("echo blocked > created"));
             service
-                .answer_input(&accepted.task_id, &input.request_id, approved)
+                .answer_input(&accepted.turn_id, &input.request_id, approved)
                 .await?;
             if approved {
-                service.cancel(&accepted.task_id).await?;
+                service.cancel(&accepted.turn_id).await?;
             }
             let finished = wait_for(
                 &service,
-                &accepted.task_id,
+                &accepted.turn_id,
                 if approved {
-                    TaskStatus::Cancelled
+                    TurnStatus::Cancelled
                 } else {
-                    TaskStatus::Failed
+                    TurnStatus::Failed
                 },
             )
             .await?;
@@ -2948,12 +2352,12 @@ mod tests {
             let stored = service
                 .inner
                 .store
-                .load(&accepted.task_id)
+                .load(&accepted.thread_id)
                 .await?
                 .ok_or("execution missing")?;
-            assert!(!stored.records.iter().any(|record| matches!(record, ExecutionRecord::ToolIntent { call, .. } if call.origin == CallOrigin::Verification)));
+            assert!(!stored.records.iter().any(|record| matches!(turn_fact(record), ExecutionRecord::ToolIntent { call, .. } if call.origin == CallOrigin::Verification)));
             assert!(stored.records.iter().any(|record| matches!(
-                record,
+                turn_fact(record),
                 ExecutionRecord::VerificationResult {
                     effect: EffectStatus::NotExecuted,
                     ..
@@ -3042,8 +2446,8 @@ mod tests {
             version: u64,
             records: &[ExecutionRecord],
         ) -> Result<u64, String> {
-            let fails = records.iter().any(|record| match record {
-                ExecutionRecord::Accepted { .. } => self.failure == "accepted",
+            let fails = records.iter().any(|record| match turn_fact(record) {
+                ExecutionRecord::ThreadCreated { .. } => self.failure == "accepted",
                 ExecutionRecord::ModelResponse { .. } => self.failure == "response",
                 ExecutionRecord::ToolIntent { .. } => self.failure == "intent",
                 ExecutionRecord::ToolResult { .. } => self.failure == "result",
@@ -3076,7 +2480,7 @@ mod tests {
                 memory: MemoryExecutionStore::default(),
                 failure,
             });
-            let service = TaskService::with_store(
+            let service = ThreadService::with_store(
                 app(vec![
                     turn(vec![
                         tool_call(
@@ -3095,7 +2499,7 @@ mod tests {
                 &[workspace.path().to_path_buf()],
                 store.clone(),
             )?;
-            let accepted = service.submit(request(&workspace)).await;
+            let accepted = service.submit_fixture(request(&workspace)).await;
             if failure == "accepted" {
                 assert_eq!(
                     accepted.err().map(|error| error.code),
@@ -3117,16 +2521,16 @@ mod tests {
             let accepted = accepted?;
             if failure != "response" {
                 let approval =
-                    wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+                    wait_for(&service, &accepted.turn_id, TurnStatus::WaitingForInput).await?;
                 let request_id = approval
                     .pending_input_id
                     .ok_or("approval identity missing")?;
                 service
-                    .answer_input(&accepted.task_id, &request_id, true)
+                    .answer_input(&accepted.turn_id, &request_id, true)
                     .await?;
             }
             let blocked =
-                wait_for(&service, &accepted.task_id, TaskStatus::RecoveryRequired).await?;
+                wait_for(&service, &accepted.turn_id, TurnStatus::RecoveryRequired).await?;
             assert!(blocked.unknown_effect);
             service.shutdown().await;
             assert!(
@@ -3144,21 +2548,21 @@ mod tests {
             );
             assert!(!workspace.path().join("second.txt").exists());
             let saved = store
-                .load(&accepted.task_id)
+                .load(&accepted.thread_id)
                 .await?
                 .ok_or("execution missing")?;
             assert!(
                 !saved
                     .records
                     .iter()
-                    .any(|record| matches!(record, ExecutionRecord::ToolResult { .. }))
+                    .any(|record| matches!(turn_fact(record), ExecutionRecord::ToolResult { .. }))
             );
             if failure == "result" {
                 assert!(
-                    saved
-                        .records
-                        .iter()
-                        .any(|record| matches!(record, ExecutionRecord::ToolIntent { .. }))
+                    saved.records.iter().any(|record| matches!(
+                        turn_fact(record),
+                        ExecutionRecord::ToolIntent { .. }
+                    ))
                 );
             }
             assert!(
@@ -3179,7 +2583,7 @@ mod tests {
             memory: MemoryExecutionStore::default(),
             failure: "release",
         });
-        let service = TaskService::with_store(
+        let service = ThreadService::with_store(
             app(vec![
                 turn(vec![tool_call(
                     "write",
@@ -3191,11 +2595,11 @@ mod tests {
             &[workspace.path().to_path_buf()],
             store.clone(),
         )?;
-        let accepted = service.submit(request(&workspace)).await?;
-        let waiting = wait_for(&service, &accepted.task_id, TaskStatus::WaitingForInput).await?;
+        let accepted = service.submit_fixture(request(&workspace)).await?;
+        let waiting = wait_for(&service, &accepted.turn_id, TurnStatus::WaitingForInput).await?;
         service
             .answer_input(
-                &accepted.task_id,
+                &accepted.turn_id,
                 waiting
                     .pending_input_id
                     .as_deref()
@@ -3204,33 +2608,33 @@ mod tests {
             )
             .await?;
         assert_eq!(
-            wait_for(&service, &accepted.task_id, TaskStatus::RecoveryRequired)
+            wait_for(&service, &accepted.turn_id, TurnStatus::RecoveryRequired)
                 .await?
                 .status,
-            TaskStatus::RecoveryRequired
+            TurnStatus::RecoveryRequired
         );
         assert_eq!(
             std::fs::read_to_string(workspace.path().join("known.txt"))?,
             "one"
         );
         let saved = store
-            .load(&accepted.task_id)
+            .load(&accepted.thread_id)
             .await?
             .ok_or("execution missing")?;
         assert!(saved.records.iter().any(|r| matches!(
-            r,
+            turn_fact(r),
             ExecutionRecord::ToolResult {
                 effect: EffectStatus::Completed,
                 ..
             }
         )));
-        assert!(
-            !saved
-                .records
-                .iter()
-                .any(|r| matches!(r, ExecutionRecord::Event { event }
-            if matches!(event.payload, TaskEventPayload::TaskFinished { .. })))
-        );
+        assert!(!saved.records.iter().any(|r| matches!(
+            turn_fact(r),
+            ExecutionRecord::TurnLifecycle {
+                lifecycle: crate::thread::TurnLifecycle::Finished { .. },
+                ..
+            }
+        )));
         service.shutdown().await;
         assert!(
             store
@@ -3241,9 +2645,9 @@ mod tests {
                 .is_none()
         );
         drop(service);
-        let peer = TaskService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
+        let peer = ThreadService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
         assert_eq!(
-            peer.submit(request(&workspace))
+            peer.submit_fixture(request(&workspace))
                 .await
                 .err()
                 .ok_or("unknown release was bypassed")?

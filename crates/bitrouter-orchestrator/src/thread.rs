@@ -7,7 +7,7 @@ use bitrouter_sdk::caller::CallerContext;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentConfig;
-use crate::service::{TaskEvent, TaskSnapshot, TaskStatus};
+use crate::service::{TurnEvent, TurnSnapshot, TurnStatus};
 use crate::store::{CallRecord, EffectStatus};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,7 +40,7 @@ pub struct TurnReceipt {
     pub thread_id: String,
     pub turn_id: String,
     pub queue_order: u64,
-    pub status: TaskStatus,
+    pub status: TurnStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,13 +69,11 @@ pub struct ThreadView {
     pub config: AgentConfig,
     pub verification_command: Option<String>,
     /// Active Turn, or the last activated Turn after it settles.
-    pub latest_turn: Option<TaskSnapshot>,
+    pub latest_turn: Option<TurnSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryState {
-    #[serde(default)]
-    pub source_is_legacy_task: bool,
     pub source_server_instance_id: String,
     #[serde(default)]
     pub source_execution_owner: Option<crate::store::ExecutionOwner>,
@@ -167,14 +165,13 @@ pub enum ThreadChange {
     Recovered {
         source_server_instance_id: String,
         source_cursor: u64,
-        #[serde(default)]
-        legacy_converted: bool,
     },
     Checkpoint {
         snapshot: ThreadSnapshot,
     },
-    TurnEvent {
-        event: Box<TaskEvent>,
+    TurnLifecycle {
+        turn_id: String,
+        lifecycle: TurnLifecycle,
     },
     ModelStep {
         turn_id: String,
@@ -225,6 +222,83 @@ pub enum ThreadChange {
     },
 }
 
+/// Small control facts; model and tool content lives only in canonical facts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TurnLifecycle {
+    Started,
+    InputRequested {
+        request_id: String,
+        tool_id: String,
+        tool_name: String,
+        arguments: String,
+    },
+    InputResolved {
+        request_id: String,
+        approved: bool,
+    },
+    CancelRequested,
+    SteeringUpdated {
+        receipt: SteeringReceipt,
+        text: Option<String>,
+    },
+    Finished {
+        status: TurnStatus,
+        detail: String,
+        final_answer: Option<String>,
+        verification: crate::service::VerificationStatus,
+        verification_evidence: Option<crate::service::VerificationEvidence>,
+        unknown_effect: bool,
+    },
+}
+
+impl TurnLifecycle {
+    pub(crate) fn payload(&self) -> crate::service::TurnEventPayload {
+        use crate::service::TurnEventPayload as P;
+        match self {
+            Self::Started => P::Started,
+            Self::InputRequested {
+                request_id,
+                tool_id,
+                tool_name,
+                arguments,
+            } => P::InputRequested {
+                request_id: request_id.clone(),
+                tool_id: tool_id.clone(),
+                tool_name: tool_name.clone(),
+                arguments: arguments.clone(),
+            },
+            Self::InputResolved {
+                request_id,
+                approved,
+            } => P::InputResolved {
+                request_id: request_id.clone(),
+                approved: *approved,
+            },
+            Self::CancelRequested => P::CancelRequested,
+            Self::SteeringUpdated { receipt, text } => P::SteeringUpdated {
+                receipt: receipt.clone(),
+                text: text.clone(),
+            },
+            Self::Finished {
+                status,
+                detail,
+                final_answer,
+                verification,
+                verification_evidence,
+                unknown_effect,
+            } => P::Finished {
+                status: *status,
+                detail: detail.clone(),
+                final_answer: final_answer.clone(),
+                verification: *verification,
+                verification_evidence: verification_evidence.clone(),
+                unknown_effect: *unknown_effect,
+            },
+        }
+    }
+}
+
 /// One acknowledged Thread transaction; sequences are durable root cursors and
 /// can have gaps because internal execution facts share the same stream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -251,7 +325,7 @@ pub enum ThreadObservation {
     /// Thread cursor and is not replayed by history pagination.
     Live {
         after_cursor: u64,
-        event: Box<TaskEvent>,
+        event: Box<TurnEvent>,
     },
 }
 
@@ -279,16 +353,19 @@ pub struct ThreadRequest {
     pub idempotency_key: String,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct TurnRequest {
     pub prompt: String,
     pub idempotency_key: String,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct CancelTurnRequest {
     pub turn_id: String,
     pub idempotency_key: String,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct ApprovalAnswer {
     pub turn_id: String,
     pub request_id: String,
@@ -296,6 +373,7 @@ pub struct ApprovalAnswer {
     pub idempotency_key: String,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct SteeringRequest {
     pub expected_turn_id: String,
     pub text: String,

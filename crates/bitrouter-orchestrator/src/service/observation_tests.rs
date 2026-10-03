@@ -18,7 +18,7 @@ async fn history_has_fixed_cutoff_survives_task_eviction_and_reconstructs_comple
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![
             turn(vec![tool_call(
                 "same-provider-id",
@@ -46,7 +46,7 @@ async fn history_has_fixed_cutoff_survives_task_eviction_and_reconstructs_comple
     let first = service
         .start_turn(&target, &caller, input("first input", "first"))
         .await?;
-    wait_for(&service, &first.turn_id, TaskStatus::Completed).await?;
+    wait_for(&service, &first.turn_id, TurnStatus::Completed).await?;
     let at_first_end = service.read_thread_view(&target, &caller)?;
     assert_eq!(at_first_end.thread.status, ThreadStatus::Idle);
     assert_eq!(
@@ -55,7 +55,7 @@ async fn history_has_fixed_cutoff_survives_task_eviction_and_reconstructs_comple
             .as_ref()
             .ok_or("Turn missing")?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     let page = service
         .thread_history(
@@ -74,9 +74,9 @@ async fn history_has_fixed_cutoff_survives_task_eviction_and_reconstructs_comple
     let second = service
         .start_turn(&target, &caller, input("second input", "second"))
         .await?;
-    wait_for(&service, &second.turn_id, TaskStatus::Completed).await?;
+    wait_for(&service, &second.turn_id, TurnStatus::Completed).await?;
     // The durable read must not depend on evictable Task event/snapshot caches.
-    service.lock_state().tasks.clear();
+    service.lock_state().turns.clear();
     let mut events = page.events;
     let mut next = page.next_after;
     while let Some(after) = next {
@@ -148,7 +148,7 @@ async fn history_has_fixed_cutoff_survives_task_eviction_and_reconstructs_comple
 async fn slow_observers_resynchronize_pending_approval_and_detach_does_not_resolve_it()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
-    let service = TaskService::with_limits(
+    let service = ThreadService::with_limits(
         app(vec![
             turn(vec![tool_call(
                 "write",
@@ -186,7 +186,7 @@ async fn slow_observers_resynchronize_pending_approval_and_detach_does_not_resol
     let active = service
         .start_turn(&target, &caller, input("work", "work"))
         .await?;
-    let waiting = wait_for(&service, &active.turn_id, TaskStatus::WaitingForInput).await?;
+    let waiting = wait_for(&service, &active.turn_id, TurnStatus::WaitingForInput).await?;
     let approval = waiting.pending_input_id.ok_or("approval missing")?;
     let lagged = observer.next().await?.ok_or("lagged snapshot missing")?;
     assert!(
@@ -245,7 +245,7 @@ async fn slow_observers_resynchronize_pending_approval_and_detach_does_not_resol
             },
         )
         .await?;
-    wait_for(&service, &active.turn_id, TaskStatus::Completed).await?;
+    wait_for(&service, &active.turn_id, TurnStatus::Completed).await?;
     assert!(!workspace.path().join("must-not-exist.txt").exists());
     assert_eq!(
         service
@@ -254,7 +254,7 @@ async fn slow_observers_resynchronize_pending_approval_and_detach_does_not_resol
             .as_ref()
             .ok_or("Turn missing")?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     // Thread attachment remains usable after Turn end for the next Turn.
     assert!(observer.next().await?.is_some());
@@ -266,7 +266,7 @@ async fn slow_observers_resynchronize_pending_approval_and_detach_does_not_resol
 async fn observation_and_history_enforce_owner_epoch_and_current_workspace_grants()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
-    let service = TaskService::new(app(vec![])?, &[workspace.path().to_path_buf()])?;
+    let service = ThreadService::new(app(vec![])?, &[workspace.path().to_path_buf()])?;
     let thread = service
         .create_thread(
             &service.inner.instance_id,
@@ -408,11 +408,13 @@ impl ExecutionStore for GatedCommit {
         version: u64,
         records: &[ExecutionRecord],
     ) -> Result<u64, String> {
-        if records.iter().any(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::Event { event } if match event.payload {
-            TaskEventPayload::AssistantMessage { .. } => self.reject_presentation == Some("assistant"),
-            TaskEventPayload::ToolFinished { .. } => self.reject_presentation == Some("tool"),
+        if records.iter().any(|record| match turn_fact(record) {
+            ExecutionRecord::ModelResponse { .. } => self.reject_presentation == Some("assistant"),
+            ExecutionRecord::ToolResult { .. } => self.reject_presentation == Some("tool"),
             _ => false,
-        }))) { return Err("injected later presentation failure".into()); }
+        }) {
+            return Err("injected canonical transaction failure".into());
+        }
         if records
             .iter()
             .any(|record| matches!(record, ExecutionRecord::TurnQueued { .. }))
@@ -464,7 +466,7 @@ async fn registration_during_commit_gets_old_snapshot_then_new_committed_event()
         reject_turn: false,
         reject_presentation: None,
     });
-    let service = TaskService::with_limits_and_store(
+    let service = ThreadService::with_limits_and_store(
         app(vec![final_turn()])?,
         &[workspace.path().to_path_buf()],
         RuntimeLimits {
@@ -521,7 +523,7 @@ async fn registration_during_commit_gets_old_snapshot_then_new_committed_event()
     assert!(
         matches!(observation, ThreadObservation::Event { event } if event.seq > cutoff && event.changes.iter().any(|change| matches!(change, ThreadChange::TurnQueued { receipt, .. } if receipt.turn_id == accepted.turn_id)))
     );
-    wait_for(&service, &accepted.turn_id, TaskStatus::Completed).await?;
+    wait_for(&service, &accepted.turn_id, TurnStatus::Completed).await?;
     service.shutdown().await;
     Ok(())
 }
@@ -537,7 +539,8 @@ async fn lost_transaction_publishes_blocked_snapshot_without_acceptance_or_curso
         reject_turn: true,
         reject_presentation: None,
     });
-    let service = TaskService::with_store(app(vec![])?, &[workspace.path().to_path_buf()], store)?;
+    let service =
+        ThreadService::with_store(app(vec![])?, &[workspace.path().to_path_buf()], store)?;
     let thread = service
         .create_thread(
             &service.inner.instance_id,
@@ -583,7 +586,7 @@ async fn lost_transaction_publishes_blocked_snapshot_without_acceptance_or_curso
 async fn volatile_deltas_are_bounded_snapshot_evidence_and_do_not_advance_durable_cursor()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
-    let service = TaskService::new(
+    let service = ThreadService::new(
         app(vec![turn(vec![tool_call(
             "write",
             "write",
@@ -602,14 +605,14 @@ async fn volatile_deltas_are_bounded_snapshot_evidence_and_do_not_advance_durabl
     let receipt = service
         .start_turn(&target, &caller, input("work", "work"))
         .await?;
-    wait_for(&service, &receipt.turn_id, TaskStatus::WaitingForInput).await?;
+    wait_for(&service, &receipt.turn_id, TurnStatus::WaitingForInput).await?;
     let before = service.read_thread_view(&target, &caller)?;
     let mut observer = service.observe_thread(&target, &caller, None)?;
     observer.next().await?.ok_or("initial snapshot missing")?;
     service
         .append(
             &receipt.turn_id,
-            TaskEventPayload::AssistantDelta {
+            TurnEventPayload::AssistantDelta {
                 item_id: "presentation-only-item".into(),
                 text: "x".repeat(MAX_LIVE_BYTES + 10),
             },
@@ -671,7 +674,7 @@ async fn volatile_deltas_are_bounded_snapshot_evidence_and_do_not_advance_durabl
 }
 
 #[tokio::test]
-async fn committed_full_items_remain_in_history_when_later_task_presentation_commit_is_lost()
+async fn failed_canonical_transactions_publish_no_completed_item()
 -> Result<(), Box<dyn std::error::Error>> {
     for failure in ["assistant", "tool"] {
         let workspace = TempDir::new()?;
@@ -696,7 +699,7 @@ async fn committed_full_items_remain_in_history_when_later_task_presentation_com
             ]
         };
         let service =
-            TaskService::with_store(app(turns)?, &[workspace.path().to_path_buf()], store)?;
+            ThreadService::with_store(app(turns)?, &[workspace.path().to_path_buf()], store)?;
         let thread = service
             .create_thread(
                 &service.inner.instance_id,
@@ -708,7 +711,7 @@ async fn committed_full_items_remain_in_history_when_later_task_presentation_com
         let receipt = service
             .start_turn(&target, &caller, input("work", "work"))
             .await?;
-        wait_for(&service, &receipt.turn_id, TaskStatus::RecoveryRequired).await?;
+        wait_for(&service, &receipt.turn_id, TurnStatus::RecoveryRequired).await?;
         let history = service
             .thread_history(
                 &target,
@@ -721,9 +724,9 @@ async fn committed_full_items_remain_in_history_when_later_task_presentation_com
             )
             .await?;
         if failure == "assistant" {
-            assert!(history.events.iter().any(|event| event.changes.iter().any(|change| matches!(change, ThreadChange::AssistantResponse { turn_id, item_id, message, .. } if turn_id == &receipt.turn_id && !item_id.is_empty() && serde_json::to_string(message).is_ok_and(|value| value.contains("done"))))));
+            assert!(!history.events.iter().any(|event| event.changes.iter().any(|change| matches!(change, ThreadChange::AssistantResponse { turn_id, item_id, message, .. } if turn_id == &receipt.turn_id && !item_id.is_empty() && serde_json::to_string(message).is_ok_and(|value| value.contains("done"))))));
         } else {
-            assert!(history.events.iter().any(|event| event.changes.iter().any(|change| matches!(change, ThreadChange::ToolResult { turn_id, item_id, message, effect, .. } if turn_id == &receipt.turn_id && !item_id.is_empty() && *effect == EffectStatus::Completed && serde_json::to_string(message).is_ok_and(|value| value.contains("durable output"))))));
+            assert!(!history.events.iter().any(|event| event.changes.iter().any(|change| matches!(change, ThreadChange::ToolResult { turn_id, item_id, message, effect, .. } if turn_id == &receipt.turn_id && !item_id.is_empty() && *effect == EffectStatus::Completed && serde_json::to_string(message).is_ok_and(|value| value.contains("durable output"))))));
         }
         assert_eq!(
             service.read_thread_view(&target, &caller)?.thread.status,
@@ -738,7 +741,7 @@ async fn committed_full_items_remain_in_history_when_later_task_presentation_com
 async fn late_delta_cannot_reopen_an_item_after_its_complete_fact_commits()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
-    let service = TaskService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
+    let service = ThreadService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
     let thread = service
         .create_thread(
             &service.inner.instance_id,
@@ -750,7 +753,7 @@ async fn late_delta_cannot_reopen_an_item_after_its_complete_fact_commits()
     let receipt = service
         .start_turn(&target, &caller, input("work", "work"))
         .await?;
-    wait_for(&service, &receipt.turn_id, TaskStatus::Completed).await?;
+    wait_for(&service, &receipt.turn_id, TurnStatus::Completed).await?;
     let before = service.read_thread_view(&target, &caller)?;
     let history = service
         .thread_history(
@@ -775,7 +778,7 @@ async fn late_delta_cannot_reopen_an_item_after_its_complete_fact_commits()
     service
         .append(
             &receipt.turn_id,
-            TaskEventPayload::AssistantDelta {
+            TurnEventPayload::AssistantDelta {
                 item_id,
                 text: "late output".into(),
             },

@@ -1,4 +1,4 @@
-//! Thread state is owned by TaskService, alongside its Turn projections. This
+//! Thread state is owned by ThreadService, alongside its Turn projections. This
 //! module does not introduce a second runner or a second commit authority.
 
 use super::*;
@@ -30,6 +30,7 @@ pub(super) struct ThreadRecord {
     pub(super) commit_lock: Arc<tokio::sync::Mutex<()>>,
     pub(super) store_version: u64,
     pub(super) storage_error: Option<String>,
+    pub(super) last_used: Instant,
 }
 
 impl ThreadRecord {
@@ -90,7 +91,7 @@ pub(super) fn unknown_thread() -> ServiceError {
     )
 }
 
-impl TaskService {
+impl ThreadService {
     /// This constructor accepts trusted host grants, never client-supplied grants.
     pub fn with_workspace_grants(
         app: Arc<App>,
@@ -131,7 +132,7 @@ impl TaskService {
             .store
             .find_key(scope, key)
             .await
-            .map_err(|error| ServiceError::new(ErrorCode::StorageUnavailable, error))?;
+            .map_err(ServiceError::storage)?;
         if entry
             .as_ref()
             .is_some_and(|entry| entry.fingerprint != fingerprint)
@@ -174,7 +175,7 @@ impl TaskService {
                     self.inner.limits.recovery_page_bytes,
                 )
                 .await
-                .map_err(|error| ServiceError::new(ErrorCode::StorageUnavailable, error))?
+                .map_err(ServiceError::storage)?
                 .ok_or_else(unknown_thread)?;
             if page.cutoff == 0 || page.cutoff > self.inner.limits.recovery_records_per_thread {
                 return Err(ServiceError::new(
@@ -264,17 +265,17 @@ impl TaskService {
                     thread_id: entry.thread_id.clone(),
                     turn_id: id,
                     queue_order,
-                    status: TaskStatus::Queued,
+                    status: TurnStatus::Queued,
                 })
             }
             ExecutionRecord::TurnActivated { turn_id: id, .. } if &id == turn_id => {
                 if let Some(receipt) = &mut receipt {
-                    receipt.status = TaskStatus::RecoveryRequired;
+                    receipt.status = TurnStatus::RecoveryRequired;
                 }
             }
             ExecutionRecord::TurnRecord { turn_id: id, fact } if &id == turn_id => {
-                if let ExecutionRecord::Event { event } = *fact
-                    && let TaskEventPayload::TaskFinished { status, .. } = event.payload
+                if let ExecutionRecord::TurnLifecycle { lifecycle, .. } = *fact
+                    && let crate::thread::TurnLifecycle::Finished { status, .. } = lifecycle
                     && let Some(receipt) = &mut receipt
                 {
                     receipt.status = status;
@@ -284,7 +285,7 @@ impl TaskService {
         })
         .await?;
         let mut receipt = receipt.ok_or("accepted Turn admission missing")?;
-        if let Some(task) = self.lock_state().tasks.get(turn_id) {
+        if let Some(task) = self.lock_state().turns.get(turn_id) {
             receipt.status = task.snapshot.status;
         }
         Ok(receipt)
@@ -350,6 +351,7 @@ impl TaskService {
             &workspace,
             config.clone(),
         )?;
+        self.reclaim_hot_capacity(0)?;
         {
             let state = self.lock_state();
             if state.closing {
@@ -447,6 +449,7 @@ impl TaskService {
                 commit_lock: Arc::new(tokio::sync::Mutex::new(())),
                 store_version: version,
                 storage_error: None,
+                last_used: Instant::now(),
             },
         );
         Ok(snapshot)
@@ -468,12 +471,253 @@ impl TaskService {
         Ok(thread.snapshot.clone())
     }
 
+    pub fn read_turn(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+        turn_id: &str,
+    ) -> Result<TurnSnapshot, ServiceError> {
+        self.read_thread_view(target, caller)?;
+        let state = self.lock_state();
+        let turn = state.turns.get(turn_id).ok_or_else(unknown_turn)?;
+        if turn.thread_id != target.thread_id {
+            return Err(unknown_turn());
+        }
+        Ok(turn.snapshot.clone())
+    }
+
+    pub async fn read_stored_turn(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+        turn_id: &str,
+    ) -> Result<TurnSnapshot, ServiceError> {
+        if turn_id.is_empty() || turn_id.len() > 128 {
+            return Err("invalid Turn identity".into());
+        }
+        let view = self.read_stored_thread_view(target, caller).await?;
+        if let Some(turn) = self.lock_state().turns.get(turn_id)
+            && turn.thread_id == target.thread_id
+        {
+            let mut snapshot = turn.snapshot.clone();
+            snapshot.cursor = view.thread.cursor;
+            return Ok(snapshot);
+        }
+        if let Some(turn) = &view.latest_turn
+            && turn.turn_id == turn_id
+        {
+            return Ok(turn.clone());
+        }
+        let _reader = self.inner.recovery_readers.try_acquire().map_err(|_| {
+            ServiceError::new(
+                ErrorCode::Overloaded,
+                "Turn history reader capacity is full",
+            )
+        })?;
+        let cutoff = view.thread.cursor;
+        let mut after = 0;
+        let mut found: Option<TurnSnapshot> = None;
+        loop {
+            let page = self
+                .inner
+                .store
+                .thread_history(
+                    &target.thread_id,
+                    after,
+                    cutoff,
+                    128,
+                    self.inner.limits.history_page_bytes,
+                )
+                .await
+                .map_err(ServiceError::storage)?;
+            for event in &page.events {
+                if event.thread_id != target.thread_id {
+                    return Err("history Thread identity mismatch".into());
+                }
+                for change in &event.changes {
+                    match change {
+                        crate::thread::ThreadChange::TurnQueued { receipt, .. }
+                            if receipt.turn_id == turn_id =>
+                        {
+                            let mut snapshot =
+                                super::observation::empty_turn(&view.thread, &view.config, turn_id);
+                            snapshot.status = TurnStatus::Queued;
+                            found = Some(snapshot);
+                        }
+                        crate::thread::ThreadChange::TurnActivated { turn_id: id, .. }
+                            if id == turn_id =>
+                        {
+                            if let Some(turn) = &mut found {
+                                turn.status = TurnStatus::Accepted;
+                            }
+                        }
+                        crate::thread::ThreadChange::QueuedTurnCancelled { turn_id: id }
+                            if id == turn_id =>
+                        {
+                            if let Some(turn) = &mut found {
+                                turn.status = TurnStatus::Cancelled;
+                            }
+                        }
+                        crate::thread::ThreadChange::TurnLifecycle {
+                            turn_id: id,
+                            lifecycle,
+                        } if id == turn_id => {
+                            if let Some(turn) = &mut found {
+                                turn.apply_payload(&lifecycle.payload());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                after = event.seq;
+                if let Some(turn) = &mut found {
+                    turn.cursor = after;
+                }
+            }
+            if !page.more {
+                break;
+            }
+            if page.events.is_empty() {
+                return Err("history made no progress".into());
+            }
+        }
+        self.check_snapshot_grant(&view.thread)?;
+        let mut turn = found.ok_or_else(unknown_turn)?;
+        turn.cursor = cutoff;
+        if view.recovery.is_some() && !turn.status.terminal() && turn.status != TurnStatus::Queued {
+            turn.status = TurnStatus::RecoveryRequired;
+            turn.pending_input_id = None;
+            turn.pending_input = None;
+            turn.detail = Some("stored Turn requires explicit recovery".into());
+        }
+        Ok(turn)
+    }
+
+    /// Called with admission held. State and gate ownership make removal atomic
+    /// with observation registration and any operation retaining the unique gate.
+    fn unload_hot(&self, thread_id: &str) -> Result<(), ServiceError> {
+        let mut state = self.lock_state();
+        let thread = state.threads.get(thread_id).ok_or_else(unknown_thread)?;
+        let gate = Arc::clone(&thread.commit_lock);
+        // A different Thread's workspace lease must not pin this idle cache.
+        // Unattributed fences remain conservative recovery blockers.
+        let workspace_owned = state
+            .active_workspaces
+            .get(&thread.snapshot.workspace)
+            .map_or_else(
+                || {
+                    state
+                        .workspace_fences
+                        .contains_key(&thread.snapshot.workspace)
+                },
+                |id| {
+                    id == thread_id
+                        || state.turns.get(id).map_or_else(
+                            || !state.threads.contains_key(id),
+                            |turn| turn.thread_id == thread_id,
+                        )
+                },
+            );
+        let _guard = gate
+            .try_lock()
+            .map_err(|_| ServiceError::new(ErrorCode::Conflict, "Thread commit is in flight"))?;
+        if Arc::strong_count(&gate) != 2
+            || !matches!(
+                thread.snapshot.status,
+                ThreadStatus::Idle | ThreadStatus::Paused
+            )
+            || thread.snapshot.active_turn_id.is_some()
+            || !thread.queued.is_empty()
+            || !thread.snapshot.queued.is_empty()
+            || thread.storage_error.is_some()
+            || thread.presentation.view.recovery.is_some()
+            || thread.presentation.publisher.receiver_count() != 0
+            || state.running_turns.values().any(|id| id == thread_id)
+            || workspace_owned
+            || state
+                .turns
+                .values()
+                .filter(|turn| turn.thread_id == thread_id)
+                .any(|turn| {
+                    !turn.snapshot.status.terminal()
+                        || turn.snapshot.unknown_effect
+                        || turn.pending.is_some()
+                        || turn.storage_error.is_some()
+                })
+        {
+            return Err(ServiceError::new(
+                ErrorCode::Conflict,
+                "Thread still owns execution, observation or recovery resources",
+            ));
+        }
+        state.turns.retain(|_, turn| turn.thread_id != thread_id);
+        state.ready_threads.retain(|id| id != thread_id);
+        state.threads.remove(thread_id);
+        Ok(())
+    }
+
+    pub async fn unload_thread(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+    ) -> Result<(), ServiceError> {
+        let _admission = self.inner.admission.lock().await;
+        self.read_thread_view(target, caller)?;
+        self.unload_hot(&target.thread_id)
+    }
+
+    pub(super) fn reclaim_hot_capacity(&self, additional_bytes: usize) -> Result<(), ServiceError> {
+        let mut candidates = {
+            let state = self.lock_state();
+            state
+                .threads
+                .iter()
+                .map(|(id, thread)| (thread.last_used, id.clone()))
+                .collect::<Vec<_>>()
+        };
+        candidates.sort_by_key(|(used, _)| *used);
+        for (_, id) in candidates {
+            let full = {
+                let state = self.lock_state();
+                state.threads.len() >= self.inner.limits.hot_threads
+                    || state
+                        .threads
+                        .values()
+                        .map(ThreadRecord::bytes)
+                        .sum::<usize>()
+                        .saturating_add(additional_bytes)
+                        > self.inner.limits.hot_context_bytes
+            };
+            if !full {
+                return Ok(());
+            }
+            let _ = self.unload_hot(&id);
+        }
+        let state = self.lock_state();
+        if state.threads.len() >= self.inner.limits.hot_threads
+            || state
+                .threads
+                .values()
+                .map(ThreadRecord::bytes)
+                .sum::<usize>()
+                .saturating_add(additional_bytes)
+                > self.inner.limits.hot_context_bytes
+        {
+            return Err(ServiceError::new(
+                ErrorCode::Overloaded,
+                "hot Thread capacity has no safely unloadable candidate",
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn start_turn(
         &self,
         target: &ThreadTarget,
         caller: &CallerContext,
         request: TurnRequest,
     ) -> Result<TurnReceipt, ServiceError> {
+        self.load_thread(target, caller).await?;
         self.admit_turn(target, caller, request, true).await
     }
     pub async fn enqueue_turn(
@@ -482,6 +726,7 @@ impl TaskService {
         caller: &CallerContext,
         request: TurnRequest,
     ) -> Result<TurnReceipt, ServiceError> {
+        self.load_thread(target, caller).await?;
         self.admit_turn(target, caller, request, false).await
     }
 
@@ -519,11 +764,11 @@ impl TaskService {
         };
         self.append_facts_serialized(
             &request.turn_id,
-            TaskEventPayload::CancelRequested,
+            TurnEventPayload::CancelRequested,
             &[ExecutionRecord::AcceptedKey { entry: key.clone() }],
         )
         .await?;
-        if let Some(task) = self.lock_state().tasks.get(&request.turn_id) {
+        if let Some(task) = self.lock_state().turns.get(&request.turn_id) {
             task.cancel.cancel();
         }
         drop(_guard);
@@ -665,7 +910,7 @@ impl TaskService {
                 .ok_or_else(|| {
                     ServiceError::new(ErrorCode::Conflict, "Turn is no longer queued")
                 })?;
-            let task = state.tasks.get(turn_id).ok_or_else(unknown_task)?;
+            let task = state.turns.get(turn_id).ok_or_else(unknown_turn)?;
             (
                 entry,
                 thread.snapshot.clone(),
@@ -678,8 +923,8 @@ impl TaskService {
             snapshot.waiting_for_capacity = false;
         }
         snapshot.cursor = snapshot.cursor.saturating_add(4);
-        let payload = TaskEventPayload::TaskFinished {
-            status: TaskStatus::Cancelled,
+        let payload = TurnEventPayload::Finished {
+            status: TurnStatus::Cancelled,
             detail: "queued Turn withdrawn before activation".into(),
             final_answer: None,
             verification: VerificationStatus::Unavailable,
@@ -701,16 +946,17 @@ impl TaskService {
             },
             ExecutionRecord::TurnRecord {
                 turn_id: turn_id.into(),
-                fact: Box::new(ExecutionRecord::Event {
-                    event: TaskEvent {
-                        thread_id: Some(target.thread_id.clone()),
+                fact: Box::new(
+                    lifecycle_fact(&TurnEvent {
+                        thread_id: target.thread_id.clone(),
                         server_instance_id: self.inner.instance_id.clone(),
-                        task_id: turn_id.into(),
+                        turn_id: turn_id.into(),
                         seq: cursor + 1,
                         timestamp_ms: now_ms(),
                         payload: payload.clone(),
-                    },
-                }),
+                    })
+                    .ok_or("missing cancellation lifecycle")?,
+                ),
             },
             ExecutionRecord::ThreadCheckpoint {
                 snapshot: snapshot.clone(),
@@ -732,7 +978,7 @@ impl TaskService {
             thread_id: target.thread_id.clone(),
             turn_id: turn_id.into(),
             queue_order: entry.order,
-            status: TaskStatus::Cancelled,
+            status: TurnStatus::Cancelled,
         })
     }
 
@@ -950,7 +1196,7 @@ impl TaskService {
                 )?
                 .with_tool_workers(
                     Arc::clone(&self.inner.tool_workers),
-                    self.inner.limits.tools_per_task,
+                    self.inner.limits.tools_per_turn,
                 ),
             )
         } else {
@@ -960,7 +1206,7 @@ impl TaskService {
             self.reserve_workspace(&workspace, &queued.turn_id).await?;
         }
         let payload = if start {
-            TaskEventPayload::Accepted {
+            TurnEventPayload::Accepted {
                 user_item_id: queued.user_item_id.clone(),
                 prompt: queued.prompt.clone(),
                 workspace: workspace.clone(),
@@ -970,19 +1216,11 @@ impl TaskService {
                 request_fingerprint: Some(hash.clone()),
             }
         } else {
-            TaskEventPayload::TurnQueued {
+            TurnEventPayload::TurnQueued {
                 user_item_id: queued.user_item_id.clone(),
                 prompt: queued.prompt.clone(),
                 queue_order: queued.order,
             }
-        };
-        let event = TaskEvent {
-            thread_id: Some(target.thread_id.clone()),
-            server_instance_id: self.inner.instance_id.clone(),
-            task_id: queued.turn_id.clone(),
-            seq: 1,
-            timestamp_ms: now_ms(),
-            payload: payload.clone(),
         };
         let key = AcceptedKey {
             scope,
@@ -999,10 +1237,6 @@ impl TaskService {
                 queue_order: queued.order,
             },
             ExecutionRecord::AcceptedKey { entry: key.clone() },
-            ExecutionRecord::TurnRecord {
-                turn_id: queued.turn_id.clone(),
-                fact: Box::new(ExecutionRecord::Event { event }),
-            },
         ];
         if start {
             facts.push(ExecutionRecord::TurnActivated {
@@ -1030,9 +1264,9 @@ impl TaskService {
             turn_id: queued.turn_id.clone(),
             queue_order: queued.order,
             status: if start {
-                TaskStatus::Accepted
+                TurnStatus::Accepted
             } else {
-                TaskStatus::Queued
+                TurnStatus::Queued
             },
         };
         {
@@ -1050,12 +1284,12 @@ impl TaskService {
                 thread.queued.push_back(queued.clone());
                 thread.snapshot.queued.push(receipt.clone());
             }
-            let snapshot = TaskSnapshot {
+            let snapshot = TurnSnapshot {
                 steering: Vec::new(),
-                thread_id: Some(target.thread_id.clone()),
+                thread_id: target.thread_id.clone(),
                 server_instance_id: self.inner.instance_id.clone(),
                 model: config.model.clone(),
-                task_id: queued.turn_id.clone(),
+                turn_id: queued.turn_id.clone(),
                 status: receipt.status,
                 cursor: 0,
                 workspace: workspace.clone(),
@@ -1069,24 +1303,19 @@ impl TaskService {
                 pending_input: None,
                 live: None,
             };
-            state.tasks.insert(
+            state.turns.insert(
                 queued.turn_id.clone(),
-                TaskRecord {
+                TurnRecord {
                     fence: Arc::new(crate::control::LaunchFence::default()),
                     steering: Vec::new(),
                     verification_budget: None,
-                    thread_id: Some(target.thread_id.clone()),
+                    thread_id: target.thread_id.clone(),
                     permission_profile: profile,
                     settled: None,
                     snapshot,
-                    events: VecDeque::new(),
-                    event_bytes: 0,
-                    publisher: broadcast::channel(self.inner.limits.subscriber_queue).0,
                     terminal_at: None,
                     cancel: cancel.clone(),
                     pending: None,
-                    commit_lock: Arc::clone(&gate),
-                    store_version: 0,
                     storage_error: None,
                 },
             );
@@ -1126,7 +1355,7 @@ impl TaskService {
         workspace: PathBuf,
         cancel: CancellationToken,
     ) {
-        self.inner.workers.spawn(self.run_task(
+        self.inner.workers.spawn(self.run_turn(
             entry.turn_id,
             agent,
             RunInput {
@@ -1148,7 +1377,7 @@ impl TaskService {
         if let Some(error) = self.workspace_owner_error(state, workspace) {
             return Err(error);
         }
-        if state.active_workspaces.len() >= self.inner.limits.active_tasks {
+        if state.active_workspaces.len() >= self.inner.limits.active_turns {
             return Err(ServiceError::new(
                 ErrorCode::Overloaded,
                 "active Turn limit reached",
@@ -1249,19 +1478,16 @@ impl TaskService {
                     thread.snapshot.pause_reason = Some(error.clone());
                     thread.presentation.blocked(&error);
                 }
-                for task in state.tasks.values_mut().filter(|task| {
-                    task.thread_id.as_deref() == Some(thread_id) && !task.snapshot.status.terminal()
-                }) {
+                for task in state
+                    .turns
+                    .values_mut()
+                    .filter(|task| task.thread_id == thread_id && !task.snapshot.status.terminal())
+                {
                     task.cancel.cancel();
                     task.storage_error = Some(error.clone());
-                    task.snapshot.status = TaskStatus::RecoveryRequired;
+                    task.snapshot.status = TurnStatus::RecoveryRequired;
                     task.snapshot.unknown_effect = true;
                     task.snapshot.detail = Some(error.clone());
-                    let _ = task.publisher.send(Observation::Snapshot {
-                        snapshot: Box::new(task.snapshot.clone()),
-                        resynchronized: true,
-                        catchup: Vec::new(),
-                    });
                 }
                 Err(ServiceError::new(ErrorCode::StorageUnavailable, error))
             }
@@ -1271,7 +1497,7 @@ impl TaskService {
     pub(super) async fn commit_turn_serialized(
         &self,
         thread_id: &str,
-        task_id: &str,
+        turn_id: &str,
         records: &[ExecutionRecord],
     ) -> Result<(), ServiceError> {
         let facts = records
@@ -1282,13 +1508,25 @@ impl TaskService {
                 | ExecutionRecord::SteeringReceived { .. }
                 | ExecutionRecord::SteeringResolved { .. } => fact.clone(),
                 _ => ExecutionRecord::TurnRecord {
-                    turn_id: task_id.into(),
+                    turn_id: turn_id.into(),
                     fact: Box::new(fact.clone()),
                 },
             })
             .collect::<Vec<_>>();
         self.commit_thread_serialized(thread_id, &facts).await?;
         let mut state = self.lock_state();
+        if records.iter().any(|fact| {
+            matches!(
+                fact,
+                ExecutionRecord::ModelResponse { .. }
+                    | ExecutionRecord::ModelInterrupted { .. }
+                    | ExecutionRecord::ToolResult { .. }
+                    | ExecutionRecord::VerificationResult { .. }
+            )
+        }) && let Some(turn) = state.turns.get_mut(turn_id)
+        {
+            turn.snapshot.live = None;
+        }
         for record in records {
             match record {
                 ExecutionRecord::Settled {
@@ -1296,7 +1534,7 @@ impl TaskService {
                     context_version,
                     ..
                 } => {
-                    if let Some(task) = state.tasks.get_mut(task_id) {
+                    if let Some(task) = state.turns.get_mut(turn_id) {
                         task.settled = Some((messages.clone(), *context_version));
                     }
                 }
@@ -1309,7 +1547,7 @@ impl TaskService {
                     thread.snapshot = snapshot.clone();
                     thread.snapshot.cursor = version;
                     thread.messages = messages.clone();
-                    if let Some(task) = state.tasks.get_mut(task_id) {
+                    if let Some(task) = state.turns.get_mut(turn_id) {
                         task.settled = None;
                     }
                     if snapshot.status == ThreadStatus::Idle
@@ -1327,11 +1565,11 @@ impl TaskService {
 
     pub(super) fn terminal_thread_checkpoint(
         &self,
-        task_id: &str,
-        events: &[TaskEvent],
+        turn_id: &str,
+        events: &[TurnEvent],
         fact_count: usize,
     ) -> Result<Option<ExecutionRecord>, ServiceError> {
-        let Some(TaskEventPayload::TaskFinished {
+        let Some(TurnEventPayload::Finished {
             status,
             detail,
             verification_evidence,
@@ -1342,12 +1580,10 @@ impl TaskService {
             return Ok(None);
         };
         let state = self.lock_state();
-        let task = state.tasks.get(task_id).ok_or_else(unknown_task)?;
-        let Some(thread_id) = &task.thread_id else {
-            return Ok(None);
-        };
+        let task = state.turns.get(turn_id).ok_or_else(unknown_turn)?;
+        let thread_id = &task.thread_id;
         let thread = state.threads.get(thread_id).ok_or_else(unknown_thread)?;
-        if thread.snapshot.active_turn_id.as_deref() != Some(task_id) {
+        if thread.snapshot.active_turn_id.as_deref() != Some(turn_id) {
             return Ok(None);
         }
         let (mut messages, version) = task
@@ -1365,12 +1601,12 @@ impl TaskService {
             .saturating_add(fact_count as u64)
             .saturating_add(1);
         snapshot.waiting_for_capacity = false;
-        if *unknown_effect || *status == TaskStatus::RecoveryRequired {
+        if *unknown_effect || *status == TurnStatus::RecoveryRequired {
             snapshot.status = ThreadStatus::RecoveryRequired;
             snapshot.pause_reason = Some(detail.clone());
         } else {
             snapshot.active_turn_id = None;
-            snapshot.status = if *status == TaskStatus::Completed {
+            snapshot.status = if *status == TurnStatus::Completed {
                 ThreadStatus::Idle
             } else {
                 ThreadStatus::Paused
@@ -1485,7 +1721,7 @@ impl TaskService {
             ) {
                 Ok(agent) => agent.with_tool_workers(
                     Arc::clone(&self.inner.tool_workers),
-                    self.inner.limits.tools_per_task,
+                    self.inner.limits.tools_per_turn,
                 ),
                 Err(error) => {
                     let _ = self.pause_thread_serialized(&thread_id, error).await;
@@ -1512,7 +1748,7 @@ impl TaskService {
                 }
                 continue;
             }
-            let payload = TaskEventPayload::Accepted {
+            let payload = TurnEventPayload::Accepted {
                 user_item_id: entry.user_item_id.clone(),
                 prompt: entry.prompt.clone(),
                 workspace: workspace.clone(),
@@ -1521,31 +1757,13 @@ impl TaskService {
                 idempotency_key: None,
                 request_fingerprint: None,
             };
-            let cursor = match self.lock_state().tasks.get(&entry.turn_id) {
-                Some(task) => task.snapshot.cursor,
-                None => continue,
-            };
-            let event = TaskEvent {
-                thread_id: Some(thread_id.clone()),
-                server_instance_id: self.inner.instance_id.clone(),
-                task_id: entry.turn_id.clone(),
-                seq: cursor + 1,
-                timestamp_ms: now_ms(),
-                payload: payload.clone(),
-            };
             if self
                 .commit_thread_serialized(
                     &thread_id,
-                    &[
-                        ExecutionRecord::TurnActivated {
-                            turn_id: entry.turn_id.clone(),
-                            context_version: version.saturating_add(1),
-                        },
-                        ExecutionRecord::TurnRecord {
-                            turn_id: entry.turn_id.clone(),
-                            fact: Box::new(ExecutionRecord::Event { event }),
-                        },
-                    ],
+                    &[ExecutionRecord::TurnActivated {
+                        turn_id: entry.turn_id.clone(),
+                        context_version: version.saturating_add(1),
+                    }],
                 )
                 .await
                 .is_err()
@@ -1570,7 +1788,7 @@ impl TaskService {
                     .active_workspaces
                     .insert(workspace.clone(), entry.turn_id.clone());
                 let Some(cancel) = state
-                    .tasks
+                    .turns
                     .get(&entry.turn_id)
                     .map(|task| task.cancel.clone())
                 else {

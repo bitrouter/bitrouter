@@ -46,6 +46,15 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   interfaces. The core engineering spec is now verified at the pinned branch
   revision. Core integration, client delivery and host investigation/proof follow
   the independently validated runtime; unknown owner/effect records stay blocked.
+- [`BRO_THREAD_TURN_UNIFICATION_SPEC.md`](BRO_THREAD_TURN_UNIFICATION_SPEC.md) —
+  **v0.1, approved and implemented with local acceptance.** Removes the separate one-shot
+  Task domain and legacy conversion, unifies native clients on Thread/Turn,
+  adds bounded idle Thread unloading and reload, and removes duplicate completion
+  events while preserving durable execution and recovery barriers.
+- [`BRO_THREAD_TURN_UNIFICATION_IMPLEMENTATION.md`](BRO_THREAD_TURN_UNIFICATION_IMPLEMENTATION.md) —
+  unified runtime/client changes and independent U1–U5 acceptance evidence; prior
+  runtime records remain historical.
+
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,
   skills over MCP, the observability TUI, the ACP TUI, the ACP controller,

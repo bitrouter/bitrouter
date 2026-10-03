@@ -1,20 +1,37 @@
-//! BRO's interactive local task client. The server owns every model and tool
-//! effect; this module keeps only a projection and a prompt editor.
-
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
+//! Interactive Thread client; the server owns execution and durable context.
+use crate::agent_local::{self, Operation, ReplyResult, ThreadClient};
 use anyhow::Result;
-use bitrouter_orchestrator::service::{
-    ErrorCode, Observation, ServiceError, TaskEvent, TaskEventPayload, TaskSnapshot, TaskStatus,
+use bitrouter_orchestrator::service::{ErrorCode, ServiceError, TurnSnapshot, TurnStatus};
+use bitrouter_orchestrator::thread::{
+    ThreadChange, ThreadEvent, ThreadObservation, ThreadStatus, ThreadView,
 };
 use bitrouter_sdk::language_model::Content;
 use bitrouter_tui::editor::Edit;
 use bitrouter_tui::native_agent::{NativeState, NativeView};
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures::StreamExt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use crate::agent_local::{self, Operation, ReplyResult, TaskClient, TaskStream};
+struct PendingSubmission {
+    text: String,
+    key: String,
+    mode: SubmissionMode,
+    uncertain: bool,
+}
+enum SubmissionMode {
+    Start,
+    Enqueue,
+    Steer(String),
+}
+#[derive(Default)]
+struct Session {
+    thread_id: Option<String>,
+    create_key: String,
+    create_uncertain: bool,
+    resume_key: Option<String>,
+    pending: Option<PendingSubmission>,
+}
 
 pub async fn run(
     config: Option<&Path>,
@@ -34,12 +51,12 @@ pub async fn run(
         let socket = agent_local::socket_path(&control_socket);
         match agent_local::request(&socket, Operation::Capabilities).await? {
             ReplyResult::Capabilities { .. } => socket,
-            _ => anyhow::bail!("BRO task server returned an unexpected capability reply"),
+            _ => anyhow::bail!("unexpected capabilities reply"),
         }
     } else {
         agent_local::connect_or_start(&source, &control_socket).await?
     };
-    let client = TaskClient::connect(&socket).await?;
+    let client = ThreadClient::connect(&socket).await?;
     let workspace = workspace_override.unwrap_or(std::env::current_dir()?);
     let mut state = NativeState {
         model: model_override.or(cfg.chat.model).unwrap_or_default(),
@@ -47,18 +64,22 @@ pub async fn run(
         verification: "unavailable".into(),
         ..NativeState::default()
     };
+    let mut session = Session {
+        thread_id: reattach,
+        create_key: uuid::Uuid::new_v4().to_string(),
+        pending: None,
+        ..Default::default()
+    };
+    let mut projection: Option<ThreadView> = None;
+    let mut subscription = None;
     let mut cursor = 0;
-    let mut projection = None;
-    let mut subscription: Option<TaskStream> = None;
     let mut reconnect = true;
-    if let Some(task_id) = reattach {
-        let snapshot = read(&client, &task_id).await?;
-        state.push(format!("Reattached task: {task_id}"));
-        state.push(format!("Tool mode: {:?}", snapshot.tool_mode));
-        state.task_id = Some(task_id.clone());
-        update_snapshot(&mut state, &snapshot);
-        subscription = Some(client.observe(&task_id, Some(0)).await?);
-        projection = Some(snapshot);
+    if let Some(id) = &session.thread_id {
+        let view = read(&client, id).await?;
+        state.push(format!("Reattached Thread: {id}"));
+        update_view(&mut state, &view);
+        subscription = Some(client.observe(id, Some(0)).await?);
+        projection = Some(view);
     }
     let mut view = NativeView::open()?;
     let mut events = EventStream::new();
@@ -66,207 +87,341 @@ pub async fn run(
     loop {
         view.draw(&state)?;
         tokio::select! {
-            next = async { match subscription.as_mut() {
-                Some(stream) => stream.next().await,
-                None => std::future::pending().await,
-            } } => {
+            next = async { match subscription.as_mut() { Some(stream) => stream.next().await, None => std::future::pending().await } } => {
                 match next {
-                    Ok(Some(Observation::Snapshot { snapshot, resynchronized, catchup })) => {
-                        if resynchronized { state.push("Event cache expired; refreshed current task state"); }
-                        let omitted_history = resynchronized || catchup.is_empty();
-                        for event in catchup {
-                            if !matches!(event.payload, TaskEventPayload::AssistantDelta { .. } | TaskEventPayload::ToolOutputDelta { .. }) { state.push(format_event(&event)); }
-                        }
-                        if snapshot.status.terminal() && omitted_history && let Some(answer) = &snapshot.final_answer {
-                            state.push(answer.chars().take(800).collect::<String>());
-                        }
-                        cursor = snapshot.cursor;
-                        update_snapshot(&mut state, &snapshot);
-                        projection = Some(*snapshot);
-                    }
-                    Ok(Some(Observation::Event { event })) => {
-                        cursor = event.seq;
-                        if !matches!(event.payload, TaskEventPayload::AssistantDelta { .. } | TaskEventPayload::ToolOutputDelta { .. }) { state.push(format_event(&event)); }
-                        if let Some(snapshot) = projection.as_mut() {
-                            snapshot.apply(&event);
-                            update_snapshot(&mut state, snapshot);
-                        }
-                    }
-                    Ok(None) => {
-                        subscription = None;
-                        if projection.as_ref().is_some_and(|snapshot| !snapshot.status.terminal()) {
-                            state.status = "disconnected".into(); state.pending_input_id = None;
-                            state.push("Connection lost; task may still be running on the server");
-                        }
-                    }
+                    Ok(Some(ThreadObservation::Snapshot { view:fresh, resynchronized, catchup })) => {
+                        if resynchronized { state.push("History cache expired; current Thread refreshed"); }
+                        for event in catchup { show_event(&mut state, &event); }
+                        cursor = fresh.thread.cursor; update_view(&mut state, &fresh); projection = Some(*fresh);
+                    },
+                    Ok(Some(ThreadObservation::Event { event })) => {
+                        cursor = event.seq; show_event(&mut state, &event);
+                        if let Some(view) = projection.as_mut() { view.apply(&event); update_view(&mut state, view); }
+                    },
+                    Ok(Some(ThreadObservation::Live { event, .. })) => {
+                        if let Some(view) = projection.as_mut() && let Some(turn) = &mut view.latest_turn && turn.turn_id == event.turn_id { turn.apply(&event); update_view(&mut state, view); }
+                    },
+                    Ok(None) => { subscription = None; state.status="disconnected".into(); state.pending_input_id=None; state.push("Connection lost; Thread remains on the server"); },
                     Err(error) => {
                         subscription = None;
-                        reconnect = !error.downcast_ref::<ServiceError>().is_some_and(|error| matches!(error.code, ErrorCode::InstanceChanged | ErrorCode::UnknownTask));
-                        state.status = if reconnect { "disconnected" } else { "server_instance_lost" }.into();
-                        state.pending_input_id = None;
-                        state.push(format!("{error}; task was not resubmitted"));
-                    }
+                        reconnect = !error.downcast_ref::<ServiceError>().is_some_and(|error| matches!(error.code, ErrorCode::InstanceChanged | ErrorCode::UnknownThread));
+                        state.status = if reconnect { "disconnected" } else { "server_instance_lost" }.into(); state.pending_input_id=None; state.push(error.to_string());
+                    },
                 }
-            }
-            _ = ticker.tick(), if subscription.is_none() && reconnect && projection.as_ref().is_some_and(|snapshot| !snapshot.status.terminal()) => {
-                if let Some(task_id) = state.task_id.as_ref() {
-                    match client.observe(task_id, Some(cursor)).await {
-                        Ok(stream) => subscription = Some(stream),
-                        Err(error) => state.push(format!("Reconnect pending: {error}")),
+            },
+            _ = ticker.tick(), if subscription.is_none() && reconnect && session.thread_id.is_some() => {
+                if let Some(id) = &session.thread_id { match client.observe(id, Some(cursor)).await { Ok(stream) => subscription=Some(stream), Err(error) => {
+                    if error.downcast_ref::<ServiceError>().is_some_and(|error| matches!(error.code, ErrorCode::InstanceChanged | ErrorCode::UnknownThread)) {
+                        reconnect=false; state.status="server_instance_lost".into();
                     }
-                }
-            }
+                    state.push(format!("Reconnect pending: {error}"));
+                } } }
+            },
             next = events.next() => {
                 let Some(next) = next else { break; };
                 let event = next?;
-                let prior_task = state.task_id.clone();
-                if handle_event(&client, &workspace, &check, read_only, &mut state, &mut projection, &event).await? {
-                    break;
-                }
-                if state.task_id != prior_task && let Some(snapshot) = projection.as_ref() {
-                    cursor = snapshot.cursor;
-                    subscription = Some(client.observe(&snapshot.task_id, Some(cursor)).await?);
-                }
-            }
+                if handle_event(&client, &workspace, &check, read_only, &mut state, &mut session, &event).await? { break; }
+            },
         }
     }
     Ok(())
 }
 
 async fn handle_event(
-    client: &TaskClient,
+    client: &ThreadClient,
     workspace: &Path,
     check: &Option<String>,
     read_only: bool,
     state: &mut NativeState,
-    projection: &mut Option<TaskSnapshot>,
+    session: &mut Session,
     event: &Event,
 ) -> Result<bool> {
+    let steering = matches!(event, Event::Key(key) if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Enter);
     if let Event::Key(key) = event {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') {
             return Ok(true);
         }
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            if let Some(task_id) = state.task_id.as_ref() {
-                let _ = client
-                    .request(Operation::Cancel {
-                        task_id: task_id.clone(),
+            if let (Some(thread_id), Some(turn_id)) = (&session.thread_id, &state.turn_id) {
+                match client
+                    .request(Operation::CancelTurn {
+                        thread_id: thread_id.clone(),
+                        turn_id: turn_id.clone(),
+                        idempotency_key: format!("cancel-{turn_id}"),
                     })
-                    .await?;
-                state.push("Cancellation requested");
+                    .await
+                {
+                    Ok(_) => state.push("Cancellation requested"),
+                    Err(error) => state.push(error.to_string()),
+                }
             } else {
                 return Ok(true);
             }
             return Ok(false);
         }
-        if let (Some(task_id), Some(request_id)) = (&state.task_id, &state.pending_input_id) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('r') {
+            if let Some(thread_id) = &session.thread_id {
+                match client
+                    .request(Operation::ResumeQueue {
+                        thread_id: thread_id.clone(),
+                        idempotency_key: session
+                            .resume_key
+                            .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                            .clone(),
+                    })
+                    .await
+                {
+                    Ok(_) => {
+                        session.resume_key = None;
+                        state.push("Queue resume requested");
+                    }
+                    Err(error) => state.push(error.to_string()),
+                }
+            }
+            return Ok(false);
+        }
+        if state.editor.is_empty()
+            && let (Some(thread_id), Some(turn_id), Some(request_id)) =
+                (&session.thread_id, &state.turn_id, &state.pending_input_id)
+        {
             let approved = match key.code {
                 KeyCode::Char('y') => Some(true),
                 KeyCode::Char('n') => Some(false),
                 _ => None,
             };
             if let Some(approved) = approved {
-                let response = client
+                match client
                     .request(Operation::Input {
-                        task_id: task_id.clone(),
+                        thread_id: thread_id.clone(),
+                        turn_id: turn_id.clone(),
                         request_id: request_id.clone(),
                         approved,
+                        idempotency_key: format!("{request_id}-{approved}"),
                     })
-                    .await;
-                if let Err(error) = response {
-                    state.push(format!("Approval response: {error}"));
-                    if error
-                        .downcast_ref::<ServiceError>()
-                        .is_some_and(|error| error.code == ErrorCode::InstanceChanged)
-                    {
-                        state.status = "server_instance_lost".into();
+                    .await
+                {
+                    Ok(_) => {
+                        state.pending_input_id = None;
+                        state.push(if approved {
+                            "Tool approved"
+                        } else {
+                            "Tool denied"
+                        });
                     }
-                    state.pending_input_id = None;
-                    return Ok(false);
+                    Err(error) => state.push(error.to_string()),
                 }
-                state.pending_input_id = None;
-                state.push(if approved {
-                    "Tool approved"
-                } else {
-                    "Tool denied"
-                });
                 return Ok(false);
             }
         }
     }
-    if matches!(
-        state.status.as_str(),
-        "disconnected" | "server_instance_lost"
-    ) {
-        return Ok(false);
-    }
-    if state.pending_input_id.is_some() {
-        return Ok(false);
-    }
-    match state.edit(event) {
+    let edit = if steering {
+        Edit::Submitted
+    } else {
+        state.edit(event)
+    };
+    match edit {
         Edit::Submitted => {
-            let input = state.editor.take();
+            let input = state.editor.text().to_owned();
             if input.trim().is_empty() {
+                return Ok(false);
+            }
+            if matches!(
+                state.status.as_str(),
+                "disconnected" | "server_instance_lost"
+            ) {
+                state.push("Reconnect before submitting; draft retained");
                 return Ok(false);
             }
             if state.model.is_empty() {
                 state.model = input.trim().into();
+                state.editor.clear();
                 state.push(format!("Model selected: {}", state.model));
-            } else {
-                let busy = state.task_id.as_ref().is_some_and(|_| {
-                    matches!(
-                        state.status.as_str(),
-                        "accepted" | "running" | "waiting_for_input"
-                    )
+                return Ok(false);
+            }
+            if let Some(pending) = &session.pending
+                && pending.text != input
+            {
+                state.push("Previous acceptance is unresolved; restore its input to retry with the same key");
+                return Ok(false);
+            }
+            if session.pending.is_none() {
+                let mode = if steering {
+                    let Some(id) = &state.turn_id else {
+                        state.push("No active Turn to steer");
+                        return Ok(false);
+                    };
+                    SubmissionMode::Steer(id.clone())
+                } else if matches!(
+                    state.status.as_str(),
+                    "accepted" | "running" | "waiting_for_input" | "busy" | "paused"
+                ) {
+                    SubmissionMode::Enqueue
+                } else {
+                    SubmissionMode::Start
+                };
+                session.pending = Some(PendingSubmission {
+                    text: input.clone(),
+                    key: uuid::Uuid::new_v4().to_string(),
+                    mode,
+                    uncertain: false,
                 });
-                if busy {
-                    state.push(
-                        "Current task is still active; cancel or wait before submitting another",
-                    );
-                    return Ok(false);
-                }
-                let reply = client
-                    .request(Operation::Submit {
-                        prompt: input.clone(),
-                        workspace: workspace.to_path_buf(),
+            }
+            if session.thread_id.is_none() {
+                match client
+                    .request(Operation::CreateThread {
+                        workspace: workspace.into(),
                         model: state.model.clone(),
                         effort: None,
                         read_only,
                         verification_command: check.clone(),
-                        idempotency_key: Some(uuid::Uuid::new_v4().to_string()),
+                        idempotency_key: session.create_key.clone(),
                     })
-                    .await?;
-                let ReplyResult::Task { snapshot } = reply else {
-                    anyhow::bail!("BRO task server returned an unexpected submit reply");
-                };
-                state.editor.push_history(input.clone());
-                state.push(format!("You: {input}"));
-                state.task_id = Some(snapshot.task_id.clone());
-                state.live = None;
-                state.push(format!("Task ID: {}", snapshot.task_id));
-                update_snapshot(state, &snapshot);
-                *projection = Some(*snapshot);
+                    .await
+                {
+                    Ok(ReplyResult::Thread { snapshot }) => {
+                        session.thread_id = Some(snapshot.thread_id.clone());
+                        state.thread_id = Some(snapshot.thread_id);
+                    }
+                    Ok(_) => anyhow::bail!("unexpected create_thread reply"),
+                    Err(error) => {
+                        if known_rejection(&error) && !session.create_uncertain {
+                            session.pending = None;
+                            session.create_key = uuid::Uuid::new_v4().to_string();
+                        } else {
+                            session.create_uncertain = true;
+                        }
+                        state.push(format!("Create outcome: {error}; draft retained"));
+                        return Ok(false);
+                    }
+                }
             }
+            let pending = session
+                .pending
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("missing pending input"))?;
+            let id = session
+                .thread_id
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("missing Thread identity"))?;
+            let operation = match &pending.mode {
+                SubmissionMode::Start => Operation::StartTurn {
+                    thread_id: id,
+                    prompt: input.clone(),
+                    idempotency_key: pending.key.clone(),
+                },
+                SubmissionMode::Enqueue => Operation::EnqueueTurn {
+                    thread_id: id,
+                    prompt: input.clone(),
+                    idempotency_key: pending.key.clone(),
+                },
+                SubmissionMode::Steer(turn_id) => Operation::Steer {
+                    thread_id: id,
+                    expected_turn_id: turn_id.clone(),
+                    text: input.clone(),
+                    idempotency_key: pending.key.clone(),
+                },
+            };
+            match client.request(operation).await {
+                Ok(ReplyResult::Receipt { receipt }) => {
+                    if matches!(pending.mode, SubmissionMode::Start) {
+                        state.turn_id = Some(receipt.turn_id.clone());
+                        state.status = "accepted".into();
+                    }
+                    state.push(format!(
+                        "Turn ID: {} ({:?})",
+                        receipt.turn_id, receipt.status
+                    ));
+                }
+                Ok(ReplyResult::Steering { receipt }) => {
+                    state.push(format!("Steering received: {}", receipt.input_id));
+                }
+                Ok(_) => anyhow::bail!("unexpected input receipt"),
+                Err(error) => {
+                    state.push(format!("Acceptance outcome: {error}; draft retained"));
+                    if known_rejection(&error) && !pending.uncertain {
+                        session.pending = None;
+                    } else if let Some(pending) = session.pending.as_mut() {
+                        pending.uncertain = true;
+                    }
+                    return Ok(false);
+                }
+            }
+            state.editor.clear();
+            state.editor.push_history(input.clone());
+            state.push(format!("You: {input}"));
+            session.pending = None;
         }
         Edit::Ended | Edit::ExitRequested => return Ok(true),
         _ => {}
     }
     Ok(false)
 }
-
-async fn read(client: &TaskClient, task_id: &str) -> Result<TaskSnapshot> {
+async fn read(client: &ThreadClient, thread_id: &str) -> Result<ThreadView> {
     match client
-        .request(Operation::Read {
-            task_id: task_id.into(),
+        .request(Operation::ReadThread {
+            thread_id: thread_id.into(),
         })
         .await?
     {
-        ReplyResult::Task { snapshot } => Ok(*snapshot),
-        _ => anyhow::bail!("BRO task server returned an unexpected read reply"),
+        ReplyResult::View { view } => Ok(*view),
+        _ => anyhow::bail!("unexpected Thread view"),
     }
 }
-
-fn update_snapshot(state: &mut NativeState, snapshot: &TaskSnapshot) {
+fn update_view(state: &mut NativeState, view: &ThreadView) {
+    state.thread_id = Some(view.thread.thread_id.clone());
+    state.model = view.thread.model.clone();
+    if let Some(turn) = &view.latest_turn {
+        state.turn_id = Some(turn.turn_id.clone());
+        update_snapshot(state, turn);
+    }
+    if matches!(
+        view.thread.status,
+        ThreadStatus::Paused | ThreadStatus::RecoveryRequired
+    ) {
+        state.status = if view.thread.status == ThreadStatus::Paused {
+            "paused"
+        } else {
+            "recovery_required"
+        }
+        .into();
+    }
+}
+fn show_event(state: &mut NativeState, event: &ThreadEvent) {
+    for change in &event.changes {
+        let detail = match change {
+            ThreadChange::AssistantResponse { message, .. } => message
+                .content
+                .iter()
+                .filter_map(|part| match part {
+                    Content::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            ThreadChange::AssistantInterrupted { detail, .. } => {
+                format!("Assistant interrupted: {detail}")
+            }
+            ThreadChange::ToolIntent { call, .. } => {
+                format!("Tool {} ({}) started", call.name, call.item_id)
+            }
+            ThreadChange::ToolResult {
+                item_id, message, ..
+            } => format!("Tool {item_id}: {:?}", message.content),
+            ThreadChange::VerificationResult { evidence, .. } => {
+                format!("Verification: {evidence:?}")
+            }
+            ThreadChange::TurnLifecycle { turn_id, lifecycle } => {
+                format!("Turn {turn_id}: {lifecycle:?}")
+            }
+            ThreadChange::TurnQueued { receipt, .. } => {
+                format!("Queued #{}: {}", receipt.queue_order, receipt.turn_id)
+            }
+            _ => continue,
+        };
+        state.push(detail.chars().take(800).collect::<String>());
+    }
+}
+fn update_snapshot(state: &mut NativeState, snapshot: &TurnSnapshot) {
     state.model = snapshot.model.clone();
     let prior_pending = state.pending_input_id.clone();
     state.status = serde_json::to_value(snapshot.status)
@@ -290,7 +445,7 @@ fn update_snapshot(state: &mut NativeState, snapshot: &TaskSnapshot) {
             live.text
         )
     });
-    if snapshot.status == TaskStatus::WaitingForInput
+    if snapshot.status == TurnStatus::WaitingForInput
         && prior_pending != snapshot.pending_input_id
         && let Some(input) = &snapshot.pending_input
     {
@@ -301,92 +456,148 @@ fn update_snapshot(state: &mut NativeState, snapshot: &TaskSnapshot) {
     }
 }
 
-fn format_event(event: &TaskEvent) -> String {
-    let detail = match &event.payload {
-        TaskEventPayload::SteeringUpdated { receipt, .. } => {
-            format!("Steering {}: {:?}", receipt.input_id, receipt.status)
+fn known_rejection(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<ServiceError>().is_some_and(|error| {
+        matches!(
+            error.code,
+            ErrorCode::InvalidRequest
+                | ErrorCode::Unauthorized
+                | ErrorCode::Conflict
+                | ErrorCode::ShuttingDown
+        )
+    })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyEvent;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn ambiguous_overload_preserves_draft_and_original_acceptance_key() -> Result<()> {
+        let home = tempfile::tempdir()?;
+        let socket = home.path().join("retry.sock");
+        let listener = tokio::net::UnixListener::bind(&socket)?;
+        let server = tokio::spawn(async move {
+            let mut original = None;
+            for index in 0..4 {
+                let (stream, _) = listener.accept().await?;
+                let (read, mut write) = stream.into_split();
+                let mut line = String::new();
+                tokio::io::BufReader::new(read).read_line(&mut line).await?;
+                let command: agent_local::ThreadCommand = serde_json::from_str(&line)?;
+                let result = if index == 0 {
+                    ReplyResult::Capabilities {
+                        runtime: Box::new(bitrouter_orchestrator::service::RuntimeCapabilities {
+                            server_instance_id: "epoch".into(),
+                            limits: Default::default(),
+                            execution_ownership: None,
+                            startup_discovery: None,
+                        }),
+                        operations: vec![],
+                    }
+                } else {
+                    anyhow::ensure!(command.server_instance_id.as_deref() == Some("epoch"));
+                    let Operation::StartTurn {
+                        thread_id,
+                        prompt,
+                        idempotency_key,
+                    } = command.operation
+                    else {
+                        anyhow::bail!("unexpected input operation");
+                    };
+                    anyhow::ensure!(thread_id == "thread" && prompt == "draft y");
+                    if index == 1 {
+                        original = Some(idempotency_key);
+                        ReplyResult::Error {
+                            code: ErrorCode::Overloaded,
+                            message: "receipt readers full".into(),
+                        }
+                    } else if index == 2 {
+                        anyhow::ensure!(original.as_ref() == Some(&idempotency_key));
+                        ReplyResult::Error {
+                            code: ErrorCode::Unauthorized,
+                            message: "grant temporarily unavailable".into(),
+                        }
+                    } else {
+                        anyhow::ensure!(original.as_ref() == Some(&idempotency_key));
+                        ReplyResult::Receipt {
+                            receipt: bitrouter_orchestrator::thread::TurnReceipt {
+                                thread_id,
+                                turn_id: "original-turn".into(),
+                                queue_order: 1,
+                                status: TurnStatus::Completed,
+                            },
+                        }
+                    }
+                };
+                let reply = agent_local::ThreadReply {
+                    version: agent_local::CONTRACT_VERSION,
+                    command_id: Some(command.command_id),
+                    result,
+                };
+                write.write_all(&serde_json::to_vec(&reply)?).await?;
+                write.write_all(b"\n").await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        });
+        let client = ThreadClient::connect(&socket).await?;
+        let mut state = NativeState {
+            model: "fixture-model".into(),
+            status: "idle".into(),
+            ..Default::default()
+        };
+        let mut session = Session {
+            thread_id: Some("thread".into()),
+            create_key: "create".into(),
+            pending: None,
+            ..Default::default()
+        };
+        for character in "draft y".chars() {
+            state.edit(&Event::Key(KeyEvent::new(
+                KeyCode::Char(character),
+                KeyModifiers::NONE,
+            )));
         }
-        TaskEventPayload::TurnQueued {
-            prompt,
-            queue_order,
-            ..
-        } => format!("Queued #{queue_order}: {prompt}"),
-        TaskEventPayload::Accepted {
-            prompt, tool_mode, ..
-        } => format!("Accepted ({tool_mode:?}): {prompt}"),
-        TaskEventPayload::AssistantDelta { text, .. } => text.clone(),
-        TaskEventPayload::AssistantStarted { .. } => "Assistant started".into(),
-        TaskEventPayload::AssistantInterrupted {
-            detail, partial, ..
-        } => format!(
-            "Assistant interrupted: {detail}\n{}",
-            partial
-                .content
-                .iter()
-                .filter_map(|part| match part {
-                    Content::Text { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        ),
-        TaskEventPayload::ToolOutputDelta { source, text, .. } => format!("[{source}] {text}"),
-        TaskEventPayload::TaskStarted => "Started".into(),
-        TaskEventPayload::ModelTurn {
-            request_id,
-            requested_model,
-            usage,
-            ..
-        } => format!(
-            "Model turn {request_id} · requested {requested_model} · usage {}",
-            usage.as_ref().map_or_else(
-                || "unavailable".into(),
-                |usage| format!(
-                    "{} input / {} output tokens ({:?})",
-                    usage.prompt_tokens, usage.completion_tokens, usage.origin
-                )
-            )
-        ),
-        TaskEventPayload::AssistantMessage { message, .. } => message
-            .content
-            .iter()
-            .filter_map(|content| match content {
-                Content::Text { text, .. } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        TaskEventPayload::ToolStarted { id, name, origin } => {
-            format!("Tool {name} ({id}, {origin:?}) started")
-        }
-        TaskEventPayload::ToolFinished {
-            id,
-            name,
-            output,
-            origin,
-        } => {
-            format!("Tool {name} ({id}, {origin:?}): {output:?}")
-        }
-        TaskEventPayload::InputRequested {
-            tool_name,
-            arguments,
-            ..
-        } => format!("Approve {tool_name} {arguments}? (y/n)"),
-        TaskEventPayload::InputResolved { approved, .. } => {
-            format!("Approval {}", if *approved { "granted" } else { "denied" })
-        }
-        TaskEventPayload::CancelRequested => "Cancellation requested".into(),
-        TaskEventPayload::TaskFinished {
-            status,
-            final_answer,
-            verification,
-            detail,
-            ..
-        } => format!(
-            "{status:?} · verification {verification:?} · {detail}\n{}",
-            final_answer.as_deref().unwrap_or("")
-        ),
-    };
-    let clipped = detail.chars().take(800).collect::<String>();
-    format!("#{} {clipped}", event.seq)
+        let submit = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        handle_event(
+            &client,
+            home.path(),
+            &None,
+            false,
+            &mut state,
+            &mut session,
+            &submit,
+        )
+        .await?;
+        assert_eq!(state.editor.text(), "draft y");
+        assert!(session.pending.is_some());
+        handle_event(
+            &client,
+            home.path(),
+            &None,
+            false,
+            &mut state,
+            &mut session,
+            &submit,
+        )
+        .await?;
+        assert_eq!(state.editor.text(), "draft y");
+        assert!(session.pending.is_some());
+        handle_event(
+            &client,
+            home.path(),
+            &None,
+            false,
+            &mut state,
+            &mut session,
+            &submit,
+        )
+        .await?;
+        assert!(state.editor.is_empty());
+        assert!(session.pending.is_none());
+        server.await??;
+        Ok(())
+    }
 }

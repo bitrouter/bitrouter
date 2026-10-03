@@ -80,7 +80,7 @@ async fn steering_received_during_sdk_request_blocks_its_eventual_stale_calls_an
         steering_inputs_per_turn: 1,
         ..RuntimeLimits::default()
     };
-    let service = TaskService::with_limits_and_store(
+    let service = ThreadService::with_limits_and_store(
         app_with_executor(model.clone())?,
         &[workspace.path().to_path_buf()],
         limits,
@@ -149,8 +149,8 @@ async fn steering_received_during_sdk_request_blocks_its_eventual_stale_calls_an
     );
     assert_eq!(service.read_thread(&target, &caller)?.cursor, cursor);
     model.release.add_permits(1);
-    let done = wait_for(&service, &receipt.turn_id, TaskStatus::Completed).await?;
-    assert_eq!(done.status, TaskStatus::Completed);
+    let done = wait_for(&service, &receipt.turn_id, TurnStatus::Completed).await?;
+    assert_eq!(done.status, TurnStatus::Completed);
     assert_eq!(done.steering[0].status, SteeringStatus::Applied);
     assert_eq!(model.calls.load(Ordering::SeqCst), 2);
     assert!(!workspace.path().join("stale.txt").exists());
@@ -180,7 +180,7 @@ async fn cancellation_records_why_received_steering_was_not_applied_and_does_not
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
     let model = Arc::new(HeldModel::new());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app_with_executor(model.clone())?,
         &[workspace.path().to_path_buf()],
         store.clone(),
@@ -214,8 +214,8 @@ async fn cancellation_records_why_received_steering_was_not_applied_and_does_not
             },
         )
         .await?;
-    let done = wait_for(&service, &receipt.turn_id, TaskStatus::Cancelled).await?;
-    assert_eq!(done.status, TaskStatus::Cancelled);
+    let done = wait_for(&service, &receipt.turn_id, TurnStatus::Cancelled).await?;
+    assert_eq!(done.status, TurnStatus::Cancelled);
     assert_eq!(done.steering[0].status, SteeringStatus::NotApplied);
     assert!(
         done.steering[0]
@@ -341,7 +341,7 @@ async fn lost_application_commit_never_claims_applied_or_starts_the_next_model_r
         memory: MemoryExecutionStore::default(),
     });
     let model = Arc::new(HeldModel::new());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app_with_executor(model.clone())?,
         &[workspace.path().to_path_buf()],
         store.clone(),
@@ -366,8 +366,8 @@ async fn lost_application_commit_never_claims_applied_or_starts_the_next_model_r
         )
         .await?;
     model.release.add_permits(1);
-    let blocked = wait_for(&service, &receipt.turn_id, TaskStatus::RecoveryRequired).await?;
-    assert_eq!(blocked.status, TaskStatus::RecoveryRequired);
+    let blocked = wait_for(&service, &receipt.turn_id, TurnStatus::RecoveryRequired).await?;
+    assert_eq!(blocked.status, TurnStatus::RecoveryRequired);
     assert_eq!(blocked.steering[0].status, SteeringStatus::Received);
     assert_eq!(model.calls.load(Ordering::SeqCst), 1);
     assert!(

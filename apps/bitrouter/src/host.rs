@@ -258,7 +258,7 @@ pub async fn serve_with_extensions(
         let control_listener = daemon::bind_control_socket(&socket_path).await?;
         let task_socket = crate::agent_local::socket_path(&socket_path);
         let task_listener = daemon::transport::bind(&task_socket).await?;
-        let task_service = bitrouter_orchestrator::service::TaskService::with_store(
+        let task_service = bitrouter_orchestrator::service::ThreadService::with_store(
             app.clone(),
             &cfg.agent_api.workspaces,
             Arc::new(crate::agent_store::DatabaseExecutionStore::new(assembled.db.clone())),

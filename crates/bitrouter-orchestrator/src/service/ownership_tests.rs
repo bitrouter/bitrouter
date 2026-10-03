@@ -9,12 +9,12 @@ async fn independent_services_share_one_owner_and_transfer_only_after_joined_shu
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let first = TaskService::with_store(
+    let first = ThreadService::with_store(
         app(vec![])?,
         &[workspace.path().to_path_buf()],
         store.clone(),
     )?;
-    let second = TaskService::with_store(
+    let second = ThreadService::with_store(
         app(vec![final_turn()])?,
         &[workspace.path().to_path_buf()],
         store.clone(),
@@ -62,7 +62,7 @@ async fn independent_services_share_one_owner_and_transfer_only_after_joined_shu
             input("new work", "new-turn"),
         )
         .await?;
-    wait_for(&second, &turn.turn_id, TaskStatus::Completed).await?;
+    wait_for(&second, &turn.turn_id, TurnStatus::Completed).await?;
     let view = second
         .load_thread(
             &crate::thread::ThreadTarget {
@@ -112,7 +112,7 @@ async fn legacy_unfenced_facts_block_execution_without_mutating_the_store()
             }],
         )
         .await?;
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![])?,
         &[workspace.path().to_path_buf()],
         store.clone(),
@@ -167,7 +167,7 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
     let workspace = TempDir::new()?;
     let first_store = Arc::new(MemoryExecutionStore::default());
     let second_store = Arc::new(MemoryExecutionStore::default());
-    let first = TaskService::with_store(
+    let first = ThreadService::with_store(
         app(vec![
             turn(vec![tool_call(
                 "write",
@@ -179,7 +179,7 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
         &[workspace.path().to_path_buf()],
         first_store.clone(),
     )?;
-    let second = TaskService::with_store(
+    let second = ThreadService::with_store(
         app(vec![final_turn(), final_turn()])?,
         &[workspace.path().to_path_buf()],
         second_store.clone(),
@@ -200,7 +200,7 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
     let active = first
         .start_turn(&target(&first_thread), &caller, input("write", "active"))
         .await?;
-    let waiting = wait_for(&first, &active.turn_id, TaskStatus::WaitingForInput).await?;
+    let waiting = wait_for(&first, &active.turn_id, TurnStatus::WaitingForInput).await?;
     assert_eq!(
         second
             .start_turn(
@@ -214,7 +214,7 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
             .code,
         ErrorCode::Conflict
     );
-    assert!(second.lock_state().tasks.is_empty());
+    assert!(second.lock_state().turns.is_empty());
     let queued = second
         .enqueue_turn(
             &target(&second_thread),
@@ -222,7 +222,7 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
             input("queued work", "queued"),
         )
         .await?;
-    assert_eq!(second.read(&queued.turn_id)?.status, TaskStatus::Queued);
+    assert_eq!(second.read(&queued.turn_id)?.status, TurnStatus::Queued);
     assert!(
         second
             .read_thread(&target(&second_thread), &caller)?
@@ -250,17 +250,17 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
         )
         .await?;
     assert_eq!(
-        wait_for(&first, &active.turn_id, TaskStatus::Completed)
+        wait_for(&first, &active.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     // There is no new RPC on `second` to wake the queue.
     assert_eq!(
-        wait_for(&second, &queued.turn_id, TaskStatus::Completed)
+        wait_for(&second, &queued.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("effect.txt"))?,
@@ -274,7 +274,7 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
         if matches!(fact.as_ref(), ExecutionRecord::WorkspaceReleasePrepared { execution_id, .. } if execution_id == &active.turn_id)))
         .ok_or("release preparation missing")?;
     let terminal = after.records.iter().position(|r| matches!(r, ExecutionRecord::TurnRecord { fact, .. }
-        if matches!(fact.as_ref(), ExecutionRecord::Event { event } if matches!(event.payload, TaskEventPayload::TaskFinished { .. }))))
+        if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, crate::thread::TurnLifecycle::Finished { .. }))))
         .ok_or("terminal fact missing")?;
     assert!(prepared < terminal);
     // A rejected start has not consumed its key or the provider fixture.
@@ -286,10 +286,10 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
         )
         .await?;
     assert_eq!(
-        wait_for(&second, &started.turn_id, TaskStatus::Completed)
+        wait_for(&second, &started.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     first.shutdown().await;
     second.shutdown().await;
@@ -301,7 +301,7 @@ async fn changed_workspace_marker_blocks_an_approved_effect_and_independent_stor
 -> Result<(), Box<dyn std::error::Error>> {
     use super::tests::{tool_call, turn};
     let workspace = TempDir::new()?;
-    let first = TaskService::new(
+    let first = ThreadService::new(
         app(vec![
             turn(vec![tool_call(
                 "write",
@@ -322,7 +322,7 @@ async fn changed_workspace_marker_blocks_an_approved_effect_and_independent_stor
     let active = first
         .start_turn(&target(&thread), &caller, input("write", "active"))
         .await?;
-    let waiting = wait_for(&first, &active.turn_id, TaskStatus::WaitingForInput).await?;
+    let waiting = wait_for(&first, &active.turn_id, TurnStatus::WaitingForInput).await?;
     let marker = first
         .lock_state()
         .workspace_fences
@@ -342,15 +342,15 @@ async fn changed_workspace_marker_blocks_an_approved_effect_and_independent_stor
         )
         .await?;
     assert_eq!(
-        wait_for(&first, &active.turn_id, TaskStatus::RecoveryRequired)
+        wait_for(&first, &active.turn_id, TurnStatus::RecoveryRequired)
             .await?
             .status,
-        TaskStatus::RecoveryRequired
+        TurnStatus::RecoveryRequired
     );
     assert!(!workspace.path().join("must-not-write.txt").exists());
     first.shutdown().await;
     drop(first);
-    let peer = TaskService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
+    let peer = ThreadService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
     let peer_thread = peer
         .create_thread(&peer.inner.instance_id, thread_request(&workspace, "peer"))
         .await?;
@@ -365,7 +365,7 @@ async fn changed_workspace_marker_blocks_an_approved_effect_and_independent_stor
     let queued = peer
         .enqueue_turn(&target(&peer_thread), &caller, input("new work", "queue"))
         .await?;
-    assert_eq!(peer.read(&queued.turn_id)?.status, TaskStatus::Queued);
+    assert_eq!(peer.read(&queued.turn_id)?.status, TurnStatus::Queued);
     assert_eq!(
         peer.read_thread(&target(&peer_thread), &caller)?.status,
         ThreadStatus::RecoveryRequired
@@ -387,7 +387,7 @@ async fn cold_inspection_without_a_release_marker_blocks_a_fresh_independent_sto
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![])?,
         &[workspace.path().to_path_buf()],
         store.clone(),
@@ -399,7 +399,7 @@ async fn cold_inspection_without_a_release_marker_blocks_a_fresh_independent_sto
         )
         .await?;
     source.shutdown().await;
-    let reader = TaskService::with_store(app(vec![])?, &[workspace.path().to_path_buf()], store)?;
+    let reader = ThreadService::with_store(app(vec![])?, &[workspace.path().to_path_buf()], store)?;
     let view = reader
         .load_thread(
             &crate::thread::ThreadTarget {
@@ -423,7 +423,7 @@ async fn cold_inspection_without_a_release_marker_blocks_a_fresh_independent_sto
             input("wait for investigation", "queued"),
         )
         .await?;
-    assert_eq!(reader.read(&queued.turn_id)?.status, TaskStatus::Queued);
+    assert_eq!(reader.read(&queued.turn_id)?.status, TurnStatus::Queued);
     let blocked = reader.read_thread(&target(&queued_thread), &CallerContext::local())?;
     assert_eq!(blocked.status, ThreadStatus::RecoveryRequired);
     assert!(!blocked.waiting_for_capacity);
@@ -442,7 +442,7 @@ async fn cold_inspection_without_a_release_marker_blocks_a_fresh_independent_sto
     );
     reader.shutdown().await;
     drop(reader);
-    let peer = TaskService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
+    let peer = ThreadService::new(app(vec![final_turn()])?, &[workspace.path().to_path_buf()])?;
     let thread = peer
         .create_thread(&peer.inner.instance_id, thread_request(&workspace, "peer"))
         .await?;
@@ -467,7 +467,7 @@ async fn disconnected_coordination_io_is_joined_before_shutdown_and_cannot_claim
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![])?,
         &[workspace.path().to_path_buf()],
         store.clone(),

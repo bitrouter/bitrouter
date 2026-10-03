@@ -14,7 +14,8 @@ use crate::editor::{Edit, Editor};
 #[derive(Default)]
 pub struct NativeState {
     pub model: String,
-    pub task_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
     pub status: String,
     pub verification: String,
     pub lines: Vec<String>,
@@ -81,12 +82,12 @@ impl NativeView {
                 ])
                 .split(area);
             let task_label = state
-                .task_id
+                .thread_id
                 .as_deref()
                 .map(|id| id.get(..8).unwrap_or(id))
                 .unwrap_or("new");
             let title = format!(
-                "BRO  model: {}  task: {}  status: {}  check: {}",
+                "BRO  model: {}  thread: {}  status: {}  check: {}",
                 if state.model.is_empty() {
                     "choose model"
                 } else {
@@ -97,7 +98,7 @@ impl NativeView {
                 state.verification
             );
             frame.render_widget(
-                Paragraph::new("Ctrl-C cancel task · Ctrl-D detach · y/n answer approval")
+                Paragraph::new("Ctrl-C cancel · Ctrl-D detach · Ctrl-Enter steer · Ctrl-R resume · y/n approval")
                     .block(Block::default().title(title).borders(Borders::ALL)),
                 chunks[0],
             );

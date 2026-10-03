@@ -5,7 +5,7 @@ use super::*;
 use crate::store::{ExecutionOwner, OwnerClaim};
 use std::sync::atomic::Ordering;
 
-impl TaskService {
+impl ThreadService {
     /// Initialize native execution authority. Read-only recovery and observation
     /// remain available when an old owner or legacy unfenced records block work.
     pub async fn initialize_execution(&self) -> Result<ExecutionOwner, ServiceError> {
@@ -32,7 +32,7 @@ impl TaskService {
             .store
             .claim_owner(&self.inner.instance_id)
             .await
-            .map_err(|error| ServiceError::new(ErrorCode::StorageUnavailable, error))?;
+            .map_err(ServiceError::storage)?;
         self.lock_state().execution_ownership = Some(claim.clone());
         let discovered = self
             .discover_startup(matches!(claim, OwnerClaim::Acquired { .. }))
@@ -105,7 +105,7 @@ impl TaskService {
         for id in turn_ids {
             let fence = {
                 let state = self.lock_state();
-                let task = state.tasks.get(&id).ok_or_else(unknown_task)?;
+                let task = state.turns.get(&id).ok_or_else(unknown_turn)?;
                 let workspace = &task.snapshot.workspace;
                 if state.active_workspaces.get(workspace) != Some(&id) {
                     return Err(ServiceError::new(
@@ -150,9 +150,9 @@ fn uncertain_cleanup(record: &ExecutionRecord) -> bool {
         ExecutionRecord::TurnRecord { fact, .. } => uncertain_cleanup(fact),
         ExecutionRecord::ToolResult { effect, .. }
         | ExecutionRecord::VerificationResult { effect, .. } => *effect == EffectStatus::Unknown,
-        ExecutionRecord::Event { event } => matches!(
-            event.payload,
-            TaskEventPayload::TaskFinished {
+        ExecutionRecord::TurnLifecycle { lifecycle, .. } => matches!(
+            lifecycle,
+            crate::thread::TurnLifecycle::Finished {
                 unknown_effect: true,
                 ..
             }

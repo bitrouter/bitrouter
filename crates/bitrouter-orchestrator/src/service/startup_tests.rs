@@ -4,11 +4,11 @@ use super::*;
 use tempfile::TempDir;
 
 #[tokio::test]
-async fn startup_discovers_cold_threads_and_legacy_tasks_without_replaying_or_loading_hot_context()
+async fn startup_discovers_cold_threads_without_replaying_or_loading_hot_context()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![
             final_turn(),
             final_turn(),
@@ -35,13 +35,13 @@ async fn startup_discovers_cold_threads_and_legacy_tasks_without_replaying_or_lo
         )
         .await?;
     assert_eq!(
-        wait_for(&source, &receipt.turn_id, TaskStatus::Completed)
+        wait_for(&source, &receipt.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     let legacy = source
-        .submit(TaskRequest {
+        .submit_fixture(TurnFixture {
             prompt: "legacy task".into(),
             workspace: workspace.path().into(),
             caller: CallerContext::local(),
@@ -51,10 +51,10 @@ async fn startup_discovers_cold_threads_and_legacy_tasks_without_replaying_or_lo
         })
         .await?;
     assert_eq!(
-        wait_for(&source, &legacy.task_id, TaskStatus::Completed)
+        wait_for(&source, &legacy.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     let paused = source
         .create_thread(
@@ -69,7 +69,7 @@ async fn startup_discovers_cold_threads_and_legacy_tasks_without_replaying_or_lo
             input("wait", "wait"),
         )
         .await?;
-    wait_for(&source, &active.turn_id, TaskStatus::WaitingForInput).await?;
+    wait_for(&source, &active.turn_id, TurnStatus::WaitingForInput).await?;
     let queued = source
         .enqueue_turn(
             &target(&paused),
@@ -79,14 +79,14 @@ async fn startup_discovers_cold_threads_and_legacy_tasks_without_replaying_or_lo
         .await?;
     source.cancel(&active.turn_id).await?;
     assert_eq!(
-        wait_for(&source, &active.turn_id, TaskStatus::Cancelled)
+        wait_for(&source, &active.turn_id, TurnStatus::Cancelled)
             .await?
             .status,
-        TaskStatus::Cancelled
+        TurnStatus::Cancelled
     );
     source.shutdown().await;
     let index = store.read_index(0, None, 128, 4096).await?;
-    let reader = TaskService::with_store(
+    let reader = ThreadService::with_store(
         app(vec![final_turn()])?,
         &[workspace.path().to_path_buf()],
         store.clone(),
@@ -98,14 +98,13 @@ async fn startup_discovers_cold_threads_and_legacy_tasks_without_replaying_or_lo
         .ok_or("startup report missing")?;
     assert!(discovery.complete && discovery.writer_fenced);
     assert_eq!(discovery.inspected_roots, 3);
-    assert_eq!(discovery.legacy_tasks, 1);
     assert_eq!(discovery.blocked_workspaces, 0);
     assert_eq!(
         discovery.scanned_records,
         index.entries.iter().map(|head| head.version).sum::<u64>()
     );
     assert!(reader.lock_state().threads.is_empty());
-    assert!(reader.lock_state().tasks.is_empty());
+    assert!(reader.lock_state().turns.is_empty());
     assert_eq!(reader.lock_state().cold_executions.len(), 3);
     assert!(!workspace.path().join("not-written.txt").exists());
     // Discovery has consumed no provider request; known-clean workspace can
@@ -124,10 +123,10 @@ async fn startup_discovers_cold_threads_and_legacy_tasks_without_replaying_or_lo
         )
         .await?;
     assert_eq!(
-        wait_for(&reader, &fresh_turn.turn_id, TaskStatus::Completed)
+        wait_for(&reader, &fresh_turn.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     // A later durable epoch is authoritative even though ThreadCreated still
     // names the original server. This metadata append performs no effect.
@@ -277,7 +276,7 @@ async fn startup_blocks_unknown_cold_workspace_before_explicit_load_but_allows_u
     let workspace = TempDir::new()?;
     let unrelated = TempDir::new()?;
     let store = Arc::new(MemoryExecutionStore::default());
-    let source = TaskService::with_store(
+    let source = ThreadService::with_store(
         app(vec![
             turn(vec![tool_call(
                 "write",
@@ -299,7 +298,7 @@ async fn startup_blocks_unknown_cold_workspace_before_explicit_load_but_allows_u
             input("write", "write"),
         )
         .await?;
-    let waiting = wait_for(&source, &active.turn_id, TaskStatus::WaitingForInput).await?;
+    let waiting = wait_for(&source, &active.turn_id, TurnStatus::WaitingForInput).await?;
     source
         .answer_input(
             &active.turn_id,
@@ -310,14 +309,14 @@ async fn startup_blocks_unknown_cold_workspace_before_explicit_load_but_allows_u
             true,
         )
         .await?;
-    wait_for(&source, &active.turn_id, TaskStatus::Completed).await?;
+    wait_for(&source, &active.turn_id, TurnStatus::Completed).await?;
     source.shutdown().await;
     let fault = Arc::new(DiscoveryFault {
         memory: store,
         fail_index: std::sync::atomic::AtomicBool::new(false),
         corrupt_result: true,
     });
-    let reader = TaskService::with_store(
+    let reader = ThreadService::with_store(
         app(vec![final_turn()])?,
         &[
             workspace.path().to_path_buf(),
@@ -329,7 +328,7 @@ async fn startup_blocks_unknown_cold_workspace_before_explicit_load_but_allows_u
     // capacity check must not bypass newly installed cold blockers.
     assert_eq!(
         reader
-            .submit(TaskRequest {
+            .submit_fixture(TurnFixture {
                 prompt: "must block".into(),
                 workspace: workspace.path().into(),
                 caller: CallerContext::local(),
@@ -352,7 +351,14 @@ async fn startup_blocks_unknown_cold_workspace_before_explicit_load_but_allows_u
             .blocked_workspaces,
         1
     );
-    assert!(reader.lock_state().threads.is_empty());
+    assert!(
+        reader
+            .lock_state()
+            .threads
+            .values()
+            .all(|thread| thread.snapshot.status == ThreadStatus::Idle
+                && thread.snapshot.active_turn_id.is_none())
+    );
     let fresh = reader
         .create_thread(
             &reader.inner.instance_id,
@@ -379,7 +385,7 @@ async fn startup_blocks_unknown_cold_workspace_before_explicit_load_but_allows_u
             input("keep queued", "queue"),
         )
         .await?;
-    assert_eq!(reader.read(&queued.turn_id)?.status, TaskStatus::Queued);
+    assert_eq!(reader.read(&queued.turn_id)?.status, TurnStatus::Queued);
     assert_eq!(
         reader
             .read_thread(&target(&fresh), &CallerContext::local())?
@@ -400,10 +406,10 @@ async fn startup_blocks_unknown_cold_workspace_before_explicit_load_but_allows_u
         )
         .await?;
     assert_eq!(
-        wait_for(&reader, &run.turn_id, TaskStatus::Completed)
+        wait_for(&reader, &run.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("already-written.txt"))?,
@@ -422,7 +428,7 @@ async fn incomplete_discovery_cannot_be_bypassed_by_a_cached_owner_and_can_retry
         fail_index: std::sync::atomic::AtomicBool::new(true),
         corrupt_result: false,
     });
-    let service = TaskService::with_store(
+    let service = ThreadService::with_store(
         app(vec![final_turn()])?,
         &[workspace.path().to_path_buf()],
         fault.clone(),
@@ -472,10 +478,10 @@ async fn incomplete_discovery_cannot_be_bypassed_by_a_cached_owner_and_can_retry
         )
         .await?;
     assert_eq!(
-        wait_for(&service, &turn.turn_id, TaskStatus::Completed)
+        wait_for(&service, &turn.turn_id, TurnStatus::Completed)
             .await?
             .status,
-        TaskStatus::Completed
+        TurnStatus::Completed
     );
     service.shutdown().await;
     Ok(())
@@ -487,7 +493,7 @@ async fn startup_record_and_metadata_limits_fail_closed_before_admission()
     for bound in ["roots", "records", "metadata"] {
         let workspace = TempDir::new()?;
         let store = Arc::new(MemoryExecutionStore::default());
-        let source = TaskService::with_store(
+        let source = ThreadService::with_store(
             app(vec![])?,
             &[workspace.path().to_path_buf()],
             store.clone(),
@@ -505,7 +511,7 @@ async fn startup_record_and_metadata_limits_fail_closed_before_admission()
             "records" => limits.startup_records = 1,
             _ => limits.startup_metadata_bytes = 1,
         }
-        let reader = TaskService::with_limits_and_store(
+        let reader = ThreadService::with_limits_and_store(
             app(vec![])?,
             &[workspace.path().to_path_buf()],
             limits,

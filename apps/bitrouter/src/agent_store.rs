@@ -2,8 +2,8 @@
 
 use bitrouter_orchestrator::store::{
     AcceptedKey, ExecutionHead, ExecutionIndexPage, ExecutionOwner, ExecutionPage, ExecutionRecord,
-    ExecutionStore, LegacyTaskProjection, OwnerClaim, StoredExecution, ThreadHistoryChunk,
-    owner_time_ms, push_history_event, validate_owner_id,
+    ExecutionStore, OwnerClaim, RUNTIME_FORMAT_VERSION, StoredExecution, ThreadHistoryChunk,
+    owner_time_ms, push_history_event, validate_owner_id, validate_runtime_format,
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
@@ -29,6 +29,7 @@ mod execution {
         #[sea_orm(primary_key, auto_increment = false)]
         pub id: String,
         pub version: i64,
+        pub format_version: i32,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -166,6 +167,7 @@ impl ExecutionStore for DatabaseExecutionStore {
                 .map_err(|e| e.to_string())?
                 .ok_or("execution index points to missing root")?;
             let value = ExecutionHead {
+                format_version: u32::try_from(root.format_version).unwrap_or(0),
                 position: u64::try_from(row.position).map_err(|e| e.to_string())?,
                 execution_id: row.execution_id,
                 version: u64::try_from(root.version).map_err(|e| e.to_string())?,
@@ -349,6 +351,7 @@ impl ExecutionStore for DatabaseExecutionStore {
         else {
             return Ok(None);
         };
+        validate_runtime_format(u32::try_from(execution.format_version).unwrap_or(0))?;
         let version = u64::try_from(execution.version).map_err(|error| error.to_string())?;
         let cutoff = cutoff.unwrap_or(version);
         if after > cutoff || cutoff > version {
@@ -416,59 +419,31 @@ impl ExecutionStore for DatabaseExecutionStore {
             .await
             .map_err(|error| error.to_string())?
             .ok_or("unknown execution")?;
+        validate_runtime_format(u32::try_from(execution.format_version).unwrap_or(0))?;
         if cutoff > execution.version {
             return Err("history cutoff is ahead of execution".into());
         }
-        let legacy_header = record::Entity::find()
-            .filter(record::Column::ExecutionId.eq(execution_id))
-            .filter(record::Column::Sequence.eq(1))
-            .filter(record::Column::Payload.starts_with("{\"record\":\"accepted\","))
-            .one(&transaction)
-            .await
-            .map_err(|error| error.to_string())?;
-        let legacy = match legacy_header {
-            Some(header) => {
-                if header.payload.len() > 4 * 1024 * 1024 {
-                    return Err("legacy header exceeds record byte bound".into());
-                }
-                let header: ExecutionRecord =
-                    serde_json::from_str(&header.payload).map_err(|error| error.to_string())?;
-                LegacyTaskProjection::from_header(&header, execution_id)?
-            }
-            None => None,
-        };
         let mut events = Vec::new();
         let mut bytes = 0;
         let mut more = false;
         loop {
-            // Native history selects public rows only. Legacy history projects
-            // one bounded raw row at a time; SDK prompts never enter the result.
+            // Select only committed public projection rows.
             let mut query = record::Entity::find()
                 .filter(record::Column::ExecutionId.eq(execution_id))
                 .filter(record::Column::Sequence.gt(after))
                 .filter(record::Column::Sequence.lte(cutoff))
                 .order_by_asc(record::Column::Sequence);
-            if legacy.is_none() {
-                query = query
-                    .filter(record::Column::Payload.starts_with("{\"record\":\"thread_event\","));
-            }
+            query =
+                query.filter(record::Column::Payload.starts_with("{\"record\":\"thread_event\","));
             let row = query
                 .limit(1)
                 .one(&transaction)
                 .await
                 .map_err(|error| error.to_string())?;
             let Some(row) = row else {
-                if legacy.is_some() && after < cutoff {
-                    return Err("legacy record history is incomplete".into());
-                }
                 break;
             };
-            if legacy.is_some()
-                && (row.sequence != after + 1 || row.payload.len() > 4 * 1024 * 1024)
-            {
-                return Err("legacy history record is missing or exceeds byte bound".into());
-            }
-            if legacy.is_none() && row.payload.len() > max_bytes.saturating_add(128) {
+            if row.payload.len() > max_bytes.saturating_add(128) {
                 if !events.is_empty() {
                     more = true;
                     break;
@@ -479,13 +454,7 @@ impl ExecutionStore for DatabaseExecutionStore {
                 serde_json::from_str(&row.payload).map_err(|error| error.to_string())?;
             let event = match fact {
                 ExecutionRecord::ThreadEvent { event } => Some(event),
-                other => legacy
-                    .as_ref()
-                    .ok_or("history row is not a Thread event")?
-                    .project(
-                        &other,
-                        u64::try_from(row.sequence).map_err(|error| error.to_string())?,
-                    )?,
+                _ => return Err("history row is not a Thread event".into()),
             };
             after = row.sequence;
             let Some(event) = event else {
@@ -535,6 +504,7 @@ impl ExecutionStore for DatabaseExecutionStore {
         else {
             return Ok(None);
         };
+        validate_runtime_format(u32::try_from(execution.format_version).unwrap_or(0))?;
         let rows = record::Entity::find()
             .filter(record::Column::ExecutionId.eq(execution_id))
             .order_by_asc(record::Column::Sequence)
@@ -560,6 +530,7 @@ impl ExecutionStore for DatabaseExecutionStore {
             .await
             .map_err(|error| error.to_string())?;
         Ok(Some(StoredExecution {
+            format_version: u32::try_from(execution.format_version).unwrap_or(0),
             execution_id: execution_id.into(),
             version,
             records,
@@ -641,10 +612,20 @@ impl DatabaseExecutionStore {
                 && current.stopped_at_ms.is_none() => {}
             _ => return Err("execution owner fence changed, stopped or missing".into()),
         }
+        if let Some(root) = execution::Entity::find_by_id(execution_id)
+            .one(&transaction)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            validate_runtime_format(u32::try_from(root.format_version).unwrap_or(0))?;
+        }
         if expected == 0 {
             execution::ActiveModel {
                 id: Set(execution_id.into()),
                 version: Set(version),
+                format_version: Set(
+                    i32::try_from(RUNTIME_FORMAT_VERSION).map_err(|e| e.to_string())?
+                ),
             }
             .insert(&transaction)
             .await
@@ -857,42 +838,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_unfenced_database_facts_cannot_be_claimed_by_a_new_epoch() -> anyhow::Result<()>
-    {
-        let db = crate::db::connect("sqlite::memory:").await?;
-        crate::db::run_migrations(&db).await?;
-        let store = DatabaseExecutionStore::new(db);
-        store
-            .commit("legacy", 0, &[settled()])
-            .await
-            .map_err(anyhow::Error::msg)?;
-        assert_eq!(
-            store
-                .claim_owner("new-epoch")
-                .await
-                .map_err(anyhow::Error::msg)?,
-            OwnerClaim::Unfenced
-        );
-        assert!(
-            store
-                .read_owner("new-epoch")
-                .await
-                .map_err(anyhow::Error::msg)?
-                .is_none()
-        );
-        assert_eq!(
-            store
-                .load("legacy")
-                .await
-                .map_err(anyhow::Error::msg)?
-                .ok_or_else(|| anyhow::anyhow!("legacy facts missing"))?
-                .version,
-            1
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn crash_owner_writer() -> anyhow::Result<()> {
         let Ok(url) = std::env::var("BRO_TEST_OWNER_STORE_URL") else {
             return Ok(());
@@ -1073,206 +1018,13 @@ mod tests {
                         thread_id: "thread".into(),
                         turn_id: format!("turn-{seq}"),
                         queue_order: seq,
-                        status: bitrouter_orchestrator::service::TaskStatus::Queued,
+                        status: bitrouter_orchestrator::service::TurnStatus::Queued,
                     },
                     user_item_id: format!("user-{seq}"),
                     prompt: text.into(),
                 }],
             },
         }
-    }
-
-    #[tokio::test]
-    async fn legacy_history_reopens_with_original_cursors_bounds_and_private_context_omitted()
-    -> anyhow::Result<()> {
-        use bitrouter_orchestrator::agent::AgentConfig;
-        use bitrouter_orchestrator::service::{
-            TaskEvent, TaskEventPayload, TaskStatus, VerificationStatus,
-        };
-        use bitrouter_sdk::language_model::{Message, Prompt, Role};
-        let directory = tempfile::tempdir()?;
-        let url = format!("sqlite://{}/legacy.db", directory.path().display());
-        let db = crate::db::connect(&url).await?;
-        crate::db::run_migrations(&db).await?;
-        let store = DatabaseExecutionStore::new(db.clone());
-        let config = AgentConfig::fixed("old-model", None).read_only();
-        let user = Message::text(Role::User, "original input");
-        let assistant = Message::text(Role::Assistant, "complete response");
-        let records = [
-            ExecutionRecord::Accepted {
-                owner_key_id: "old-key".into(),
-                owner_user_id: "old-user".into(),
-                fingerprint: "fingerprint".into(),
-                config: Box::new(config.clone()),
-                verification_command: None,
-                event: TaskEvent {
-                    thread_id: None,
-                    server_instance_id: "old-writer".into(),
-                    task_id: "old-task".into(),
-                    seq: 1,
-                    timestamp_ms: 42,
-                    payload: TaskEventPayload::Accepted {
-                        user_item_id: "original-user-item".into(),
-                        prompt: "original input".into(),
-                        workspace: directory.path().into(),
-                        model: "old-model".into(),
-                        tool_mode: config.tool_mode(),
-                        idempotency_key: None,
-                        request_fingerprint: Some("fingerprint".into()),
-                    },
-                },
-            },
-            ExecutionRecord::ModelRequest {
-                step_id: "original-step".into(),
-                item_id: "original-assistant".into(),
-                context_version: 0,
-                prompt: Box::new(Prompt {
-                    model: "old-model".into(),
-                    system: Some("PRIVATE_SDK_SYSTEM_ONLY".into()),
-                    system_provider_metadata: Default::default(),
-                    messages: vec![user.clone()],
-                    tools: Vec::new(),
-                    params: Default::default(),
-                    response_format: None,
-                    tool_choice: None,
-                    stream: true,
-                }),
-            },
-            ExecutionRecord::ModelResponse {
-                step_id: "original-step".into(),
-                item_id: "original-assistant".into(),
-                request_id: "provider-request".into(),
-                requested_model: "old-model".into(),
-                usage: None,
-                estimated_spend_microusd: 0,
-                message: assistant.clone(),
-                calls: Vec::new(),
-            },
-            ExecutionRecord::Settled {
-                outcome: None,
-                context_version: 1,
-                messages: vec![user, assistant],
-                model_steps: 1,
-                tool_calls: 0,
-                estimated_spend_microusd: 0,
-                active_duration_ms: 1,
-            },
-            ExecutionRecord::Event {
-                event: TaskEvent {
-                    thread_id: None,
-                    server_instance_id: "old-writer".into(),
-                    task_id: "old-task".into(),
-                    seq: 2,
-                    timestamp_ms: 43,
-                    payload: TaskEventPayload::TaskFinished {
-                        status: TaskStatus::Completed,
-                        detail: "finished".into(),
-                        final_answer: Some("complete response".into()),
-                        verification: VerificationStatus::NotRequested,
-                        verification_evidence: None,
-                        unknown_effect: false,
-                    },
-                },
-            },
-        ];
-        store
-            .commit("old-task", 0, &records[..3])
-            .await
-            .map_err(anyhow::Error::msg)?;
-        let first = store
-            .thread_history("old-task", 0, 3, 1, 16 * 1024)
-            .await
-            .map_err(anyhow::Error::msg)?;
-        assert_eq!(first.events.len(), 1);
-        assert_eq!(first.events[0].seq, 1);
-        assert!(first.more);
-        let first_size = serde_json::to_vec(&first.events[0])?.len();
-        let bounded = store
-            .thread_history("old-task", 0, 3, 10, first_size)
-            .await
-            .map_err(anyhow::Error::msg)?;
-        assert_eq!(bounded.events.len(), 1);
-        assert!(bounded.more);
-        assert!(store.thread_history("old-task", 0, 3, 10, 1).await.is_err());
-        store
-            .commit("old-task", 3, &records[3..])
-            .await
-            .map_err(anyhow::Error::msg)?;
-        drop(store);
-        db.close().await?;
-        let reopened_db = crate::db::connect(&url).await?;
-        let reopened = DatabaseExecutionStore::new(reopened_db.clone());
-        let fixed = reopened
-            .thread_history("old-task", 1, 3, 10, 16 * 1024)
-            .await
-            .map_err(anyhow::Error::msg)?;
-        assert_eq!(
-            fixed
-                .events
-                .iter()
-                .map(|event| event.seq)
-                .collect::<Vec<_>>(),
-            vec![2, 3]
-        );
-        assert!(!fixed.more);
-        let complete = reopened
-            .thread_history("old-task", 0, 5, 10, 16 * 1024)
-            .await
-            .map_err(anyhow::Error::msg)?;
-        assert_eq!(
-            complete
-                .events
-                .iter()
-                .map(|event| event.seq)
-                .collect::<Vec<_>>(),
-            vec![1, 2, 3, 4, 5]
-        );
-        assert!(
-            complete
-                .events
-                .iter()
-                .all(|event| event.thread_id == "old-task"
-                    && event.server_instance_id == "old-writer")
-        );
-        let encoded = serde_json::to_string(&complete.events)?;
-        assert!(encoded.contains("original-user-item") && encoded.contains("original-assistant"));
-        assert!(!encoded.contains("PRIVATE_SDK_SYSTEM_ONLY") && !encoded.contains("\"messages\":"));
-        assert_eq!(
-            reopened
-                .load("old-task")
-                .await
-                .map_err(anyhow::Error::msg)?
-                .ok_or_else(|| anyhow::anyhow!("root missing"))?
-                .version,
-            5
-        );
-        let mut oversized = records[1].clone();
-        if let ExecutionRecord::ModelRequest { prompt, .. } = &mut oversized {
-            prompt.system = Some("s".repeat(4 * 1024 * 1024));
-        }
-        record::ActiveModel {
-            execution_id: Set("old-task".into()),
-            sequence: Set(2),
-            payload: Set(serde_json::to_string(&oversized)?),
-        }
-        .update(&reopened_db)
-        .await?;
-        assert!(
-            reopened
-                .thread_history("old-task", 1, 5, 10, 16 * 1024)
-                .await
-                .is_err()
-        );
-        record::Entity::delete_by_id(("old-task".to_string(), 2))
-            .exec(&reopened_db)
-            .await?;
-        assert!(
-            reopened
-                .thread_history("old-task", 1, 5, 10, 16 * 1024)
-                .await
-                .is_err()
-        );
-        Ok(())
     }
 
     #[tokio::test]
@@ -1675,13 +1427,19 @@ mod discovery_tests {
             .position(|migration| migration.name() == "m20240101_000025_create_bro_execution_index")
             .ok_or_else(|| anyhow::anyhow!("index migration missing"))?;
         crate::db::migration::Migrator::up(&db, Some(u32::try_from(position)?)).await?;
-        execution::ActiveModel {
-            id: Set("before-migration".into()),
-            version: Set(1),
-        }
-        .insert(&db)
-        .await?;
+        // Emulate the pre-format writer without referencing the new column.
+        let insert = sea_orm::sea_query::Query::insert()
+            .into_table(execution::Entity)
+            .columns([execution::Column::Id, execution::Column::Version])
+            .values(["before-migration".into(), 1_i64.into()])?
+            .to_owned();
+        db.execute(db.get_database_backend().build(&insert)).await?;
         crate::db::migration::Migrator::up(&db, None).await?;
+        let old_root = execution::Entity::find_by_id("before-migration")
+            .one(&db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("old root missing"))?;
+        assert_eq!(old_root.format_version, 0);
         let store = DatabaseExecutionStore::new(db.clone());
         let page = store
             .read_index(0, None, 128, 4096)
@@ -1714,6 +1472,7 @@ mod discovery_tests {
         .insert(&db)
         .await?;
         execution::ActiveModel {
+            format_version: Set(0),
             id: Set("after-migration".into()),
             version: Set(1),
         }
@@ -1737,6 +1496,79 @@ mod discovery_tests {
                 .iter()
                 .any(|entry| entry.execution_id == "after-migration")
         );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn old_runtime_format_is_rejected_before_decoding_and_preserves_owner_and_journal()
+    -> anyhow::Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::migration::Migrator::up(&db, None).await?;
+        let store = DatabaseExecutionStore::new(db.clone());
+        let OwnerClaim::Acquired { owner } = store
+            .claim_owner("old-owner")
+            .await
+            .map_err(anyhow::Error::msg)?
+        else {
+            anyhow::bail!("missing owner");
+        };
+        execution::ActiveModel {
+            id: Set("old-root".into()),
+            version: Set(1),
+            format_version: Set(0),
+        }
+        .insert(&db)
+        .await?;
+        let payload = "{\"record\":\"accepted\",\"unrecognized_old_payload\":true}";
+        record::ActiveModel {
+            execution_id: Set("old-root".into()),
+            sequence: Set(1),
+            payload: Set(payload.into()),
+        }
+        .insert(&db)
+        .await?;
+        discovery::ActiveModel {
+            execution_id: Set("old-root".into()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await?;
+        let error = store
+            .read_records("old-root", 0, None, 1, 4096)
+            .await
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("old format read"))?;
+        assert!(error.contains("unsupported_runtime_format"));
+        assert!(
+            store
+                .thread_history("old-root", 0, 1, 1, 4096)
+                .await
+                .is_err()
+        );
+        assert!(store.load("old-root").await.is_err());
+        assert!(
+            store
+                .commit_owned(&owner, "old-root", 1, &[ExecutionRecord::QueueResumed])
+                .await
+                .err()
+                .is_some_and(|error| error.contains("unsupported_runtime_format"))
+        );
+        assert_eq!(
+            store
+                .read_owner("old-owner")
+                .await
+                .map_err(anyhow::Error::msg)?,
+            Some(owner)
+        );
+        let saved = record::Entity::find_by_id(("old-root".to_owned(), 1))
+            .one(&db)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("lost old payload"))?;
+        assert_eq!(saved.payload, payload);
+        let heads = store
+            .read_index(0, None, 128, 4096)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(heads.entries[0].format_version, 0);
         Ok(())
     }
 }
