@@ -662,7 +662,7 @@ async fn steering_revokes_restored_waiting_approval_and_late_execute() -> TestRe
     late_command.execution_epoch = replacement.store.lock().await.grant.execution_epoch;
     assert!(
         replacement
-            .send(ServerMessage::ToolExecute(late_command))
+            .send(ServerMessage::ToolExecute(Box::new(late_command)))
             .await
             .is_err()
     );

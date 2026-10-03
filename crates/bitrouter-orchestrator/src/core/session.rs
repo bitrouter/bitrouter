@@ -39,6 +39,7 @@ use super::routing::{
 use super::signals::{self, MaterialRequest, SignalState};
 
 mod archive;
+mod artifact_storage;
 mod budget;
 mod capacity;
 mod pairing;
@@ -2577,7 +2578,9 @@ impl CoreSession {
         self.transition_for(Some(agent_id), "model.output.applied", |state, head| {
             let manifest = current_step(state,agent_id,step_id)?.manifest.clone();
             let limit = active_run(state)?.limits.outstanding_tools;
-            let input_bytes = active_run(state)?.limits.input_bytes.min(self.shared.limits.input_bytes);
+            // A text-only or interrupted output does not need a tool reply
+            // envelope. Apply admission errors only to actual workspace calls.
+            let result_limits = tool_payloads::admit(state, &self.shared.limits, manifest.max_tool_output_bytes);
             let outstanding = state.agents.values().filter_map(|agent| agent.turn.as_ref()).flat_map(|turn| &turn.invocations).filter(|call| call.result.is_none()).count();
             let agent = agent_mut(state, agent_id)?;
             let context_revision = agent.context_revision;
@@ -2705,7 +2708,7 @@ impl CoreSession {
                             execution_epoch: head.execution_epoch,
                             authorizing_event_seq: head.event_seq + 1,
                             verification: false,
-                            result_limits: Some(super::protocol::ToolResultLimits::for_input(input_bytes, manifest.max_tool_output_bytes)?),
+                            result_limits: Some(result_limits.clone()?),
                         },
                         public_call_id: id("call"),
                         provider_call_id: call_id.clone(),
@@ -2960,7 +2963,7 @@ impl CoreSession {
                 let delivered = tokio::select! {
                     biased;
                     _ = disconnected.cancelled() => Err(reject(ErrorCode::CheckpointUnavailable, "harness disconnected before tool delivery")),
-                    delivered = session.shared.harness.send(ServerMessage::ToolExecute(command)) => delivered,
+                    delivered = session.shared.harness.send(ServerMessage::ToolExecute(Box::new(command))) => delivered,
                 };
                 if delivered.is_err() {
                     session.disconnect_generation(generation).await;
@@ -3213,6 +3216,7 @@ impl CoreSession {
                 .collect();
             capacity::check(next, &proposed, &self.shared.limits, live.gate.grant())?;
         }
+        artifact_storage::check(next, &prepared.state, &self.shared.limits)?;
         next.recovery_archive = prepared.state.recovery_archive.clone();
         Ok((proposed, prepared))
     }

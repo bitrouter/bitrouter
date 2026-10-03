@@ -495,9 +495,9 @@ fn reconcile_tools(
                 state.run.as_ref(),
                 turn.input.limits.as_ref(),
             )?;
-            // Upgrade legacy intents while their original run policy is still
-            // available. Later roots must not enlarge retained child replies,
-            // and any restored dispatch must advertise its effective bounds.
+            // Upgrade legacy payload limits while the original run policy is
+            // available. An absent artifact bound stays absent: already
+            // dispatched work did not promise the new body allowance.
             call.dispatch.result_limits = Some(limits);
             let invocation_id = call.dispatch.invocation_id.clone();
             let observation = observations.remove(&invocation_id);

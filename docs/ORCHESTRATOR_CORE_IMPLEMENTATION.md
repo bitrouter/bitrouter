@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload bounds, cleanup projection, recovery archives and durable checkpoint-capacity failure implemented; artifact/storage exhaustion, unknown output admission and the remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission and durable capacity failure implemented; physical storage/future archive exhaustion, unknown output admission and the remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Pending |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -2309,3 +2309,71 @@ Validation of the durable capacity-failure increment with Rust 1.99.0:
 
 New-commit remote CI and the remaining C4–C6/full-acceptance work are separate
 required gates.
+
+## C4 artifact-body bounds and retained-state admission
+
+New workspace and verification intents freeze `ToolResultLimits.artifact_bytes`
+alongside output/payload limits. Every result or lifecycle observation counts
+distinct referenced body bytes; identical references count once, conflicting
+identities and overflowing totals reject before acceptance. The allowance uses
+the manifest quota divided by `5 * run.outstanding_tools + 2`. It cannot grow
+after signals or ownership changes. The two extra shares are an allocation
+policy, not a separate physical-storage or future-archive guarantee.
+
+Before ACK, admission adds actual distinct object sizes to unconsumed allowances
+for first running/stopped/unknown observations and uncertain/definite results
+of every unfinished bounded invocation. Hydrated recovery dependencies and
+advertised material objects count even when the wire inventory is smaller.
+Archive space uses the larger of the distinct acknowledged/replacement root
+sizes and twice the current archive representation, including when still inline.
+Exhaustion discards the candidate and uses the independent durable
+`run.capacity_reached` transition; accepted evidence is not truncated or erased.
+
+Independent review found two compatibility defects in the initial migration:
+it narrowed an already dispatched legacy reply to the new allocation, and
+required discarded run limits for a completed legacy child. Restoration now
+preserves absent body limits. Legacy evidence still receives payload/reference,
+availability and actual aggregate-quota checks, but no retroactive body-space
+reservation is claimed. Existing payload-limit migration retains its original
+provenance requirements; a previously frozen payload contract does not acquire
+new run-policy requirements merely because its artifact field is absent.
+
+Focused regressions cover frozen body limits after quota enlargement, duplicate
+and conflicting references, overflow, one and two concurrent tools through
+logical quota exhaustion and complete uncertain/definite recovery, a legacy
+result larger than the new share, and a completed legacy child with default
+input limits across root replacement. The focused artifact/payload/capacity
+suite passed 19 tests. Final workspace checks and review follow below.
+
+The first workspace run caught an error-priority regression for an oversized
+payload containing an invalid artifact digest. Complete payload admission again
+precedes artifact validation; the unchanged regression and all 286 orchestrator
+tests then passed. Strict clippy also required boxing the enlarged
+`ServerMessage::ToolExecute` variant; its JSON representation is unchanged.
+An additional regression reproduced rejection of a valid small-input text-only
+task by the hoisted reply-limit check. Reply admission errors are now applied
+only when constructing an actual workspace invocation; plain or interrupted
+output does not need to fit an unused tool-result envelope.
+
+This increment does not complete A20/C4: physical storage reservation, staging
+and historical-checkpoint retention, all future archive growth, legacy-body
+reservations, oversized historical-result migration, unknown provider/output
+admission, wider child/wait saturation and the remaining fault matrix remain.
+C5/C6 and the final A01–A23 audit also remain open. Prior commit `599c131a`
+completed remote CI successfully (run `37091394067`).
+
+Final validation of this increment with Rust 1.99.0:
+
+- Workspace/all-feature nextest: 3943 passed, 22 skipped, in 107.311 seconds
+  with four test threads, including the final text-only admission regression.
+  The complete orchestrator suite separately passed all 287 tests.
+- Strict workspace/all-target/all-feature clippy passed in 30.53 seconds;
+  strict workspace rustdoc passed in 18.20 seconds. Workspace doctests:
+  5 passed, 1 ignored.
+- Rust 1.93.0 workspace/all-feature check passed in 18.42 seconds; formatting
+  and diff checks passed.
+- Final independent read-only review found no remaining P1/P2 within this
+  increment, including the compatibility fixes, validation priority, boxed
+  message variant and deferred reply admission. The remaining C4/C5/C6 and
+  full acceptance obligations above are unchanged. New-commit CI is a separate
+  gate.

@@ -84,6 +84,28 @@ async fn tool_payload_rejects_metadata_and_escaped_output_before_acceptance() ->
 }
 
 #[tokio::test]
+async fn tool_payload_reply_capacity_does_not_block_a_text_only_answer() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, _, _) = setup(vec![output(vec![text("done")])], harness.clone(), false).await?;
+    let mut task = input();
+    task.text = "x".into();
+    task.acceptance_criteria.clear();
+    task.limits = Some(Limits {
+        input_bytes: 1024,
+        ..Limits::default()
+    });
+    let bytes = serde_json::to_vec(&task)?.len() as u64;
+    task.limits.as_mut().ok_or("limits")?.input_bytes = bytes + 8;
+    session.start("input", 1, task).await?;
+    assert_eq!(
+        session.drive().await?.run.map(|run| run.status),
+        Some(RunStatus::Completed)
+    );
+    assert!(harness.sent.lock().await.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn tool_payload_boundary_fits_the_maximum_control_envelope() -> TestResult {
     let (session, _, command) = pending().await?;
     let limits = command.result_limits.ok_or("limits")?;
@@ -270,7 +292,7 @@ async fn tool_payload_verification_advertises_its_own_frozen_limits() -> TestRes
     Ok(())
 }
 
-fn rewrite_last(
+pub(super) fn rewrite_last(
     store: &mut DurableHarness,
     edit: impl FnOnce(&mut bitrouter_orchestrator::core::checkpoint::CheckpointPayload),
 ) -> TestResult {
@@ -315,7 +337,9 @@ async fn tool_payload_legacy_intent_is_upgraded_before_restored_dispatch() -> Te
         .first()
         .ok_or("dispatch")?
         .clone();
-    assert_eq!(sent.result_limits, command.result_limits);
+    let mut legacy_limits = command.result_limits.ok_or("limits")?;
+    legacy_limits.artifact_bytes = None;
+    assert_eq!(sent.result_limits, Some(legacy_limits));
     assert_eq!(sent.invocation_id, command.invocation_id);
     assert_eq!(
         restored
@@ -421,7 +445,9 @@ async fn tool_payload_legacy_child_retains_limits_across_root_replacement() -> T
             .invocations[0]
             .dispatch
             .result_limits;
-        assert_eq!(frozen, command.result_limits);
+        let mut legacy_limits = command.result_limits.ok_or("limits")?;
+        legacy_limits.artifact_bytes = None;
+        assert_eq!(frozen, Some(legacy_limits));
         let before = restored.head().await;
         assert_eq!(
             restored

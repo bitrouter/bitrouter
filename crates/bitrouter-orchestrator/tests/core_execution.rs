@@ -1,5 +1,7 @@
 #[path = "core_execution/accounting.rs"]
 mod accounting;
+#[path = "core_execution/artifact_storage.rs"]
+mod artifact_storage;
 #[path = "core_execution/budget.rs"]
 mod budget;
 #[path = "core_execution/capacity.rs"]
@@ -302,6 +304,7 @@ impl HarnessPort for Harness {
             return Ok(());
         }
         if let ServerMessage::ToolExecute(command) = message {
+            let command = *command;
             if self.hold_send {
                 self.seen.add_permits(1);
                 self.resume

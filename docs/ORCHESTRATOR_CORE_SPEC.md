@@ -384,7 +384,14 @@ limits, including verification and restore reconciliation. A host/manifest
 change cannot enlarge a previously admitted reply. Oversized evidence is
 rejected before a checkpoint; it is never truncated or treated as a tool
 outcome. These per-message limits are distinct from reserving space for all
-outstanding results and terminal records in a checkpoint.
+outstanding results and terminal records in a checkpoint. `artifact_bytes`
+bounds the sum of distinct immutable artifact body sizes referenced by each
+result or observation. Repeated identical references count once; conflicting
+references for the same ID and overflowing byte totals reject the message.
+Missing `artifact_bytes` preserves a legacy execution contract: restoration
+does not narrow an already authorized reply or invent a retroactive reservation.
+Its evidence still receives payload, reference, availability and aggregate
+quota checks. New invocations, including verification, always carry the bound.
 
 The checkpoint contains the agent tree, turns, runnable/waiting states,
 mailboxes, ordered context manifests and histories, pending calls, unconsumed
@@ -640,6 +647,25 @@ may enforce tighter limits. Tool-output bounds and artifact quotas are part of
 its advertised manifest and checked at bind time. Active-time accounting
 excludes intervals with no running model/tool work, such as pure approval or
 commit waits; it does not sum overlapping work as wall time.
+
+Artifact admission counts the current snapshot's distinct referenced bodies,
+including hydrated archive dependencies and advertised material objects, plus
+unconsumed allowances for newly admitted tool evidence. The initial per-message
+body allowance is `artifact_quota_bytes / (5 * outstanding_tools + 2)`, frozen
+with the invocation. Five first essential messages cover running, stopped and
+unknown-effect observations and uncertain/definite outcomes. A definite outcome
+releases unused allowances. Repeated optional reports need additional room;
+they cannot consume another invocation's reserved bytes. Current archive
+representation and acknowledged/replacement-root overlap also count before ACK,
+including before the first wire compaction. Aggregate failure uses the durable
+capacity-failure path below, preserving the unaccepted request at the harness.
+
+These checks bound logical objects referenced by current state and its pending
+replacement. They do not establish physical host storage leases, capacity for
+all retained historical checkpoints, or all future recovery-archive growth.
+Legacy invocations without a body bound have no prospective body reservation.
+Those remaining storage and migration obligations require separate acceptance
+evidence before the full cleanup guarantee is complete.
 
 Checkpoint admission checks both the candidate and a conservative cleanup
 projection. If a live run cannot admit the candidate, core discards it and
