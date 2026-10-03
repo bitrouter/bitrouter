@@ -231,6 +231,9 @@ pub(crate) struct NativeOutputReservation(pub u32);
 /// Every controlled call carries this marker, even before output admission.
 pub(crate) struct NativeManagedRequest;
 
+/// Maximum decoded HTTP entity bytes consumed for one managed provider reply.
+pub(crate) struct NativeResponseByteLimit(pub u64);
+
 /// A redacted snapshot after shared auth, prompt preparation and model policy.
 /// The pipeline executes this exact prompt and route chain without rerunning
 /// selection after the embedding runtime acknowledges the plan.
@@ -290,6 +293,14 @@ pub struct NativeAttemptReport {
 /// Per-request durable controls supplied by a native embedding runtime.
 #[async_trait]
 pub trait NativeExecutionControl: Send + Sync {
+    /// Bound the HTTP executor's complete decoded response body, including SSE
+    /// framing and terminal events. This also bounds unsuccessful response bodies.
+    /// The bound is checked before passing each chunk to JSON/SSE parsing. It is
+    /// not an allocation accounting guarantee for custom executors or hooks.
+    fn provider_response_byte_limit(&self) -> Option<u64> {
+        None
+    }
+
     /// Request cancellation of active provider I/O. The SDK still reports the
     /// resulting attempt and runs settlement; cancellation does not prove that
     /// the provider performed no work. Ordinary callers never trigger this.

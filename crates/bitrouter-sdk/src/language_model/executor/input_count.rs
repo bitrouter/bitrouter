@@ -236,12 +236,15 @@ impl HttpExecutor {
             )));
         }
         let mut bytes = Vec::new();
+        let limit = super::response_body::limit(ctx)
+            .unwrap_or(16 * 1024)
+            .min(16 * 1024);
         while let Some(chunk) = response
             .chunk()
             .await
             .map_err(|_| invalid("provider input counting response failed"))?
         {
-            if bytes.len().saturating_add(chunk.len()) > 16 * 1024 {
+            if (bytes.len() as u64).saturating_add(chunk.len() as u64) > limit {
                 return Err(invalid("provider input counting response exceeds bound"));
             }
             bytes.extend_from_slice(&chunk);

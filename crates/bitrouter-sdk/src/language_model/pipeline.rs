@@ -1222,6 +1222,9 @@ impl Pipeline {
             .map(NativeExecutionControl::model_selection);
         let mut ctx = PipelineContext::new(req);
         if let Some(control) = control {
+            if let Some(limit) = control.provider_response_byte_limit() {
+                ctx.insert_extension(Arc::new(super::native::NativeResponseByteLimit(limit)));
+            }
             ctx.insert_extension(Arc::new(NativePreparationRuntime::new(control)));
         }
         if selection.is_some() {

@@ -357,6 +357,10 @@ struct TransformCheckedControl {
 
 #[async_trait::async_trait]
 impl crate::language_model::native::NativeExecutionControl for TransformCheckedControl {
+    fn provider_response_byte_limit(&self) -> Option<u64> {
+        self.inner.provider_response_byte_limit()
+    }
+
     async fn provider_cancelled(&self) {
         self.inner.provider_cancelled().await;
     }

@@ -2645,3 +2645,44 @@ The provider is held by an explicit permit rather than a wall-clock delay.
   check passed (0.51 seconds); formatting, diff and tracked-ignore checks passed.
 - Previous head `a66aa7ef` passed all jobs of GitHub CI 37147783376. The CI for
   this increment remains a separate gate.
+
+## C4 managed provider response ingress
+
+Managed model steps pass the smaller of the frozen root run's and session's
+`checkpoint_bytes` through the SDK control wrapper to the HTTP executor. Each
+response is bounded before complete JSON buffering or SSE event parsing. The
+limit counts cumulative decoded entity bytes, including SSE framing, keepalives,
+deltas and terminal data. Content-Length can reject early but cannot replace
+actual chunk accounting. Input-count responses use the smaller of this limit
+and their existing 16 KiB bound. Ordinary uncontrolled execution keeps its
+existing text decoding behavior.
+
+Oversized successful responses produce a bounded failure receipt, retain
+unknown cost exposure when usage is unavailable, and cannot authorize tools.
+Oversized error bodies are discarded without losing the original HTTP status:
+400/401/403 do not become fallback-eligible invalid responses, 401 still permits
+the existing single authentication refresh, and 429 retains Retry-After.
+Transport errors retain their existing classification. The admission check
+also stops chunked responses that never send EOF and unfinished SSE events.
+
+The seven SDK regressions passed in 0.039 seconds and all nineteen managed API
+tests passed in 2.953 seconds. Independent review identified the error-status
+regression and verified its fix; the focused re-review found no remaining
+P1/P2. This increment bounds provider HTTP entity ingress; full physical copy
+accounting, custom executors, preparation hooks, canonical output admission and
+remaining storage/acceptance work remain open.
+
+CI `37149428807` for previous head `1a85743d` failed only the Windows tests:
+the new recovery client's explicit close drain received OS error 10053
+(`ConnectionAborted`). That cleanup now accepts connection abort/reset after
+close initiation. Active send/receive errors, epoch assertions and the close
+timeout remain unchanged. Independent review found no P1/P2 in this fix;
+new-head Windows CI must confirm it.
+
+Final-source Rust 1.99.0 workspace/all-feature nextest passed 3996 tests with
+22 skipped in 111.394 seconds using four test threads. Strict workspace/all-
+target/all-feature clippy passed in 39.632 seconds, strict rustdoc in 26.123
+seconds, and Rust 1.93.0 workspace/all-feature check in 23.358 seconds.
+Workspace doctests passed five tests with one ignored. Formatting, diff and
+tracked-ignore checks passed. These gates and the independent reviews cover
+this increment; the remaining acceptance requirements are still open.

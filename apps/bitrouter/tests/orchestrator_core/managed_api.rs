@@ -18,6 +18,9 @@ mod pressure;
 #[path = "managed_api/recovery.rs"]
 mod recovery;
 
+#[path = "managed_api/provider_limits.rs"]
+mod provider_limits;
+
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
