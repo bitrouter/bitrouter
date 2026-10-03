@@ -2,10 +2,11 @@
 
 mod auth;
 mod channel;
+mod output;
 mod responses;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -19,6 +20,7 @@ use sea_orm::DatabaseConnection;
 use tokio::sync::{Mutex, Semaphore};
 
 type SessionKey = (String, String, String);
+type OutputBudgets = (Weak<output::Budget>, Weak<output::Budget>);
 
 struct Entry {
     session: Option<CoreSession>,
@@ -38,6 +40,8 @@ struct Shared {
     sessions: Mutex<BTreeMap<SessionKey, Entry>>,
     connections: Arc<Semaphore>,
     requests: Arc<Semaphore>,
+    inspections: Arc<Semaphore>,
+    outputs: Mutex<BTreeMap<SessionKey, OutputBudgets>>,
     shutdown: tokio_util::sync::CancellationToken,
 }
 
@@ -101,6 +105,8 @@ impl ManagedCoreApi {
                 sessions: Mutex::new(BTreeMap::new()),
                 connections: Arc::new(Semaphore::new(max_sessions as usize)),
                 requests: Arc::new(Semaphore::new(16)),
+                inspections: Arc::new(Semaphore::new(4)),
+                outputs: Mutex::new(BTreeMap::new()),
                 shutdown: tokio_util::sync::CancellationToken::new(),
             }),
         }
@@ -146,7 +152,7 @@ impl ManagedCoreApi {
         principal: &auth::Principal,
         session_id: &str,
         epoch: u64,
-    ) -> Result<(CoreSession, Limits), ApiError> {
+    ) -> Result<(CoreSession, Limits, Arc<output::Budget>), ApiError> {
         let sessions = self.shared.sessions.lock().await;
         let entry = sessions
             .get(&Self::key(principal, session_id))
@@ -166,7 +172,7 @@ impl ManagedCoreApi {
         entry
             .session
             .clone()
-            .map(|session| (session, entry.limits.clone()))
+            .map(|session| (session, entry.limits.clone(), entry.port.output.budget()))
             .ok_or_else(|| {
                 ApiError::core(
                     ErrorCode::Busy,

@@ -31,6 +31,7 @@ mod auth_scope;
 
 #[derive(Default)]
 struct Store {
+    heads_received: usize,
     head: DurableHead,
     batches: Vec<CheckpointBatch>,
     acknowledgements: BTreeMap<String, CheckpointAck>,

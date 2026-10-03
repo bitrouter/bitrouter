@@ -24,7 +24,7 @@ mock-provider demonstration does not establish production integration.
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission and durable capacity failure implemented; physical storage/future archive exhaustion, unknown output admission and the remaining fault matrix remain |
-| C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, HTTP/SSE projection and WebSocket channel connected to the service host; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
+| C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, incremental HTTP/SSE projection and separate bounded WebSocket control lane connected to the service host; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
 
@@ -2559,3 +2559,57 @@ shared per-session byte admission ledger. That path still needs incremental
 serialization/projection and pressure tests. Mid-operation authorization races,
 authenticated replacement/release conformance, measured remote running-tool
 clock handoff, remaining C4/C6 work and full acceptance remain open.
+
+## C5 incremental output and slow-consumer isolation
+
+Managed HTTP consumers now share an immutable terminal exchange instead of
+cloning it per reader. Borrowed wire views serialize JSON and SSE directly into
+admitted chunks of at most 16 KiB. Text, tool arguments, attributed events and
+the final response are not copied into queued JSON values. Nested verification
+arguments stream through JSON-string escaping. A complete response or logical
+SSE event can exceed the byte window without truncation or rejected output.
+
+The session ledger accounts for allocated chunk capacity and retains ownership
+through downstream `Bytes` clones, EOF and body drop. Frozen run limits apply
+across consumers of that run. A producer waiting for capacity exits when its
+consumer closes; accepted core work remains independent. At most sixteen
+admitted HTTP consumers can own producers. Weak ledgers preserve outstanding
+bytes across restoration, release and rebind; a lower limit that cannot yet
+contain retained bytes returns busy before binding side effects.
+
+All current harness `ServerMessage` variants are control or durable traffic.
+They use a separate bounded staging lane under `unacknowledged_bytes`, leaving
+the `ephemeral_bytes` window for HTTP/UI output. One encoded WebSocket message
+is admitted before allocation and retained through socket flush. Both split
+socket halves retain its owner on failure/abort because the underlying socket
+may have copied it into its own write buffer. Existing core checkpoint/ACK
+accounting still owns pending durable batches; this is not a completed proof of
+aggregate physical source, checkpoint and transport-copy memory accounting.
+
+Managed ingress reserves its consumer slot before reading a body, authenticates,
+and applies the host input bound before deserialization. No-beta ordinary
+Responses inspection retains its original 16 MiB bound behind four separate
+host slots. Both reads have a twenty-second deadline, and managed requests
+require positive output capacity. The ordinary inference handler remains
+available when managed consumer admission is full.
+
+Independent review identified and verified fixes for control starvation behind
+UI bytes, WebSocket copied-buffer ownership on split-socket failure, an ordinary
+ingress slot with no deadline, and typed SSE projection errors becoming body
+errors. Final focused reviews found no remaining P1/P2 in this increment.
+The final targeted run passed 22 tests in 2.214 seconds. These include concurrent
+JSON/SSE clients receiving escaped output larger than 4 KiB session/1 KiB run
+windows, a held server body chunk alongside real WebSocket head/cancel commands,
+17-byte nested-argument serialization, EOF/cloned-chunk ownership, consumer
+cancellation while awaiting bytes, failed-writer cleanup, typed unsupported
+output errors, and admission before polling a request body.
+
+Final-source workspace/all-feature nextest passed 3983 tests with 22 skipped
+in 109.972 seconds using four test threads. Strict workspace/all-target/
+all-feature clippy passed in 24.49 seconds, strict rustdoc in 17.32 seconds,
+and Rust 1.93.0 workspace/all-feature check in 16.24 seconds. Workspace doctests
+passed five tests with one ignored; formatting, diff and tracked-ignore checks
+passed. This evidence does not complete physical memory accounting,
+maximum-size control/ACK-loss stress, remote clock handoff, remaining
+C4/C6 work or A01–A23 acceptance. Previous head `3dbea06c` passed all jobs of
+remote CI `37144726860`; the next commit's CI is tracked separately.

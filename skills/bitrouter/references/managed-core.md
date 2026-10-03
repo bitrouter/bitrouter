@@ -62,3 +62,24 @@ chunks retain the response, even after execution has finished. Retry a busy
 consumer with the same operation identity. Key-bound policy is checked by the
 shared model pipeline on each new exchange; changing a policy does not reopen
 an already completed response.
+
+HTTP JSON and SSE serialize incrementally from a shared immutable exchange.
+The `ephemeral_bytes` window counts allocated output chunks across consumers of
+the session and, when lowered, the same frozen run. A logical response or SSE
+event may exceed that window: drain its chunks to receive the complete result.
+The server does not truncate text or replace a result with a size error merely
+because the complete response is larger than the window. Server-side consumers
+that retain `Bytes` must release them after copying or processing each chunk.
+
+Harness WebSocket commands, receipts and checkpoints use a separately bounded
+control lane under `unacknowledged_bytes`; UI consumers cannot spend that lane's
+capacity. Socket staging retains its byte owner through flush and both halves'
+cleanup on failure. Lowering transport limits during restoration can return
+busy until previously retained output fits. Reconnect/rebind do not reset live
+byte ownership. Managed remote execution requires positive output capacity.
+
+Managed requests acquire a consumer slot before reading their body and use the
+host input bound (64 KiB by default), then the negotiated session bound. Both
+managed and ordinary Responses body inspection have a twenty-second deadline.
+Ordinary inspection has four separate host slots and retains its existing
+16 MiB body bound; managed consumers cannot occupy these inspection slots.

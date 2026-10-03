@@ -12,10 +12,14 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 #[path = "managed_api/authentication.rs"]
 mod authentication;
 
+#[path = "managed_api/pressure.rs"]
+mod pressure;
+
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 struct Fixture {
+    router: axum::Router,
     base: String,
     key: String,
     other_key: String,
@@ -138,8 +142,10 @@ models:
     }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let base = format!("http://{}", listener.local_addr()?);
-    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    let server_router = router.clone();
+    let server = tokio::spawn(async move { axum::serve(listener, server_router).await });
     Ok(Fixture {
+        router,
         base,
         key: credentials[0].clone(),
         other_key: credentials[1].clone(),
@@ -179,6 +185,18 @@ async fn harness(
     Arc<Mutex<Store>>,
     tokio::task::JoinHandle<Result<()>>,
 )> {
+    harness_with_limits(fixture, Limits::default()).await
+}
+
+async fn harness_with_limits(
+    fixture: &Fixture,
+    limits: Limits,
+) -> Result<(
+    mpsc::Sender<Value>,
+    mpsc::Receiver<ToolExecute>,
+    Arc<Mutex<Store>>,
+    tokio::task::JoinHandle<Result<()>>,
+)> {
     let socket = socket(fixture).await?;
     let tools = vec![bitrouter_orchestrator::core::protocol::HarnessTool {
         name: "read".into(),
@@ -209,7 +227,7 @@ async fn harness(
         durable_head: DurableHead::default(),
         checkpoint: None,
         manifest,
-        limits: Limits::default(),
+        limits,
     };
     let first = envelope("bind", "session.bind", serde_json::to_value(binding)?);
     connected_harness(socket, grant, Arc::new(Mutex::new(Store::default())), first).await
@@ -255,7 +273,7 @@ async fn connected_harness(
                             }
                             socket.send(Message::Text(envelope(&format!("ack_{}", batch.identity.batch_id), "checkpoint.ack", serde_json::to_value(ack)?).to_string().into())).await?;
                         }
-                        ServerMessage::Head(_) => { if let Some(ready) = ready.take() { let _ = ready.send(()); } }
+                        ServerMessage::Head(_) => { retained.lock().await.heads_received += 1; if let Some(ready) = ready.take() { let _ = ready.send(()); } }
                         ServerMessage::ToolExecute(command) => {
                             let store = retained.lock().await;
                             let state = &store.batches.last().context("durable head")?.decode(&Limits::default())?.checkpoint.state;
@@ -264,6 +282,7 @@ async fn connected_harness(
                             tools.send(*command).await?;
                         }
                         ServerMessage::Receipt(_) => {}
+                        ServerMessage::ToolCancel { .. } => {}
                         ServerMessage::Error(error) => anyhow::bail!("channel error: {error}"),
                         other => anyhow::bail!("unexpected channel event: {other:?}"),
                     }

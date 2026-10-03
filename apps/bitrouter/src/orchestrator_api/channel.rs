@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use axum::extract::State;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -23,13 +23,13 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     ApiError, CoreError, CoreSession, Entry, ErrorCode, Limits, ManagedCoreApi, SessionKey,
-    auth::Principal,
+    auth::Principal, output,
 };
 
 const IO_TIMEOUT: Duration = Duration::from_secs(20);
 
 struct Outgoing {
-    text: String,
+    text: Utf8Bytes,
     sent: oneshot::Sender<Result<(), CoreError>>,
 }
 
@@ -38,6 +38,29 @@ struct Connection {
     generation: u64,
     sender: mpsc::Sender<Outgoing>,
     closed: CancellationToken,
+    buffered: Arc<BufferedOwner>,
+}
+
+#[derive(Default)]
+struct BufferedOwner(std::sync::Mutex<Option<Utf8Bytes>>);
+
+impl BufferedOwner {
+    fn retain(&self, bytes: Utf8Bytes) {
+        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = Some(bytes);
+    }
+    fn clear(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+    }
+}
+
+// Both halves retain the owner of bytes copied into tungstenite's shared
+// socket buffer. Fields drop in order: the socket half before its owner.
+struct BufferedHalf<T> {
+    half: T,
+    owner: Arc<BufferedOwner>,
 }
 
 struct PendingAck {
@@ -56,6 +79,8 @@ struct PendingRead {
 }
 
 pub(super) struct RemotePort {
+    pub(super) output: Arc<output::Scope>,
+    control: Arc<output::Scope>,
     principal: Principal,
     grant: bitrouter_orchestrator::core::protocol::OwnershipGrant,
     limits: Limits,
@@ -70,8 +95,12 @@ impl RemotePort {
         principal: Principal,
         grant: bitrouter_orchestrator::core::protocol::OwnershipGrant,
         limits: Limits,
+        output: Arc<output::Scope>,
+        control: Arc<output::Scope>,
     ) -> Self {
         Self {
+            output,
+            control,
             principal,
             grant,
             limits,
@@ -105,6 +134,7 @@ impl RemotePort {
             generation,
             sender,
             closed: CancellationToken::new(),
+            buffered: Arc::new(BufferedOwner::default()),
         };
         *current = Some(connection.clone());
         Ok(connection)
@@ -148,23 +178,21 @@ impl RemotePort {
             // hold core-owned typed values, never additional encoded batches.
             let _writing = self.writing.lock().await;
             self.principal.revalidate().await?;
-            let text = serde_json::to_string(&message).map_err(|_| {
+            let bound = self.limits.unacknowledged_bytes;
+            let length = output::encoded_len(&message, bound)?;
+            // Every ServerMessage is control/durable traffic. Reserve from its
+            // separate bounded lane so slow UI bodies cannot delay cancellation.
+            let lease = self.control.reserve(length, true).await?;
+            let mut bytes = Vec::with_capacity(length);
+            serde_json::to_writer(&mut bytes, &message).map_err(|_| {
                 error(
                     ErrorCode::CheckpointConflict,
                     "cannot encode harness message",
                 )
             })?;
-            let bound = if matches!(message, ServerMessage::Checkpoint(_)) {
-                self.limits.unacknowledged_bytes
-            } else {
-                self.limits.ephemeral_bytes
-            };
-            if text.len() as u64 > bound {
-                return Err(error(
-                    ErrorCode::LimitExceeded,
-                    "harness output exceeds negotiated byte bound",
-                ));
-            }
+            let bytes = output::retain(bytes, lease);
+            let text = Utf8Bytes::try_from(bytes)
+                .map_err(|_| error(ErrorCode::CheckpointConflict, "harness output is not UTF-8"))?;
             let (sent, receive) = oneshot::channel();
             connection
                 .sender
@@ -372,23 +400,36 @@ async fn serve(
             return;
         }
     };
-    let (mut writer, mut reader) = socket.split();
+    let (writer, reader) = socket.split();
+    let mut writer = BufferedHalf {
+        half: writer,
+        owner: connection.buffered.clone(),
+    };
+    let mut reader = BufferedHalf {
+        half: reader,
+        owner: connection.buffered.clone(),
+    };
     let write_closed = connection.closed.clone();
     let writing = tokio::spawn(async move {
         while let Some(output) = tokio::select! {
             _ = write_closed.cancelled() => None,
             output = outgoing.recv() => output,
         } {
+            // Tungstenite can copy payload bytes into its socket write buffer.
+            // Retain the admitted owner until that buffer has been flushed.
+            writer.owner.retain(output.text.clone());
             let delivered =
-                tokio::time::timeout(IO_TIMEOUT, writer.send(Message::Text(output.text.into())))
+                tokio::time::timeout(IO_TIMEOUT, writer.half.send(Message::Text(output.text)))
                     .await;
             let ok = matches!(delivered, Ok(Ok(())));
-            let _ = output
-                .sent
-                .send(if ok { Ok(()) } else { Err(disconnected()) });
             if !ok {
-                break;
+                drop(writer);
+                let _ = output.sent.send(Err(disconnected()));
+                write_closed.cancel();
+                return;
             }
+            writer.owner.clear();
+            let _ = output.sent.send(Ok(()));
         }
         write_closed.cancel();
     });
@@ -428,7 +469,7 @@ async fn serve(
         let next = tokio::select! {
             _ = connection.closed.cancelled() => break,
             _ = api.shared.shutdown.cancelled() => break,
-            next = reader.next() => next,
+            next = reader.half.next() => next,
         };
         let text = match next {
             Some(Ok(Message::Text(text))) => text,
@@ -495,6 +536,8 @@ async fn serve(
     let _ = worker.await;
     writing.abort();
     let _ = writing.await;
+    drop(reader);
+    connection.buffered.clear();
     let mut sessions = api.shared.sessions.lock().await;
     if let Some(entry) = sessions.get_mut(&key) {
         entry.connected = false;
@@ -533,6 +576,27 @@ async fn prepare(
     }
     let key = ManagedCoreApi::key(principal, &binding.grant.session_id);
     let mut sessions = api.shared.sessions.lock().await;
+    // The weak registry preserves one byte ledger across release/rebind and
+    // restoration while old HTTP bodies or downstream chunks still exist.
+    let (output, control) = {
+        let mut outputs = api.shared.outputs.lock().await;
+        outputs.retain(|_, (ui, control)| ui.strong_count() > 0 || control.strong_count() > 0);
+        let budget = outputs
+            .get(&key)
+            .and_then(|(ui, _)| ui.upgrade())
+            .unwrap_or_default();
+        let control_budget = outputs
+            .get(&key)
+            .and_then(|(_, control)| control.upgrade())
+            .unwrap_or_default();
+        let output = budget.scope(binding.limits.ephemeral_bytes, None)?;
+        let control = control_budget.scope(binding.limits.unacknowledged_bytes, None)?;
+        outputs.insert(
+            key.clone(),
+            (Arc::downgrade(&budget), Arc::downgrade(&control_budget)),
+        );
+        (output, control)
+    };
     if let Some(entry) = sessions.get_mut(&key) {
         if entry.connected {
             return Err(error(
@@ -574,6 +638,8 @@ async fn prepare(
                 principal.clone(),
                 binding.grant.clone(),
                 binding.limits.clone(),
+                output,
+                control,
             ));
             let connection = port.attach(sender).await?;
             entry.connected = true;
@@ -607,6 +673,8 @@ async fn prepare(
         principal.clone(),
         binding.grant.clone(),
         binding.limits.clone(),
+        output,
+        control,
     ));
     let connection = port.attach(sender).await?;
     sessions.insert(
@@ -854,4 +922,40 @@ fn disconnected() -> CoreError {
         ErrorCode::CheckpointUnavailable,
         "harness channel interrupted or timed out",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::FutureExt;
+
+    #[tokio::test]
+    async fn aborted_writer_keeps_staging_owner_until_the_reader_is_dropped()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let budget = Arc::new(output::Budget::default());
+        let scope = budget.scope(64, None)?;
+        let owner = Arc::new(BufferedOwner::default());
+        owner.retain(Utf8Bytes::try_from(output::retain(
+            vec![b'x'; 64],
+            scope.reserve(64, true).await?,
+        ))?);
+        let reader = BufferedHalf {
+            half: (),
+            owner: owner.clone(),
+        };
+        let writer = BufferedHalf { half: (), owner };
+        let (started, start) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _writer = writer;
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        });
+        start.await?;
+        task.abort();
+        assert!(task.await.is_err());
+        assert!(scope.reserve(1, true).now_or_never().is_none());
+        drop(reader);
+        assert_eq!(scope.reserve(64, true).await?.len(), 64);
+        Ok(())
+    }
 }
