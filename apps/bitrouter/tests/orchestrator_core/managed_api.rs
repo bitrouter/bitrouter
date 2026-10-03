@@ -9,6 +9,9 @@ use futures::{SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
+#[path = "managed_api/authentication.rs"]
+mod authentication;
+
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -16,6 +19,8 @@ struct Fixture {
     base: String,
     key: String,
     other_key: String,
+    db: sea_orm::DatabaseConnection,
+    policy: Arc<bitrouter::policy::PolicyStore>,
     api: ManagedCoreApi,
     upstream: MockServer,
     server: tokio::task::JoinHandle<std::io::Result<()>>,
@@ -32,6 +37,10 @@ async fn fixture() -> Result<Fixture> {
 }
 
 async fn fixture_with_output(output: Option<Value>) -> Result<Fixture> {
+    configured_fixture(output, None).await
+}
+
+async fn configured_fixture(output: Option<Value>, policy: Option<&str>) -> Result<Fixture> {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/responses/input_tokens"))
@@ -52,6 +61,12 @@ async fn fixture_with_output(output: Option<Value>) -> Result<Fixture> {
                 "usage":{"input_tokens":20,"output_tokens":10,"total_tokens":30}
             }))
         }).mount(&upstream).await;
+    let home = tempfile::tempdir()?;
+    let policy_dir = home.path().join("policies");
+    tokio::fs::create_dir(&policy_dir).await?;
+    if let Some(policy) = policy {
+        tokio::fs::write(policy_dir.join("managed-policy.yaml"), policy).await?;
+    }
     let config = bitrouter_sdk::config::parse_with(
         &format!(
             r#"
@@ -62,6 +77,9 @@ server:
   skip_auth: true
 database:
   url: 'sqlite::memory:'
+plugins:
+  bitrouter-policy:
+    policy_dir: '{}'
 providers:
   fixture:
     api_base: {}/v1
@@ -81,11 +99,11 @@ models:
       - provider: fixture
         service_id: served
 "#,
+            policy_dir.display(),
             upstream.uri()
         ),
         |_| None,
     )?;
-    let home = tempfile::tempdir()?;
     let assembled = bitrouter::assemble::build_app_with_path(
         &config,
         Some(&home.path().join("bitrouter.yaml")),
@@ -103,14 +121,14 @@ models:
                 user_id: user.into(),
                 spend_limit_micro_usd: None,
                 rpm_limit: None,
-                policy_id: None,
+                policy_id: (user == "owner" && policy.is_some()).then(|| "managed-policy".into()),
             },
         )
         .await?;
         credentials.push(key.secret);
     }
     let app = Arc::new(assembled.app);
-    let api = ManagedCoreApi::new(app.clone(), assembled.db, "remote_core".into());
+    let api = ManagedCoreApi::new(app.clone(), assembled.db.clone(), "remote_core".into());
     let router = api.wrap(build_router(AppState {
         language_model: app.language_model().context("pipeline")?.clone(),
         mcp: app.mcp().cloned(),
@@ -125,6 +143,8 @@ models:
         base,
         key: credentials[0].clone(),
         other_key: credentials[1].clone(),
+        db: assembled.db,
+        policy: assembled.policy_store,
         api,
         upstream,
         server,
