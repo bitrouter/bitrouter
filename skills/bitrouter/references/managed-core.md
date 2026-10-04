@@ -266,3 +266,18 @@ They do not authorize re-running a failed guard; accepted steering and
 cancellation retain their existing priority. A provider-integration phase error
 alone still follows its enclosing attempt's authentication/fallback policy.
 These additions use the existing checkpoint and managed Responses interfaces.
+
+
+Run count limits and byte limits apply together. The default 32-agent tree,
+depth four, four active model slots and eight outstanding workspace invocations
+are independent ceilings. Reaching one ceiling does not promise enough
+checkpoint or artifact capacity to reach all the others simultaneously. Each
+new dispatch must also retain its complete frozen reply contract and cleanup
+records. Parent models that consume child conclusions need their own admission.
+
+Advertise the actual harness artifact quota before starting a run. Increasing
+that quota does not enlarge the core checkpoint or JSON reply limits. Conversely,
+unused count slots do not override a byte-admission failure. A typed resource
+failure stops new work while the harness still reports definitive results for
+already authorized invocations; required outcomes and terminal records must
+survive reconnect and acknowledgement loss.

@@ -3272,3 +3272,51 @@ seconds, strict rustdoc in 14.227 seconds, workspace doctests passed five tests
 with one ignored, and Rust 1.93.0 workspace/all-feature check passed in 0.772
 seconds. Formatting, diff and tracked-ignore checks passed. New-head remote CI
 and complete C4–C6/A01–A23 acceptance remain separate gates.
+
+
+## C4/C5 default tree and outstanding-tool limits
+
+The default-count fixture creates a depth-four tree and holds four real executor
+futures concurrently under unchanged `Limits::default()`. It rejects a fifth
+child depth and, in the 32-agent cases, a thirty-third agent. Replaying either
+rejected operation preserves its receipt and durable head. Agent-specific initial
+answers and per-agent prompt/step counts verify attribution across the tree.
+Parents receive each child's exact turn identity, answer and context sources once.
+
+Tool work starts after the other branches have completed and the root has
+consumed their conclusions. This explicit barrier separates outstanding-tool
+contracts from concurrent join-model reports. A six-agent case returns eight
+replies at each invocation's complete frozen JSON payload limit; a 32-agent case
+completes with one such reply. Each retained result must pair exactly once with
+its provider call ID, tool name and output. Terminal ACK loss reconnects without
+additional executor calls or tool dispatch, and the SDK settlement count matches
+the executed-call count. Every retained batch stays inside the default checkpoint and wire
+bounds, followed by settled release.
+
+The pressure variants first admit eight tools in the 32-agent tree, then submit
+full-size optional tool observations until actual byte admission fails. The
+required full results must still fit through failure cleanup and terminal ACK
+loss both before and after persistence. Separately, a six-agent tree advertising
+only 4 MiB of artifact capacity rejects the batch before dispatch. The adequate
+fixture advertises 256 MiB; it never increases the core's 8 MiB checkpoint,
+16 MiB wire or 64 KiB input limits. Count ceilings and byte ceilings apply
+together, without promising that every maximum can coexist with arbitrary
+retained history.
+
+These are in-process scheduler/checkpoint tests with simulated model and harness
+work. The complete JSON replies contain escape-heavy workspace revision metadata,
+while referenced artifact bodies are five-byte fixtures. The tests do not
+measure full artifact-body storage, cold archive restoration, physical memory or
+production harness behavior. Validation and independent review results follow;
+complete C4–C6/A01–A23 acceptance remains open.
+
+Final workspace/all-feature nextest passed **4054 tests, 22 skipped** in
+298.097 seconds with four test threads (298.867 seconds including compilation).
+All five new cases passed, including actual saturation with terminal ACK loss
+before and after persistence. Strict workspace/all-target/all-feature clippy
+passed in 7.388 seconds, strict rustdoc in 3.495 seconds, workspace doctests
+passed five tests with one ignored, and Rust 1.93.0 workspace/all-feature check
+passed in 0.606 seconds. Formatting, diff and tracked-ignore checks passed.
+Independent source/test/documentation review found no remaining actionable
+P1/P2 in this increment. Previous head `923b5494` passed CI 37193107781; new-head
+remote CI and complete C4–C6/A01–A23 acceptance remain separate gates.
