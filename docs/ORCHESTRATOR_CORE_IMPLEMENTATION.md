@@ -3370,3 +3370,43 @@ that fixture changes preserve coverage and product limits. Prior-head CI
 37204394325 completed with the Linux workspace failure described above; its
 other platform jobs passed. New-head CI and complete C4–C6/A01–A23 acceptance
 remain separate gates.
+
+
+## C5 local/remote collaboration parity
+
+A shared provider script now drives the assembled application through both
+`CoreSession` and independent authenticated HTTP/WebSocket clients. It emits
+an explicit inherited-context spawn, an isolated fresh-context delegation and
+a wait. Two child provider requests must both reach an asynchronous barrier
+before either can finish, under a two-model run limit. This proves actual
+request overlap without depending on a response delay or a synthetic counter.
+
+Each path checks selected context against the actual provider input, exact
+child/turn/parent ownership, one child execution and one consumed conclusion,
+and decision/application/allocation/attempt identity joins. Applied decisions
+and actual provider/model receipts remain attributable. Collaboration calls
+never become workspace dispatches. The normalized allocation, routing and
+answer evidence must agree between the two ports.
+
+The remote client additionally checks each child's exact JSON and SSE text and
+agent path, child-delivery event identities, the root's final-answer ownership,
+terminal run status and empty pending-tool map. Replaying the accepted input as
+JSON or SSE returns the same completed exchange without additional provider
+requests. Wait target identities remain exact, while intermediate wait status
+and root scheduling may vary: `wait_agent` is not a join-all operation.
+
+This supplies a concrete cross-transport scenario for A01/A04 and context/output
+attribution. It does not establish all collaboration/reuse/cancellation cases,
+credentialed real-provider behavior, production harness conformance or complete
+C4–C6/A01–A23 acceptance. Validation and independent review results follow.
+
+The final targeted parity case passed in 12.961 seconds. Final
+workspace/all-feature nextest passed **4058 tests, 22 skipped** in 514.068
+seconds with four test threads (520.174 seconds including compilation); the
+new case passed in 14.484 seconds under suite load. Strict
+workspace/all-target/all-feature clippy passed in 2.274 seconds, strict rustdoc
+in 8.276 seconds, workspace doctests passed five tests with one ignored, and
+Rust 1.93.0 workspace/all-feature check passed in 0.526 seconds. Formatting,
+diff and tracked-ignore checks passed. Independent source/test/documentation
+review found no remaining actionable P1/P2 in this increment. New-head remote
+CI and full C4–C6/A01–A23 acceptance remain separate gates.

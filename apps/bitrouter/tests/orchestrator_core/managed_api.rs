@@ -21,10 +21,14 @@ mod recovery;
 #[path = "managed_api/provider_limits.rs"]
 mod provider_limits;
 
+#[path = "managed_api/collaboration.rs"]
+mod collaboration;
+
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 struct Fixture {
+    app: Arc<bitrouter_sdk::App>,
     router: axum::Router,
     base: String,
     key: String,
@@ -159,6 +163,7 @@ models:
     let server_router = router.clone();
     let server = tokio::spawn(async move { axum::serve(listener, server_router).await });
     Ok(Fixture {
+        app,
         router,
         base,
         key: credentials[0].clone(),
