@@ -54,6 +54,7 @@
 //! action.
 
 pub mod agents;
+pub mod agents_menu;
 pub mod code;
 pub mod cost;
 pub mod editor;

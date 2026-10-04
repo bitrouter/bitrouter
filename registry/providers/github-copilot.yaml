@@ -81,6 +81,10 @@ models:
     provider_model_id: gpt-6-luna
   - id: openai/gpt-6-sol
     provider_model_id: gpt-6-sol
+  - id: anthropic/claude-sonnet-5.5
+    provider_model_id: claude-sonnet-5.5
+  - id: openai/gpt-6.1-sol
+    provider_model_id: gpt-6.1-sol
 status: active
 weight: 1
 community: false

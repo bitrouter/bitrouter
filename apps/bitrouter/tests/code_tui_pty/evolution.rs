@@ -108,10 +108,10 @@ fn code_fresh_session_preserves_direct_routing_and_timeout_in_the_terminal() -> 
         |screen| {
             screen.contains("FXRD pty-fresh-")
                 && !screen.contains(first_id)
-                && screen.contains("activity: ready")
+                && screen.contains("stub · direct · ready")
         },
     )?;
-    code.pty.wait_for_text("route: direct")?;
+    code.pty.wait_for_text("stub · direct · ready")?;
     let second = code.pty.checkpoint();
     code.pty.send(b"wait-for-timeout in the new session\r")?;
     code.pty.wait_for_text_since(&second, "FXWAIT")?;
@@ -376,7 +376,7 @@ fn code_checkpoint_history_displays_recorded_revisions_without_changing_the_curr
         "second recorded turn settled",
         |screen| {
             screen.contains("FXRP2")
-                && screen.contains("activity: ready")
+                && screen.contains("stub · direct · ready")
                 && screen.contains("Turn completed")
         },
     )?;

@@ -81,6 +81,12 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   Replaces the seven-view Code dashboard with a conversation, contextual
   pickers/inspectors, and agent/route/activity/attributed-cost status; defines
   shared interaction behavior, ACP boundaries, and acceptance criteria.
+- [`CODE_TUI_CODEX_NAVIGATION_SPEC.md`](CODE_TUI_CODEX_NAVIGATION_SPEC.md) —
+  **implemented; locally verified.** Codex-style conversation entry and explicit Left-arrow
+  navigation to a native-buffer Agents menu; first delivery covers the menu
+  skeleton and includes acceptance criteria and an implementation goal prompt.
+- [`CODE_TUI_CODEX_IMPLEMENTATION.md`](CODE_TUI_CODEX_IMPLEMENTATION.md) —
+  first-delivery changes, acceptance evidence and live PTY screenshots.
 - [`CODE_SLASH_COMMAND_UX_SPEC.md`](CODE_SLASH_COMMAND_UX_SPEC.md) — **implemented
   locally.** Makes `/` the command input, preserves drafts on cancel,
   removes default action hotkeys, and adds configurable bindings under

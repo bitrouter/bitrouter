@@ -1335,6 +1335,7 @@
       "release_date": "2026-09-22"
     },
     {
+      "deprecation_date": "2026-10-29",
       "description": "Anthropic's Claude Sonnet 4.6.",
       "family": "claude-sonnet",
       "id": "anthropic/claude-sonnet-4.6",
@@ -1712,6 +1713,142 @@
         }
       ],
       "release_date": "2026-06-30"
+    },
+    {
+      "id": "anthropic/claude-sonnet-5.5",
+      "input_modalities": [
+        "file",
+        "image",
+        "text"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "name": "Anthropic: Claude Sonnet 5.5",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": "anthropic",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "anthropic",
+          "provider_model_id": "claude-sonnet-5-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "anthropic.claude-sonnet-5-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "azure",
+          "provider_model_id": "claude-sonnet-5-5",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "anthropic/claude-sonnet-5.5"
+        },
+        {
+          "api_protocol": "anthropic",
+          "provider": "claude-code",
+          "provider_model_id": "claude-sonnet-5-5"
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "claude-sonnet-5.5"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "claude-sonnet-5-5"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "anthropic/claude-sonnet-5.5"
+        }
+      ],
+      "release_date": "2026-09-28"
     },
     {
       "deprecation_date": "2026-10-05",
@@ -5348,6 +5485,7 @@
       "release_date": "2026-04-23"
     },
     {
+      "deprecation_date": "2026-10-31",
       "family": "gpt",
       "id": "openai/gpt-5.6-luna",
       "input_modalities": [
@@ -5556,6 +5694,7 @@
       "release_date": "2026-06-25"
     },
     {
+      "deprecation_date": "2026-10-31",
       "id": "openai/gpt-5.6-luna-pro",
       "input_modalities": [
         "file",
@@ -5593,6 +5732,7 @@
       "release_date": "2026-07-09"
     },
     {
+      "deprecation_date": "2026-10-31",
       "family": "gpt",
       "id": "openai/gpt-5.6-sol",
       "input_modalities": [
@@ -5796,6 +5936,7 @@
       "release_date": "2026-06-25"
     },
     {
+      "deprecation_date": "2026-10-31",
       "id": "openai/gpt-5.6-sol-pro",
       "input_modalities": [
         "file",
@@ -5833,6 +5974,7 @@
       "release_date": "2026-07-09"
     },
     {
+      "deprecation_date": "2026-10-31",
       "family": "gpt",
       "id": "openai/gpt-5.6-terra",
       "input_modalities": [
@@ -6036,6 +6178,7 @@
       "release_date": "2026-06-25"
     },
     {
+      "deprecation_date": "2026-10-31",
       "id": "openai/gpt-5.6-terra-pro",
       "input_modalities": [
         "file",
@@ -6284,6 +6427,27 @@
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.011,
+              "cache_write": 0.1375,
+              "no_cache": 0.11
+            },
+            "output_tokens": {
+              "text": 0.55
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "openai.gpt-6-luna",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
               "cache_read": 0.01,
               "cache_write": 0.125,
               "no_cache": 0.1
@@ -6443,6 +6607,27 @@
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.22,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 11.0
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "openai.gpt-6-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
               "cache_read": 0.2,
               "cache_write": 2.5,
               "no_cache": 2.0
@@ -6575,6 +6760,166 @@
         }
       ],
       "release_date": "2026-09-22"
+    },
+    {
+      "id": "openai/gpt-6.1-sol",
+      "input_modalities": [
+        "file",
+        "image",
+        "text"
+      ],
+      "max_input_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "name": "OpenAI: GPT-6.1 Sol",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.11,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 11.0
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "openai.gpt-6.1-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "azure",
+          "provider_model_id": "gpt-6.1-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "gpt-6.1-sol"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "openai",
+          "provider_model_id": "gpt-6.1-sol",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "responses",
+          "provider": "openai-codex",
+          "provider_model_id": "gpt-6.1-sol"
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "gpt-6.1-sol"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "openai/gpt-6.1-sol"
+        }
+      ],
+      "release_date": "2026-09-29"
+    },
+    {
+      "id": "openai/gpt-6.1-sol-pro",
+      "input_modalities": [
+        "file",
+        "image",
+        "text"
+      ],
+      "max_input_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "name": "OpenAI: GPT-6.1 Sol Pro",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "openai/gpt-6.1-sol-pro"
+        }
+      ],
+      "release_date": "2026-09-29"
     },
     {
       "deprecation_date": "2026-10-05",
@@ -6827,6 +7172,24 @@
           },
           "provider": "alibaba",
           "provider_model_id": "qwen3.6-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.16,
+              "cache_write": 0.0,
+              "no_cache": 0.32
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider": "ambient",
+          "provider_model_id": "qwen/qwen3.6-27b",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -7155,6 +7518,28 @@
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.003,
+              "cache_write": 0.0375,
+              "no_cache": 0.03
+            },
+            "output_tokens": {
+              "text": 0.13
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.7-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
               "cache_read": 0.002962,
               "cache_write": 0.03703,
               "no_cache": 0.02962
@@ -7168,6 +7553,21 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003,
+              "cache_write": 0.0375,
+              "no_cache": 0.03
+            },
+            "output_tokens": {
+              "text": 0.13
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "qwen/qwen3.7-flash"
         },
         {
           "api_protocol": [
@@ -7733,6 +8133,24 @@
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.16,
+              "cache_write": 0.0,
+              "no_cache": 0.32
+            },
+            "output_tokens": {
+              "text": 3.2
+            }
+          },
+          "provider": "ambient",
+          "provider_model_id": "qwen/qwen3.8-27b",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
               "cache_read": 0.05,
               "cache_write": 0.625,
               "no_cache": 0.5
@@ -8000,6 +8418,21 @@
           "provider_model_id": "qwen3.8-max"
         },
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 2.5,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            }
+          },
+          "provider": "opencode-zen",
+          "provider_model_id": "qwen3.8-max"
+        },
+        {
           "api_protocol": [
             "openai",
             "responses",
@@ -8110,6 +8543,62 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            }
+          },
+          "provider": "alibaba",
+          "provider_model_id": "qwen3.8-omni-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.014,
+              "no_cache": 0.113
+            },
+            "output_tokens": {
+              "text": 0.382
+            }
+          },
+          "provider": "alibaba_cn",
+          "provider_model_id": "qwen3.8-omni-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "qwen/qwen3.8-omni-flash"
+        },
         {
           "api_protocol": [
             "openai",

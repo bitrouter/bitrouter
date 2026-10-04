@@ -239,6 +239,24 @@ models:
         cache_write: 2.5
       output_tokens:
         text: 10
+  - id: anthropic/claude-sonnet-5.5
+    provider_model_id: claude-sonnet-5-5
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+  - id: openai/gpt-6.1-sol
+    provider_model_id: gpt-6.1-sol
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.1
+        cache_write: 2.5
+      output_tokens:
+        text: 10
 auto_sync:
   feed: models_dev
   key: azure
