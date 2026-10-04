@@ -68,6 +68,7 @@ pub mod executor;
 pub mod hooks;
 pub mod native;
 pub mod native_accounting;
+mod native_auxiliary;
 pub mod native_context;
 pub mod native_continuation;
 mod native_output;

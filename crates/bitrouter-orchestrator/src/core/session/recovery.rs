@@ -302,12 +302,14 @@ async fn restore_snapshot(
     let mut resource_history = budget::ResourceHistory::default();
     let mut response_history = None;
     let mut wait_output_history = BTreeMap::new();
+    let mut auxiliary_output_history = BTreeMap::new();
     for (batch, mut payload) in payloads {
         archive::hydrate(&mut payload, harness, &binding.limits).await?;
         release::validate_history(&payload, &mut releases)?;
         budget::validate_history(&payload, &mut resource_history)?;
         responses::validate_history(&payload, &mut response_history)?;
         wait_output::validate_history(&payload, &mut wait_output_history)?;
+        auxiliary_output::validate_history(&payload, &mut auxiliary_output_history)?;
         recovery_time::validate_history(
             &payload,
             CheckpointAck::for_batch(batch, &payload).head(),
@@ -371,6 +373,7 @@ fn validate_snapshot(
     budget::validate(state)?;
     model_output::reserved(state)?;
     wait_output::validate(state)?;
+    auxiliary_output::reserved(state)?;
     responses::validate(state, binding)?;
     steering::validate(state, &binding.limits, binding.durable_head.state_revision)?;
     let root = state
@@ -911,7 +914,8 @@ pub(super) fn resume_model_steps(
                 .attempts
                 .last()
                 .and_then(|attempt| attempt.receipt.as_ref())
-                .and_then(|receipt| receipt.report.rejection_reason());
+                .and_then(|receipt| receipt.report.rejection_reason())
+                .or_else(|| auxiliary_output::terminal_reason(step));
             if steered.contains(&agent.agent_id) {
                 step.interrupted = true;
                 step.settled = true;

@@ -612,6 +612,61 @@ impl bitrouter_sdk::language_model::hooks::PreRequestHook for ValidationHook {
 }
 
 #[tokio::test]
+async fn recorded_validation_denial_survives_process_replacement_before_failure_commit()
+-> TestResult {
+    let harness = Arc::new(Harness::new(Some("agent.failed"), None));
+    let validation = Arc::new(ValidationBarrier {
+        entered: Semaphore::new(0),
+        release: Semaphore::new(1),
+        next_calls: AtomicUsize::new(0),
+        deny: true,
+        skip_next: false,
+        returned: Semaphore::new(0),
+    });
+    let (session, executor, task) = historical_task_with_guards(
+        harness.clone(),
+        false,
+        true,
+        false,
+        Some(validation.clone()),
+        None,
+    )
+    .await?;
+    current_result(&session, &harness, task).await?;
+    assert!(session.drive().await.is_err());
+    assert_eq!(validation.next_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(executor.generated.lock().await.len(), 3);
+    session.disconnect().await;
+    let replacement = recovery::harness_at(harness.store.lock().await.clone()).await;
+    let request = recovery::request(&*replacement.store.lock().await, false)?;
+    let (restored, executor) = recovery::restore(
+        request,
+        replacement.clone(),
+        vec![output(vec![text("must not execute")])],
+    )
+    .await?;
+    let done = restored.drive().await?;
+    assert_eq!(
+        done.run.as_ref().map(|run| run.status),
+        Some(RunStatus::Failed)
+    );
+    let step = done
+        .root_turn()
+        .and_then(|turn| turn.steps.last())
+        .ok_or("step")?;
+    assert!(step.settled);
+    assert!(
+        step.context_validation
+            .as_ref()
+            .and_then(|record| record.report.as_ref())
+            .is_some_and(|report| !report.allowed && report.error_code.is_some())
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    assert!(replacement.sent.lock().await.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn validation_denial_and_live_source_changes_stop_later_guards_and_counts() -> TestResult {
     for mode in ["deny", "signal", "cancel", "disconnect"] {
         let harness = Arc::new(Harness::new(None, None));

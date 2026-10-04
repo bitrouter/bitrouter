@@ -365,6 +365,10 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
         self.inner.canonical_output_byte_limit()
     }
 
+    fn auxiliary_report_byte_limit(&self, request_id: &str) -> Result<Option<u64>> {
+        self.inner.auxiliary_report_byte_limit(request_id)
+    }
+
     fn attempt_report_byte_limit(
         &self,
         request_id: &str,

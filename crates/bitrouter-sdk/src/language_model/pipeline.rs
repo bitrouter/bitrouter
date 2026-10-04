@@ -858,6 +858,7 @@ impl Pipeline {
                 }
                 let route_index = u32::try_from(index)
                     .map_err(|_| BitrouterError::bad_request("route index exhausted"))?;
+                let report_limit = super::native_auxiliary::limit(control, &plan.request_id)?;
                 control.before_input_count(&plan, route_index).await?;
                 let started = Instant::now();
                 let outcome = match self
@@ -876,13 +877,22 @@ impl Pipeline {
                         ),
                     },
                 };
-                let report = NativeInputCountReport {
+                let mut report = NativeInputCountReport {
                     request_id: plan.request_id.clone(),
                     route_index,
-                    outcome: outcome.clone(),
+                    outcome,
                     elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                    report_rejection: None,
                 };
+                super::native_auxiliary::count(&mut report, report_limit)?;
+                let outcome = report.outcome.clone();
+                let rejected = report.report_rejection.is_some();
                 control.after_input_count(report).await?;
+                if rejected {
+                    return Err(BitrouterError::UpstreamInvalidResponse {
+                        message: super::native::NativeInputCountRejection::REASON.into(),
+                    });
+                }
                 routes[index].input_count = Some(outcome);
             }
             plan.routes = routes.to_vec();
@@ -902,6 +912,7 @@ impl Pipeline {
                                     "managed rebuild lost its request-check bindings",
                                 )
                             })?;
+                        let _ = super::native_auxiliary::limit(control, ctx.request_id())?;
                         control.before_context_validation(ctx.request_id()).await?;
                         let started = Instant::now();
                         let validated = async {
@@ -1362,20 +1373,13 @@ impl Pipeline {
     }
 
     async fn run_pre_resolution(&self, ctx: &mut PipelineContext) -> Result<()> {
-        for hook in &self.pre_resolution_hooks {
-            match observe_pipeline(
-                preparation_runtime(ctx),
-                ctx.request_id().into(),
-                NativePreparationWorkKind::PreResolutionHook,
-                hook.check(ctx),
-            )
-            .await?
-            {
-                HookDecision::Allow => continue,
-                HookDecision::Deny(reason) => return Err(reason.into()),
-            }
-        }
-        Ok(())
+        self.run_admitted_hooks(
+            ctx,
+            &self.pre_resolution_hooks,
+            None,
+            NativePreparationWorkKind::PreResolutionHook,
+        )
+        .await
     }
 
     async fn run_pre_request(
@@ -1410,23 +1414,27 @@ impl Pipeline {
         kind: NativePreparationWorkKind,
     ) -> Result<()> {
         for hook in hooks {
-            let decision = observe_pipeline(
+            observe_pipeline(
                 preparation_runtime(ctx),
                 ctx.request_id().into(),
                 kind,
-                hook.check(ctx),
+                async {
+                    // Persist the complete verdict before acknowledging the
+                    // callback. Otherwise a lost ACK can erase a known Deny.
+                    match hook.check(ctx).await? {
+                        HookDecision::Allow => {
+                            if checked_selector.is_some_and(|selector| ctx.model() != selector) {
+                                return Err(BitrouterError::internal(
+                                    "a pre-request hook cannot change a checked router selector; register selector rewrites as router preparation hooks",
+                                ));
+                            }
+                            Ok(())
+                        }
+                        HookDecision::Deny(reason) => Err(reason.into()),
+                    }
+                },
             )
             .await?;
-            match decision {
-                HookDecision::Allow => {
-                    if checked_selector.is_some_and(|selector| ctx.model() != selector) {
-                        return Err(BitrouterError::internal(
-                            "a pre-request hook cannot change a checked router selector; register selector rewrites as router preparation hooks",
-                        ));
-                    }
-                }
-                HookDecision::Deny(reason) => return Err(reason.into()),
-            }
         }
         Ok(())
     }

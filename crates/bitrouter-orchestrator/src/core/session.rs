@@ -40,6 +40,7 @@ use super::signals::{self, MaterialRequest, SignalState};
 
 mod archive;
 mod artifact_storage;
+mod auxiliary_output;
 mod budget;
 mod capacity;
 mod model_output;
@@ -178,6 +179,14 @@ pub struct ContextValidationRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelStep {
+    /// Version 1 reserves complete auxiliary reports and bounded failure evidence.
+    /// A missing marker preserves the legacy contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auxiliary_output_version: Option<u32>,
+    /// Oversized terminal diagnostic, hashed as a serde JSON string. The
+    /// readable original is not retained; terminal_reason explains the omission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_diagnostic: Option<bitrouter_sdk::language_model::native::NativeEvidenceCommitment>,
     pub step_id: String,
     pub decision_id: String,
     pub context_revision: u64,
@@ -2485,6 +2494,8 @@ impl CoreSession {
             }
             turn.status = AgentStatus::ModelRunning;
             turn.steps.push(ModelStep {
+                auxiliary_output_version: Some(auxiliary_output::VERSION),
+                failure_diagnostic: None,
                 step_id: step_id.clone(),
                 decision_id: id("decision"),
                 context_revision: revision,
@@ -3120,6 +3131,7 @@ impl CoreSession {
     async fn fail(&self, agent_id: &str, reason: &str) -> Result<(), CoreError> {
         self.transition_for(Some(agent_id), "agent.failed", |state, _| {
             let turn = agent_turn(state, agent_id)?;
+            let reason = auxiliary_output::failure(turn.steps.last_mut(), reason)?;
             // A rejected/failed complete attempt has no output left to apply.
             // Keep genuinely pending provider or preparation evidence unsettled.
             if let Some(step) = turn.steps.last_mut()
@@ -3146,7 +3158,7 @@ impl CoreSession {
                 return Ok(json!({"reason":reason,"interrupted":true}));
             }
             turn.status = AgentStatus::Failed;
-            turn.terminal_reason = Some(reason.to_owned());
+            turn.terminal_reason = Some(reason.clone());
             if agent_id == state.agent_id {
                 for (target, agent) in &mut state.agents {
                     if target != agent_id
@@ -3582,6 +3594,10 @@ impl NativeExecutionControl for StepControl {
 
     fn canonical_output_byte_limit(&self) -> Option<u64> {
         Some(self.canonical_output_bytes)
+    }
+
+    fn auxiliary_report_byte_limit(&self, request_id: &str) -> bitrouter_sdk::Result<Option<u64>> {
+        bitrouter_sdk::language_model::native::auxiliary_report_allowance(request_id).map(Some)
     }
 
     fn attempt_report_byte_limit(
@@ -4128,6 +4144,8 @@ impl NativeExecutionControl for StepControl {
                 context.revision = context_revision;
                 let signal_revision = state.signals.revision;
                 agent_turn(state, &self.agent_id)?.steps.push(ModelStep {
+                    auxiliary_output_version: Some(auxiliary_output::VERSION),
+                    failure_diagnostic: None,
                     step_id: rebuilt_step_id.clone(),
                     decision_id: id("decision"),
                     context_revision,

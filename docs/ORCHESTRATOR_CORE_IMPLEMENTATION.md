@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure, canonical output admission, prospective receipt/delivery contributions and first recovery-observation archive reserves implemented; physical storage/future archive exhaustion, full report metadata, later prompt growth and the remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure, canonical output admission, prospective receipt/delivery contributions and first recovery-observation archive reserves implemented; physical storage/future archive exhaustion, later prompt growth and the remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, incremental HTTP/SSE projection and separate bounded WebSocket control lane connected to the service host; independent clients cover binding/release ACK loss, released-epoch restoration and read-only head queries during provider work; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -3157,3 +3157,64 @@ rustdoc in 28.711 seconds, workspace doctests passed five tests with one ignored
 and Rust 1.93.0 workspace/all-feature check passed in 23.855 seconds. Formatting,
 diff and tracked-ignore checks passed. New-head remote CI remains a separate
 gate; the full C4–C6/A01–A23 acceptance contract remains incomplete.
+
+
+## C4 auxiliary outcome admission
+
+New model steps freeze `auxiliary_output_version: 1`. Before preparation,
+input-count, rebuilt-context validation or provider-integration work starts,
+core reserves its complete outcome in state and event copies. Each report has
+an allowance of 4096 bytes plus its serde-JSON request identity. Validation also
+reserves the known candidate history it may activate. Legacy steps without the
+marker retain their existing admission behavior; unknown versions or journal
+policy changes are rejected before ownership advances.
+
+Controlled SDK categories bound preparation, validation and integration error
+reports. Arbitrary count metadata above the allowance becomes an explicit
+`report_rejection` with a versioned byte-count/SHA-256 commitment and the original
+numeric count, including zero. The numeric count is retained as evidence;
+missing request binding means it cannot prove fit. A rejected count stops later
+counts and generation. The commitment covers serde JSON before projection and
+does not retain readable raw counter metadata.
+
+An unsettled step also reserves failure delivery. Reasons through 1024 serialized
+bytes remain readable; larger diagnostics retain a byte-count/SHA-256 commitment
+and a controlled terminal reason. Completed preparation failures, context
+denials and rejected counts remain terminal through outcome ACK loss and process
+replacement, with cancellation and accepted steering retaining their precedence.
+An independent review found that `HookDecision::Deny` was being recorded as a
+successful callback before conversion to an error. A new regression reproduced
+cold recovery continuing that request. All three preparation hook groups now
+classify Deny and checked-selector violations inside the observed operation.
+
+These are durable logical-capacity contracts. Trusted extension allocation,
+new tool intents, later prompts, repeated archive growth, physical storage and
+remaining C4–C6/A01–A23 conformance still require their own evidence. Targeted
+checks, negative reservation checks, final workspace gates and review follow.
+
+Forty-six targeted tests passed in 48.762 seconds. Coverage includes all three
+Deny hook groups, pre/post-persistence outcome ACK loss, process replacement
+before failure application, exact count limits and insufficient envelope
+rejection before callbacks. Recovery rejects forged markers, oversized reports,
+count commitments, altered request identities and count summaries forged into
+fit evidence without advancing the durable head. A held callback remains
+recordable after competing state saturates checkpoint admission, including
+exact batch retransmission, bounded failure cleanup and release.
+
+At an exact host boundary, each of the four complete auxiliary outcomes still
+fits. The test then spends newly released capacity before maximal readable or
+oversized failure delivery. Two negative checks independently disabled only
+the report reservation or failure reservation, preserving every frozen limit;
+both reproduced `checkpoint cleanup capacity exhausted`. Production source was
+restored after each experiment. Full workspace validation follows. Previous
+head `c4e9168f` passed CI 37188213974.
+
+Final Rust 1.99.0 workspace/all-feature nextest passed **4046 tests, 22 skipped**
+in 215.827 seconds with four test threads (371.088 seconds including compilation).
+Strict workspace/all-target/all-feature clippy passed in 31.875 seconds, strict
+rustdoc in 54.129 seconds, workspace doctests passed five tests with one ignored,
+and Rust 1.93.0 workspace/all-feature check passed in 45.346 seconds. Formatting,
+diff and tracked-ignore checks passed. Final independent source/test/documentation
+review found no remaining actionable P1/P2 in this increment and confirmed both
+reservations were restored after the negative checks. New-head remote CI remains
+a separate gate; complete C4–C6/A01–A23 acceptance remains open.

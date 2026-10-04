@@ -88,6 +88,7 @@ pub(crate) async fn observe<T>(
     work: NativePreparationWork,
     operation: impl Future<Output = Result<T>>,
 ) -> Result<T> {
+    let _ = super::native_auxiliary::limit(control, &work.request_id)?;
     control.before_preparation_work(&work).await?;
     let started = Instant::now();
     let result = operation.await;

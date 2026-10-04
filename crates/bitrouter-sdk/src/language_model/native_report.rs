@@ -152,7 +152,7 @@ fn committed_cost(cost: &NativeTokenCost) -> Result<NativeTokenCost> {
     })
 }
 
-fn commitment(value: &impl Serialize) -> Result<NativeEvidenceCommitment> {
+pub(super) fn commitment(value: &impl Serialize) -> Result<NativeEvidenceCommitment> {
     let mut writer = HashCounter {
         bytes: 0,
         hash: Sha256::new(),

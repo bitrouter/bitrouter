@@ -62,6 +62,38 @@ pub struct NativeInputCountReport {
     pub outcome: NativeInputCount,
     /// Count operation time; does not include durable acknowledgement waits.
     pub elapsed_ms: u64,
+    /// Complete count metadata was rejected; its token count is evidence only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_rejection: Option<NativeInputCountRejection>,
+}
+
+/// Versioned evidence for count metadata that cannot enter the durable runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeInputCountRejection {
+    /// Version 1 hashes the serde JSON report with report_rejection absent.
+    pub version: u32,
+    /// Complete report limit admitted before executing the counter.
+    pub byte_limit: u64,
+    /// Commitment to the complete report before metadata projection.
+    pub original: NativeEvidenceCommitment,
+    /// Original counted tokens, without a usable request binding or fit claim.
+    pub input_tokens: Option<u64>,
+}
+
+impl NativeInputCountRejection {
+    /// Unavailable routing outcome paired with a rejected count report.
+    pub const REASON: &'static str = "input count report exceeds its admitted byte limit";
+}
+
+/// Version-1 auxiliary report allowance, including a complete request identity.
+/// Preparation/provider error codes use the SDK's controlled vocabulary; count
+/// metadata has explicit rejection evidence if the complete report is larger.
+pub fn auxiliary_report_allowance(request_id: &str) -> Result<u64> {
+    NativeEvidenceCommitment::capture(&request_id)?
+        .bytes
+        .checked_add(4096)
+        .ok_or_else(|| crate::BitrouterError::internal("auxiliary report allowance exhausted"))
 }
 
 /// Read-only hook and bound-checker validation of a committed rebuilt context.
@@ -308,6 +340,14 @@ pub struct NativeEvidenceCommitment {
     pub sha256: String,
 }
 
+impl NativeEvidenceCommitment {
+    /// Hash the exact serde JSON representation without allocating an encoded
+    /// copy. A commitment does not retain readable content or provider wire bytes.
+    pub fn capture(value: &impl Serialize) -> Result<Self> {
+        super::native_report::commitment(value)
+    }
+}
+
 /// Why a complete managed attempt report cannot enter durable state verbatim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -456,6 +496,12 @@ pub trait NativeExecutionControl: Send + Sync {
         _report: super::native_preparation::NativePreparationWorkReport,
     ) -> Result<()> {
         Ok(())
+    }
+
+    /// Optional complete auxiliary-outcome limit, checked before callback or
+    /// counter execution. Legacy embeddings retain their existing contract.
+    fn auxiliary_report_byte_limit(&self, _request_id: &str) -> Result<Option<u64>> {
+        Ok(None)
     }
 
     /// Fixed selection still resolves aliases and provider fallback, but skips

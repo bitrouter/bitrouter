@@ -4,6 +4,8 @@ mod accounting;
 mod artifact_storage;
 #[path = "core_execution/authority.rs"]
 mod authority;
+#[path = "core_execution/auxiliary_admission.rs"]
+mod auxiliary_admission;
 #[path = "core_execution/budget.rs"]
 mod budget;
 #[path = "core_execution/cancellation.rs"]

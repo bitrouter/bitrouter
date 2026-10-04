@@ -224,7 +224,32 @@ custom executor and estimator allocations retain their separate memory limits.
 Harnesses must preserve these fields and cost variants verbatim. Legacy report
 contracts remain unchanged; this addition is not a new public API endpoint.
 
-New tool intents, later model prompts, other callback reports, future archive
+New tool intents, later model prompts, future archive
 growth, physical copies and trusted extension allocations remain separate
 admission obligations. The delivery checks do not
 establish complete memory/storage or end-to-end conformance.
+
+
+New model steps also retain `auxiliary_output_version: 1`. Core admits complete
+preparation, input-count, context-validation and provider-integration reports
+before their work starts. The allowance is 4096 bytes plus the serde-JSON request
+identity. Pending context validation also reserves its candidate history.
+Harnesses preserve the marker and full report fields in checkpoints and replay.
+Omitted markers retain legacy admission; unknown versions and journal changes
+are rejected before takeover.
+
+An oversized count report retains `report_rejection` version 1, its admitted
+limit, a pre-projection serde-JSON byte-count/SHA-256 commitment, and the original
+numeric count if present. Its `Unavailable` outcome stops further counting and
+generation. Numeric count evidence alone cannot establish context fit after its
+request binding was rejected. A failure diagnostic above 1024 serialized bytes
+retains `failure_diagnostic` and a controlled terminal reason; the commitment
+does not preserve readable diagnostics. SDK preparation and provider-integration
+reports use controlled error categories.
+
+Known preparation failures (including hook Deny), validation denials and count
+report rejections remain terminal after outcome ACK loss or cold restoration.
+They do not authorize re-running a failed guard; accepted steering and
+cancellation retain their existing priority. A provider-integration phase error
+alone still follows its enclosing attempt's authentication/fallback policy.
+These additions use the existing checkpoint and managed Responses interfaces.

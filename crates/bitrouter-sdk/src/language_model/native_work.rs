@@ -175,6 +175,7 @@ pub(crate) async fn observe<T>(
         // Input counting has its own acknowledged intent and no model attempt.
         return operation.await;
     };
+    let _ = super::native_auxiliary::limit(runtime.control.as_ref(), &work.request_id)?;
     let gate = Instant::now();
     let allowed = runtime.control.before_provider_work(&work).await;
     runtime.add_gate_time(gate.elapsed());

@@ -177,6 +177,7 @@ pub(super) fn check(
     let mut projected = state.clone();
     let mut reserve = Reservation::default();
     reserve.add(model_output::reserved(state)?)?;
+    reserve.add(auxiliary_output::reserved(state)?)?;
     reserve.add(wait_output::reserved(state, host)?)?;
     let mut event_payloads = vec![json!({"reason":"x".repeat(128)})];
     if let Some(event) = responses::reserve_terminal(&mut projected)? {
@@ -493,6 +494,128 @@ mod tests {
         }
         host.checkpoint_bytes = high;
         Ok(host)
+    }
+
+    #[test]
+    fn saturated_auxiliary_reports_keep_admitted_capacity() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use bitrouter_sdk::language_model::native::NativeRouteConstraints;
+        for kind in ["preparation", "count", "validation", "provider"] {
+            let mut state = fixture()?;
+            let limits = state.run.as_ref().ok_or("run")?.limits.clone();
+            let plan = json!({
+                "request_id":"request", "original_model":"model", "effective_model":"model", "effort_source":"caller",
+                "prompt":{"model":"model", "messages":[], "stream":false},
+                "routes":[{"provider":"provider","model":"model","protocol":"chat_completions","constraints":NativeRouteConstraints::default()}]
+            });
+            let prompt: Prompt = serde_json::from_value(plan["prompt"].clone())?;
+            let context = ContextManifest::capture(&state, "root", &prompt)?;
+            let mut step = json!({
+                "step_id":"step","decision_id":"decision","context_revision":0,"signal_revision":0,
+                "manifest":state.manifest,"materials":[],"context":context,"input_state_revision":1,"input_history":[],
+                "attempts":[],"settled":false,"auxiliary_output_version":1
+            });
+            let report = match kind {
+                "preparation" => {
+                    let work =
+                        json!({"request_id":"request","kind":"pre_request_hook","work_index":0});
+                    step["preparation_work"] = json!([{"work":work}]);
+                    json!({"work":work,"elapsed_ms":u64::MAX,"error_code":""})
+                }
+                "count" => {
+                    step["count_plan"] = plan.clone();
+                    step["input_counts"] = json!([{"route_index":0}]);
+                    json!({"request_id":"request","route_index":0,"elapsed_ms":u64::MAX,"outcome":{"status":"unavailable","reason":""}})
+                }
+                "validation" => {
+                    step["context_validation"] = json!({"request_id":"request","applied":false});
+                    json!({"request_id":"request","allowed":false,"elapsed_ms":u64::MAX,"work_elapsed_ms":u64::MAX,"error_code":""})
+                }
+                "provider" => {
+                    let work = json!({"request_id":"request","attempt_index":0,"work_index":0,"kind":"authentication"});
+                    step["plan"] = plan.clone();
+                    step["attempts"] =
+                        json!([{"attempt_id":"attempt","index":0,"provider_work":[{"work":work}]}]);
+                    json!({"work":work,"elapsed_ms":u64::MAX,"http_status":null,"error_code":""})
+                }
+                _ => return Err("unknown auxiliary fixture".into()),
+            };
+            agent_turn(&mut state, "root")?
+                .steps
+                .push(serde_json::from_value(step)?);
+            crate::core::accounting::work::synchronize(&mut state)?;
+            let grant = OwnershipGrant {
+                session_id: "session".into(),
+                harness_id: "harness".into(),
+                core_instance_id: "core".into(),
+                execution_epoch: 1,
+            };
+            let host = exact_host(&state, &grant, &limits)?;
+            let mut report = report;
+            let bound = serialized_bytes(&"request")? + 4096;
+            let padding = usize::try_from(bound - serialized_bytes(&report)?)?;
+            if kind == "count" {
+                report["outcome"]["reason"] = json!("x".repeat(padding));
+            } else {
+                report["error_code"] = json!("x".repeat(padding));
+            }
+            assert_eq!(serialized_bytes(&report)?, bound);
+            let step = &mut agent_turn(&mut state, "root")?.steps[0];
+            match kind {
+                "preparation" => {
+                    step.preparation_work[0].report = Some(serde_json::from_value(report.clone())?)
+                }
+                "count" => {
+                    step.input_counts[0].report = Some(serde_json::from_value(report.clone())?)
+                }
+                "validation" => {
+                    step.context_validation.as_mut().ok_or("validation")?.report =
+                        Some(serde_json::from_value(report.clone())?)
+                }
+                "provider" => {
+                    step.attempts[0].provider_work[0].report =
+                        Some(serde_json::from_value(report.clone())?)
+                }
+                _ => return Err("unknown auxiliary fixture".into()),
+            }
+            crate::core::accounting::work::synchronize(&mut state)?;
+            let mut received = proposal(&state, &grant)?;
+            received.events.push(DurableEvent {
+                event_seq: 2,
+                kind: format!("{kind}.outcome"),
+                run_id: Some("run".into()),
+                agent_id: Some("root".into()),
+                payload: report,
+            });
+            check(&state, &received, &host, &grant)?;
+            // Spend the released report reservation before terminal delivery.
+            // A maximal readable reason and an oversized diagnostic must both
+            // remain deliverable without relying on the earlier free space.
+            let host = exact_host(&state, &grant, &limits)?;
+            for oversized in [false, true] {
+                let mut failed = state.clone();
+                let turn = agent_turn(&mut failed, "root")?;
+                let reason = if oversized {
+                    "failure\0\"".repeat(100_000)
+                } else {
+                    "x".repeat(1022)
+                };
+                let reason = auxiliary_output::failure(turn.steps.last_mut(), &reason)?;
+                turn.steps[0].settled = true;
+                turn.status = AgentStatus::Failed;
+                turn.terminal_reason = Some(reason.clone());
+                let mut outcome = proposal(&failed, &grant)?;
+                outcome.events.push(DurableEvent {
+                    event_seq: 2,
+                    kind: "agent.failed".into(),
+                    run_id: Some("run".into()),
+                    agent_id: Some("root".into()),
+                    payload: json!({"reason":reason}),
+                });
+                check(&failed, &outcome, &host, &grant)?;
+            }
+        }
+        Ok(())
     }
 
     #[test]
