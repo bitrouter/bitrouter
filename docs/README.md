@@ -188,3 +188,4 @@ The **product** documentation that used to live here now lives in the
 - [TS goal audit](ACP_TS_GOAL_AUDIT.md): requirement-level evidence for the controlled reward pilot, learner experiments and serving implementation; separate limits on natural-history and live-benefit claims.
 
 - [BRO Conversation and durable Threads navigation](BRO_CONVERSATION_UI_SPEC.md) — PR #952 UI integration into the native Thread client.
+- [BRO Conversation UI integration evidence](BRO_CONVERSATION_UI_IMPLEMENTATION.md) — delivered behavior, local gates and remaining verification boundaries.
