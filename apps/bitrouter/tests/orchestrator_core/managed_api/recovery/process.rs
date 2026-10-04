@@ -9,6 +9,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
 
+#[path = "process/inflight.rs"]
+mod inflight;
+
 struct Host {
     child: tokio::process::Child,
     base: String,
@@ -78,6 +81,10 @@ impl Environment {
     }
 
     async fn start(&self) -> Result<Host> {
+        self.start_with_provider(&self.upstream.uri()).await
+    }
+
+    async fn start_with_provider(&self, endpoint: &str) -> Result<Host> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let config = self.home.path().join("bitrouter.yaml");
@@ -95,7 +102,7 @@ database:
   url: 'sqlite://./auth.db'
 providers:
   fixture:
-    api_base: {}/v1
+    api_base: {endpoint}/v1
     api_key: process-provider-fixture
     models:
       - id: served
@@ -111,8 +118,7 @@ models:
     endpoints:
       - provider: fixture
         service_id: served
-"#,
-                self.upstream.uri()
+"#
             ),
         )
         .await?;
@@ -395,31 +401,7 @@ async fn replace(
     drop(peer.socket);
     let replacement = env.start().await?;
     assert_ne!(replacement.instance, original.instance);
-    let restored_bytes = tokio::fs::read(&journal).await?;
-    assert_eq!(restored_bytes, retained);
-    let mut store = Store::default();
-    for batch in serde_json::from_slice::<Vec<CheckpointBatch>>(&restored_bytes)? {
-        let grant: OwnershipGrant = serde_json::from_slice(
-            &tokio::fs::read(
-                env.home
-                    .path()
-                    .join(format!("grant-{}.json", batch.identity.execution_epoch)),
-            )
-            .await?,
-        )?;
-        let ack = batch.validate_append(
-            &grant,
-            &store.head,
-            &Limits::default(),
-            &BTreeMap::new(),
-            None,
-        )?;
-        store.head = ack.head();
-        store
-            .acknowledgements
-            .insert(batch.identity.batch_id.clone(), ack);
-        store.batches.push(batch);
-    }
+    let store = read_journal(env, &retained).await?;
     let state = snapshot(store.batches.last().context("checkpoint")?)?;
     let result = match recovery {
         Recovery::RetainedResult => Some(serde_json::from_slice::<ToolResult>(
@@ -485,6 +467,35 @@ async fn replace(
         .await?;
     peer.ready().await?;
     Ok((replacement, peer))
+}
+
+async fn read_journal(env: &Environment, retained: &[u8]) -> Result<Store> {
+    let restored_bytes = tokio::fs::read(env.home.path().join("harness-journal.json")).await?;
+    assert_eq!(restored_bytes, retained);
+    let mut store = Store::default();
+    for batch in serde_json::from_slice::<Vec<CheckpointBatch>>(&restored_bytes)? {
+        let grant: OwnershipGrant = serde_json::from_slice(
+            &tokio::fs::read(
+                env.home
+                    .path()
+                    .join(format!("grant-{}.json", batch.identity.execution_epoch)),
+            )
+            .await?,
+        )?;
+        let ack = batch.validate_append(
+            &grant,
+            &store.head,
+            &Limits::default(),
+            &BTreeMap::new(),
+            None,
+        )?;
+        store.head = ack.head();
+        store
+            .acknowledgements
+            .insert(batch.identity.batch_id.clone(), ack);
+        store.batches.push(batch);
+    }
+    Ok(store)
 }
 
 async fn crash_case(kind: &str, persisted: bool) -> Result<()> {

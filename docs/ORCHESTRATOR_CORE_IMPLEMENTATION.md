@@ -51,13 +51,14 @@ admission APIs. Remaining boundary evidence must exercise output already
 committed before a new tool batch overflows, and accepted tool results before a
 later prompt overflows, including durable failure, ACK loss and cleanup.
 
-The process fixture currently covers checkpoint boundaries and quiescent
-handoff. A15 still needs a shipped-process crash while the provider request is
-actually in flight with incomplete output, retaining the old uncertain spend
-without turning partial calls into actions. Queue/steer/cancel combinations,
-repeated restoration until archive capacity and storage-full staging/commit
-faults also remain independent core conformance work. The first essential
-recovery-observation reserve does not prove unlimited future handoff growth.
+The process fixture covers checkpoint boundaries with quiescent handoff and
+in-flight incomplete provider HTTP bodies with explicitly scripted trusted
+activity input. The latter retains uncertain spend without applying partial
+calls, but does not establish production activity measurement. Queue/steer/cancel
+combinations, repeated restoration until archive capacity and storage-full
+staging/commit faults remain independent core conformance work. The first
+essential recovery-observation reserve does not prove unlimited future handoff
+growth.
 
 Production storage reservations, historical checkpoint retention/reclamation,
 workspace read/write/shell barriers, actual provider cost reconciliation and
@@ -3498,3 +3499,53 @@ Formatting, diff and tracked-ignore checks passed. No failed, timed-out or leaky
 test was reported. Independent source/test/documentation review found no
 remaining actionable P1/P2 in this increment. New-head remote CI and the full
 acceptance contract remain separate verification gates.
+
+## C4/C5 process death during an incomplete provider response
+
+Two additional shipped-CLI process cases hold a nonstreaming provider HTTP
+response open while killing `bro serve`. An independent raw HTTP fixture first
+answers input counting, then sends either a partial JSON tool argument or a
+complete-looking JSON response whose declared HTTP body still has missing
+bytes. It reports when the prefix has been written and observes the old
+connection close after the process is killed. These are HTTP entity/body cases,
+not SSE streaming coverage or proof of exactly which bytes the client decoded.
+
+The replacement loads only the independent harness's saved journal and grants.
+The original provider attempt has no complete receipt, tool invocation or
+applied collaboration call. Its cost exposure retains its original request,
+attempt and provider source, with unknown time and token cost. Restoration
+without a stopped-owner attestation or without cumulative activity is rejected
+without provider dispatch. A successful restoration closes the interrupted
+step; its checkpoint must be acknowledged before new work is admitted. Retrying
+the pending response keeps the run identity but creates a new step, SDK request
+and provider attempt. Only the fresh complete response authorizes a file write.
+Completion retains the original uncertain attempt, two new outcomes, one file
+effect, fenced old epochs and immutable response replay without extra calls.
+
+The positive restoration path deliberately supplies a **scripted cumulative
+activity attestation** as trusted fixture input. It is not measured elapsed
+activity and is not derived from network arrival, RTT or restart downtime.
+Consequently these tests exercise crash recovery conditional on trusted activity
+input; they do not establish a production clock handoff, remote Running-tool
+restoration, real-provider reconciliation or full C4–C6/A01–A23 acceptance.
+Production timing and harness integration remain separate requirements.
+
+The five process tests passed all sixteen scenarios in 21.179 seconds with two
+test threads. Independent source/test/documentation review found no actionable
+P1/P2. Its optional suggestion strengthened the failed-restoration HTTP probe to
+use the new epoch and require `unauthorized_scope`, specifically checking that
+no usable binding was installed. Final workspace gates follow. Prior head
+`33e293cd` has passed all Linux CI jobs; macOS and Windows tests remain pending
+at this snapshot. This is not an overall remote CI success claim.
+
+
+Final Rust 1.99.0 workspace/all-feature nextest passed **4063 tests, 22 skipped**
+in 401.049 seconds with four test threads (407.557 seconds including compilation).
+Both new cases passed under full-suite load, including the strengthened
+new-epoch rejection probe. No failed, timed-out or leaky test was reported.
+Strict workspace/all-target/all-feature clippy passed in 2.447 seconds, strict
+rustdoc in 9.569 seconds, workspace doctests passed five tests with one ignored,
+and Rust 1.93.0 workspace/all-feature check passed in 0.555 seconds. Formatting,
+diff and tracked-ignore checks passed. The production protocol, limits, clocks
+and core behavior are unchanged; this increment adds conditional fault evidence.
+New-head CI and full acceptance remain separate gates.
