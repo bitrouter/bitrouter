@@ -3218,3 +3218,57 @@ diff and tracked-ignore checks passed. Final independent source/test/documentati
 review found no remaining actionable P1/P2 in this increment and confirmed both
 reservations were restored after the negative checks. New-head remote CI remains
 a separate gate; complete C4–C6/A01–A23 acceptance remains open.
+
+
+## C4/C5 shipped-process crash conformance
+
+The managed API fixture now starts the shipped `bro serve` executable, with its
+own temporary configuration and virtual-key database. An independent HTTP and
+WebSocket client retains checkpoint bytes, harness-issued ownership grants and
+tool results on disk. It kills the core process without graceful shutdown,
+starts a new instance, validates the retained journal against its grants and
+restores under a higher epoch. No live core registry or session object crosses
+the process boundary.
+
+The checkpoint matrix stops at model intent, complete model outcome, applied
+model output, completed response, accepted tool result and terminal run. Each
+barrier is tested before persistence and after persistence with its ACK withheld.
+The harness executes an actual append-and-sync file write. Assertions cover the
+single effect, immutable response replay, preserved run identity, provider call
+counts, stale HTTP epoch rejection and settled release. A lost complete outcome
+can require another provider attempt; the original uncertain intent remains in
+the cost inventory with unknown cost, never an invented zero estimate.
+
+Two additional cases cover a delivered but unstarted command and an unknown
+write effect. The former preserves invocation/attempt identities while fencing
+the command to the replacement epoch. The latter keeps execution in
+`recovery_required` even after a continuation records a definite live result.
+A subsequent authenticated restoration confirms the independently retained
+result before execution resumes; original uncertainty remains in the journal.
+
+These tests exercise real process death and the production CLI/API/controller
+path, with a loopback simulated provider and a deterministic test harness. Their
+activity handoffs are quiescent: the provider or tool has stopped, or dispatch
+has not begun. They do not demonstrate power-loss durability, remote Running
+tool clock handoff, real-provider reconciliation, production harness integration
+or the complete C4–C6/A01–A23 acceptance contract. Validation and independent
+review results follow. Previous head `73560289` passed CI 37191002776 on all
+configured platforms.
+
+Three focused tests covering fourteen scenarios passed in 43.472 seconds. The
+unknown-effect test also retains a definite live result without clearing the
+recovery barrier, then resumes after a second process replacement confirms that
+result. Its original uncertainty observation remains present. Independent
+read-only review of the tests, helpers and documentation found no actionable
+P1/P2. Full workspace validation follows; cross-platform execution remains a
+separate remote CI gate.
+
+Final workspace/all-feature nextest passed **4049 tests, 22 skipped** in
+379.766 seconds with four test threads (391.049 seconds including compilation).
+Nextest marked one unchanged extension-host test as leaky; its isolated rerun
+passed in 0.205 seconds without that marker. The new process tests left no CLI
+child running. Strict workspace/all-target/all-feature clippy passed in 4.863
+seconds, strict rustdoc in 14.227 seconds, workspace doctests passed five tests
+with one ignored, and Rust 1.93.0 workspace/all-feature check passed in 0.772
+seconds. Formatting, diff and tracked-ignore checks passed. New-head remote CI
+and complete C4–C6/A01–A23 acceptance remain separate gates.

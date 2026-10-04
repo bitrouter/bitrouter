@@ -52,6 +52,19 @@ the session or accepted operation identity. Managed HTTP admission remains
 closed until binding completes. `session.head` is read-only and requires the
 actual current durable head; it does not cancel an active provider request.
 
+On core process replacement, retain the harness journal and ownership grants
+independently of the lost process. Validate its exact durable head, obtain the
+new core instance from capabilities and restore with a strictly higher epoch.
+A delivered command that the harness can prove never started may be reported as
+`not_started`; core can redeliver the same invocation/attempt under the new epoch.
+A stopped write without a confirmed outcome is not proof that it never happened:
+report `effect_unknown` and reconcile it through authenticated restoration.
+A live result or continuation may be retained, but execution stays in
+`recovery_required` until restoration confirms the effect. A confirmed result
+retained by the harness can be supplied during restoration even when its core
+checkpoint or ACK was lost. Keep the original uncertain evidence and operation
+identities; response replay does not authorize repeating the workspace effect.
+
 Artifact quota must cover current bodies, outstanding tool-evidence allowances
 and archive growth, including coexistence of acknowledged and replacement
 roots. New invocation checkpoints retain `recovery_archive_allowance` for first
