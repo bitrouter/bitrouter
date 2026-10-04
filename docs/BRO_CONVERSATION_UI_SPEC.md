@@ -1,11 +1,10 @@
 # BRO Conversation and durable Threads navigation
 
-Date: 2026-10-04. Approved scope: integrate PR #952's native-scrollback UI into
-PR #945; BRO Threads populate the native Agents menu, while explicit ACP entry
-points retain their supervisor inventory. This contract supersedes the native
-presentation in the Thread/Turn unification contract. The ACP navigation contract
-in [CODE_TUI_CODEX_NAVIGATION_SPEC.md](CODE_TUI_CODEX_NAVIGATION_SPEC.md) remains
-applicable to explicit ACP sessions.
+Updated: 2026-10-04. This is the native presentation and navigation contract for
+PR #945. Runtime identity, admission, context, ownership and recovery are defined
+once in [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md). Explicit
+ACP entry points retain their supervisor inventory and use
+[shared ACP navigation](CODE_TUI_CODEX_NAVIGATION_SPEC.md).
 
 ## Ownership and entry
 

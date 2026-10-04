@@ -28,38 +28,32 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   and identity migration sub-batch; not completion of the original M0–M1 batch.
 - [`CLI.md`](CLI.md) — full command reference, flags, and config resolution.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
-- [`BRO_BASE_TOOLS_SPEC.md`](BRO_BASE_TOOLS_SPEC.md) — **v0.2, adapted to the Thread/Turn runtime;
-  integration and original platform evidence recorded separately.** Six native base tools: directory-aware `read`,
-  `glob`, `grep`, `write`, `edit`, and a server-selected `shell`.
-- [`BRO_BASE_TOOLS_ACCEPTANCE.md`](BRO_BASE_TOOLS_ACCEPTANCE.md) — Local source
-  checks, real-model coding/read-only tests, and controlled seven-to-six comparison.
-- [`BRO_AGENT_RUNTIME_SPEC.md`](BRO_AGENT_RUNTIME_SPEC.md) — **v0.2, product MVP
-  execution baseline retained; standalone runtime/crate gate locally verified;
-  full product MVP incomplete.**
-  Product 003 now gives orchestrator 004 v1.0 precedence for conflicting
-  core/harness ownership, interfaces and subsequent stages. Retains
-  Thread/Turn/Item, bounded tool concurrency,
-  queue/steer, durable execution facts, safe recovery, and shared clients.
-  Supersedes the [native-agent design](BRO_NATIVE_AGENT_SERVER_SPEC.md) and
-  [shared-session draft](BRO_SHARED_SESSION_SERVER_SPEC.md), retained as deprecated
-  history. See the
-  [implementation record](BRO_NATIVE_AGENT_IMPLEMENTATION.md) for delivered
-  baseline behavior, checks, and remaining risks. Current phase progress is in
-  [runtime implementation evidence](BRO_AGENT_RUNTIME_IMPLEMENTATION.md).
-- [`BRO_AGENT_RUNTIME_HANDOFF.md`](BRO_AGENT_RUNTIME_HANDOFF.md) — **source-verified
-  migration notes; new core contract not implemented.** Current runtime components,
-  core/harness destination responsibilities, preserved correctness and remaining
-  interfaces. The core engineering spec is now verified at the pinned branch
-  revision. Core integration, client delivery and host investigation/proof follow
-  the independently validated runtime; unknown owner/effect records stay blocked.
-- [`BRO_THREAD_TURN_UNIFICATION_SPEC.md`](BRO_THREAD_TURN_UNIFICATION_SPEC.md) —
-  **v0.1, approved and implemented with local acceptance.** Removes the separate one-shot
-  Task domain and legacy conversion, unifies native clients on Thread/Turn,
-  adds bounded idle Thread unloading and reload, and removes duplicate completion
-  events while preserving durable execution and recovery barriers.
-- [`BRO_THREAD_TURN_UNIFICATION_IMPLEMENTATION.md`](BRO_THREAD_TURN_UNIFICATION_IMPLEMENTATION.md) —
-  unified runtime/client changes and independent U1–U5 acceptance evidence; prior
-  runtime records remain historical.
+
+## BRO current contracts and evidence
+
+Start with [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md).
+It incorporates implemented Thread/Turn behavior; historical documents do not
+supply additional overrides. Contract scope and acceptance scope are separate.
+
+| Subject | Document |
+| --- | --- |
+| Runtime identities, scheduling, context, durable commits, recovery and transport | [BRO_AGENT_RUNTIME_SPEC.md](BRO_AGENT_RUNTIME_SPEC.md) |
+| Six tool interfaces, filesystem bounds and interpreter rules | [BRO_BASE_TOOLS_SPEC.md](BRO_BASE_TOOLS_SPEC.md) |
+| Native Conversation and durable Thread navigation | [BRO_CONVERSATION_UI_SPEC.md](BRO_CONVERSATION_UI_SPEC.md) |
+| Source-specific validation and historical checkpoints | [BRO_AGENT_RUNTIME_IMPLEMENTATION.md](BRO_AGENT_RUNTIME_IMPLEMENTATION.md) |
+| Tool provider/platform experiments and reproduction | [BRO_BASE_TOOLS_ACCEPTANCE.md](BRO_BASE_TOOLS_ACCEPTANCE.md) |
+| Final Conversation/main fixture acceptance | [BRO_CONVERSATION_UI_IMPLEMENTATION.md](BRO_CONVERSATION_UI_IMPLEMENTATION.md) |
+| Raw exports, summaries and archive integrity | [Evidence README](evidence/bro-base-tools/README.md) |
+| Future core/harness separation, outside standalone acceptance | [BRO_AGENT_RUNTIME_HANDOFF.md](BRO_AGENT_RUNTIME_HANDOFF.md) |
+
+Old [native server](BRO_NATIVE_AGENT_SERVER_SPEC.md),
+[shared-session](BRO_SHARED_SESSION_SERVER_SPEC.md) and
+[Thread/Turn migration](BRO_THREAD_TURN_UNIFICATION_SPEC.md) pages are short
+historical pointers to immutable Git snapshots. Their implementation ledgers
+are indexed from current runtime acceptance. Explicit ACP sessions retain the
+separate ACP contracts below.
+
+## Other development contracts
 
 - `*_SPEC.md` / `*_ACCEPTANCE.md` — design specs and acceptance criteria for
   in-flight work (spawn/launch, onboarding, the MCP `2026-07-28` upgrade,

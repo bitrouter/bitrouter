@@ -107,37 +107,25 @@ entries. The three inspection tools form the read-only profile. The server
 resolves one interpreter before a coding execution; model commands and
 verification share it. See [the six-tool contract](BRO_BASE_TOOLS_SPEC.md).
 
-The current BRO runtime lives for one `bro serve` instance. CLI and TUI run only
-client projections; detaching does not cancel a task. Snapshot registration and event
-cutoffs share one state lock, and slow observers receive a fresh snapshot.
-Shutdown stops admission, cancels active tasks, and joins execution cleanup.
-The host now commits native execution facts through its configured database.
-Live execution is still instance-owned. Core native Thread/legacy Task loading
-reconstructs a
-bounded read-only recovery view; safe restart continuation is under implementation.
-Native store commits now fence one instance/generation transactionally. Clean
-shutdown can persist a stopped proof after joins and durable queue pauses;
-active lost owners or legacy unfenced facts block native execution. Shared
-canonical workspace locks and persistent exclusion markers also fence cooperating
-local runtimes using separate stores. Bounded startup discovery indexes native
-Threads and legacy Tasks before admission and blocks unresolved cold workspaces.
-The native and legacy loaders now share a validator, preserving original Task
-identities, controls, Items and history record positions without replay. Unknown
-effect resolution, durable legacy Task conversion and checkpoint continuation
-remain incomplete.
-The retained [BRO runtime v0.2 spec](BRO_AGENT_RUNTIME_SPEC.md) records persistent
-Thread state, bounded tool concurrency,
-queue/steer and safe recovery. R1 durable Item lifecycle and R2 bounded read
-workers and R3 core context/queue/steering/observation pass local checks. Thread
-client delivery and R4 execution recovery remain incomplete.
-The former process-local design is
-historical scope, not a restriction on that refactor.
-Product 003 now gives orchestrator 004 v1.0 precedence for conflicting ownership,
-interfaces and later stages: core owns scheduling and model/context routing;
-harness owns workspace tools and durable workflow/session authority. The current
-runtime is a migration input, not proof that this separation or the new managed
-API exists. See the [migration handoff](BRO_AGENT_RUNTIME_HANDOFF.md) for source
-boundaries and the unavailable engineering-spec reference.
+The native BRO runtime has one `ThreadService` per serving instance. App-owned
+SQLite stores Thread/Turn facts, acceptance keys, public events and owner/version
+fences. Clients only project state; detaching does not cancel, approve or resume.
+Bounded tool workers, ordered exclusive effects, FIFO/steering, joined shutdown,
+workspace locks/markers and bounded startup discovery preserve execution barriers.
+Cold queries do not execute. Safe same-owner reload and explicit stopped-owner
+checkpoint recovery preserve identities and budgets without replaying completed
+effects; lost owners, unknown effects and uncertain accounting remain blocked.
+
+Use [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md) for current
+requirements, including root format 2 and local v15/HTTP v2. The
+[runtime acceptance index](BRO_AGENT_RUNTIME_IMPLEMENTATION.md) separates local
+fixtures, historical provider/platform checks and remaining product gates.
+[Conversation UI](BRO_CONVERSATION_UI_SPEC.md) and
+[six tools](BRO_BASE_TOOLS_SPEC.md) specialize that contract. Older phase ledgers
+are historical references, not competing descriptions of current behavior.
+Future [core/harness separation](BRO_AGENT_RUNTIME_HANDOFF.md) assigns live
+scheduling/checkpoint semantics to Core and durable storage/ACK authority to
+Harness; the standalone implementation does not prove that integration.
 Router metering and external ACP session ownership retain their own boundaries.
 
 The CLI is the **host** interface: it owns `main()` and mounts the other

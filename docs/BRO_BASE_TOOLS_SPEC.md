@@ -5,7 +5,7 @@ Version: **v0.2**. Updated: **2026-10-04**.
 Status: **implemented in #951 and adapted to #945's Thread/Turn runtime.**
 The [acceptance record](BRO_BASE_TOOLS_ACCEPTANCE.md) separates original
 macOS/Windows/real-model evidence from integration validation. Runtime authority,
-commit ordering and recovery remain governed by the current runtime contracts.
+commit ordering and recovery are defined by the standalone runtime contract.
 
 ## Scope and authority
 
@@ -14,12 +14,10 @@ tools. Merge directory listing into `read`, rename `find` to `glob`, and expose
 one `shell` backed by a server-selected interpreter. Preserve the native
 read-only profile without a general command executor.
 
-This is the approved amendment to the tool portions of
-[BRO agent runtime MVP](BRO_AGENT_RUNTIME_SPEC.md). Runtime tables and delivered
-CLI/skill descriptions now use these six tools. Thread/Turn/Item, permissions,
-commit ordering, concurrency, and recovery requirements remain owned by the
-runtime spec. This tool change does not establish completion of any runtime
-phase.
+This document defines tool arguments, outputs, path bounds and interpreter rules.
+[The standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md) owns identities,
+permissions, commit barriers, concurrency and recovery; tool validation does not
+establish full runtime or product acceptance.
 
 External ACP harnesses retain their own tool names and behavior. The change
 does not rename external tools or cross-harness observation markers. New CLI
@@ -28,27 +26,16 @@ listing, and new glob syntax are outside this slice.
 
 ## Source findings and design rationale
 
-Inspected source: HEAD `b4294b316a319031c09744b9c9a785cbecc65550`, with
-uncommitted native-runtime work present on 2026-10-01. These findings describe
-that worktree, not a released build.
+The earlier seven-tool interface split file/directory reads and exposed platform
+shell names. The current registry uses the same six names on supported Unix and
+Windows servers. [The original design rationale](https://github.com/bitrouter/bitrouter/blob/65555b126e8d14982b2a7c977b618d545cd8f5b7/docs/BRO_BASE_TOOLS_SPEC.md#source-findings-and-design-rationale)
+is historical. A clearer interface is the motivation; better accuracy, latency
+or token cost is not established by the controlled acceptance tasks.
 
-| Source finding | Proposed change |
-| --- | --- |
-| `WorkspaceTools` declares eight names, but platform filtering exposes seven per coding task | Expose the same six names on supported Unix and Windows servers |
-| `bash` and `powershell` already share an execution function | Move platform selection behind one declared `shell` |
-| `read` accepts UTF-8 files; `ls` lists one directory | Dispatch `read` by resolved path type |
-| `find` already uses `globset::Glob` | Rename the tool while preserving matching behavior |
-| Declaration, validation, permission classification, and dispatch separately match names | Keep these consistent through the runtime's static registry contract |
-
-The expected benefit is a clearer interface with fewer platform-dependent
-names. Improved model accuracy, latency, or token cost is a hypothesis, not an
-acceptance claim. Merging `read` also makes its description more complex; keep
-its parameters small and its two output forms explicit.
-
-Source references: [tool declarations and handlers](../crates/bitrouter-orchestrator/src/tools.rs),
-[native instructions and execution](../crates/bitrouter-orchestrator/src/agent.rs),
-[verification](../crates/bitrouter-orchestrator/src/service.rs), and
-[execution records](../crates/bitrouter-orchestrator/src/store.rs).
+Source: [tools.rs](../crates/bitrouter-orchestrator/src/tools.rs),
+[agent.rs](../crates/bitrouter-orchestrator/src/agent.rs),
+[service.rs](../crates/bitrouter-orchestrator/src/service.rs) and
+[store.rs](../crates/bitrouter-orchestrator/src/store.rs).
 
 ## Tool interfaces and permissions
 
@@ -161,7 +148,7 @@ Use path '.' for the root. offset is one-based; offset and limit count file
 lines or directory entries. Directories include hidden and ignored children.
 Output is bounded; use the returned offset to continue."
 
-## Rename find to glob
+## Glob search
 
 Retain the existing `pattern`, `path`, and `limit` schema. `pattern` must be
 nonempty and valid for the existing matcher. An omitted `path` or `"."` selects
@@ -186,7 +173,7 @@ No new ordering or pagination guarantee is introduced for `glob`. Update names
 in declarations, errors, prompts, permissions, and native tests. Keep `grep`'s
 optional `glob` filter unchanged; it is an argument, not another tool name.
 
-## Unify shell execution
+## Shell execution
 
 Keep the command interface small:
 
