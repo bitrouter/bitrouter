@@ -17,6 +17,9 @@ pub struct ProviderAttemptSource {
     /// Canonical output contract remains live after the original turn retires.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_output_bytes: Option<u64>,
+    /// Preserves the admission policy when the original turn is replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_output_version: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +217,7 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                             attempt_index: attempt.index,
                             route: route.clone(),
                             canonical_output_bytes: attempt.canonical_output_bytes,
+                            canonical_output_version: attempt.canonical_output_version,
                         })
                 });
                 if let Some(receipt) = &attempt.receipt {

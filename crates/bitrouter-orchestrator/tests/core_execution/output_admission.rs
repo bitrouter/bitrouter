@@ -283,7 +283,7 @@ async fn concurrent_canonical_results_fill_their_frozen_allowances_and_settle() 
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(limits.len(), 2);
     assert_eq!(limits[0], limits[1]);
-    assert!(limits[0] > 64 * 1024);
+    assert!(limits[0] > 16 * 1024);
     executor
         .bytes
         .store(usize::try_from(limits[0])?, Ordering::SeqCst);
@@ -357,6 +357,7 @@ async fn canonical_output_reservation_rejects_forgery_and_preserves_legacy() -> 
                                     attempt["canonical_output_bytes"] = json!(1);
                                 } else if let Some(attempt) = attempt.as_object_mut() {
                                     attempt.remove("canonical_output_bytes");
+                                    attempt.remove("canonical_output_version");
                                 }
                             }
                         }
@@ -434,9 +435,13 @@ async fn canonical_output_reservation_blocks_takeover_without_headroom() -> Test
             payload.checkpoint.state["signals"]["facts"]["retained_facts"] =
                 json!("f".repeat(padding));
             if legacy {
-                payload.checkpoint.state["agents"][&root]["turn"]["steps"][0]["attempts"][0]
+                if let Some(attempt) = payload.checkpoint.state["agents"][&root]["turn"]["steps"][0]
+                    ["attempts"][0]
                     .as_object_mut()
-                    .map(|attempt| attempt.remove("canonical_output_bytes"));
+                {
+                    attempt.remove("canonical_output_bytes");
+                    attempt.remove("canonical_output_version");
+                }
                 strip_ledger_allowances(&mut payload.checkpoint.state);
             }
         })?;
@@ -474,9 +479,221 @@ fn strip_ledger_allowances(state: &mut serde_json::Value) {
                 for entry in work.values_mut() {
                     if let Some(source) = entry["provider_source"].as_object_mut() {
                         source.remove("canonical_output_bytes");
+                        source.remove("canonical_output_version");
                     }
                 }
             }
         }
     }
+}
+
+#[tokio::test]
+async fn full_canonical_allowance_reaches_response_history_and_terminal_answer() -> TestResult {
+    for lost_ack in [None, Some(false), Some(true)] {
+        let harness = Arc::new(Harness::new(None, None));
+        let port: Arc<dyn HarnessPort> = match lost_ack {
+            Some(committed) => Arc::new(reconnect::FaultPort::new(
+                harness.clone(),
+                "model.output.applied",
+                committed,
+            )),
+            None => harness.clone(),
+        };
+        let executor = Arc::new(ConcurrentOutput {
+            seen: Semaphore::new(0),
+            resume: Semaphore::new(0),
+            bytes: AtomicUsize::new(0),
+            calls: AtomicUsize::new(0),
+        });
+        let records = UsageRecords::default();
+        let table = StaticRoutingTable::new();
+        table.insert("fixture-model", vec![target("first")]);
+        let app = App::builder()
+            .language_model(|builder| {
+                builder
+                    .routing_table(Arc::new(table))
+                    .executor(executor.clone())
+                    .settlement_recorder(records.clone());
+            })
+            .build()?;
+        let session = bind_app(Arc::new(app), port).await?;
+        let mut task = input();
+        task.limits = Some(Limits {
+            checkpoint_bytes: 256 * 1024,
+            input_bytes: 16 * 1024,
+            active_models: 1,
+            ..Limits::default()
+        });
+        let accepted = session.start_response("input", 1, task).await?;
+        let response_id = accepted.assigned_ids["response_id"].clone();
+        let driver = tokio::spawn({
+            let session = session.clone();
+            let response_id = response_id.clone();
+            async move { session.drive_response(&response_id).await }
+        });
+        tokio::time::timeout(Duration::from_secs(30), executor.seen.acquire())
+            .await??
+            .forget();
+        let state = session.snapshot().await;
+        let bound = state.root_turn().ok_or("turn")?.steps[0].attempts[0]
+            .canonical_output_bytes
+            .ok_or("bound")?;
+        executor
+            .bytes
+            .store(usize::try_from(bound)?, Ordering::SeqCst);
+        executor.resume.add_permits(1);
+        let outcome = tokio::time::timeout(Duration::from_secs(30), driver).await??;
+        let response = if lost_ack.is_some() {
+            assert!(outcome.is_err());
+            reconnect::reconnect(&session, &harness).await?;
+            session.drive_response(&response_id).await?
+        } else {
+            outcome?
+        };
+        assert_eq!(response.run_status, Some(RunStatus::Completed));
+        assert_eq!(response.output.len(), 1);
+        let state = session.snapshot().await;
+        let turn = state.root_turn().ok_or("turn")?;
+        let result = turn.steps[0].attempts[0]
+            .receipt
+            .as_ref()
+            .ok_or("receipt")?
+            .report
+            .result
+            .as_ref()
+            .ok_or("result")?;
+        assert_eq!(serde_json::to_vec(result)?.len() as u64, bound);
+        assert_eq!(response.final_answer, turn.final_answer);
+        assert_eq!(
+            response.final_answer,
+            state.run.as_ref().ok_or("run")?.final_answer
+        );
+        assert_eq!(response.output[0].message.content, result.content);
+        assert_eq!(
+            state.agents[&state.agent_id]
+                .history
+                .last()
+                .ok_or("history")?
+                .content,
+            result.content
+        );
+        assert_eq!(*records.0.lock().await, vec![(7, 3, false)]);
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert!(harness.sent.lock().await.is_empty());
+        assert_eq!(session.drive_response(&response_id).await?, response);
+        let bounds = Limits {
+            checkpoint_bytes: 256 * 1024,
+            input_bytes: 16 * 1024,
+            active_models: 1,
+            ..Limits::default()
+        };
+        for batch in &harness.store.lock().await.batches {
+            batch.decode(&bounds)?;
+        }
+        session.disconnect().await;
+        let restored_harness = recovery::harness_at(harness.store.lock().await.clone()).await;
+        let request = recovery::request(&*restored_harness.store.lock().await, false)?;
+        let (restored, restored_executor) =
+            recovery::restore(request, restored_harness, Vec::new()).await?;
+        assert_eq!(restored.drive_response(&response_id).await?, response);
+        assert_eq!(restored_executor.calls.load(Ordering::SeqCst), 0);
+        restored
+            .release("release", restored.head().await.state_revision)
+            .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn canonical_delivery_policy_validates_versions_and_restores_v1() -> TestResult {
+    let original = recovery::completed_store().await?;
+    for mode in ["v1", "unknown", "missing_bytes", "mismatched_inventory"] {
+        let mut store = original.clone();
+        tool_payloads::rewrite_last(&mut store, |payload| {
+            let state = &mut payload.checkpoint.state;
+            let v1_bound = state["run"]["limits"]["checkpoint_bytes"]
+                .as_u64()
+                .zip(state["run"]["limits"]["active_models"].as_u64())
+                .map(|(bytes, active)| bytes / (2 * (active + 1)));
+            if let Some(agents) = state["agents"].as_object_mut() {
+                for agent in agents.values_mut() {
+                    if let Some(steps) = agent["turn"]["steps"].as_array_mut() {
+                        for step in steps {
+                            if let Some(attempts) = step["attempts"].as_array_mut() {
+                                for attempt in attempts {
+                                    match mode {
+                                        "v1" => {
+                                            attempt["canonical_output_version"] =
+                                                serde_json::Value::Null;
+                                            attempt["canonical_output_bytes"] = json!(v1_bound);
+                                        }
+                                        "unknown" => attempt["canonical_output_version"] = json!(3),
+                                        "missing_bytes" => {
+                                            attempt["canonical_output_bytes"] =
+                                                serde_json::Value::Null
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(runs) = state["cost_work"].as_object_mut() {
+                for run in runs.values_mut() {
+                    if let Some(work) = run["work"].as_object_mut() {
+                        for item in work.values_mut() {
+                            if let Some(source) = item["provider_source"].as_object_mut() {
+                                match mode {
+                                    "v1" => {
+                                        source.remove("canonical_output_version");
+                                        source.insert(
+                                            "canonical_output_bytes".into(),
+                                            json!(v1_bound),
+                                        );
+                                    }
+                                    "mismatched_inventory" => {
+                                        source.remove("canonical_output_version");
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })?;
+        let harness = recovery::harness_at(store).await;
+        let before = harness.store.lock().await.head.clone();
+        let request = recovery::request(&*harness.store.lock().await, false)?;
+        let restored = recovery::restore(request, harness.clone(), Vec::new()).await;
+        if mode == "v1" {
+            let (session, executor) = restored?;
+            assert!(
+                session
+                    .snapshot()
+                    .await
+                    .root_turn()
+                    .ok_or("turn")?
+                    .steps
+                    .iter()
+                    .flat_map(|step| &step.attempts)
+                    .all(|attempt| attempt.canonical_output_version.is_none()
+                        && attempt.canonical_output_bytes.is_some())
+            );
+            assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+        } else {
+            assert_eq!(
+                restored
+                    .err()
+                    .ok_or("invalid policy accepted")?
+                    .downcast_ref::<CoreError>()
+                    .map(|error| error.code),
+                Some(ErrorCode::CheckpointConflict)
+            );
+            assert_eq!(harness.store.lock().await.head, before);
+        }
+    }
+    Ok(())
 }

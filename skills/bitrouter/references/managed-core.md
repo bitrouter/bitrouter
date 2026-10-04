@@ -155,20 +155,28 @@ unknown spend when usage is unavailable; exact operation replay does not retry
 the provider. This ingress bound does not establish full physical memory
 accounting or bound allocations inside custom executors and preparation hooks.
 
-Each new model attempt freezes `canonical_output_bytes` before provider
-dispatch. The allowance is the frozen root run's `checkpoint_bytes` divided by
-`2 * (active_models + 1)`, rounded down; child agents use the same policy. Core
-reserves twice the allowance for each unresolved attempt's canonical receipt
-and event contributions. The durable cost inventory retains this contract
-after a run or child turn is replaced, so competing state cannot consume a
-retired attempt's reserved contribution. Late evidence must satisfy that
-attempt's original allowance, including its rejection summary's byte limit.
+New model attempts freeze `canonical_output_bytes` and
+`canonical_output_version: 2` before provider dispatch. Version 2 allocates the
+frozen root's `checkpoint_bytes / [8 * (active_models + 1)]`, rounded down.
+Descendants use the same policy. Admission reserves canonical receipt/event
+bytes plus future history, provisional and terminal answers, child mail and
+active Responses output. Open runtime waits reserve both cleanup views of the
+answer and its complete retained context sources. New waits compete for their
+additional capacity before acceptance.
 
-Core's SDK control counts serialized JSON before private-output sealing and
-before copying a result into its durable attempt report, then checks again
-after sealing. This also covers custom executor results and JSON escaping.
-Restoration checks the retained contract and pending capacity before takeover.
-Missing legacy fields do not impose a new bound on already admitted attempts.
+A committed receipt still reserves delivery until the step is applied or
+interrupted. Existing cleanup projections then account for the retained answer,
+mail and wait results. The cost inventory preserves the original contract after
+turn/run replacement; retired attempts keep receipt/event capacity for late
+evidence, without applying output to a replacement turn. Evidence must satisfy
+the frozen result bound and rejection byte limit.
+
+SDK admission counts JSON before and after private-output sealing, including
+custom executor results and escaping. Restoration checks policy consistency
+and headroom before takeover. A missing version with a retained byte limit
+preserves the original `checkpoint_bytes / [2 * (active_models + 1)]` policy;
+missing both fields retains the earlier unversioned contract. Unknown versions
+or inconsistent attempt/inventory fields are rejected.
 
 A rejected complete result has no deliverable content in its attempt report.
 `output_rejection` retains the byte limit, canonical usage counters and their
@@ -179,6 +187,7 @@ loss retries that rejected result or authorizes its tool calls. An exact
 response replay retains its original failure. Missing usage remains unknown.
 Late evidence remains attributed to its original attempt; a newer run, model
 step or applied steering input cannot be failed by an older rejected output.
-The reservation covers canonical result contributions. Full report metadata,
-future history/response/archive growth, physical copies and trusted extension
-allocations remain separate admission obligations.
+New tool intents, later model prompts, model-originated wait expansion, full
+report metadata, future archive growth, physical copies and trusted extension
+allocations remain separate admission obligations. The delivery checks do not
+establish complete memory/storage or end-to-end conformance.

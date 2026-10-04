@@ -134,6 +134,9 @@ pub struct AttemptRecord {
     /// Missing legacy fields do not create a retrospective output contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_output_bytes: Option<u64>,
+    /// Version 2 reserves canonical delivery; absence retains the original policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_output_version: Option<u32>,
     /// Actual integration work, including internal HTTP authentication retries.
     /// Empty legacy/custom-executor records do not prove complete coverage.
     #[serde(default)]
@@ -4164,7 +4167,7 @@ impl NativeExecutionControl for StepControl {
                 return Err(reject(ErrorCode::OperationConflict, "attempt does not follow its immutable model plan"));
             }
             let attempt_id = id("attempt");
-            step.attempts.push(AttemptRecord { attempt_id: attempt_id.clone(), index: attempt_index, receipt: None, canonical_output_bytes: Some(self.canonical_output_bytes), provider_work: Vec::new() });
+            step.attempts.push(AttemptRecord { attempt_id: attempt_id.clone(), index: attempt_index, receipt: None, canonical_output_bytes: Some(self.canonical_output_bytes), canonical_output_version: Some(model_output::DELIVERY_VERSION), provider_work: Vec::new() });
             active_run(state)?.model_attempts += 1;
             Ok(json!({"attempt_id":attempt_id,"request_id":request_id,"attempt_index":attempt_index}))
         }).await.map_err(sdk_error)?;

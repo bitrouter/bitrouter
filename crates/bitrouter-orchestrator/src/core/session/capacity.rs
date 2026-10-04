@@ -451,11 +451,9 @@ mod tests {
         })
     }
 
-    #[test]
-    fn saturated_managed_checkpoint_keeps_room_for_child_delivery()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn fixture() -> Result<SessionSnapshot, Box<dyn std::error::Error>> {
         let input = json!({"text":"task", "model":"model", "acceptance_criteria":[], "required_materials":[]});
-        let mut state: SessionSnapshot = serde_json::from_value(json!({
+        let state: SessionSnapshot = serde_json::from_value(json!({
             "session_id":"session", "agent_id":"root",
             "manifest":{"tools":[],"tool_manifest_digest":HarnessManifest::digest(&[])?,
                 "workspace_id":"workspace","permission_revision":1,"max_tool_output_bytes":1024,
@@ -469,6 +467,13 @@ mod tests {
                 "limits":Limits::default(),"status":"running","model_attempts":0,"active_ms":0},
             "operations":{},"waits":{},"signals":SignalState::default(),"allocations":{}
         }))?;
+        Ok(state)
+    }
+
+    #[test]
+    fn saturated_managed_checkpoint_keeps_room_for_child_delivery()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut state = fixture()?;
         let mut child = state.agents.get("root").ok_or("root")?.clone();
         child.agent_id = "child".into();
         child.parent_id = Some("root".into());
@@ -523,5 +528,152 @@ mod tests {
         )?;
         check(&state, &proposal(&state, &grant)?, &limits, &grant)?;
         Ok(())
+    }
+
+    #[test]
+    fn saturated_model_delivery_covers_wait_answers_and_retained_sources()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut state = fixture()?;
+        let root = state.agents.get("root").ok_or("root")?.clone();
+        let mut child = root.clone();
+        child.agent_id = "child".into();
+        child.parent_id = Some("root".into());
+        child.display_path = "/root/child".into();
+        child.depth = 1;
+        let turn = child.turn.as_mut().ok_or("turn")?;
+        turn.agent_turn_id = "child_turn".into();
+        turn.status = AgentStatus::ModelRunning;
+        for index in 0..4 {
+            child.context_sources.push(ContextSource {
+                permission_revision: index,
+                workspace_revision: Some("retained-source".repeat(512)),
+                tool_manifest_digest: state.manifest.tool_manifest_digest.clone(),
+                materials: Vec::new(),
+            });
+        }
+        state.agents.insert("child".into(), child);
+        let limits = Limits {
+            checkpoint_bytes: 2 * 1024 * 1024,
+            ..Limits::default()
+        };
+        state.run.as_mut().ok_or("run")?.limits = limits.clone();
+        responses::begin(&mut state, "input", "run", None, 1)?;
+        for index in 0..4 {
+            let Applied::Waiting(wait) = collaboration::apply(
+                &mut state,
+                "root",
+                &Action::Wait {
+                    agent_ids: vec!["child".into()],
+                    timeout_ms: 600_000,
+                },
+                0,
+                1,
+            )?
+            else {
+                return Err("expected pending wait".into());
+            };
+            state.waits.insert(
+                format!("wait-{index}"),
+                RuntimeWait {
+                    actor_id: "root".into(),
+                    state: wait,
+                    result: None,
+                },
+            );
+        }
+        let prompt: Prompt =
+            serde_json::from_value(json!({"model":"model", "messages":[], "stream":false}))?;
+        let context = ContextManifest::capture(&state, "child", &prompt)?;
+        let bound = model_output::allowance(&limits)?;
+        let mut result: bitrouter_sdk::language_model::types::GenerateResult =
+            serde_json::from_value(json!({
+                "content":[],"finish_reason":"stop","provider_metadata":{}
+            }))?;
+        let empty = Message::text(Role::Assistant, "");
+        result.content = empty.content;
+        let padding = bound
+            .checked_sub(serialized_bytes(&result)?)
+            .ok_or("result envelope")?;
+        let message = Message::text(Role::Assistant, "x".repeat(usize::try_from(padding)?));
+        result.content = message.content.clone();
+        assert_eq!(serialized_bytes(&result)?, bound);
+        let receipt = json!({"decision_id":"decision","attempt_id":"attempt","cost_source":"unknown","cache_observation_source":"unknown",
+            "report":{"request_id":"request","attempt_index":0,"elapsed_ms":0,"result":result,
+                "route":{"provider":"provider","model":"model","protocol":"chat_completions",
+                    "constraints":bitrouter_sdk::language_model::native::NativeRouteConstraints::default()}}});
+        let step: ModelStep = serde_json::from_value(json!({
+            "step_id":"step", "decision_id":"decision", "context_revision":0,"signal_revision":0,
+            "manifest":state.manifest,"materials":[],"context":context,"input_state_revision":1,"input_history":[],
+            "attempts":[{"attempt_id":"attempt","index":0,"receipt":receipt,"canonical_output_bytes":bound,"canonical_output_version":2}],"settled":false
+        }))?;
+        agent_turn(&mut state, "child")?.steps.push(step);
+        let grant = OwnershipGrant {
+            session_id: "session".into(),
+            harness_id: "harness".into(),
+            core_instance_id: "core".into(),
+            execution_epoch: 1,
+        };
+        let before = proposal(&state, &grant)?;
+        // Search the exact headroom needed by the pending-output projection.
+        // Root policy remains frozen; only the independent host admission bound
+        // is varied, avoiding incidental fixture slack in this arithmetic test.
+        let mut host = limits.clone();
+        let (mut low, mut high) = (0, host.checkpoint_bytes);
+        check(&state, &before, &host, &grant)?;
+        while low < high {
+            let middle = low + (high - low) / 2;
+            host.checkpoint_bytes = middle;
+            match check(&state, &before, &host, &grant) {
+                Ok(()) => high = middle,
+                Err(error) if error.code == ErrorCode::LimitExceeded => low = middle + 1,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        host.checkpoint_bytes = high;
+        check(&state, &before, &host, &grant)?;
+        let source = ContextSource::capture(&context);
+        let child = agent_mut(&mut state, "child")?;
+        child.history.push(message);
+        child.context_sources.push(source);
+        child.context_revision += 1;
+        let turn = child.turn.as_mut().ok_or("turn")?;
+        turn.steps[0].settled = true;
+        turn.status = AgentStatus::Runnable;
+        turn.final_answer = Some("x".repeat(usize::try_from(padding)?));
+        responses::capture(
+            &mut state,
+            &DurableEvent {
+                event_seq: 2,
+                kind: "model.output.applied".into(),
+                run_id: Some("run".into()),
+                agent_id: Some("child".into()),
+                payload: json!({"step_id":"step","request_id":"request"}),
+            },
+        )?;
+        check(&state, &proposal(&state, &grant)?, &host, &grant)?;
+        for wait in state.waits.values() {
+            let completed = collaboration::wait_result(&state, &wait.state, 0);
+            assert_eq!(
+                completed["agents"][0]["final_answer"],
+                json!(turn_answer(&state)?)
+            );
+            assert_eq!(
+                completed["agents"][0]["context_sources"]
+                    .as_array()
+                    .ok_or("sources")?
+                    .len(),
+                5
+            );
+        }
+        Ok(())
+    }
+
+    fn turn_answer(state: &SessionSnapshot) -> Result<&str, Box<dyn std::error::Error>> {
+        state
+            .agents
+            .get("child")
+            .and_then(|agent| agent.turn.as_ref())
+            .and_then(|turn| turn.final_answer.as_deref())
+            .ok_or_else(|| "child answer missing".into())
     }
 }

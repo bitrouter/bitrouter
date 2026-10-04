@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure, single canonical output admission and first recovery-observation archive reserves implemented; physical storage/future archive exhaustion, concurrent output headroom and the remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure, canonical output admission, prospective receipt/delivery contributions and first recovery-observation archive reserves implemented; physical storage/future archive exhaustion, full report metadata, model-wait/prompt growth and the remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, incremental HTTP/SSE projection and separate bounded WebSocket control lane connected to the service host; independent clients cover binding/release ACK loss, released-epoch restoration and read-only head queries during provider work; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -2965,3 +2965,61 @@ Workspace doctests passed five tests with one ignored. Formatting, diff and
 tracked-ignore checks passed. Final independent code/test/documentation review
 found no remaining actionable P1/P2 in this increment. Previous head `421a5196`
 passed CI 37178987902; new-head remote CI remains a separate gate.
+
+
+## C4 canonical output delivery after receipt admission
+
+A complete result could fit its old frozen bound and commit its receipt while
+its history, provisional answer and managed response exceeded checkpoint
+capacity. A full-allowance text-result regression reproduced a failed response
+where a completed response was expected.
+
+New attempts now freeze `canonical_output_version: 2`. Its result bound is the
+root's `checkpoint_bytes / [8 * (active_models + 1)]`, rounded down, leaving
+room for delivery copies alongside receipt/event contributions. Pending
+capacity includes history, provisional and root answers, child conclusions,
+active Responses output/answer and terminal-event bytes. A received result
+retains its actual delivery contribution until the step is applied or
+interrupted; the existing cleanup projection then counts the retained state.
+Retired unresolved attempts keep their receipt/event reservation through the
+cost inventory. A missing version preserves the previous two-share policy;
+missing both fields preserves earlier legacy behavior. Unknown policies and
+attempt/inventory inconsistencies reject recovery without advancing its head.
+
+Independent review found that runtime waits need two answer contributions for
+the cleanup projection's before/after views, and both views newly expose all
+retained context sources. The corrected reservation includes those sources,
+not just a source introduced by the current step. A unit admission test uses
+four waits and substantial retained sources, searches the exact host capacity
+boundary with a fixed run policy, then applies the complete result and response
+capture. This is projection arithmetic evidence, not a production wait workflow.
+
+The managed-response regression returns the full frozen canonical allowance,
+checks receipt/history/turn/run/response content, single settlement, replay and
+release, and exercises output-application ACK loss before and after persistence
+plus process restoration without another model call. Version tests cover the
+old bounded contract, unbounded legacy records, unknown versions, missing bytes
+and inconsistent inventory. Final validation is recorded below.
+
+This work does not reserve every new tool intent, later model prompt, normal
+model-originated wait expansion, arbitrary report metadata, recovery archive,
+physical copy or trusted extension allocation. Existing independent admission
+still governs those transitions. The complete C4–C6/A01–A23 requirements,
+remote running-tool time handoff and production harness conformance remain open.
+
+Nine focused tests passed in 9.366 seconds. Two surgical negative checks kept
+the version-2 result limit unchanged: removing only delivery admission, and
+restoring the single-wait-copy/missing-source bug. Both caused the exact-boundary
+projection test to reject output with `checkpoint cleanup capacity exhausted`.
+Production source was restored before final workspace validation.
+
+Rust 1.99.0 workspace/all-feature nextest passed **4026 tests, 22 skipped** in
+128.394 seconds using four test threads. A subsequent test-only `Option::map`
+to `if let` lint correction passed its targeted regression in 0.182 seconds;
+production code was unchanged. Final strict workspace/all-target/all-feature
+clippy passed in 5.501 seconds, strict rustdoc in 18.231 seconds, workspace
+doctests passed five tests with one ignored, and Rust 1.93.0 workspace/all-feature
+check passed in 19.174 seconds. Formatting, diff and tracked-ignore checks passed.
+Final independent code/test/documentation review found no remaining actionable
+P1/P2 in this increment. Commit `abc628ab` passed CI 37181083836; new-head remote
+CI remains a separate gate.
