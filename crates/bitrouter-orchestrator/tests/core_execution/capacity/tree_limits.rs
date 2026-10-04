@@ -251,9 +251,12 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
     // Counts and byte budgets are independent ceilings. Hold the tool-bearing
     // model until all other branches finish and the root has consumed their
     // conclusions, isolating the tool contract from later join-model reports.
-    *executor.burst_agent.lock().await = Some(agents[5].clone());
+    // Pick the earliest scheduled root leaf so this barrier does not wait for
+    // a random UUID's position behind the rest of the large tree.
+    let burst = agents[5..].iter().min().ok_or("burst agent")?.clone();
+    *executor.burst_agent.lock().await = Some(burst.clone());
     for agent in &agents {
-        let content = if *agent == agents[5] {
+        let content = if *agent == burst {
             (0..tool_count)
                 .map(|index| call(&format!("leaf-{index}")))
                 .collect()
@@ -272,14 +275,16 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
         async move { session.drive().await }
     });
     tokio::time::timeout(Duration::from_secs(30), executor.seen.acquire_many(4))
-        .await??
+        .await
+        .map_err(|_| "initial four models did not reach the executor barrier")??
         .forget();
     assert_eq!(executor.active.load(Ordering::SeqCst), 4);
     assert_eq!(executor.peak.load(Ordering::SeqCst), 4);
     assert_eq!(executor.entered.load(Ordering::SeqCst), 4);
     executor.release.add_permits(4);
     tokio::time::timeout(Duration::from_secs(120), executor.burst_seen.acquire())
-        .await??
+        .await
+        .map_err(|_| "tool-bearing model did not reach the executor barrier")??
         .forget();
     let quiet = tokio::time::timeout(Duration::from_secs(240), async {
         loop {
@@ -287,7 +292,7 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
             if state
                 .agents
                 .values()
-                .filter(|agent| agent.agent_id != agents[5])
+                .filter(|agent| agent.agent_id != burst)
                 .all(|agent| {
                     agent.turn.as_ref().is_some_and(|turn| {
                         !turn.steps.is_empty()
@@ -320,7 +325,7 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
                     "agent={} depth={} burst={} status={:?} notified={} answer={} settled={:?} mail={:?}",
                     agent.agent_id,
                     agent.depth,
-                    agent.agent_id == agents[5],
+                    agent.agent_id == burst,
                     turn.status,
                     turn.notified,
                     turn.final_answer.is_some(),
@@ -341,7 +346,9 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
     let retained_bytes = serde_json::to_vec(&session.snapshot().await)?.len();
     eprintln!("{case:?}/{committed}: pre-tool snapshot bytes={retained_bytes}");
     executor.burst_release.add_permits(1);
-    let initial = tokio::time::timeout(Duration::from_secs(120), running).await??;
+    let initial = tokio::time::timeout(Duration::from_secs(120), running)
+        .await
+        .map_err(|_| "driver did not settle after releasing the tool model")??;
     let mut outcomes = Vec::new();
     let (commands, error) = if expected_commands == 0 {
         assert!(harness.sent.lock().await.is_empty());
@@ -361,7 +368,7 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
         );
         let commands = harness.sent.lock().await.clone();
         assert_eq!(commands.len(), expected_commands);
-        assert!(commands.iter().all(|command| command.agent_id == agents[5]));
+        assert!(commands.iter().all(|command| command.agent_id == burst));
         if matches!(case, Case::CheckpointCapacity) {
             saturate_observations(&session, &harness, commands.first().ok_or("tool")?).await?;
         }
@@ -379,7 +386,8 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
             outcomes.push(outcome);
         }
         let error = tokio::time::timeout(Duration::from_secs(120), session.drive())
-            .await?
+            .await
+            .map_err(|_| "driver did not settle after recording all tool results")?
             .err()
             .ok_or("terminal ACK loss missing")?;
         (commands, error)
@@ -490,7 +498,7 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
             })
             .count();
         assert!(actual > 0, "agent {agent} had no model execution");
-        if *agent != agents[5] {
+        if *agent != burst {
             let answer = format!("owned work completed by {agent}");
             assert!(
                 done.agents[agent]

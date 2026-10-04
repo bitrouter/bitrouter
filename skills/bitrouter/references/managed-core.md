@@ -281,3 +281,10 @@ unused count slots do not override a byte-admission failure. A typed resource
 failure stops new work while the harness still reports definitive results for
 already authorized invocations; required outcomes and terminal records must
 survive reconnect and acknowledgement loss.
+
+Restoration authenticates the entire supplied journal and final durable head
+before reading any recovery archive. It then validates hydrated snapshots one
+at a time. Harnesses still provide the original checkpoint bytes and preserve
+all referenced archive dependencies; this is an internal buffer-lifetime change,
+with no new message or smaller legacy reply allowance. Ordinary checkpoint JSON
+keeps omitted optional fields intact during historical receipt validation.

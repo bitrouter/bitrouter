@@ -3320,3 +3320,53 @@ passed in 0.606 seconds. Formatting, diff and tracked-ignore checks passed.
 Independent source/test/documentation review found no remaining actionable
 P1/P2 in this increment. Previous head `923b5494` passed CI 37193107781; new-head
 remote CI and complete C4–C6/A01–A23 acceptance remain separate gates.
+
+
+## C4 restoration decoding lifetime
+
+Restoration now counts its complete control envelope without allocating a second
+serialized request. It authenticates every original batch, ownership transition
+and the final durable head first, dropping each decoded payload as it proceeds.
+Only after that complete pass does it decode and hydrate one snapshot at a time
+for the existing release, resource, response, wait-policy, auxiliary-policy and
+activity-history validators. Only the final hydrated payload is retained. A bad
+late batch cannot cause archive reads through an otherwise valid prefix.
+
+Archive hydration consumes the compact checkpoint JSON and releases the raw
+archive bytes after owned deserialization, before rebuilding hydrated JSON.
+Ordinary snapshots retain their original JSON representation: inserting omitted
+optional fields during normalization can break legitimate legacy receipt/event
+equality. A legacy release regression covers omitted `error` fields in both
+retained copies. Other tests produce real archives through successive restores,
+reject corrupt late chain metadata and oversized envelopes before any artifact
+read or ownership registration, reject an intermediate policy rewrite, and
+preserve complete tool observations and cumulative activity through restoration,
+settlement and release.
+
+This removes avoidable request/journal/archive buffer overlap. It does not claim
+a measured RSS ceiling or complete physical memory accounting. The encoded
+request, current typed/JSON representations and historical validation facts
+remain live as needed. Physical storage leases, historical checkpoint retention
+and the remaining C4–C6/A01–A23 requirements are still open.
+
+CI 37204394325 for prior head `bdbdf1a1` exposed a Linux fixture wait timeout
+before the tool-bearing model was released; two other large cases passed close
+to the ordinary five-minute cutoff. The tree fixture now selects the earliest
+root leaf by scheduler order, labels each timed barrier, and runs the three
+large checkpoint-history cases in one nextest group. Each still exercises four
+overlapping model futures with the same product limits, assertions and overall
+test timeout. Validation and independent review results follow.
+
+Final workspace/all-feature nextest passed **4057 tests, 22 skipped** in
+500.440 seconds with four test threads (596.623 seconds including compilation).
+All three restoration regressions passed. The three large tree cases passed
+in 141.400, 128.865 and 139.412 seconds with their unchanged timeout. Strict
+workspace/all-target/all-feature clippy passed in 33.009 seconds, strict rustdoc
+in 20.955 seconds, workspace doctests passed five tests with one ignored, and
+Rust 1.93.0 workspace/all-feature check passed in 21.100 seconds. Formatting,
+diff and tracked-ignore checks passed. Independent source/test/documentation
+review found no remaining actionable P1/P2 in this increment and confirmed
+that fixture changes preserve coverage and product limits. Prior-head CI
+37204394325 completed with the Linux workspace failure described above; its
+other platform jobs passed. New-head CI and complete C4–C6/A01–A23 acceptance
+remain separate gates.

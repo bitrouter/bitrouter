@@ -213,8 +213,18 @@ pub(super) async fn hydrate(
     harness: &dyn HarnessPort,
     limits: &Limits,
 ) -> Result<(), CoreError> {
-    let mut state: SessionSnapshot =
-        serde_json::from_value(payload.checkpoint.state.clone()).map_err(json_error)?;
+    let mut state: SessionSnapshot = if payload
+        .checkpoint
+        .state
+        .get("recovery_archive")
+        .is_some_and(|reference| !reference.is_null())
+    {
+        serde_json::from_value(std::mem::take(&mut payload.checkpoint.state)).map_err(json_error)?
+    } else {
+        // Validate ordinary snapshots without cloning their JSON or rewriting
+        // legacy/default fields before the history validators inspect them.
+        SessionSnapshot::deserialize(&payload.checkpoint.state).map_err(json_error)?
+    };
     if state.session_id != payload.identity.session_id {
         return Err(reject(
             ErrorCode::UnauthorizedScope,
@@ -267,6 +277,9 @@ pub(super) async fn hydrate(
         ));
     }
     let mut record: RecoveryArchive = serde_json::from_slice(&bytes).map_err(json_error)?;
+    // The parsed record owns its data. Release the wire body before rebuilding
+    // the hydrated checkpoint's JSON representation.
+    drop(bytes);
     if record.schema_version != VERSION
         || record.session_id != state.session_id
         || record.run_id != state.run.as_ref().map(|run| run.run_id.clone())

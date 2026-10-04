@@ -2,6 +2,7 @@
 //! occurs until the reconciled snapshot is acknowledged under the current grant.
 
 use super::*;
+use crate::core::checkpoint::serialized_bytes;
 use crate::core::protocol::{ArtifactRef, Restore, ToolObservation, ToolStatus};
 
 impl CoreSession {
@@ -233,7 +234,7 @@ async fn restore_snapshot(
         )
     })?;
     // Bound the whole envelope before decoding a chain of full snapshots.
-    let bytes = serde_json::to_vec(request).map_err(json_error)?.len() as u64;
+    let bytes = serialized_bytes(request)?;
     if bytes > binding.limits.unacknowledged_bytes {
         return Err(reject(
             ErrorCode::LimitExceeded,
@@ -243,7 +244,6 @@ async fn restore_snapshot(
     let mut head = None::<DurableHead>;
     let mut owner = None::<String>;
     let mut identities = BTreeSet::new();
-    let mut payloads = Vec::new();
     for batch in std::iter::once(checkpoint).chain(&request.journal_tail) {
         let payload = batch.decode(&binding.limits)?;
         if batch.identity.session_id != binding.grant.session_id {
@@ -278,7 +278,6 @@ async fn restore_snapshot(
         }
         head = Some(CheckpointAck::for_batch(batch, &payload).head());
         owner = Some(batch.identity.core_instance_id.clone());
-        payloads.push((batch, payload));
     }
     if head.as_ref() != Some(&binding.durable_head) {
         return Err(reject(
@@ -294,8 +293,10 @@ async fn restore_snapshot(
             "a different owner requires a new epoch",
         ));
     }
-    // Establish the authenticated chain/head before artifact I/O. A rejected
-    // cross-session batch must not cause a read through the current host port.
+    // Authenticate the entire chain/head before artifact I/O, then decode one
+    // snapshot at a time. Keeping the original immutable batches allows this
+    // second pass without retaining every decoded JSON tree. A rejected tail
+    // must not cause reads through the current host port for its valid prefix.
     let mut final_payload = None;
     let mut releases = BTreeMap::new();
     let mut activity_history = None;
@@ -303,7 +304,11 @@ async fn restore_snapshot(
     let mut response_history = None;
     let mut wait_output_history = BTreeMap::new();
     let mut auxiliary_output_history = BTreeMap::new();
-    for (batch, mut payload) in payloads {
+    for (index, batch) in std::iter::once(checkpoint)
+        .chain(&request.journal_tail)
+        .enumerate()
+    {
+        let mut payload = batch.decode(&binding.limits)?;
         archive::hydrate(&mut payload, harness, &binding.limits).await?;
         release::validate_history(&payload, &mut releases)?;
         budget::validate_history(&payload, &mut resource_history)?;
@@ -315,7 +320,11 @@ async fn restore_snapshot(
             CheckpointAck::for_batch(batch, &payload).head(),
             &mut activity_history,
         )?;
-        final_payload = Some(payload);
+        // Validators retain their own historical facts. Earlier hydrated
+        // snapshots can be dropped before the next archive is read.
+        if index == request.journal_tail.len() {
+            final_payload = Some(payload);
+        }
     }
     let payload = final_payload
         .ok_or_else(|| reject(ErrorCode::CheckpointConflict, "empty restore chain"))?;

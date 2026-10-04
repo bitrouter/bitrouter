@@ -34,6 +34,8 @@ mod recovery_time;
 mod release;
 #[path = "core_execution/responses.rs"]
 mod responses;
+#[path = "core_execution/restore_decode.rs"]
+mod restore_decode;
 #[path = "core_execution/root_queue.rs"]
 mod root_queue;
 #[path = "core_execution/steering.rs"]
