@@ -37,7 +37,7 @@ async fn steering_settles_dispatched_effects_skips_later_calls_and_applies_input
             turn(vec![
                 tool_call(
                     "shell",
-                    "bash",
+                    "shell",
                     serde_json::json!({"command":"touch started; while [ ! -f release ]; do sleep 0.01; done; printf settled > effect.txt"}),
                 ),
                 tool_call(

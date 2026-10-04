@@ -1334,7 +1334,6 @@ impl ThreadService {
                 agent,
                 (previous_messages, context_version),
                 verification,
-                workspace,
                 cancel,
             );
         }
@@ -1352,7 +1351,6 @@ impl ThreadService {
         agent: Agent,
         context: (Vec<Message>, u64),
         verification: Option<String>,
-        workspace: PathBuf,
         cancel: CancellationToken,
     ) {
         self.inner.workers.spawn(self.run_turn(
@@ -1368,7 +1366,6 @@ impl ThreadService {
                 restored_verification: None,
             },
             verification,
-            workspace,
             cancel,
         ));
     }
@@ -1803,14 +1800,7 @@ impl ThreadService {
                 }
                 cancel
             };
-            self.spawn_thread_turn(
-                entry,
-                agent,
-                (messages, version),
-                verification,
-                workspace,
-                cancel,
-            );
+            self.spawn_thread_turn(entry, agent, (messages, version), verification, cancel);
         }
         self.schedule_queue_retry();
     }

@@ -87,6 +87,8 @@ pub enum VerificationStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerificationEvidence {
     pub command: String,
+    #[serde(default)]
+    pub interpreter: Option<serde_json::Value>,
     pub exit_status: Option<i32>,
     pub stdout: String,
     pub stderr: String,
@@ -797,7 +799,6 @@ impl ThreadService {
         agent: Agent,
         prompt: RunInput,
         verification_command: Option<String>,
-        workspace: PathBuf,
         cancel: CancellationToken,
     ) -> futures::future::BoxFuture<'static, ()> {
         {
@@ -814,14 +815,7 @@ impl ThreadService {
         Box::pin(async move {
             let _worker = worker;
             service
-                .run_turn_inner(
-                    turn_id,
-                    agent,
-                    prompt,
-                    verification_command,
-                    workspace,
-                    cancel,
-                )
+                .run_turn_inner(turn_id, agent, prompt, verification_command, cancel)
                 .await
         })
     }
@@ -832,7 +826,6 @@ impl ThreadService {
         agent: Agent,
         prompt: RunInput,
         verification_command: Option<String>,
-        workspace: PathBuf,
         cancel: CancellationToken,
     ) {
         if self
@@ -865,6 +858,7 @@ impl ThreadService {
                 .get(&turn_id)
                 .map_or(PermissionProfile::Ask, |record| record.permission_profile);
             let verification_limits = agent.verification_limits();
+            let verification_tools = agent.workspace_tools();
             let runner = agent.clone();
             let mut run = tokio::spawn(async move {
                 runner
@@ -986,7 +980,13 @@ impl ThreadService {
                                 max_calls: verification_limits.1,
                             };
                             let (verification, evidence, uncertain) = match self
-                                .run_verification(&turn_id, &workspace, command, &cancel, budget)
+                                .run_verification(
+                                    &turn_id,
+                                    &verification_tools,
+                                    command,
+                                    &cancel,
+                                    budget,
+                                )
                                 .await
                             {
                                 Ok(result) => result,
@@ -1098,7 +1098,7 @@ impl ThreadService {
     async fn run_verification(
         &self,
         turn_id: &str,
-        workspace: &Path,
+        tools: &WorkspaceTools,
         command: String,
         cancel: &CancellationToken,
         budget: VerificationBudget,
@@ -1109,7 +1109,7 @@ impl ThreadService {
             .get(turn_id)
             .map(|task| Arc::clone(&task.fence))
             .ok_or_else(unknown_turn)?;
-        let name = if cfg!(windows) { "powershell" } else { "bash" };
+        let name = "shell";
         let arguments = serde_json::json!({"command":command}).to_string();
         WorkspaceTools::validate(name, &arguments)?;
         let call = CallRecord {
@@ -1190,14 +1190,7 @@ impl ThreadService {
                                 value: serde_json::json!({"not_executed":true,"error":"verification stopped before execution"}),
                             }
                         } else {
-                            let tools = match WorkspaceTools::new(workspace) {
-                                Ok(tools) => tools,
-                                Err(error) => {
-                                    break 'verification ToolResultOutput::ErrorJson {
-                                        value: serde_json::json!({"not_executed":true,"error":error.to_string()}),
-                                    };
-                                }
-                            };
+                            let tools = tools.clone();
                             self.commit_records(
                                 turn_id,
                                 &[ExecutionRecord::ToolIntent {
@@ -1223,10 +1216,10 @@ impl ThreadService {
                                 let (start, ready) = oneshot::channel::<()>();
                                 let run = tokio::spawn(async move {
                                     let _permit = permit;
-                                    if ready.await.is_err() { return ToolResultOutput::ErrorJson {
+                                    if ready.await.is_err() { return (ToolResultOutput::ErrorJson {
                                         value: serde_json::json!({"execution_status":"not_executed","error":"verification start withdrawn"}),
-                                    }; }
-                                    tools.execute(name, &arguments, &tool_cancel, &item_id, Some(&events)).await
+                                    }, EffectStatus::NotExecuted); }
+                                    tools.execute_with_effect(name, &arguments, &tool_cancel, &item_id, Some(&events)).await
                                 });
                                 (start, run)
                             });
@@ -1244,9 +1237,9 @@ impl ThreadService {
                             let mut storage_error = None;
                             let result = loop {
                                 tokio::select! {
-                                    result = &mut run => break result.unwrap_or_else(|error| ToolResultOutput::ErrorJson {
+                                    result = &mut run => break result.unwrap_or_else(|error| (ToolResultOutput::ErrorJson {
                                         value: serde_json::json!({"error":format!("verification worker lost: {error}"),"worker_lost":true}),
-                                    }),
+                                    }, EffectStatus::Unknown)),
                                     _ = &mut deadline, if !expired => { expired = true; worker_cancel.cancel(); },
                                     Some(event) = receiver.recv() => if storage_error.is_none() && let Err(error) = self.append_agent_event(turn_id, event).await { storage_error = Some(error); worker_cancel.cancel(); },
                                 }
@@ -1262,15 +1255,8 @@ impl ThreadService {
                             if let Some(error) = storage_error {
                                 return Err(error);
                             }
-                            effect = if cancel.is_cancelled()
-                                || expired
-                                || matches!(result, ToolResultOutput::ErrorJson { .. })
-                            {
-                                EffectStatus::Unknown
-                            } else {
-                                EffectStatus::Completed
-                            };
-                            result
+                            effect = result.1;
+                            result.0
                         }
                     } else {
                         ToolResultOutput::ErrorJson {
@@ -1792,6 +1778,7 @@ fn now_ms() -> u64 {
 fn verification_evidence(command: String, result: &ToolResultOutput) -> VerificationEvidence {
     let mut evidence = VerificationEvidence {
         command: command.clone(),
+        interpreter: None,
         exit_status: None,
         stdout: String::new(),
         stderr: String::new(),
@@ -1802,6 +1789,7 @@ fn verification_evidence(command: String, result: &ToolResultOutput) -> Verifica
     };
     match result {
         ToolResultOutput::Json { value } => {
+            evidence.interpreter = value.get("interpreter").cloned();
             evidence.exit_status = value
                 .get("exit_status")
                 .and_then(serde_json::Value::as_i64)
@@ -1991,15 +1979,18 @@ mod tests {
         turn_id: &str,
         status: TurnStatus,
     ) -> Result<TurnSnapshot, String> {
-        tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            loop {
-                let snapshot = service.read(turn_id).map_err(|error| error.to_string())?;
-                if snapshot.status == status || snapshot.status.terminal() {
-                    return Ok(snapshot);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(if cfg!(windows) { 10 } else { 3 }),
+            async {
+                loop {
+                    let snapshot = service.read(turn_id).map_err(|error| error.to_string())?;
+                    if snapshot.status == status || snapshot.status.terminal() {
+                        return Ok(snapshot);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            }
-        })
+            },
+        )
         .await
         .map_err(|error| error.to_string())?
     }
@@ -2261,7 +2252,19 @@ mod tests {
             .await?
             .ok_or("execution records missing")?;
         assert!(stored.records.iter().any(|record| matches!(turn_fact(record), ExecutionRecord::ToolIntent { call, .. } if call.origin == CallOrigin::Verification)));
-        assert!(stored.records.iter().any(|record| matches!(turn_fact(record), ExecutionRecord::VerificationResult { call, effect: EffectStatus::Completed, evidence, .. } if call.origin == CallOrigin::Verification && evidence.exit_status == Some(0))));
+        assert!(stored.records.iter().any(|record| matches!(turn_fact(record), ExecutionRecord::VerificationResult { call, effect: EffectStatus::Completed, evidence, .. } if call.origin == CallOrigin::Verification && call.name == "shell" && evidence.exit_status == Some(0))));
+        let interpreter = passed
+            .verification_evidence
+            .as_ref()
+            .and_then(|evidence| evidence.interpreter.as_ref())
+            .ok_or("verification interpreter missing")?;
+        let executable = interpreter["executable"]
+            .as_str()
+            .ok_or("executable missing")?;
+        assert!(stored.records.iter().any(|record| matches!(turn_fact(record),
+            ExecutionRecord::ModelRequest { prompt, .. } if prompt.tools.iter().any(|tool|
+                matches!(tool, bitrouter_sdk::language_model::Tool::Function { name, description: Some(description), .. }
+                    if name == "shell" && description.contains(executable))))));
         assert_eq!(
             passed
                 .verification_evidence

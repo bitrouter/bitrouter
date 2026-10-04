@@ -344,16 +344,26 @@ See `references/sessions.md` for the controller/native-session boundary and what
 
 ## Interactive interface (`bro code`)
 
-Bare `bro code` is BRO's native task view. It streams assistant text and live
-shell output through transient task snapshots; complete turns and tool results
-remain in the durable event journal. Coding tools are `read` (UTF-8 text),
-`ls` (directory entries), `find` (glob paths), `grep` (regex or literal text),
-`write` (create/overwrite), `edit` (unique `oldText`/`newText` replacements),
-and `bash` on Unix or `powershell` on Windows (`command`, optional timeout in
-seconds). Search tools respect `.gitignore` and output limits. New tasks started
-with `--read-only` expose only `read`, `ls`, `find`, and `grep`; the server also
-rejects an unadvertised effectful call. The local task socket contract is
-version 3; restart an older daemon before connecting.
+Bare `bro code` owns one native BRO Thread with retained context and multiple
+Turns. Enter starts/enqueues, Ctrl-Enter steers, Ctrl-R resumes a paused queue,
+empty-composer `y`/`n` answers approval, and Ctrl-D detaches. Reattach with
+`--thread-id`; `--task-id` is removed. Assistant/shell deltas are transient;
+complete model/tool facts and Thread events are committed together.
+
+Coding declares exactly `read`, `glob`, `grep`, `write`, `edit`, `shell`;
+`--read-only` declares only the first three and rejects effectful calls before
+approval. `read` covers UTF-8 files and paginated directories (`path: "."` for
+root); offsets are one-based and complete output is capped at 50 KiB. Directories
+include hidden/ignored entries; searches respect project ignore rules and skip
+child symlinks. `edit` uses unique original-file spans. Shell is noninteractive,
+with a 30-second default and 120-second maximum. Coding selects Bash then sh
+on Unix, pwsh then powershell.exe on Windows before sampling; declaration,
+result and verification identify the same selected interpreter. Missing shells
+fail coding before sampling; read-only needs none. Loss after selection returns
+an error without retry under another interpreter. Old tool names have no aliases.
+Bounded read workers, exclusive effects and recovery blocking remain in force.
+Local protocol is v14; opt-in HTTP uses `/agent/v2`. Old execution-root formats
+are rejected rather than rewritten or replayed.
 
 Explicit local `bro code <agent>` opens an ACP conversation.
 `bro code <agent>` asks the daemon supervisor to own the ACP controller from
