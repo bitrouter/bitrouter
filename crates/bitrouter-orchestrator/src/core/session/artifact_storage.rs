@@ -48,14 +48,38 @@ pub(super) fn check(
     )?;
     // Keep space for the current archive representation even before wire
     // compaction is needed, and for its replacement to coexist before ACK.
-    // Future evidence growth and physical host leases are separate obligations.
+    // First essential restoration evidence consumes its frozen reservation;
+    // optional/repeated evidence still needs fresh admission. Physical host
+    // leases and historical-checkpoint retention are separate obligations.
     let archive = archive::prepare(state, true, host)?.state;
-    let mut bytes = archive
+    let mut archive_bytes = archive
         .recovery_archive
         .as_ref()
-        .map_or(0, |root| root.bytes)
-        .checked_mul(2)
-        .ok_or_else(exhausted)?;
+        .map_or(0, |root| root.bytes);
+    let mut tool_evidence_bytes = 0;
+    for agent in state.agents.values() {
+        let Some(turn) = &agent.turn else { continue };
+        for call in &turn.invocations {
+            let limits =
+                tool_payloads::limits(call, host, state.run.as_ref(), turn.input.limits.as_ref())?;
+            if let Some(allowance) = call.recovery_archive_allowance {
+                let growth = allowance
+                    .checked_mul(archive::remaining_observation_slots(call))
+                    .ok_or_else(exhausted)?;
+                archive_bytes = add(archive_bytes, growth)?;
+            }
+            let reserved = limits
+                .artifact_bytes
+                .unwrap_or(0)
+                .checked_mul(tool_payloads::remaining_artifact_slots(call))
+                .ok_or_else(exhausted)?;
+            tool_evidence_bytes = add(tool_evidence_bytes, reserved)?;
+        }
+    }
+    if archive_bytes > host.unacknowledged_bytes {
+        return Err(exhausted());
+    }
+    let mut bytes = archive_bytes.checked_mul(2).ok_or_else(exhausted)?;
     let mut retained_roots = 0u64;
     for reference in roots.values() {
         retained_roots = add(retained_roots, reference.bytes)?;
@@ -66,19 +90,7 @@ pub(super) fn check(
             bytes = add(bytes, reference.bytes)?;
         }
     }
-    for agent in state.agents.values() {
-        let Some(turn) = &agent.turn else { continue };
-        for call in &turn.invocations {
-            let limits =
-                tool_payloads::limits(call, host, state.run.as_ref(), turn.input.limits.as_ref())?;
-            let reserved = limits
-                .artifact_bytes
-                .unwrap_or(0)
-                .checked_mul(tool_payloads::remaining_artifact_slots(call))
-                .ok_or_else(exhausted)?;
-            bytes = add(bytes, reserved)?;
-        }
-    }
+    bytes = add(bytes, tool_evidence_bytes)?;
     if bytes > state.manifest.artifact_quota_bytes {
         return Err(exhausted());
     }

@@ -62,7 +62,7 @@ pub(super) fn limits(
         evidence: Vec::new(),
         workspace_revision: None,
     })?;
-    match call.dispatch.result_limits {
+    let limits = match call.dispatch.result_limits {
         Some(frozen)
             if frozen.output_bytes == call.result_limit_bytes
                 && frozen.output_bytes > 0
@@ -84,7 +84,16 @@ pub(super) fn limits(
             ErrorCode::RecoveryRequired,
             "legacy tool intent has no retained run input policy",
         )),
+    }?;
+    if let Some(bytes) = call.recovery_archive_allowance
+        && bytes != archive::observation_allowance(call, limits)?
+    {
+        return Err(reject(
+            ErrorCode::CheckpointConflict,
+            "recovery archive reservation differs from the frozen reply contract",
+        ));
     }
+    Ok(limits)
 }
 
 pub(super) fn validate_result(

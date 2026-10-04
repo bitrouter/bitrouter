@@ -1324,7 +1324,9 @@ async fn bind_app_with_limits(
         workspace_revision: None,
         permission_revision: 1,
         max_tool_output_bytes: 8192,
-        artifact_quota_bytes: 1024 * 1024,
+        // Concurrent-tool tests need room for their full frozen reply contracts
+        // and prospective recovery archives, independently of checkpoint bytes.
+        artifact_quota_bytes: 4 * 1024 * 1024,
         max_artifact_chunk_bytes: 8192,
         required_features: Vec::new(),
     };
@@ -3458,6 +3460,7 @@ async fn verification_waits_for_children_and_respects_shared_tool_capacity() -> 
     task.limits = Some(Limits {
         active_models: 1,
         outstanding_tools: 2,
+        input_bytes: 8192,
         ..Limits::default()
     });
     task.verification = Some(Verification {

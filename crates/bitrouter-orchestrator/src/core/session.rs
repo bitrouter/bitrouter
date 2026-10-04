@@ -208,6 +208,10 @@ pub struct Invocation {
     pub result: Option<ToolResult>,
     pub consumed: bool,
     pub result_limit_bytes: u64,
+    /// Frozen archive growth for each first essential recovery observation.
+    /// Absence preserves an already authorized legacy reply contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_archive_allowance: Option<u64>,
     pub effect: super::protocol::ToolEffect,
     pub signal_revision: u64,
     /// Workspace version used to authorize this invocation, including explicit
@@ -2776,7 +2780,8 @@ impl CoreSession {
                         });
                         continue;
                     }
-                    calls.push(Invocation {
+                    let mut invocation = Invocation {
+                        recovery_archive_allowance: None,
                         recovery_observation: None,
                         recovery_observation_revision: 0,
                         prior_recovery_observations: Vec::new(),
@@ -2809,7 +2814,12 @@ impl CoreSession {
                         provider_call_id: call_id.clone(),
                         result: None,
                         consumed: false,
-                    });
+                    };
+                    invocation.recovery_archive_allowance = Some(archive::observation_allowance(
+                        &invocation,
+                        result_limits.clone()?,
+                    )?);
+                    calls.push(invocation);
                 }
             }
             if step.plan.as_ref().is_some_and(|plan| {
@@ -2928,7 +2938,8 @@ impl CoreSession {
                 .steps
                 .last()
                 .ok_or_else(|| reject(ErrorCode::Busy, "no final model step"))?;
-            turn.invocations.push(Invocation {
+            let mut invocation = Invocation {
+                recovery_archive_allowance: None,
                 recovery_observation: None,
                 recovery_observation_revision: 0,
                 prior_recovery_observations: Vec::new(),
@@ -2961,7 +2972,10 @@ impl CoreSession {
                 provider_call_id: String::new(),
                 result: None,
                 consumed: false,
-            });
+            };
+            invocation.recovery_archive_allowance =
+                Some(archive::observation_allowance(&invocation, result_limits)?);
+            turn.invocations.push(invocation);
             turn.status = AgentStatus::WaitingTool;
             Ok(json!({}))
         })

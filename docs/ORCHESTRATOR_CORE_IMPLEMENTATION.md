@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure and single canonical output admission implemented; physical storage/future archive exhaustion, concurrent output headroom and the remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure, single canonical output admission and first recovery-observation archive reserves implemented; physical storage/future archive exhaustion, concurrent output headroom and the remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, incremental HTTP/SSE projection and separate bounded WebSocket control lane connected to the service host; independent clients cover binding/release ACK loss, released-epoch restoration and read-only head queries during provider work; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -2827,3 +2827,48 @@ target/all-feature clippy passed in 72.589 seconds, strict rustdoc in 29.496
 seconds, and Rust 1.93.0 workspace/all-feature check in 98.572 seconds.
 Workspace doctests passed five tests with one ignored. Formatting, diff and
 tracked-ignore checks passed. Remote CI for the new commit is a separate gate.
+
+Commit `58753028` passed CI `37157297097`.
+
+## C4 prospective recovery archive admission
+
+New ordinary and verification tool intents freeze a per-observation
+`recovery_archive_allowance`. It includes the complete frozen JSON payload,
+duplicated dependency metadata, archive entry/revision growth, and a
+maximum-width authenticated activity handoff. Current archive bytes plus
+unconsumed first running/stopped/unknown-effect allowances are checked against
+the restoration bound and counted twice against artifact quota for replacement
+overlap. This check precedes tool dispatch and applies before wire compaction.
+Archive encoding itself counts bytes before allocating its serialized buffer.
+
+Live observations do not consume archive allowances. First archived phases do;
+definite outcomes release unused allowances. Restoration validates a retained
+allowance against the original reply contract; absence remains a legacy marker
+and never narrows an already authorized result. Repeated archive evidence still
+needs fresh room. Artifact-body reservations remain separate: a fresh artifact
+for a phase already reported live does not acquire a second body allowance.
+
+Regression coverage includes low-quota rejection before tool dispatch, legacy
+restoration and forged allowances. The saturation test first creates a real
+archive, fills the logical artifact quota, then imports full-payload/full-body
+stopped and uncertain observations for two outstanding tools. Restore ACK loss
+is exercised before and after persistence; reconnect preserves the exact
+proposal and never redispatches the tools. Definite results then permit cleanup.
+Disabling only the prospective archive count reproduces rejection before the
+restore proposal can commit. With the reservation enabled, the regression passes.
+General concurrent-tool fixtures now advertise sufficient archive capacity;
+dedicated quota tests retain explicit small limits.
+
+Initial independent review found no new P1/P2 in the implementation. Final
+review and workspace validation are recorded below. Physical storage/staging
+leases, retained historical checkpoints, legacy migration, arbitrary repeated
+restore growth, concurrent model-output headroom and the full C4–C6/A01–A23
+requirements remain open.
+
+Final-source Rust 1.99.0 workspace/all-feature nextest passed 4018 tests with
+22 skipped in 114.939 seconds using four test threads. Strict workspace/all-
+target/all-feature clippy passed in 32.401 seconds, strict rustdoc in 18.002
+seconds, and Rust 1.93.0 workspace/all-feature check in 19.386 seconds.
+Workspace doctests passed five tests with one ignored. Formatting, diff and
+tracked-ignore checks passed. Final independent code/test/documentation review
+found no new P1/P2. New-head remote CI remains a separate gate.

@@ -2,7 +2,10 @@
 //! hydrates and validates the complete evidence before using any lifecycle fact.
 
 use super::*;
-use crate::core::protocol::{ArtifactRef, RunActivityReconciliation, ToolObservation};
+use crate::core::checkpoint::serialized_bytes;
+use crate::core::protocol::{
+    ArtifactRef, RunActivityReconciliation, ToolObservation, ToolResultLimits, ToolStatus,
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 
 const MEDIA_TYPE: &str = "application/vnd.bitrouter.recovery+json";
@@ -35,6 +38,66 @@ pub(super) struct Prepared {
 pub(super) struct Blob {
     reference: ArtifactRef,
     bytes: Vec<u8>,
+}
+
+/// An observation may add both its complete payload and all of its artifact
+/// metadata to the dependency list. Include first-entry structure, widened
+/// revisions and a maximum-width authenticated handoff from the same restore.
+pub(super) fn observation_allowance(
+    call: &Invocation,
+    limits: ToolResultLimits,
+) -> Result<u64, CoreError> {
+    let entry = BTreeMap::from([(
+        &call.dispatch.invocation_id,
+        ArchivedTool {
+            attempt_id: call.dispatch.attempt_id.clone(),
+            revision: u64::MAX,
+            current: None,
+            prior: Vec::new(),
+        },
+    )]);
+    let handoff = RunActivityReconciliation {
+        run_id: call.dispatch.run_id.clone(),
+        durable_head: DurableHead {
+            execution_epoch: u64::MAX,
+            state_revision: u64::MAX,
+            event_seq: u64::MAX,
+            batch_id: Some("x".repeat(128)),
+            payload_sha256: Some("0".repeat(64)),
+        },
+        active_ms: u64::MAX,
+    };
+    let structure = serialized_bytes(&entry)?;
+    let activity = serialized_bytes(&handoff)?;
+    limits
+        .payload_bytes
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(structure))
+        .and_then(|bytes| bytes.checked_add(activity))
+        // Commas in prior observations, tool entries, dependencies and activity.
+        .and_then(|bytes| bytes.checked_add(4))
+        .ok_or_else(|| reject(ErrorCode::LimitExceeded, "recovery reservation exhausted"))
+}
+
+pub(super) fn remaining_observation_slots(call: &Invocation) -> u64 {
+    if call
+        .result
+        .as_ref()
+        .is_some_and(|result| result.status != ToolOutcome::EffectUnknown)
+    {
+        return 0;
+    }
+    // Live observations do not consume archive capacity: the first fresh
+    // recovery observation still has to enter the archive after a crash.
+    let seen = |status| {
+        call.recovery_observation
+            .iter()
+            .chain(&call.prior_recovery_observations)
+            .any(|observation| observation.status == status)
+    };
+    u64::from(call.result.is_none() && !seen(ToolStatus::Running) && !seen(ToolStatus::Stopped))
+        + u64::from(!seen(ToolStatus::Stopped))
+        + u64::from(!seen(ToolStatus::EffectUnknown))
 }
 
 pub(super) fn prepare(
@@ -77,8 +140,7 @@ pub(super) fn prepare(
         }
     }
     record.dependencies = dependencies(&record)?;
-    let bytes = serde_json::to_vec(&record).map_err(json_error)?;
-    if bytes.len() as u64
+    if serialized_bytes(&record)?
         > state
             .manifest
             .artifact_quota_bytes
@@ -89,6 +151,7 @@ pub(super) fn prepare(
             "recovery archive exceeds artifact or restoration bound",
         ));
     }
+    let bytes = serde_json::to_vec(&record).map_err(json_error)?;
     let hash = sha256(&bytes);
     let reference = ArtifactRef {
         artifact_id: format!("recovery-{hash}"),

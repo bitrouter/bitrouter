@@ -4,7 +4,7 @@ use bitrouter_orchestrator::core::protocol::{
 };
 use bitrouter_orchestrator::core::session::AgentStatus;
 
-fn capabilities(owner: &str) -> Capabilities {
+pub(super) fn capabilities(owner: &str) -> Capabilities {
     Capabilities {
         version: 1,
         core_instance_id: owner.into(),
@@ -17,7 +17,7 @@ fn capabilities(owner: &str) -> Capabilities {
     }
 }
 
-fn application(
+pub(super) fn application(
     responses: Vec<MockResponse>,
 ) -> Result<(Arc<App>, Arc<RecordingExecutor>), Box<dyn std::error::Error>> {
     let table = StaticRoutingTable::new();

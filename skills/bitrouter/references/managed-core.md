@@ -52,6 +52,17 @@ the session or accepted operation identity. Managed HTTP admission remains
 closed until binding completes. `session.head` is read-only and requires the
 actual current durable head; it does not cancel an active provider request.
 
+Artifact quota must cover current bodies, outstanding tool-evidence allowances
+and archive growth, including coexistence of acknowledged and replacement
+roots. New invocation checkpoints retain `recovery_archive_allowance` for first
+archived running/stopped/unknown-effect evidence and the associated handoffs.
+Core rejects new tools when these obligations do not fit, including before the
+first archive is uploaded. A smaller negotiated control/reply bound can reduce
+this reservation; lowering an existing invocation's reply contract cannot.
+Absent allowances remain legacy state. Additional distinct artifact bodies,
+repeated archive observations and extra handoffs require fresh capacity. These
+logical checks do not reserve physical staging or historical-checkpoint storage.
+
 After the cancellation checkpoint is acknowledged, `run.cancel` stops live
 provider executor futures throughout the run; `agent.cancel` and
 `interrupt_agent` affect only the target subtree. While a cancellation is

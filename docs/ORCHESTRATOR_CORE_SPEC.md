@@ -699,6 +699,17 @@ representation and acknowledged/replacement-root overlap also count before ACK,
 including before the first wire compaction. Aggregate failure uses the durable
 capacity-failure path below, preserving the unaccepted request at the harness.
 
+New invocations also retain `recovery_archive_allowance` in their checkpoint.
+For each first archived running/stopped/unknown-effect observation, admission
+reserves the frozen payload, its dependency metadata, archive entry growth and
+a maximum-width activity handoff. The prospective archive and its replacement
+must coexist within quota. Live status records do not consume these archive
+allowances; definite results release unused ones. This reserves archive growth,
+not a second artifact-body allowance for a phase already reported live. New
+distinct bodies still require ordinary artifact admission. Repeated archived
+observations and extra handoffs need fresh capacity. A missing allowance marks
+a legacy invocation and does not retroactively narrow its reply contract.
+
 These checks bound logical objects referenced by current state and its pending
 replacement. They do not establish physical host storage leases, capacity for
 all retained historical checkpoints, or all future recovery-archive growth.
