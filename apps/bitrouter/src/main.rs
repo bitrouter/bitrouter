@@ -2644,7 +2644,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
 async fn run_native_task(args: TaskRunArgs, remote: bool) -> Result<()> {
     use bitrouter::agent_local::{Operation, ReplyResult};
-    use bitrouter_orchestrator::service::TurnStatus;
+    use bitrouter_orchestrator::turn::TurnStatus;
 
     anyhow::ensure!(
         !remote,

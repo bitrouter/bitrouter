@@ -18,6 +18,9 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 
 The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `bitrouter_sdk::extension::ExtensionApi` inside `assemble::build_app_with_extensions`; the SDK also retains legacy `Plugin`/hook interfaces for host assembly. See [the extension directory guide](../extensions/README.md) and [guardrails](../extensions/regex-checker/README.md).
 
+For the native runtime module map, execution reading order and test layout, see
+the [orchestrator source guide](../crates/bitrouter-orchestrator/README.md).
+
 ### External interfaces
 
 Clients reach BitRouter through its external **interfaces** — the ways *in*. These are distinct from the SDK's four internal *wire-protocol adapters* (Chat Completions / Responses / Messages / Generate Content, described below): an interface is an entry point, an adapter is a dialect the `language_model` pipeline parses and speaks.

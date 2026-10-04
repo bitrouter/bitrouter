@@ -1,67 +1,17 @@
-use super::tests::{app_with_executor, final_turn, mock_stream, tool_call, turn, wait_for};
-use super::thread_tests::{input, prompts, target, thread_request};
-use super::*;
-use crate::thread::{CancelTurnRequest, SteeringRequest, SteeringStatus};
-use bitrouter_sdk::language_model::{
-    ExecutionResult, Executor, MockExecutor, PipelineContext, Prompt, RoutingTarget,
-    StreamPartStream,
-};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+use bitrouter_sdk::caller::CallerContext;
 use tempfile::TempDir;
 
-pub(super) struct HeldModel {
-    inner: MockExecutor,
-    calls: AtomicUsize,
-    entered: tokio::sync::Notify,
-    pub(super) release: tokio::sync::Semaphore,
-}
-impl HeldModel {
-    pub(super) fn new() -> Self {
-        Self {
-            inner: MockExecutor::new(vec![
-                mock_stream(turn(vec![tool_call(
-                    "stale",
-                    "write",
-                    serde_json::json!({"path":"stale.txt", "content":"must not execute"}),
-                )])),
-                mock_stream(final_turn()),
-            ]),
-            calls: AtomicUsize::new(0),
-            entered: tokio::sync::Notify::new(),
-            release: tokio::sync::Semaphore::new(0),
-        }
-    }
-    pub(super) async fn wait(&self) -> Result<(), String> {
-        tokio::time::timeout(Duration::from_secs(3), self.entered.notified())
-            .await
-            .map_err(|error| error.to_string())
-    }
-}
-#[async_trait::async_trait]
-impl Executor for HeldModel {
-    async fn execute(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<ExecutionResult> {
-        self.inner.execute(target, prompt, ctx).await
-    }
-    async fn execute_stream(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<StreamPartStream> {
-        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-            self.entered.notify_one();
-            if let Ok(permit) = self.release.acquire().await {
-                permit.forget();
-            }
-        }
-        self.inner.execute_stream(target, prompt, ctx).await
-    }
-}
+use super::support::{
+    HeldModel, app_with_executor, input, prompts, target, thread_request, wait_for,
+};
+use crate::service::{ErrorCode, RuntimeLimits, ThreadService};
+use crate::store::{ExecutionRecord, ExecutionStore, MemoryExecutionStore};
+use crate::thread::ThreadStatus;
+use crate::turn::{CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus};
+
 fn correction(turn_id: &str, text: &str, key: &str) -> SteeringRequest {
     SteeringRequest {
         expected_turn_id: turn_id.into(),

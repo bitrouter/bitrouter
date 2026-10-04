@@ -1,14 +1,25 @@
-use super::tests::app_with_executor;
-use super::tests::{app, final_turn, tool_call, turn, wait_for};
-use super::thread_tests::{input, target, thread_request};
-use super::*;
-use crate::store::{AcceptedKey, ExecutionPage, StoredExecution, ThreadHistoryChunk};
-use crate::thread::{
-    ApprovalAnswer, CancelTurnRequest, RecoveryBlocker, SteeringRequest, SteeringStatus,
-    ThreadHistoryRequest, ThreadObservation,
-};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use bitrouter_sdk::caller::CallerContext;
 use tempfile::TempDir;
+
+use super::support::{
+    app, app_with_executor, final_turn, input, target, thread_request, tool_call, turn, wait_for,
+};
+use crate::service::{ErrorCode, RuntimeLimits, ThreadService};
+use crate::store::{
+    AcceptedKey, ExecutionPage, ExecutionRecord, ExecutionStore, MemoryExecutionStore,
+    StoredExecution, ThreadHistoryChunk,
+};
+use crate::thread::{
+    PermissionProfile, RecoveryBlocker, ThreadHistoryRequest, ThreadObservation, ThreadStatus,
+};
+use crate::turn::{
+    ApprovalAnswer, CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus,
+    VerificationStatus,
+};
 
 fn recovery_request(
     view: &crate::thread::ThreadView,
@@ -112,7 +123,7 @@ async fn stopped_terminal_thread_reopens_with_original_context_and_idempotent_re
         .await?;
     wait_for(&destination, &second.turn_id, TurnStatus::Completed).await?;
     let prompts =
-        super::thread_tests::prompts(memory.as_ref(), &created.thread_id, &second.turn_id).await?;
+        super::support::prompts(memory.as_ref(), &created.thread_id, &second.turn_id).await?;
     let prompt = prompts.first().ok_or("continuation prompt missing")?;
     crate::context::validate_history(&prompt.messages)?;
     let encoded = serde_json::to_string(&prompt.messages)?;
@@ -228,7 +239,7 @@ async fn terminal_recovery_preserves_paused_fifo_and_refuses_lost_owner_or_forei
         Some(queued.turn_id.as_str())
     );
     assert!(
-        super::thread_tests::prompts(memory.as_ref(), &created.thread_id, &queued.turn_id)
+        super::support::prompts(memory.as_ref(), &created.thread_id, &queued.turn_id)
             .await?
             .is_empty()
     );
@@ -237,7 +248,7 @@ async fn terminal_recovery_preserves_paused_fifo_and_refuses_lost_owner_or_forei
         .await?;
     wait_for(&destination, &queued.turn_id, TurnStatus::Failed).await?;
     assert_eq!(
-        super::thread_tests::prompts(memory.as_ref(), &created.thread_id, &queued.turn_id)
+        super::support::prompts(memory.as_ref(), &created.thread_id, &queued.turn_id)
             .await?
             .len(),
         1
@@ -592,7 +603,7 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
                     turn_id: first.turn_id.clone(),
                     fact: Box::new(ExecutionRecord::TurnLifecycle {
                         turn_id: first.turn_id.clone(),
-                        lifecycle: crate::thread::TurnLifecycle::CancelRequested,
+                        lifecycle: crate::turn::TurnLifecycle::CancelRequested,
                     }),
                 }],
             )?;
@@ -645,7 +656,7 @@ async fn settled_turn_recovery_finishes_original_outcome_without_model_or_verifi
             assert!(finished.verification_evidence.is_some());
         }
         assert_eq!(
-            super::thread_tests::prompts(memory.as_ref(), &created.thread_id, &first.turn_id)
+            super::support::prompts(memory.as_ref(), &created.thread_id, &first.turn_id)
                 .await?
                 .len(),
             1
@@ -771,8 +782,7 @@ async fn continuation_checkpoint_keeps_the_turn_budget_and_confirmed_results_wit
         let done = wait_for(&destination, &first.turn_id, expected).await?;
         assert_eq!(done.turn_id, first.turn_id);
         let prompts =
-            super::thread_tests::prompts(memory.as_ref(), &created.thread_id, &first.turn_id)
-                .await?;
+            super::support::prompts(memory.as_ref(), &created.thread_id, &first.turn_id).await?;
         assert_eq!(prompts.len(), usize::try_from(max_steps)?);
         if max_steps == 2 {
             crate::context::validate_history(&prompts[1].messages)?;
@@ -812,7 +822,7 @@ async fn pending_steering_at_checkpoint_keeps_its_target_and_is_applied_once_aft
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     let source_memory = Arc::new(MemoryExecutionStore::default());
-    let model = Arc::new(super::steering_tests::HeldModel::new());
+    let model = Arc::new(super::support::HeldModel::new());
     let source = ThreadService::with_store(
         app_with_executor(model.clone())?,
         &[workspace.path().into()],
@@ -912,7 +922,7 @@ async fn pending_steering_at_checkpoint_keeps_its_target_and_is_applied_once_aft
         cursor
     );
     let prompts =
-        super::thread_tests::prompts(memory.as_ref(), &created.thread_id, &first.turn_id).await?;
+        super::support::prompts(memory.as_ref(), &created.thread_id, &first.turn_id).await?;
     assert_eq!(prompts.len(), 2);
     crate::context::validate_history(&prompts[1].messages)?;
     assert_eq!(

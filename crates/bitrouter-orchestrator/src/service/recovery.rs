@@ -1,13 +1,32 @@
 //! Durable reconstruction and explicit checkpoint recovery. Loading alone never
 //! grants execution ownership, resolves effects or permits replay.
 
-use super::*;
-use crate::agent::RunReport;
+use std::collections::{HashMap, VecDeque};
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Instant;
+
+use bitrouter_sdk::caller::CallerContext;
+use bitrouter_sdk::language_model::{Content, Message, Role};
+use serde::Serialize;
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
+
+use super::state::TurnRecord;
+use super::{
+    ErrorCode, RuntimeLimits, ServiceError, ThreadService, admission, state, threads, unknown_turn,
+    workspace,
+};
+use crate::agent::{Agent, RunInput, RunReport, RunStatus};
+use crate::item::{CallOrigin, CallRecord};
+use crate::store::{EffectStatus, ExecutionRecord};
 use crate::thread::{
     RecoveredSteering, RecoveryBlocker, RecoveryBudget, RecoveryState, RecoveryTurn,
-    SteeringStatus, ThreadRecoveryRequest, ThreadTarget, ThreadView,
+    ThreadRecoveryRequest, ThreadStatus, ThreadTarget, ThreadView,
 };
-use bitrouter_sdk::language_model::{Content, Role};
+use crate::turn::{
+    SteeringStatus, TurnSnapshot, TurnStatus, VerificationEvidence, VerificationStatus,
+};
 
 #[derive(Serialize)]
 struct RecoveredCall {
@@ -49,7 +68,7 @@ struct Rebuild {
     caller: CallerContext,
     view: ThreadView,
     messages: Vec<Message>,
-    queued: VecDeque<threads::QueuedTurn>,
+    queued: VecDeque<state::QueuedTurn>,
     next_order: u64,
     active: Option<Active>,
     blockers: Vec<RecoveryBlocker>,
@@ -107,13 +126,13 @@ impl ThreadService {
     ) -> Result<ThreadView, ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
         self.read_thread_view(target, caller)?;
-        let scope = threads::key_scope(
+        let scope = admission::key_scope(
             caller,
             Some(&target.thread_id),
             "recover",
             &request.idempotency_key,
         )?;
-        let hash = threads::fingerprint(&request)?;
+        let hash = admission::fingerprint(&request)?;
         let _admission = self.inner.admission.lock().await;
         let gate = self.thread_gate(&target.thread_id)?;
         let _guard = gate.lock().await;
@@ -336,7 +355,7 @@ impl ThreadService {
                 || state
                     .threads
                     .values()
-                    .map(threads::ThreadRecord::bytes)
+                    .map(state::ThreadRecord::bytes)
                     .sum::<usize>()
                     .saturating_sub(thread.bytes())
                     .saturating_add(replacement)
@@ -1059,7 +1078,7 @@ impl Rebuild {
                     self.invalid("invalid admission identity or FIFO order");
                 }
                 self.next_order = *queue_order;
-                self.queued.push_back(threads::QueuedTurn {
+                self.queued.push_back(state::QueuedTurn {
                     turn_id: turn_id.clone(),
                     user_item_id: user_item_id.clone(),
                     prompt: prompt.clone(),
@@ -1223,7 +1242,7 @@ impl Rebuild {
         mut self,
         epoch: &str,
         limits: &RuntimeLimits,
-    ) -> Result<(threads::ThreadRecord, Vec<(String, TurnRecord)>), ServiceError> {
+    ) -> Result<(state::ThreadRecord, Vec<(String, TurnRecord)>), ServiceError> {
         let stored_status = self.view.thread.status;
         let stored_pause_reason = self.view.thread.pause_reason.clone();
         let mut context_valid = crate::context::validate_history(&self.messages).is_ok();
@@ -1413,7 +1432,7 @@ impl Rebuild {
                 recovered_task(snapshot, &self.view, &reason),
             ));
         }
-        let thread = threads::ThreadRecord {
+        let thread = state::ThreadRecord {
             presentation: super::observation::Presentation::recovered(self.view.clone(), limits),
             snapshot: self.view.thread,
             caller: self.caller,
@@ -1768,7 +1787,7 @@ impl Active {
                 self.outcome = outcome.clone();
             }
             ExecutionRecord::TurnLifecycle {
-                lifecycle: crate::thread::TurnLifecycle::CancelRequested,
+                lifecycle: crate::turn::TurnLifecycle::CancelRequested,
                 ..
             } => self.cancel_requested = true,
             _ => {}
@@ -1889,95 +1908,4 @@ fn record_epoch(record: &ExecutionRecord) -> Option<&str> {
 }
 
 #[cfg(test)]
-mod bounded_scan_tests {
-    use super::*;
-
-    #[test]
-    fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_epoch()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let limits = RuntimeLimits {
-            context_bytes_per_thread: 4096,
-            ..RuntimeLimits::default()
-        };
-        let snapshot = crate::thread::ThreadSnapshot {
-            server_instance_id: "first-writer".into(),
-            thread_id: "thread".into(),
-            status: ThreadStatus::Idle,
-            workspace: PathBuf::from("/workspace"),
-            model: "model".into(),
-            permission_profile: PermissionProfile::ReadOnly,
-            context_version: 0,
-            cursor: 0,
-            active_turn_id: None,
-            queued: Vec::new(),
-            pause_reason: None,
-            waiting_for_capacity: false,
-        };
-        let header = ExecutionRecord::ThreadCreated {
-            caller: CallerContext::local(),
-            snapshot,
-            config: Box::new(AgentConfig::fixed("model", None).read_only()),
-            verification_command: None,
-        };
-        let mut audit = StartupAudit::new(&header, "thread", limits.clone())?;
-        audit.consume(vec![
-            header,
-            ExecutionRecord::TurnQueued {
-                turn_id: "turn".into(),
-                user_item_id: "user".into(),
-                prompt: "input".into(),
-                queue_order: 1,
-            },
-            ExecutionRecord::TurnActivated {
-                turn_id: "turn".into(),
-                context_version: 0,
-            },
-        ])?;
-        let mut records = Vec::new();
-        for index in 0..1000 {
-            records.push(ExecutionRecord::TurnRecord {
-                turn_id: "turn".into(),
-                fact: Box::new(ExecutionRecord::ModelRequest {
-                    step_id: format!("step-{index}"),
-                    item_id: format!("assistant-{index}"),
-                    context_version: 0,
-                    prompt: Box::new(bitrouter_sdk::language_model::Prompt {
-                        model: "model".into(),
-                        system: None,
-                        system_provider_metadata: Default::default(),
-                        messages: vec![Message::text(Role::User, "input")],
-                        tools: Vec::new(),
-                        params: Default::default(),
-                        response_format: None,
-                        tool_choice: None,
-                        stream: true,
-                    }),
-                }),
-            });
-        }
-        records.push(ExecutionRecord::ThreadEvent {
-            event: crate::thread::ThreadEvent {
-                server_instance_id: "later-writer".into(),
-                thread_id: "thread".into(),
-                seq: 1004,
-                timestamp_ms: 0,
-                changes: Vec::new(),
-            },
-        });
-        audit.consume(records)?;
-        assert!(!audit.valid);
-        let active = audit
-            .rebuild
-            .active
-            .as_ref()
-            .ok_or("active recovery state missing")?;
-        assert!(serde_json::to_vec(active)?.len() < limits.context_bytes_per_thread * 3);
-        assert_eq!(audit.epoch(), "later-writer");
-        assert!(!audit.known_clean(Some(&crate::store::ExecutionOwner {
-            server_instance_id: "later-writer".into(),
-            generation: 2,
-            stopped_at_ms: Some(1),
-        })));
-        Ok(())
-    }
-}
+mod tests;

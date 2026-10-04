@@ -1,11 +1,20 @@
-use super::tests::{app, final_turn, tool_call, turn, wait_for};
-use super::*;
-use crate::thread::{
-    ApprovalAnswer, CancelTurnRequest, ThreadRequest, ThreadSnapshot, ThreadTarget, TurnRequest,
-};
-use crate::thread::{SteeringRequest, SteeringStatus};
-use bitrouter_sdk::language_model::Prompt;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+
+use bitrouter_sdk::caller::CallerContext;
 use tempfile::TempDir;
+
+use super::support::{
+    app, final_turn, input, prompts, target, thread_request, tool_call, turn, wait_for,
+};
+use crate::service::{ErrorCode, ThreadService};
+use crate::store::{EffectStatus, ExecutionRecord, ExecutionStore, MemoryExecutionStore};
+use crate::thread::{PermissionProfile, ThreadStatus};
+use crate::turn::{
+    ApprovalAnswer, CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus,
+    VerificationStatus,
+};
 
 fn correction(turn_id: &str, text: &str, key: &str) -> SteeringRequest {
     SteeringRequest {
@@ -372,47 +381,6 @@ async fn steering_during_verification_resumes_same_turn_with_existing_model_and_
         service.shutdown().await;
     }
     Ok(())
-}
-
-pub(super) fn thread_request(workspace: &TempDir, key: &str) -> ThreadRequest {
-    ThreadRequest {
-        caller: CallerContext::local(),
-        workspace: workspace.path().to_path_buf(),
-        config: AgentConfig::fixed("fixture-model", None),
-        permission_profile: PermissionProfile::Ask,
-        verification_command: None,
-        idempotency_key: key.into(),
-    }
-}
-pub(super) fn target(snapshot: &ThreadSnapshot) -> ThreadTarget {
-    ThreadTarget {
-        thread_id: snapshot.thread_id.clone(),
-        server_instance_id: snapshot.server_instance_id.clone(),
-    }
-}
-pub(super) fn input(prompt: &str, key: &str) -> TurnRequest {
-    TurnRequest {
-        prompt: prompt.into(),
-        idempotency_key: key.into(),
-    }
-}
-pub(super) async fn prompts(
-    store: &dyn ExecutionStore,
-    thread_id: &str,
-    turn_id: &str,
-) -> Result<Vec<Prompt>, String> {
-    let saved = store.load(thread_id).await?.ok_or("Thread missing")?;
-    Ok(saved
-        .records
-        .into_iter()
-        .filter_map(|record| match record {
-            ExecutionRecord::TurnRecord { turn_id: id, fact } if id == turn_id => match *fact {
-                ExecutionRecord::ModelRequest { prompt, .. } => Some(*prompt),
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect())
 }
 
 #[tokio::test]
@@ -1097,7 +1065,7 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
         .await?
         .ok_or("Thread missing")?;
     assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::AcceptedKey { entry } if entry.key == "answer")).count(), 1);
-    assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, crate::thread::TurnLifecycle::InputResolved { request_id, approved:true } if request_id == &approval_id)))).count(), 1);
+    assert_eq!(saved.records.iter().filter(|record| matches!(record, ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, crate::turn::TurnLifecycle::InputResolved { request_id, approved:true } if request_id == &approval_id)))).count(), 1);
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("approved.txt"))?,
         "approved once"

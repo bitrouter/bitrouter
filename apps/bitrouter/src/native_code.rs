@@ -1,11 +1,12 @@
 //! Interactive Thread client; the server owns execution and durable context.
 use crate::agent_local::{self, Operation, ReplyResult, ThreadClient};
 use anyhow::Result;
-use bitrouter_orchestrator::service::{ErrorCode, ServiceError, TurnSnapshot};
+use bitrouter_orchestrator::service::{ErrorCode, ServiceError};
 use bitrouter_orchestrator::thread::{
     ThreadChange, ThreadDirectoryPage, ThreadEvent, ThreadObservation, ThreadStatus, ThreadView,
-    TurnLifecycle,
 };
+use bitrouter_orchestrator::turn::TurnLifecycle;
+use bitrouter_orchestrator::turn::TurnSnapshot;
 use bitrouter_sdk::language_model::Content;
 use bitrouter_tui::agents_menu::MenuEntry;
 use bitrouter_tui::editor::{Edit, Editor, press};
@@ -711,9 +712,9 @@ fn show_event(state: &mut NativeState, event: &ThreadEvent) {
                             })
                             .unwrap_or("Steering input");
                     let status = match receipt.status {
-                        bitrouter_orchestrator::thread::SteeringStatus::Received => "received",
-                        bitrouter_orchestrator::thread::SteeringStatus::Applied => "applied",
-                        bitrouter_orchestrator::thread::SteeringStatus::NotApplied => "not applied",
+                        bitrouter_orchestrator::turn::SteeringStatus::Received => "received",
+                        bitrouter_orchestrator::turn::SteeringStatus::Applied => "applied",
+                        bitrouter_orchestrator::turn::SteeringStatus::NotApplied => "not applied",
                     };
                     (
                         id,
@@ -832,7 +833,7 @@ fn known_rejection(error: &anyhow::Error) -> bool {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use bitrouter_orchestrator::service::TurnStatus;
+    use bitrouter_orchestrator::turn::TurnStatus;
     use crossterm::event::KeyEvent;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
@@ -866,7 +867,7 @@ mod tests {
                     ) => {
                         anyhow::ensure!(thread_id == "thread" && prompt == "follow up");
                         ReplyResult::Receipt {
-                            receipt: bitrouter_orchestrator::thread::TurnReceipt {
+                            receipt: bitrouter_orchestrator::turn::TurnReceipt {
                                 thread_id,
                                 turn_id: "queued".into(),
                                 queue_order: 2,
@@ -889,11 +890,11 @@ mod tests {
                                 && text == "adjust course"
                         );
                         ReplyResult::Steering {
-                            receipt: bitrouter_orchestrator::thread::SteeringReceipt {
+                            receipt: bitrouter_orchestrator::turn::SteeringReceipt {
                                 input_id: "steering".into(),
                                 turn_id: expected_turn_id,
                                 order: 1,
-                                status: bitrouter_orchestrator::thread::SteeringStatus::Received,
+                                status: bitrouter_orchestrator::turn::SteeringStatus::Received,
                                 context_version: None,
                                 next_step_id: None,
                                 reason: None,
@@ -1022,7 +1023,7 @@ mod tests {
                     } else {
                         anyhow::ensure!(original.as_ref() == Some(&idempotency_key));
                         ReplyResult::Receipt {
-                            receipt: bitrouter_orchestrator::thread::TurnReceipt {
+                            receipt: bitrouter_orchestrator::turn::TurnReceipt {
                                 thread_id,
                                 turn_id: "original-turn".into(),
                                 queue_order: 1,

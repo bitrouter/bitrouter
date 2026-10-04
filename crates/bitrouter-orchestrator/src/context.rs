@@ -1,6 +1,7 @@
+use std::collections::HashSet;
+
 use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::language_model::{Content, GenerationParams, Message, Prompt, Tool, ToolChoice};
-use std::collections::HashSet;
 
 pub(crate) fn build(
     model: &str,

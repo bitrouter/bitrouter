@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use crate::agent::AgentConfig;
-use crate::service::VerificationEvidence;
-use crate::thread::{SteeringReceipt, ThreadEvent, ThreadSnapshot};
+use crate::item::CallRecord;
+use crate::thread::{ThreadEvent, ThreadSnapshot};
+use crate::turn::{SteeringReceipt, VerificationEvidence};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AcceptedKey {
@@ -44,24 +45,6 @@ pub fn validate_owner_id(server_instance_id: &str) -> Result<(), String> {
         return Err("invalid execution owner identity".into());
     }
     Ok(())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CallRecord {
-    #[serde(default)]
-    pub origin: CallOrigin,
-    pub item_id: String,
-    pub provider_call_id: String,
-    pub name: String,
-    pub arguments: String,
-}
-
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum CallOrigin {
-    #[default]
-    Model,
-    Verification,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,7 +114,7 @@ pub enum ExecutionRecord {
     },
     TurnLifecycle {
         turn_id: String,
-        lifecycle: crate::thread::TurnLifecycle,
+        lifecycle: crate::turn::TurnLifecycle,
     },
     ModelRequest {
         step_id: String,
@@ -171,7 +154,7 @@ pub enum ExecutionRecord {
     },
     VerificationResult {
         #[serde(default)]
-        status: Option<crate::service::VerificationStatus>,
+        status: Option<crate::turn::VerificationStatus>,
         call: CallRecord,
         evidence: VerificationEvidence,
         effect: EffectStatus,
@@ -762,252 +745,7 @@ fn commit_memory(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::thread::{ThreadChange, TurnReceipt};
-
-    #[tokio::test]
-    async fn record_pages_bound_bytes_and_count_without_changing_captured_cutoff()
-    -> Result<(), String> {
-        let store = MemoryExecutionStore::default();
-        store
-            .commit(
-                "thread",
-                0,
-                &[
-                    event(1, "small"),
-                    event(2, &"x".repeat(2048)),
-                    event(3, "small"),
-                ],
-            )
-            .await?;
-        let first = store
-            .read_records("thread", 0, None, 3, 1000)
-            .await?
-            .ok_or("missing first page")?;
-        assert_eq!(first.cutoff, 3);
-        assert_eq!(first.records.len(), 1);
-        assert_eq!(first.next_after, Some(1));
-        assert!(
-            store
-                .read_records("thread", 1, Some(3), 3, 1000)
-                .await
-                .is_err()
-        );
-        store.commit("thread", 3, &[event(4, "later")]).await?;
-        let next = store
-            .read_records("thread", 1, Some(first.cutoff), 1, 4096)
-            .await?
-            .ok_or("missing second page")?;
-        assert_eq!(next.cutoff, first.cutoff);
-        assert_eq!(next.records.len(), 1);
-        assert_eq!(next.next_after, Some(2));
-        assert!(
-            store
-                .read_records("thread", 3, Some(3), 1, 4096)
-                .await?
-                .ok_or("missing empty page")?
-                .records
-                .is_empty()
-        );
-        assert!(
-            store
-                .read_records("thread", 0, Some(5), 1, 4096)
-                .await
-                .is_err()
-        );
-        Ok(())
-    }
-
-    fn event(seq: u64, text: &str) -> ExecutionRecord {
-        ExecutionRecord::ThreadEvent {
-            event: ThreadEvent {
-                server_instance_id: "epoch".into(),
-                thread_id: "thread".into(),
-                seq,
-                timestamp_ms: 1,
-                changes: vec![ThreadChange::TurnQueued {
-                    receipt: TurnReceipt {
-                        thread_id: "thread".into(),
-                        turn_id: format!("turn-{seq}"),
-                        queue_order: seq,
-                        status: crate::service::TurnStatus::Queued,
-                    },
-                    user_item_id: format!("user-{seq}"),
-                    prompt: text.into(),
-                }],
-            },
-        }
-    }
-
-    #[tokio::test]
-    async fn history_pages_keep_cutoff_and_report_byte_capacity_without_skipping_an_event()
-    -> Result<(), String> {
-        let store = MemoryExecutionStore::default();
-        store
-            .commit("thread", 0, &[event(1, "first"), event(2, "second")])
-            .await?;
-        let first = store.thread_history("thread", 0, 2, 1, 4096).await?;
-        assert_eq!(first.events.len(), 1);
-        assert!(first.more);
-        let bytes = serde_json::to_vec(&first.events[0])
-            .map_err(|error| error.to_string())?
-            .len();
-        let one = store.thread_history("thread", 0, 2, 100, bytes).await?;
-        assert_eq!(one.events[0].seq, 1);
-        assert_eq!(one.events.len(), 1);
-        assert!(one.more);
-        assert!(
-            store
-                .thread_history("thread", 0, 2, 100, bytes - 1)
-                .await
-                .is_err()
-        );
-        store.commit("thread", 2, &[event(3, "later")]).await?;
-        let next = store
-            .thread_history("thread", one.events[0].seq, 2, 100, 4096)
-            .await?;
-        assert_eq!(next.events.len(), 1);
-        assert_eq!(next.events[0].seq, 2);
-        assert!(!next.more);
-        assert!(
-            store
-                .thread_history("thread", 2, 2, 100, 4096)
-                .await?
-                .events
-                .is_empty()
-        );
-        assert!(
-            store
-                .thread_history("thread", 0, 4, 100, 4096)
-                .await
-                .is_err()
-        );
-        Ok(())
-    }
-    #[tokio::test]
-    async fn owner_fence_blocks_peers_raw_writes_and_retired_tokens() -> Result<(), String> {
-        let store = MemoryExecutionStore::default();
-        let OwnerClaim::Acquired { owner: first } = store.claim_owner("first").await? else {
-            return Err("initial claim failed".into());
-        };
-        assert_eq!(
-            store.claim_owner("first").await?,
-            OwnerClaim::Acquired {
-                owner: first.clone()
-            }
-        );
-        assert_eq!(
-            store.claim_owner("second").await?,
-            OwnerClaim::Blocked {
-                owner: first.clone()
-            }
-        );
-        let fact = ExecutionRecord::Settled {
-            outcome: None,
-            messages: Vec::new(),
-            context_version: 0,
-            model_steps: 0,
-            tool_calls: 0,
-            estimated_spend_microusd: 0,
-            active_duration_ms: 0,
-        };
-        assert_eq!(
-            store
-                .commit_owned(&first, "execution", 0, std::slice::from_ref(&fact))
-                .await?,
-            1
-        );
-        assert!(
-            store
-                .commit("execution", 1, std::slice::from_ref(&fact))
-                .await
-                .is_err()
-        );
-        let mut wrong = first.clone();
-        wrong.generation += 1;
-        assert!(
-            store
-                .commit_owned(&wrong, "execution", 1, std::slice::from_ref(&fact))
-                .await
-                .is_err()
-        );
-        let stopped = store.stop_owner(&first).await?;
-        assert!(stopped.stopped_at_ms.is_some());
-        assert_eq!(store.read_owner("first").await?, Some(stopped));
-        assert!(
-            store
-                .commit_owned(&first, "execution", 1, std::slice::from_ref(&fact))
-                .await
-                .is_err()
-        );
-        let OwnerClaim::Acquired { owner: second } = store.claim_owner("second").await? else {
-            return Err("stopped owner did not transfer".into());
-        };
-        assert_eq!(second.generation, first.generation + 1);
-        assert!(store.stop_owner(&first).await.is_err());
-        assert!(
-            store
-                .commit_owned(&first, "execution", 1, std::slice::from_ref(&fact))
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            store.commit_owned(&second, "execution", 1, &[fact]).await?,
-            2
-        );
-        store.stop_owner(&second).await?;
-        assert!(store.claim_owner("first").await.is_err());
-        Ok(())
-    }
-}
+mod tests;
 
 #[cfg(test)]
-mod discovery_tests {
-    use super::*;
-    fn fact() -> ExecutionRecord {
-        ExecutionRecord::Settled {
-            outcome: None,
-            messages: Vec::new(),
-            context_version: 0,
-            model_steps: 0,
-            tool_calls: 0,
-            estimated_spend_microusd: 0,
-            active_duration_ms: 0,
-        }
-    }
-    #[tokio::test]
-    async fn root_index_is_atomic_bounded_and_has_a_fixed_membership_cutoff() -> Result<(), String>
-    {
-        let store = MemoryExecutionStore::default();
-        store.commit("z-root", 0, &[fact()]).await?;
-        store.commit("a-root", 0, &[fact()]).await?;
-        let first = store.read_index(0, None, 1, 1024).await?;
-        assert_eq!(first.entries.len(), 1);
-        assert_eq!(first.entries[0].execution_id, "z-root");
-        let after = first.next_after.ok_or("more root missing")?;
-        store.commit("new-root", 0, &[fact()]).await?;
-        store.commit("a-root", 1, &[fact()]).await?;
-        let next = store.read_index(after, Some(first.cutoff), 1, 1024).await?;
-        assert_eq!(next.entries[0].execution_id, "a-root");
-        assert_eq!(next.entries[0].version, 2); // A head is not a mutable journal snapshot.
-        assert!(next.next_after.is_none());
-        assert!(store.read_index(0, None, 1, 1).await.is_err());
-        assert!(store.read_index(0, None, 0, 1024).await.is_err());
-        assert!(
-            store
-                .read_index(first.cutoff + 1, Some(first.cutoff), 1, 1024)
-                .await
-                .is_err()
-        );
-        assert!(store.commit("failed-root", 1, &[fact()]).await.is_err());
-        let all = store.read_index(0, None, 128, 4096).await?;
-        assert_eq!(all.entries.len(), 3);
-        assert!(
-            !all.entries
-                .iter()
-                .any(|entry| entry.execution_id == "failed-root")
-        );
-        Ok(())
-    }
-}
+mod discovery_tests;

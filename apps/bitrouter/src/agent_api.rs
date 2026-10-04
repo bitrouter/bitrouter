@@ -15,8 +15,10 @@ use axum::{Json, Router};
 use bitrouter_orchestrator::agent::AgentConfig;
 use bitrouter_orchestrator::service::{ErrorCode, ServiceError, ThreadService};
 use bitrouter_orchestrator::thread::{
-    ApprovalAnswer, CancelTurnRequest, PermissionProfile, SteeringRequest, ThreadHistoryRequest,
-    ThreadRequest, ThreadTarget, TurnRequest,
+    PermissionProfile, ThreadHistoryRequest, ThreadRequest, ThreadTarget,
+};
+use bitrouter_orchestrator::turn::{
+    ApprovalAnswer, CancelTurnRequest, SteeringRequest, TurnRequest,
 };
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::AgentApiConfig;

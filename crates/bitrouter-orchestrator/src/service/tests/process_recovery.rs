@@ -1,15 +1,25 @@
 //! Actual native execution process loss with a test-only durable journal image.
 //! This verifies fail-closed recovery, not SQLite or forced owner retirement.
 
-use super::tests::{app, final_turn, tool_call, turn};
-use super::thread_tests::{input, target, thread_request};
-use super::*;
-use crate::store::{
-    AcceptedKey, ExecutionOwner, ExecutionPage, StoredExecution, ThreadHistoryChunk,
-};
-use crate::thread::{ThreadRecoveryRequest, ThreadTarget, WorkspaceGrant};
 use std::io::Write;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use bitrouter_sdk::caller::CallerContext;
+use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
+
+use super::support::{app, final_turn, input, target, thread_request, tool_call, turn};
+use crate::item::CallOrigin;
+use crate::service::{ErrorCode, ThreadService};
+use crate::store::{
+    AcceptedKey, ExecutionOwner, ExecutionPage, ExecutionRecord, ExecutionStore,
+    MemoryExecutionStore, StoredExecution, ThreadHistoryChunk,
+};
+use crate::thread::{
+    PermissionProfile, ThreadRecoveryRequest, ThreadStatus, ThreadTarget, WorkspaceGrant,
+};
 
 #[derive(Serialize, Deserialize)]
 struct JournalImage {
@@ -223,7 +233,7 @@ async fn native_process_loss_at_commit_windows_never_retires_owner_or_replays_wo
             std::process::Command::new(std::env::current_exe()?)
                 .args([
                     "--exact",
-                    "service::process_recovery_tests::native_crash_fixture",
+                    "service::tests::process_recovery::native_crash_fixture",
                     "--nocapture",
                 ])
                 .env("BRO_NATIVE_CRASH_ROOT", root.path())

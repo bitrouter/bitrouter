@@ -5,9 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use bitrouter_orchestrator::agent::AgentConfig;
-use bitrouter_orchestrator::service::{
-    ErrorCode, RuntimeCapabilities, ThreadService, TurnSnapshot,
-};
+use bitrouter_orchestrator::service::{ErrorCode, RuntimeCapabilities, ThreadService};
+use bitrouter_orchestrator::turn::TurnSnapshot;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::types::ReasoningEffort;
 use serde::{Deserialize, Serialize};
@@ -17,9 +16,11 @@ use tokio_util::sync::CancellationToken;
 use crate::daemon::transport;
 
 use bitrouter_orchestrator::thread::{
-    ApprovalAnswer, CancelTurnRequest, PermissionProfile, SteeringReceipt, SteeringRequest,
-    ThreadHistoryPage, ThreadHistoryRequest, ThreadObservation, ThreadRequest, ThreadSnapshot,
-    ThreadTarget, ThreadView, TurnReceipt, TurnRequest,
+    PermissionProfile, ThreadHistoryPage, ThreadHistoryRequest, ThreadObservation, ThreadRequest,
+    ThreadSnapshot, ThreadTarget, ThreadView,
+};
+use bitrouter_orchestrator::turn::{
+    ApprovalAnswer, CancelTurnRequest, SteeringReceipt, SteeringRequest, TurnReceipt, TurnRequest,
 };
 
 pub const CONTRACT_VERSION: u32 = 15;
@@ -981,7 +982,7 @@ mod tests {
                                     thread_id,
                                     turn_id: "original-turn".into(),
                                     queue_order: 1,
-                                    status: bitrouter_orchestrator::service::TurnStatus::Accepted,
+                                    status: bitrouter_orchestrator::turn::TurnStatus::Accepted,
                                 },
                             },
                         )

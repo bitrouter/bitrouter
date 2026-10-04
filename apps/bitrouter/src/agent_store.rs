@@ -1006,7 +1006,8 @@ mod tests {
     }
 
     fn history_event(seq: u64, text: &str) -> ExecutionRecord {
-        use bitrouter_orchestrator::thread::{ThreadChange, ThreadEvent, TurnReceipt};
+        use bitrouter_orchestrator::thread::{ThreadChange, ThreadEvent};
+        use bitrouter_orchestrator::turn::TurnReceipt;
         ExecutionRecord::ThreadEvent {
             event: ThreadEvent {
                 server_instance_id: "first-process".into(),
@@ -1018,7 +1019,7 @@ mod tests {
                         thread_id: "thread".into(),
                         turn_id: format!("turn-{seq}"),
                         queue_order: seq,
-                        status: bitrouter_orchestrator::service::TurnStatus::Queued,
+                        status: bitrouter_orchestrator::turn::TurnStatus::Queued,
                     },
                     user_item_id: format!("user-{seq}"),
                     prompt: text.into(),

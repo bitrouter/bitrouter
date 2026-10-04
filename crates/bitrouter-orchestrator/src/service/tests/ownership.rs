@@ -1,8 +1,15 @@
-use super::tests::{app, final_turn, wait_for};
-use super::thread_tests::{input, target, thread_request};
-use super::*;
-use crate::store::OwnerClaim;
+use std::sync::Arc;
+use std::time::Duration;
+
+use bitrouter_sdk::caller::CallerContext;
 use tempfile::TempDir;
+use tokio::sync::oneshot;
+
+use super::support::{app, final_turn, input, target, thread_request, wait_for};
+use crate::service::{ErrorCode, ServiceError, ThreadService, workspace};
+use crate::store::{ExecutionRecord, ExecutionStore, MemoryExecutionStore, OwnerClaim};
+use crate::thread::ThreadStatus;
+use crate::turn::TurnStatus;
 
 #[tokio::test]
 async fn independent_services_share_one_owner_and_transfer_only_after_joined_shutdown()
@@ -163,7 +170,7 @@ async fn legacy_unfenced_facts_block_execution_without_mutating_the_store()
 #[tokio::test]
 async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_release()
 -> Result<(), Box<dyn std::error::Error>> {
-    use super::tests::{tool_call, turn};
+    use super::support::{tool_call, turn};
     let workspace = TempDir::new()?;
     let first_store = Arc::new(MemoryExecutionStore::default());
     let second_store = Arc::new(MemoryExecutionStore::default());
@@ -274,7 +281,7 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
         if matches!(fact.as_ref(), ExecutionRecord::WorkspaceReleasePrepared { execution_id, .. } if execution_id == &active.turn_id)))
         .ok_or("release preparation missing")?;
     let terminal = after.records.iter().position(|r| matches!(r, ExecutionRecord::TurnRecord { fact, .. }
-        if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, crate::thread::TurnLifecycle::Finished { .. }))))
+        if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle { lifecycle, .. } if matches!(lifecycle, crate::turn::TurnLifecycle::Finished { .. }))))
         .ok_or("terminal fact missing")?;
     assert!(prepared < terminal);
     // A rejected start has not consumed its key or the provider fixture.
@@ -299,7 +306,7 @@ async fn independent_stores_exclude_one_workspace_and_retry_fifo_after_external_
 #[tokio::test]
 async fn changed_workspace_marker_blocks_an_approved_effect_and_independent_store()
 -> Result<(), Box<dyn std::error::Error>> {
-    use super::tests::{tool_call, turn};
+    use super::support::{tool_call, turn};
     let workspace = TempDir::new()?;
     let first = ThreadService::new(
         app(vec![

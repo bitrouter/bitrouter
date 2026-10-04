@@ -1,9 +1,10 @@
 //! Store-wide execution ownership. This fences durable writers; it does not
 //! prove termination of an abruptly lost owner or replace workspace isolation.
 
-use super::*;
-use crate::store::{ExecutionOwner, OwnerClaim};
 use std::sync::atomic::Ordering;
+
+use super::{ErrorCode, ServiceError, ThreadService, unknown_turn};
+use crate::store::{EffectStatus, ExecutionOwner, ExecutionRecord, OwnerClaim};
 
 impl ThreadService {
     /// Initialize native execution authority. Read-only recovery and observation
@@ -152,7 +153,7 @@ fn uncertain_cleanup(record: &ExecutionRecord) -> bool {
         | ExecutionRecord::VerificationResult { effect, .. } => *effect == EffectStatus::Unknown,
         ExecutionRecord::TurnLifecycle { lifecycle, .. } => matches!(
             lifecycle,
-            crate::thread::TurnLifecycle::Finished {
+            crate::turn::TurnLifecycle::Finished {
                 unknown_effect: true,
                 ..
             }

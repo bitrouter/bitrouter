@@ -7,8 +7,11 @@ use bitrouter_sdk::caller::CallerContext;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentConfig;
-use crate::service::{TurnEvent, TurnSnapshot, TurnStatus};
-use crate::store::{CallRecord, EffectStatus};
+use crate::item::CallRecord;
+use crate::store::EffectStatus;
+use crate::turn::{
+    SteeringReceipt, TurnEvent, TurnLifecycle, TurnReceipt, TurnSnapshot, TurnStatus,
+};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,14 +36,6 @@ pub enum ThreadStatus {
 pub struct ThreadTarget {
     pub thread_id: String,
     pub server_instance_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TurnReceipt {
-    pub thread_id: String,
-    pub turn_id: String,
-    pub queue_order: u64,
-    pub status: TurnStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,8 +121,8 @@ pub struct RecoveryTurn {
     pub outcome: Option<crate::store::SettlementOutcome>,
     #[serde(default)]
     pub confirmed_verification: Option<(
-        crate::service::VerificationStatus,
-        crate::service::VerificationEvidence,
+        crate::turn::VerificationStatus,
+        crate::turn::VerificationEvidence,
     )>,
 }
 
@@ -228,7 +223,7 @@ pub enum ThreadChange {
     VerificationResult {
         turn_id: String,
         call: CallRecord,
-        evidence: crate::service::VerificationEvidence,
+        evidence: crate::turn::VerificationEvidence,
         effect: EffectStatus,
         active_duration_ms: u64,
         tool_calls: u32,
@@ -237,83 +232,6 @@ pub enum ThreadChange {
         turn_id: String,
         context_version: u64,
     },
-}
-
-/// Small control facts; model and tool content lives only in canonical facts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum TurnLifecycle {
-    Started,
-    InputRequested {
-        request_id: String,
-        tool_id: String,
-        tool_name: String,
-        arguments: String,
-    },
-    InputResolved {
-        request_id: String,
-        approved: bool,
-    },
-    CancelRequested,
-    SteeringUpdated {
-        receipt: SteeringReceipt,
-        text: Option<String>,
-    },
-    Finished {
-        status: TurnStatus,
-        detail: String,
-        final_answer: Option<String>,
-        verification: crate::service::VerificationStatus,
-        verification_evidence: Option<crate::service::VerificationEvidence>,
-        unknown_effect: bool,
-    },
-}
-
-impl TurnLifecycle {
-    pub(crate) fn payload(&self) -> crate::service::TurnEventPayload {
-        use crate::service::TurnEventPayload as P;
-        match self {
-            Self::Started => P::Started,
-            Self::InputRequested {
-                request_id,
-                tool_id,
-                tool_name,
-                arguments,
-            } => P::InputRequested {
-                request_id: request_id.clone(),
-                tool_id: tool_id.clone(),
-                tool_name: tool_name.clone(),
-                arguments: arguments.clone(),
-            },
-            Self::InputResolved {
-                request_id,
-                approved,
-            } => P::InputResolved {
-                request_id: request_id.clone(),
-                approved: *approved,
-            },
-            Self::CancelRequested => P::CancelRequested,
-            Self::SteeringUpdated { receipt, text } => P::SteeringUpdated {
-                receipt: receipt.clone(),
-                text: text.clone(),
-            },
-            Self::Finished {
-                status,
-                detail,
-                final_answer,
-                verification,
-                verification_evidence,
-                unknown_effect,
-            } => P::Finished {
-                status: *status,
-                detail: detail.clone(),
-                final_answer: final_answer.clone(),
-                verification: *verification,
-                verification_evidence: verification_evidence.clone(),
-                unknown_effect: *unknown_effect,
-            },
-        }
-    }
 }
 
 /// One acknowledged Thread transaction; sequences are durable root cursors and
@@ -368,52 +286,6 @@ pub struct ThreadRequest {
     pub permission_profile: PermissionProfile,
     pub verification_command: Option<String>,
     pub idempotency_key: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct TurnRequest {
-    pub prompt: String,
-    pub idempotency_key: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct CancelTurnRequest {
-    pub turn_id: String,
-    pub idempotency_key: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ApprovalAnswer {
-    pub turn_id: String,
-    pub request_id: String,
-    pub approved: bool,
-    pub idempotency_key: String,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct SteeringRequest {
-    pub expected_turn_id: String,
-    pub text: String,
-    pub idempotency_key: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SteeringStatus {
-    Received,
-    Applied,
-    NotApplied,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SteeringReceipt {
-    pub input_id: String,
-    pub turn_id: String,
-    pub order: u64,
-    pub status: SteeringStatus,
-    pub context_version: Option<u64>,
-    pub next_step_id: Option<String>,
-    pub reason: Option<String>,
 }
 
 /// Trusted host configuration; this is not accepted from an input RPC.

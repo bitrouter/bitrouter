@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, ensure};
 use bitrouter::agent_local::{Operation, ReplyResult};
-use bitrouter_orchestrator::service::{TurnStatus, VerificationStatus};
+use bitrouter_orchestrator::turn::{TurnStatus, VerificationStatus};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
 use tokio::process::Command;
@@ -462,7 +462,7 @@ async fn wait_status(
     socket: &std::path::Path,
     execution: &Execution,
     wanted: TurnStatus,
-) -> Result<bitrouter_orchestrator::service::TurnSnapshot> {
+) -> Result<bitrouter_orchestrator::turn::TurnSnapshot> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         let snapshot = match bitrouter::agent_local::request(

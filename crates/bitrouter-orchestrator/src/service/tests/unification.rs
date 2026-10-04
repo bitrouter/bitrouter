@@ -1,8 +1,14 @@
-use super::tests::{app, final_turn, tool_call, turn, wait_for};
-use super::thread_tests::{input, target, thread_request};
-use super::*;
-use crate::thread::{ThreadHistoryRequest, WorkspaceGrant};
+use std::sync::Arc;
+use std::time::Duration;
+
+use bitrouter_sdk::caller::CallerContext;
 use tempfile::TempDir;
+
+use super::support::{app, final_turn, input, target, thread_request, tool_call, turn, wait_for};
+use crate::service::{ErrorCode, RuntimeLimits, ThreadService};
+use crate::store::{ExecutionStore, MemoryExecutionStore};
+use crate::thread::{PermissionProfile, ThreadHistoryRequest, ThreadStatus, WorkspaceGrant};
+use crate::turn::TurnStatus;
 
 async fn joined(service: &ThreadService, id: &str) -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -186,7 +192,7 @@ async fn unload_refuses_worker_gate_observer_queue_approval_and_recovery()
         .cancel_turn(
             &target,
             &caller,
-            crate::thread::CancelTurnRequest {
+            crate::turn::CancelTurnRequest {
                 turn_id: active.turn_id.clone(),
                 idempotency_key: "cancel".into(),
             },

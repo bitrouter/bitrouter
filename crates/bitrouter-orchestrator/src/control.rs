@@ -1,7 +1,8 @@
 //! A launch fence shared by input admission and owned worker dispatch. It is
 //! held only for synchronous state changes/spawn, never database or worker I/O.
-use bitrouter_sdk::language_model::Prompt;
 use std::sync::Mutex;
+
+use bitrouter_sdk::language_model::Prompt;
 use tokio::sync::{mpsc, oneshot, watch};
 
 pub(crate) struct ModelBoundary {

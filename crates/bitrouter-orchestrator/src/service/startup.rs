@@ -1,6 +1,12 @@
 //! Bounded cold discovery closes the gap between process startup and explicit
 //! loading. Cold metadata does not grant access or become model context.
-use super::*;
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use super::{ErrorCode, ServiceError, ThreadService, recovery};
 use crate::store::ExecutionHead;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
