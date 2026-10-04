@@ -287,8 +287,20 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
         .map_err(|_| "tool-bearing model did not reach the executor barrier")??
         .forget();
     let quiet = tokio::time::timeout(Duration::from_secs(240), async {
+        let mut progress_at = std::time::Instant::now();
         loop {
             let state = session.snapshot().await;
+            if progress_at.elapsed() >= Duration::from_secs(10) {
+                let head = session.head().await;
+                eprintln!(
+                    "{case:?}/{committed}: waiting for tree joins; revision={} event={} entered={} active={}",
+                    head.state_revision,
+                    head.event_seq,
+                    executor.entered.load(Ordering::SeqCst),
+                    executor.active.load(Ordering::SeqCst)
+                );
+                progress_at = std::time::Instant::now();
+            }
             if state
                 .agents
                 .values()

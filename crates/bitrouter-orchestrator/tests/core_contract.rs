@@ -600,6 +600,113 @@ fn base64_and_envelope_count_toward_unacknowledged_bound() -> TestResult {
 }
 
 #[test]
+fn base64_wire_admission_matches_the_actual_message_at_the_exact_boundary() -> TestResult {
+    for length in [4096, 4097, 4098, 512 * 1024] {
+        let mut payload = proposal(&DurableHead::default(), "batch_1");
+        payload.checkpoint.state = json!({"content":"x".repeat(length)});
+        let batch = CheckpointBatch::encode(&payload, &Limits::default())?;
+        let wire = serde_json::to_vec(
+            &bitrouter_orchestrator::core::protocol::ServerMessage::Checkpoint(batch.clone()),
+        )?;
+        assert_eq!(batch.wire_bytes()?, wire.len() as u64);
+        let mut limits = Limits {
+            unacknowledged_bytes: wire.len() as u64,
+            ..Limits::default()
+        };
+        assert_eq!(CheckpointBatch::encode(&payload, &limits)?, batch);
+        assert_eq!(batch.decode(&limits)?, payload);
+        limits.unacknowledged_bytes -= 1;
+        assert_eq!(
+            CheckpointBatch::encode(&payload, &limits)
+                .err()
+                .map(|error| error.code),
+            Some(ErrorCode::LimitExceeded)
+        );
+        assert_eq!(
+            batch.decode(&limits).err().map(|error| error.code),
+            Some(ErrorCode::LimitExceeded)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn malformed_base64_keeps_exact_wire_limit_error_precedence() -> TestResult {
+    let original = CheckpointBatch::encode(
+        &proposal(&DurableHead::default(), "batch_1"),
+        &Limits::default(),
+    )?;
+    for invalid in ["\"\"\"\"", "\\\\", "\0", "%%%%", "AAAA=", "A", "é"] {
+        let mut batch = original.clone();
+        batch.payload_bytes = invalid.into();
+        let wire = serde_json::to_vec(
+            &bitrouter_orchestrator::core::protocol::ServerMessage::Checkpoint(batch.clone()),
+        )?;
+        assert_eq!(batch.wire_bytes()?, wire.len() as u64);
+        let mut limits = Limits {
+            unacknowledged_bytes: wire.len() as u64 - 1,
+            ..Limits::default()
+        };
+        assert_eq!(
+            batch.decode(&limits).err().map(|error| error.code),
+            Some(ErrorCode::LimitExceeded),
+            "{invalid:?}"
+        );
+        limits.unacknowledged_bytes += 1;
+        assert_eq!(
+            batch.decode(&limits).err().map(|error| error.code),
+            Some(ErrorCode::CheckpointConflict),
+            "{invalid:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn base64_wire_admission_counts_escaped_untrusted_envelope_fields() -> TestResult {
+    let original = CheckpointBatch::encode(
+        &proposal(&DurableHead::default(), "batch_1"),
+        &Limits::default(),
+    )?;
+    for field in [
+        "batch_id",
+        "session_id",
+        "core_instance_id",
+        "payload_sha256",
+    ] {
+        let mut value = serde_json::to_value(&original)?;
+        if field == "payload_sha256" {
+            value[field] = json!("\"\\\0é");
+        } else {
+            value["identity"][field] = json!("\"\\\0é");
+        }
+        let batch: CheckpointBatch = serde_json::from_value(value)?;
+        let wire = serde_json::to_vec(
+            &bitrouter_orchestrator::core::protocol::ServerMessage::Checkpoint(batch.clone()),
+        )?;
+        assert_eq!(batch.wire_bytes()?, wire.len() as u64);
+        let mut limits = Limits {
+            unacknowledged_bytes: wire.len() as u64 - 1,
+            ..Limits::default()
+        };
+        assert_eq!(
+            batch.decode(&limits).err().map(|error| error.code),
+            Some(ErrorCode::LimitExceeded),
+            "{field}"
+        );
+        limits.unacknowledged_bytes += 1;
+        // Sufficient wire capacity cannot authorize a changed hashed identity
+        // or digest. Header escaping is counted before those integrity checks.
+        assert_eq!(
+            batch.decode(&limits).err().map(|error| error.code),
+            Some(ErrorCode::CheckpointConflict),
+            "{field}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn inline_material_carries_its_own_media_type() -> TestResult {
     let wire = json!({"version":1,"session_id":"session_1","execution_epoch":1,"operation_id":"material_1","type":"material.result","payload":{"request_id":"request_1","material":{"material_id":"instructions","version":"v1","sha256":sha256(b"instructions"),"media_type":"text/plain","provenance":"harness_observed","required":true,"artifact":null,"content":"instructions"},"unavailable_reason":null}});
     let message: ClientMessage = serde_json::from_value(wire.clone())?;

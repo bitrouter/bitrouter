@@ -201,7 +201,7 @@ impl CheckpointBatch {
             payload_bytes: STANDARD.encode(&bytes),
             payload_sha256: sha256(&bytes),
         };
-        batch.check_wire_limit(limits)?;
+        batch.check_base64_wire_limit(limits)?;
         Ok(batch)
     }
 
@@ -223,10 +223,16 @@ impl CheckpointBatch {
                 "encoded checkpoint exceeds negotiated bound",
             ));
         }
-        self.check_wire_limit(limits)?;
-        let bytes = STANDARD
-            .decode(&self.payload_bytes)
-            .map_err(|error| conflict(error.to_string()))?;
+        self.check_base64_wire_limit(limits)?;
+        let bytes = match STANDARD.decode(&self.payload_bytes) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                // Invalid base64 may contain JSON escapes. Preserve the exact
+                // wire-limit error before reporting malformed payload bytes.
+                self.check_wire_limit(limits)?;
+                return Err(conflict(error.to_string()));
+            }
+        };
         if bytes.len() as u64 > limits.checkpoint_bytes {
             return Err(CoreError::rejected(
                 ErrorCode::LimitExceeded,
@@ -264,6 +270,45 @@ impl CheckpointBatch {
 
     fn check_wire_limit(&self, limits: &Limits) -> Result<(), CoreError> {
         if self.wire_bytes()? > limits.unacknowledged_bytes {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "checkpoint wire envelope exceeds unacknowledged output bound",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Valid base64 needs no JSON escaping. Count only the small envelope and
+    /// add the encoded length instead of rescanning a potentially multi-MiB
+    /// string at every admission. For untrusted input this is a lower bound;
+    /// decode must still strictly validate base64 before accepting the batch.
+    fn check_base64_wire_limit(&self, limits: &Limits) -> Result<(), CoreError> {
+        #[derive(Serialize)]
+        struct EmptyBatch<'a> {
+            identity: &'a BatchIdentity,
+            payload_encoding: &'a str,
+            payload_bytes: &'static str,
+            payload_sha256: &'a str,
+        }
+        #[derive(Serialize)]
+        struct Envelope<'a> {
+            #[serde(rename = "type")]
+            kind: &'static str,
+            payload: EmptyBatch<'a>,
+        }
+        let overhead = serialized_bytes(&Envelope {
+            kind: "checkpoint.proposed",
+            payload: EmptyBatch {
+                identity: &self.identity,
+                payload_encoding: &self.payload_encoding,
+                payload_bytes: "",
+                payload_sha256: &self.payload_sha256,
+            },
+        })?;
+        if overhead
+            .checked_add(self.payload_bytes.len() as u64)
+            .is_none_or(|bytes| bytes > limits.unacknowledged_bytes)
+        {
             return Err(CoreError::rejected(
                 ErrorCode::LimitExceeded,
                 "checkpoint wire envelope exceeds unacknowledged output bound",

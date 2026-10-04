@@ -23,10 +23,10 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure, canonical output admission, prospective receipt/delivery contributions and first recovery-observation archive reserves implemented; physical storage/future archive exhaustion, later prompt growth and the remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure, canonical output admission, prospective receipt/delivery contributions and first recovery-observation archive reserves implemented; complete physical-storage/repeated-recovery cleanup guarantees and the explicit fault evidence below remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, incremental HTTP/SSE projection and separate bounded WebSocket control lane connected to the service host; independent clients cover binding/release ACK loss, released-epoch restoration and read-only head queries during provider work; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
-| Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
+| Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Draft PR #956 submitted; stage reviews and validation recorded below; full acceptance audit, final independent review and final-head CI remain required |
 
 Each stage receives an independent review. Findings and fixes are recorded with
 the stage's actual validation commands. The final independent review checks the
@@ -34,11 +34,44 @@ whole contract rather than only the new diff.
 
 ## Acceptance evidence
 
-All A01–A23 scenarios in the specification are **unproven** until executable
-evidence is recorded here. Later stages must cover every scenario, including
+The complete A01–A23 matrix is **not yet proven**. The stage records below contain
+bounded executable evidence; final acceptance must cover every scenario, including
 remote/in-process parity, real concurrency, durable output and effect barriers,
 crash/ACK-loss recovery, caller isolation, provider accounting, and actual
 production-harness integration. No completed subset narrows the original scope.
+
+### Open acceptance work after the cross-transport increment
+
+The source audit distinguishes existing admission from missing proof. New tool
+intents and later model prompts already pass through `prepare_checkpoint`,
+`capacity::check` and `artifact_storage::check` before acceptance/dispatch.
+`artifact_storage::recovery_archive_reservation_precedes_tool_dispatch` covers
+low-quota rejection without tool execution. These are not unimplemented
+admission APIs. Remaining boundary evidence must exercise output already
+committed before a new tool batch overflows, and accepted tool results before a
+later prompt overflows, including durable failure, ACK loss and cleanup.
+
+The process fixture currently covers checkpoint boundaries and quiescent
+handoff. A15 still needs a shipped-process crash while the provider request is
+actually in flight with incomplete output, retaining the old uncertain spend
+without turning partial calls into actions. Queue/steer/cancel combinations,
+repeated restoration until archive capacity and storage-full staging/commit
+faults also remain independent core conformance work. The first essential
+recovery-observation reserve does not prove unlimited future handoff growth.
+
+Production storage reservations, historical checkpoint retention/reclamation,
+workspace read/write/shell barriers, actual provider cost reconciliation and
+physical memory measurements need evidence from the relevant implementation.
+Core-owned buffer accounting does not constrain arbitrary allocations made
+inside a custom executor or callback before it returns.
+
+Remote Running-tool restoration remains explicitly unsupported. Independent
+monotonic clocks and uncertain one-way transport delay cannot turn message
+arrival or RTT into an exact activity stop time. A usable bridge requires a
+trusted measurement domain, complete activity coverage through replacement
+entry and a lifecycle drain; unknown coverage must still reject restoration.
+Quiescent restoration and in-process measured handoff do not establish that
+remote capability. These gaps do not narrow A01–A23 or replace A23 with mocks.
 
 ## Validation environment
 
@@ -3410,3 +3443,58 @@ Rust 1.93.0 workspace/all-feature check passed in 0.526 seconds. Formatting,
 diff and tracked-ignore checks passed. Independent source/test/documentation
 review found no remaining actionable P1/P2 in this increment. New-head remote
 CI and full C4–C6/A01–A23 acceptance remain separate gates.
+
+
+## C4 checkpoint wire admission cost
+
+CI 37208007310 for `0655f64c` failed the Linux workspace shard at the
+32-agent fixture's pre-tool join deadline. Its last snapshot still recorded
+recent activity; independent source review found no mandatory lock cycle.
+A local serial baseline passed all three large cases in 108.330, 104.484 and
+111.003 seconds. CPU sampling showed substantial time repeatedly counting the
+large base64 string as JSON during checkpoint wire-limit checks. This evidence
+supports a CPU-cost diagnosis, not a proven permanent scheduler deadlock.
+
+Checkpoint encoding and decoding now count the actual empty-payload envelope
+and add the base64 byte length with checked arithmetic. This is exact for
+valid base64, which never requires JSON escaping. Decode first rejects an
+oversized lower bound, then strictly decodes the payload; malformed base64
+falls back to exact JSON wire counting before returning its decode error.
+Thus escaped malformed payloads retain the previous size-error precedence.
+The public `wire_bytes` method continues to count arbitrary inputs exactly.
+No schema, hash, ownership, ACK, negotiated limit or admission policy changes.
+
+Three regressions compare admission with the serialized `ServerMessage` at
+its exact size and one byte below, cover base64 padding residues and a large
+payload, reject malformed base64 while preserving error precedence, and count
+escaped untrusted identity/digest fields before rejecting their integrity.
+The 32-agent fixture also records head revisions and actual executor counts
+while awaiting joins so future timeouts distinguish progress from a stall.
+Its scale, four overlapping model calls, assertions and deadlines are unchanged.
+
+The complete 24-test checkpoint contract suite passed. Large-fixture comparison,
+workspace validation and final independent review are recorded below when done.
+Previous head `e1da9e15` passed every job of CI 37206392220. The later Linux
+failure is not treated as a successful CI run; new-head CI remains a separate
+gate. Full C4–C6/A01–A23 acceptance remains open.
+
+
+The same three local serial cases now pass in 75.630, 74.670 and 77.411 seconds
+(227.712 seconds combined versus the 323.819-second baseline). Random agent
+identities and join scheduling remain variable; these are observed local
+measurements, not a universal speedup or a Linux CI pass. Progress diagnostics
+show increasing durable revisions during each wait. Independent code, regression
+and documentation review found no actionable P1/P2. Full workspace gates are
+running sequentially before submission.
+
+
+Final Rust 1.99.0 workspace/all-feature nextest passed **4061 tests, 22 skipped**
+in 395.623 seconds with four test threads (489.136 seconds including compilation).
+The three large cases passed under suite load in 112.280, 98.752 and 101.760
+seconds. Strict workspace/all-target/all-feature clippy passed in 32.795 seconds,
+strict rustdoc in 19.572 seconds, workspace doctests passed five tests with one
+ignored, and Rust 1.93.0 workspace/all-feature check passed in 19.130 seconds.
+Formatting, diff and tracked-ignore checks passed. No failed, timed-out or leaky
+test was reported. Independent source/test/documentation review found no
+remaining actionable P1/P2 in this increment. New-head remote CI and the full
+acceptance contract remain separate verification gates.
