@@ -1,3 +1,8 @@
+**2026-10-04 six-tool integration:** the tool surface is now `read`, `glob`,
+`grep`, `write`, `edit`, `shell`, on the unified Thread/Turn runtime at `e2453004`.
+The [base-tool acceptance record](BRO_BASE_TOOLS_ACCEPTANCE.md) records the
+integration checks separately from the historical runtime evidence below.
+
 # BRO runtime v0.2 implementation evidence
 
 **2026-10-02:** this is retained evidence for the earlier runtime head. The

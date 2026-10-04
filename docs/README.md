@@ -24,9 +24,11 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   and identity migration sub-batch; not completion of the original M0–M1 batch.
 - [`CLI.md`](CLI.md) — full command reference, flags, and config resolution.
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — workspace architecture and SDK internals.
-- [`BRO_BASE_TOOLS_SPEC.md`](BRO_BASE_TOOLS_SPEC.md) — **v0.1, proposed for
-  review; not implemented.** Six native base tools: directory-aware `read`,
+- [`BRO_BASE_TOOLS_SPEC.md`](BRO_BASE_TOOLS_SPEC.md) — **v0.2, adapted to the Thread/Turn runtime;
+  integration and original platform evidence recorded separately.** Six native base tools: directory-aware `read`,
   `glob`, `grep`, `write`, `edit`, and a server-selected `shell`.
+- [`BRO_BASE_TOOLS_ACCEPTANCE.md`](BRO_BASE_TOOLS_ACCEPTANCE.md) — Local source
+  checks, real-model coding/read-only tests, and controlled seven-to-six comparison.
 - [`BRO_AGENT_RUNTIME_SPEC.md`](BRO_AGENT_RUNTIME_SPEC.md) — **v0.2, product MVP
   execution baseline retained; standalone runtime/crate gate locally verified;
   full product MVP incomplete.**

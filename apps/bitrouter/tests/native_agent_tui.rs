@@ -334,7 +334,7 @@ async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
     let mut tui = TerminalClient::open(binary, &config, &turn_id)?;
     tui.wait_for("Approve edit")?;
     tui.send(b"y")?;
-    tui.wait_for("Approve bash")?;
+    tui.wait_for("Approve shell")?;
     tui.send(b"y")?;
     let completed = wait_status(&socket, &turn_id, TurnStatus::Completed).await?;
     ensure!(completed.verification == VerificationStatus::Passed);

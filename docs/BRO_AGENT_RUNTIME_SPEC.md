@@ -118,7 +118,7 @@ Explicit external ACP harnesses retain their session/context/tool ownership.
 | --- | --- |
 | Conversation | Persistent Thread; at most one active Turn per Thread |
 | Input | start, enqueue, steer; bounded FIFO, targeted cancellation, explicit queue resume |
-| Tools | read, ls, find, grep, write, edit; bash on Unix, powershell on Windows |
+| Tools | read, glob, grep, write, edit, shell; see [base-tool contract](BRO_BASE_TOOLS_SPEC.md) |
 | Concurrency | Bounded shared reads; workspace-exclusive writes, shell, verification; ordered barriers |
 | Model | Fixed Thread model/effort baseline; immutable snapshot for each SDK request |
 | Output | Live assistant and stdout/stderr; authoritative bounded Item records |
@@ -359,9 +359,9 @@ when cancelling a request; cancelled waiting does not establish zero cost.
 
 | Tool class | Resource rule |
 | --- | --- |
-| read, ls, find, grep | Workspace-shared, bounded concurrency |
+| read, glob, grep | Workspace-shared, bounded concurrency |
 | write, edit | Workspace-exclusive |
-| bash, powershell, verification | Workspace-exclusive, regardless of purported read-only command text |
+| shell, verification | Workspace-exclusive, regardless of purported read-only command text |
 | Future registered tool | Trusted metadata; exclusive if unspecified |
 
 Preserve submission barriers: read A/read B may overlap, then edit A waits for
@@ -461,7 +461,7 @@ permission decisions, using registered metadata, not model assertions. Hide
 forbidden tools and reject forged dispatches. Keep current path checks/output
 bounds/edit behavior; OS support needs platform-specific execution evidence.
 
-| Profile | read / ls / find / grep | write / edit / shell / verification |
+| Profile | read / glob / grep | write / edit / shell / verification |
 | --- | --- | --- |
 | read_only | Allow within server restrictions | Deny |
 | ask | Allow within server restrictions | Ask per invocation |

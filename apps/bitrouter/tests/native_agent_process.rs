@@ -4,7 +4,7 @@
 #![cfg(unix)]
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -26,9 +26,12 @@ async fn separate_process_client_and_server_finish_verified_coding_task() -> Res
             let turn = turns_for_reply.fetch_add(1, Ordering::SeqCst);
             let body = if turn == 0 {
                 tool_sse(vec![
-                    tool_call(0, "read-1", "read", json!({"path": "note.txt"})),
+                    tool_call(0, "read-1", "read", json!({"path": ".", "limit": 1})),
+                    tool_call(3, "glob-1", "glob", json!({"pattern": "*.txt"})),
+                    tool_call(4, "grep-1", "grep", json!({"pattern": "before"})),
+                    tool_call(5, "write-1", "write", json!({"path": "NOTES.md", "content": "Updated note."})),
                     tool_call(1, "edit-1", "edit", json!({"path": "note.txt", "edits": [{"oldText": "before", "newText": "after"}]})),
-                    tool_call(2, "bash-1", "bash", json!({"command": "cat note.txt"})),
+                    tool_call(2, "shell-1", "shell", json!({"command": "cat note.txt"})),
                 ])
             } else {
                 text_sse("Changed note.txt and checked it.")
@@ -90,6 +93,28 @@ async fn separate_process_client_and_server_finish_verified_coding_task() -> Res
         turns.load(Ordering::SeqCst) == 2,
         "expected two routed model turns"
     );
+    ensure!(std::fs::read_to_string(workspace.join("NOTES.md"))? == "Updated note.");
+    for request in upstream
+        .received_requests()
+        .await
+        .context("missing model requests")?
+    {
+        let body: Value = serde_json::from_slice(&request.body)?;
+        let names: Vec<_> = body["tools"]
+            .as_array()
+            .context("missing tools")?
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str())
+            .collect();
+        ensure!(names == ["read", "glob", "grep", "write", "edit", "shell"]);
+        ensure!(
+            body["tools"][5]["function"]["description"]
+                .as_str()
+                .is_some_and(
+                    |description| description.contains("Bash") || description.contains("POSIX sh")
+                )
+        );
+    }
     let lines = stdout
         .lines()
         .map(serde_json::from_str::<Value>)
@@ -100,7 +125,126 @@ async fn separate_process_client_and_server_finish_verified_coding_task() -> Res
     ensure!(terminal["type"] == "terminal");
     ensure!(terminal["status"] == "completed", "{terminal}");
     ensure!(terminal["verification"] == "passed", "{terminal}");
+    let shell_result = lines
+        .iter()
+        .filter_map(|line| line["event"]["changes"].as_array())
+        .flatten()
+        .filter(|change| change["kind"] == "tool_result")
+        .filter_map(|change| change["message"]["content"].as_array())
+        .flatten()
+        .find(|part| part["call_id"] == "shell-1")
+        .context("shell result missing from Thread events")?;
+    ensure!(shell_result["output"]["value"]["interpreter"].is_object());
+    ensure!(
+        shell_result["output"]["value"]["interpreter"]
+            == terminal["verification_evidence"]["interpreter"]
+    );
     ensure!(terminal["final_answer"] == "Changed note.txt and checked it.");
+    Ok(())
+}
+
+#[tokio::test]
+async fn verification_losing_declared_shell_records_no_effect_and_never_falls_back() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let upstream = MockServer::start().await;
+    let home = tempfile::tempdir()?;
+    let workspace = home.path().join("project");
+    let bins = home.path().join("bin");
+    std::fs::create_dir(&workspace)?;
+    std::fs::create_dir(&bins)?;
+    let interpreter = bins.join("bash");
+    std::fs::write(&interpreter, "#!/bin/sh\nexec /bin/bash \"$@\"\n")?;
+    std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755))?;
+    let removed = Arc::new(AtomicBool::new(false));
+    let removed_for_reply = Arc::clone(&removed);
+    let declared = interpreter.clone();
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(move |_: &wiremock::Request| {
+            removed_for_reply.store(std::fs::remove_file(&declared).is_ok(), Ordering::SeqCst);
+            ResponseTemplate::new(200).set_body_raw(text_sse("Done."), "text/event-stream")
+        })
+        .mount(&upstream)
+        .await;
+    let config = home.path().join("bitrouter.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "inherit_defaults: false\nserver:\n  listen: '127.0.0.1:0'\n  skip_auth: true\ndatabase:\n  url: 'sqlite://{}?mode=rwc'\nproviders:\n  mock:\n    api_base: {}\n    api_key: fixture\n    api_protocol:\n      - '*': chat_completions\n    models:\n      - id: test-model\n",
+            home.path().join("bitrouter.db").display(),
+            upstream.uri()
+        ),
+    )?;
+    let search_path = std::env::join_paths(std::iter::once(bins).chain(std::env::split_paths(
+        &std::env::var_os("PATH").context("PATH missing")?,
+    )))?;
+    let binary = env!("CARGO_BIN_EXE_bro");
+    let output = tokio::time::timeout(
+        Duration::from_secs(60),
+        Command::new(binary)
+            .args([
+                "task",
+                "run",
+                "Inspect the workspace",
+                "--model",
+                "test-model",
+                "--check",
+                "printf replayed > unexpected",
+                "--workspace",
+            ])
+            .arg(&workspace)
+            .arg("--config")
+            .arg(&config)
+            .env("PATH", search_path)
+            .output(),
+    )
+    .await??;
+    let stop = tokio::time::timeout(
+        Duration::from_secs(10),
+        Command::new(binary)
+            .arg("stop")
+            .arg("--config")
+            .arg(&config)
+            .output(),
+    )
+    .await??;
+    ensure!(stop.status.success(), "daemon cleanup failed");
+    ensure!(
+        removed.load(Ordering::SeqCst),
+        "declared interpreter was not selected before sampling"
+    );
+    ensure!(
+        !output.status.success(),
+        "verification unexpectedly succeeded"
+    );
+    ensure!(
+        !workspace.join("unexpected").exists(),
+        "verification replayed through a fallback shell"
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    let lines = stdout
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let terminal = lines.last().context("terminal missing")?;
+    ensure!(
+        terminal["type"] == "terminal" && terminal["status"] == "failed",
+        "{terminal}"
+    );
+    ensure!(
+        terminal["verification"] == "unavailable" && terminal["unknown_effect"] == false,
+        "{terminal}"
+    );
+    ensure!(
+        lines
+            .iter()
+            .filter_map(|line| line["event"]["changes"].as_array())
+            .flatten()
+            .any(|change| change["kind"] == "verification_result"
+                && change["call"]["name"] == "shell"
+                && change["effect"] == "not_executed")
+    );
     Ok(())
 }
 
