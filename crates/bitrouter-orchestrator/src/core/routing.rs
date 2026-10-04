@@ -316,6 +316,13 @@ impl ExecutionReceipt {
                     .as_ref()
                     .and_then(|rejected| rejected.usage.as_ref())
                     .map(|usage| usage.origin)
+            })
+            .or_else(|| {
+                report
+                    .report_rejection
+                    .as_ref()
+                    .and_then(|rejected| rejected.usage.as_ref())
+                    .map(|usage| usage.origin)
             });
         Self {
             decision_id: decision_id.into(),

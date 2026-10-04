@@ -911,7 +911,7 @@ pub(super) fn resume_model_steps(
                 .attempts
                 .last()
                 .and_then(|attempt| attempt.receipt.as_ref())
-                .is_some_and(|receipt| receipt.report.output_rejection.is_some());
+                .and_then(|receipt| receipt.report.rejection_reason());
             if steered.contains(&agent.agent_id) {
                 step.interrupted = true;
                 step.settled = true;
@@ -922,7 +922,7 @@ pub(super) fn resume_model_steps(
                         AgentStatus::Runnable
                     };
                 }
-            } else if rejected_output {
+            } else if let Some(reason) = rejected_output {
                 // This attempt completed and failed canonical admission. It
                 // is not an uncertain interrupted call eligible for retry.
                 step.settled = true;
@@ -930,8 +930,7 @@ pub(super) fn resume_model_steps(
                     turn.status = AgentStatus::Cancelling;
                 } else {
                     turn.status = AgentStatus::Failed;
-                    turn.terminal_reason =
-                        Some("canonical model output exceeds its admitted byte limit".into());
+                    turn.terminal_reason = Some(reason.into());
                 }
             } else if let Some((request_id, output)) = output {
                 // Replay the ordinary output admission transition, never the
@@ -1006,11 +1005,16 @@ pub(super) fn finish_rejected_output(
                 .attempts
                 .last()
                 .and_then(|attempt| attempt.receipt.as_ref())
-                .is_some_and(|receipt| receipt.report.output_rejection.is_some())
+                .is_some_and(|receipt| receipt.report.rejection_reason().is_some())
     }) {
         turn.status = AgentStatus::Failed;
-        turn.terminal_reason =
-            Some("canonical model output exceeds its admitted byte limit".into());
+        turn.terminal_reason = turn
+            .steps
+            .last()
+            .and_then(|step| step.attempts.last())
+            .and_then(|attempt| attempt.receipt.as_ref())
+            .and_then(|receipt| receipt.report.rejection_reason())
+            .map(str::to_owned);
         cancel_descendants_of_failed_root(state);
     }
 }

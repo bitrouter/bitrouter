@@ -661,6 +661,22 @@ async fn retired_attempt_keeps_output_capacity_and_contract_for_late_evidence() 
         .ok_or("result envelope exceeds allowance")?;
     result.content = vec![text(&"x".repeat(padding))];
     assert_eq!(serde_json::to_vec(result)?.len() as u64, bound);
+    let report_bound = work
+        .provider_source
+        .as_ref()
+        .ok_or("retired source")?
+        .attempt_report_bytes
+        .ok_or("retired report allowance")?;
+    evidence.report.actual_provider = Some(String::new());
+    let report_padding = usize::try_from(report_bound)?
+        .checked_sub(serde_json::to_vec(&evidence.report)?.len())
+        .ok_or("report envelope")?;
+    evidence.report.actual_provider = Some("p".repeat(report_padding));
+    assert_eq!(
+        serde_json::to_vec(&evidence.report)?.len() as u64,
+        report_bound
+    );
+
     let mut exhausted = false;
     for index in 1..512 {
         let mut update = signal_update(&session, Vec::new()).await;
@@ -710,6 +726,23 @@ async fn retired_attempt_keeps_output_capacity_and_contract_for_late_evidence() 
         assert_eq!(session.head().await, before);
         assert!(session.operation(&operation).await.is_none());
     }
+    let mut oversized = evidence.clone();
+    oversized
+        .report
+        .actual_provider
+        .as_mut()
+        .ok_or("actual provider")?
+        .push('x');
+    let before = session.head().await;
+    assert_eq!(
+        session
+            .provider_evidence("oversized-report", oversized)
+            .await
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::CheckpointConflict)
+    );
+    assert_eq!(session.head().await, before);
     let accepted = session.provider_evidence("late", evidence.clone()).await?;
     assert_eq!(
         session.provider_evidence("late", evidence.clone()).await?,

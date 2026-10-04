@@ -20,6 +20,9 @@ pub struct ProviderAttemptSource {
     /// Preserves the admission policy when the original turn is replaced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_output_version: Option<u32>,
+    /// Complete report contract, including bounded metadata-rejection evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_report_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +221,7 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                             route: route.clone(),
                             canonical_output_bytes: attempt.canonical_output_bytes,
                             canonical_output_version: attempt.canonical_output_version,
+                            attempt_report_bytes: attempt.attempt_report_bytes,
                         })
                 });
                 if let Some(receipt) = &attempt.receipt {

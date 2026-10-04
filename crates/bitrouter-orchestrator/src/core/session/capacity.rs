@@ -1,7 +1,8 @@
 //! Admission reserves a conservative cancellation/settlement projection. The
 //! projection is never committed or executed: real outcomes still come only
 //! from authenticated evidence. Canonical model results have frozen allowances;
-//! provider metadata and physical allocations remain separate obligations.
+//! complete attempt reports have their own limits. Physical allocations retain
+//! separate admission obligations.
 
 use super::*;
 use crate::core::checkpoint::{ToolStartFence, serialized_bytes};
@@ -471,6 +472,128 @@ mod tests {
         Ok(state)
     }
 
+    fn exact_host(
+        state: &SessionSnapshot,
+        grant: &OwnershipGrant,
+        limits: &Limits,
+    ) -> Result<Limits, CoreError> {
+        let proposed = proposal(state, grant)?;
+        let mut host = limits.clone();
+        let (mut low, mut high) = (0, host.checkpoint_bytes);
+        check(state, &proposed, &host, grant)?;
+        while low < high {
+            host.checkpoint_bytes = low + (high - low) / 2;
+            match check(state, &proposed, &host, grant) {
+                Ok(()) => high = host.checkpoint_bytes,
+                Err(error) if error.code == ErrorCode::LimitExceeded => {
+                    low = host.checkpoint_bytes + 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        host.checkpoint_bytes = high;
+        Ok(host)
+    }
+
+    #[test]
+    fn saturated_complete_report_and_error_handoffs_keep_frozen_capacity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_sdk::language_model::native::{NativePlan, NativeRouteConstraints};
+        use bitrouter_sdk::language_model::native_accounting::NativeTokenCost;
+        for failed in [false, true] {
+            let mut state = fixture()?;
+            let mut child = state.agents.get("root").ok_or("root")?.clone();
+            child.agent_id = "child".into();
+            child.parent_id = Some("root".into());
+            child.display_path = "/root/child".into();
+            child.depth = 1;
+            let turn = child.turn.as_mut().ok_or("turn")?;
+            turn.agent_turn_id = "child-turn".into();
+            turn.status = AgentStatus::ModelRunning;
+            state.agents.insert("child".into(), child);
+            let limits = Limits {
+                checkpoint_bytes: 1024 * 1024,
+                ..Limits::default()
+            };
+            state.run.as_mut().ok_or("run")?.limits = limits.clone();
+            let plan: NativePlan = serde_json::from_value(json!({
+                "request_id":"request", "original_model":"model", "effective_model":"model", "effort_source":"caller",
+                "prompt":{"model":"model", "messages":[], "stream":false},
+                "routes":[{"provider":"provider","model":"model","protocol":"chat_completions","constraints":NativeRouteConstraints::default()}]
+            }))?;
+            let canonical = model_output::allowance(&limits)?;
+            let bound =
+                model_output::report_allowance(canonical, &plan.request_id, &plan.routes[0])?;
+            let mut report: NativeAttemptReport = serde_json::from_value(json!({
+                "request_id":"request", "attempt_index":0, "route":plan.routes[0], "elapsed_ms":u64::MAX,
+                "error":if failed { Some("") } else { None },
+                "actual_provider":if failed { None } else { Some("") },
+                "actual_model":if failed { None } else { Some("actual-model") },
+                "result":if failed { Value::Null } else { json!({"content":[],"finish_reason":"stop","provider_metadata":{}}) }
+            }))?;
+            // Both serving identity and cost metadata can independently occupy
+            // space outside the canonical result. Retain their full values.
+            if !failed {
+                report.token_cost = NativeTokenCost::unknown("\0\"".repeat(512));
+            }
+            let padding = usize::try_from(bound - serialized_bytes(&report)?)?;
+            if failed {
+                report.error = Some("x".repeat(padding));
+            } else {
+                report.actual_provider = Some("x".repeat(padding));
+            }
+            assert_eq!(serialized_bytes(&report)?, bound);
+            let context = ContextManifest::capture(&state, "child", &plan.prompt)?;
+            let step: ModelStep = serde_json::from_value(json!({
+                "step_id":"step","decision_id":"decision","context_revision":0,"signal_revision":0,
+                "manifest":state.manifest,"materials":[],"context":context,"input_state_revision":1,"input_history":[],
+                "plan":plan,"attempts":[{"attempt_id":"attempt","index":0,"canonical_output_bytes":canonical,
+                    "canonical_output_version":3,"attempt_report_bytes":bound}],"settled":false
+            }))?;
+            agent_turn(&mut state, "child")?.steps.push(step);
+            crate::core::accounting::work::synchronize(&mut state)?;
+            let grant = OwnershipGrant {
+                session_id: "session".into(),
+                harness_id: "harness".into(),
+                core_instance_id: "core".into(),
+                execution_epoch: 1,
+            };
+            let host = exact_host(&state, &grant, &limits)?;
+            let receipt = ExecutionReceipt::capture("decision", "attempt", &plan, report.clone());
+            agent_turn(&mut state, "child")?.steps[0].attempts[0].receipt = Some(receipt.clone());
+            crate::core::accounting::work::synchronize(&mut state)?;
+            let mut received = proposal(&state, &grant)?;
+            received.events.push(DurableEvent {
+                event_seq: 2,
+                kind: "model.attempt.outcome".into(),
+                run_id: Some("run".into()),
+                agent_id: Some("child".into()),
+                payload: encode(&receipt)?,
+            });
+            check(&state, &received, &host, &grant)?;
+            assert!(report.report_rejection.is_none());
+            if failed {
+                // Spend newly released headroom after recording the report;
+                // the known error must remain reserved until application.
+                let host = exact_host(&state, &grant, &limits)?;
+                let turn = agent_turn(&mut state, "child")?;
+                turn.steps[0].settled = true;
+                turn.terminal_reason = report.error.clone();
+                turn.status = AgentStatus::Failed;
+                let mut finished = proposal(&state, &grant)?;
+                finished.events.push(DurableEvent {
+                    event_seq: 3,
+                    kind: "agent.failed".into(),
+                    run_id: Some("run".into()),
+                    agent_id: Some("child".into()),
+                    payload: json!({"reason":report.error}),
+                });
+                check(&state, &finished, &host, &grant)?;
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn saturated_managed_checkpoint_keeps_room_for_child_delivery()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -642,7 +765,8 @@ mod tests {
         let prompt: Prompt =
             serde_json::from_value(json!({"model":"model", "messages":[], "stream":false}))?;
         let context = ContextManifest::capture(&state, "child", &prompt)?;
-        let bound = model_output::allowance(&limits)?;
+        // Retain the version-2 arithmetic fixture; live tests use the current policy.
+        let bound = limits.checkpoint_bytes / (8 * (u64::from(limits.active_models) + 1));
         let mut result: bitrouter_sdk::language_model::types::GenerateResult =
             serde_json::from_value(json!({
                 "content":[],"finish_reason":"stop","provider_metadata":{}

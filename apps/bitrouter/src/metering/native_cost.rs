@@ -126,6 +126,7 @@ mod tests {
             actual_provider: Some("execution-provider".into()),
             actual_model: Some("served-model".into()),
             output_rejection: None,
+            report_rejection: None,
             result: Some(GenerateResult {
                 content: Vec::new(),
                 usage: Some(Usage {

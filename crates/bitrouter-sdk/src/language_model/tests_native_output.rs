@@ -1,6 +1,6 @@
 use super::*;
 use crate::language_model::native::{
-    NativeAttemptReport, NativeExecutionControl, NativePlan, NativePlanAdmission,
+    NativeAttemptReport, NativeExecutionControl, NativePlan, NativePlanAdmission, NativeRoute,
 };
 use crate::language_model::native_accounting::{
     NativeCostEstimator, NativeTokenCost, NativeTokenRates,
@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 
 struct Control {
     limit: Option<u64>,
+    report_limit: Option<u64>,
     reports: Mutex<Vec<NativeAttemptReport>>,
 }
 
@@ -17,6 +18,9 @@ struct Control {
 impl NativeExecutionControl for Control {
     fn canonical_output_byte_limit(&self) -> Option<u64> {
         self.limit
+    }
+    fn attempt_report_byte_limit(&self, _: &str, _: &NativeRoute) -> Result<Option<u64>> {
+        Ok(self.report_limit)
     }
     async fn plan(&self, plan: NativePlan) -> Result<NativePlanAdmission> {
         Ok(NativePlanAdmission {
@@ -35,6 +39,8 @@ impl NativeExecutionControl for Control {
 struct Records(Arc<Mutex<Vec<UsageRecord>>>);
 
 struct UsageRecord {
+    provider: String,
+    model: String,
     prompt_tokens: u64,
     completion_tokens: u64,
     raw: Option<serde_json::Value>,
@@ -45,6 +51,8 @@ struct UsageRecord {
 impl SettlementRecorder for Records {
     async fn record(&self, ctx: &mut SettlementContext) -> Result<()> {
         self.0.lock().await.push(UsageRecord {
+            provider: ctx.provider_id.clone(),
+            model: ctx.model_id.clone(),
             prompt_tokens: ctx.prompt_tokens,
             completion_tokens: ctx.completion_tokens,
             raw: ctx.raw_usage.clone(),
@@ -125,6 +133,7 @@ async fn canonical_output_rejection_settles_before_fallible_success_hooks()
     let calls = Arc::new(AtomicUsize::new(0));
     let control = Arc::new(Control {
         limit: Some(1),
+        report_limit: None,
         reports: Mutex::new(Vec::new()),
     });
     let records = Records::default();
@@ -165,6 +174,7 @@ async fn canonical_output_limit_counts_json_and_keeps_original_settlement()
     for limit in [Some(0), Some(bytes - 1), Some(bytes), Some(bytes + 1), None] {
         let control = Arc::new(Control {
             limit,
+            report_limit: None,
             reports: Mutex::new(Vec::new()),
         });
         let records = Records::default();
@@ -238,6 +248,7 @@ async fn canonical_output_without_usage_stays_unknown()
     result.usage = None;
     let control = Arc::new(Control {
         limit: Some(1),
+        report_limit: None,
         reports: Mutex::new(Vec::new()),
     });
     let mut builder = PipelineBuilder::new();
@@ -262,5 +273,188 @@ async fn canonical_output_without_usage_stays_unknown()
             .is_some_and(|rejection| rejection.usage.is_none())
     );
     assert!(reports[0].token_cost.estimated_micro_usd().is_none());
+    Ok(())
+}
+
+struct ActualIdentityExecutor {
+    calls: AtomicUsize,
+    large_identity: bool,
+}
+
+#[async_trait]
+impl Executor for ActualIdentityExecutor {
+    async fn execute(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let mut execution = MockExecutor::new(vec![MockResponse::Generate(result())])
+            .execute(target, prompt, ctx)
+            .await?;
+        execution.provider_id = if self.large_identity {
+            "actual\0\"provider".repeat(4096)
+        } else {
+            "actual-provider".into()
+        };
+        execution.model_id = "actual-model".into();
+        Ok(execution)
+    }
+    async fn execute_stream(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        Err(BitrouterError::internal("unexpected stream"))
+    }
+}
+
+struct ReportEstimator {
+    amount: Option<u64>,
+    large_metadata: bool,
+}
+
+impl NativeCostEstimator for ReportEstimator {
+    fn estimate(&self, report: &NativeAttemptReport) -> NativeTokenCost {
+        assert!(
+            report
+                .actual_provider
+                .as_deref()
+                .is_some_and(|id| id.starts_with("actual"))
+        );
+        assert_eq!(report.actual_model.as_deref(), Some("actual-model"));
+        let cost = Estimator.estimate(report);
+        match (self.amount, cost) {
+            (
+                Some(amount),
+                NativeTokenCost::ConfiguredEstimate {
+                    usage_origin,
+                    normalized_usage,
+                    rates,
+                    pricing_provider,
+                    pricing_model,
+                    ..
+                },
+            ) => NativeTokenCost::ConfiguredEstimate {
+                micro_usd: amount,
+                usage_origin,
+                normalized_usage,
+                rates,
+                pricing_version: if self.large_metadata {
+                    "price\0\"".repeat(4096)
+                } else {
+                    "v1".into()
+                },
+                pricing_provider,
+                pricing_model,
+            },
+            _ => NativeTokenCost::unknown("unknown\0\"".repeat(4096)),
+        }
+    }
+}
+
+#[tokio::test]
+async fn complete_report_rejection_preserves_original_settlement_and_numeric_cost()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    for canonical_limit in [None, Some(1)] {
+        for (amount, large_identity, large_metadata) in [
+            (None, false, false),
+            (Some(0), false, true),
+            (Some(7), true, false),
+        ] {
+            let control = Arc::new(Control {
+                limit: canonical_limit,
+                report_limit: Some(16 * 1024),
+                reports: Mutex::new(Vec::new()),
+            });
+            let executor = Arc::new(ActualIdentityExecutor {
+                calls: AtomicUsize::new(0),
+                large_identity,
+            });
+            let hook_calls = Arc::new(AtomicUsize::new(0));
+            let records = Records::default();
+            let mut builder = PipelineBuilder::new();
+            builder
+                .routing_table(routing_table(&["first", "fallback"]))
+                .executor(executor.clone())
+                .native_cost_estimator(Arc::new(ReportEstimator {
+                    amount,
+                    large_metadata,
+                }))
+                .execution_hook(RejectingSuccessHook(hook_calls.clone()))
+                .settlement_recorder(records.clone());
+            assert!(
+                Arc::new(builder.build()?)
+                    .execute_native_controlled(request(), control.clone())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(hook_calls.load(Ordering::SeqCst), 0);
+            let reports = control.reports.lock().await;
+            assert_eq!(reports.len(), 1);
+            let report = &reports[0];
+            assert!(serde_json::to_vec(report)?.len() <= 16 * 1024);
+            assert!(report.result.is_none());
+            assert_eq!(report.output_rejection.is_some(), canonical_limit.is_some());
+            assert_eq!(report.token_cost.estimated_micro_usd(), amount);
+            let rejection = report.report_rejection.as_ref().ok_or("report rejection")?;
+            assert!(rejection.had_result && rejection.original.bytes > rejection.byte_limit);
+            assert!(rejection.actual_provider.is_some() && rejection.actual_model.is_some());
+            assert_eq!(
+                rejection
+                    .usage
+                    .as_ref()
+                    .map(|usage| (usage.prompt_tokens, usage.completion_tokens)),
+                Some((10, 5))
+            );
+            assert!(report.actual_provider.is_none() && report.actual_model.is_none());
+            let settled = records.0.lock().await;
+            assert_eq!(settled.len(), 1);
+            assert_eq!(
+                (settled[0].prompt_tokens, settled[0].completion_tokens),
+                (10, 5)
+            );
+            assert!(settled[0].raw.is_some() && settled[0].error);
+            assert_eq!(settled[0].model, "actual-model");
+            assert_eq!(
+                settled[0].provider,
+                if large_identity {
+                    "actual\0\"provider".repeat(4096)
+                } else {
+                    "actual-provider".into()
+                }
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn insufficient_report_envelope_prevents_provider_dispatch()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let control = Arc::new(Control {
+        limit: None,
+        report_limit: Some(1),
+        reports: Mutex::new(Vec::new()),
+    });
+    let executor = Arc::new(ActualIdentityExecutor {
+        calls: AtomicUsize::new(0),
+        large_identity: true,
+    });
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(routing_table(&["first", "fallback"]))
+        .executor(executor.clone());
+    let error = Arc::new(builder.build()?)
+        .execute_native_controlled(request(), control.clone())
+        .await
+        .err()
+        .ok_or("small envelope accepted")?;
+    assert!(error.to_string().contains("cannot hold rejection evidence"));
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    assert!(control.reports.lock().await.is_empty());
     Ok(())
 }

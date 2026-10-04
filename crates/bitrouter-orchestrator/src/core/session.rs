@@ -135,9 +135,13 @@ pub struct AttemptRecord {
     /// Missing legacy fields do not create a retrospective output contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_output_bytes: Option<u64>,
-    /// Version 2 reserves canonical delivery; absence retains the original policy.
+    /// Version 2 reserves canonical delivery; version 3 also bounds complete reports.
+    /// Absence retains the original policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_output_version: Option<u32>,
+    /// Complete report contract, including bounded metadata-rejection evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_report_bytes: Option<u64>,
     /// Actual integration work, including internal HTTP authentication retries.
     /// Empty legacy/custom-executor records do not prove complete coverage.
     #[serde(default)]
@@ -3580,6 +3584,16 @@ impl NativeExecutionControl for StepControl {
         Some(self.canonical_output_bytes)
     }
 
+    fn attempt_report_byte_limit(
+        &self,
+        request_id: &str,
+        route: &bitrouter_sdk::language_model::native::NativeRoute,
+    ) -> bitrouter_sdk::Result<Option<u64>> {
+        model_output::report_allowance(self.canonical_output_bytes, request_id, route)
+            .map(Some)
+            .map_err(sdk_error)
+    }
+
     async fn provider_cancelled(&self) {
         self.provider_cancellation.cancelled().await;
     }
@@ -4169,8 +4183,10 @@ impl NativeExecutionControl for StepControl {
                 || step.attempts.last().is_some_and(|attempt| attempt.receipt.is_none()) {
                 return Err(reject(ErrorCode::OperationConflict, "attempt does not follow its immutable model plan"));
             }
+            let route = plan.routes.get(attempt_index as usize).ok_or_else(|| reject(ErrorCode::OperationConflict, "attempt route disappeared"))?;
+            let attempt_report_bytes = model_output::report_allowance(self.canonical_output_bytes, request_id, route)?;
             let attempt_id = id("attempt");
-            step.attempts.push(AttemptRecord { attempt_id: attempt_id.clone(), index: attempt_index, receipt: None, canonical_output_bytes: Some(self.canonical_output_bytes), canonical_output_version: Some(model_output::DELIVERY_VERSION), provider_work: Vec::new() });
+            step.attempts.push(AttemptRecord { attempt_id: attempt_id.clone(), index: attempt_index, receipt: None, canonical_output_bytes: Some(self.canonical_output_bytes), canonical_output_version: Some(model_output::CURRENT_VERSION), attempt_report_bytes: Some(attempt_report_bytes), provider_work: Vec::new() });
             active_run(state)?.model_attempts += 1;
             Ok(json!({"attempt_id":attempt_id,"request_id":request_id,"attempt_index":attempt_index}))
         }).await.map_err(sdk_error)?;

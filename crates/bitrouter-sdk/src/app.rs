@@ -365,6 +365,14 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
         self.inner.canonical_output_byte_limit()
     }
 
+    fn attempt_report_byte_limit(
+        &self,
+        request_id: &str,
+        route: &crate::language_model::native::NativeRoute,
+    ) -> Result<Option<u64>> {
+        self.inner.attempt_report_byte_limit(request_id, route)
+    }
+
     async fn provider_cancelled(&self) {
         self.inner.provider_cancelled().await;
     }

@@ -283,7 +283,7 @@ async fn concurrent_canonical_results_fill_their_frozen_allowances_and_settle() 
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(limits.len(), 2);
     assert_eq!(limits[0], limits[1]);
-    assert!(limits[0] > 16 * 1024);
+    assert_eq!(limits[0], (512 * 1024) / (16 * 3));
     executor
         .bytes
         .store(usize::try_from(limits[0])?, Ordering::SeqCst);
@@ -358,6 +358,7 @@ async fn canonical_output_reservation_rejects_forgery_and_preserves_legacy() -> 
                                 } else if let Some(attempt) = attempt.as_object_mut() {
                                     attempt.remove("canonical_output_bytes");
                                     attempt.remove("canonical_output_version");
+                                    attempt.remove("attempt_report_bytes");
                                 }
                             }
                         }
@@ -411,8 +412,14 @@ async fn canonical_output_reservation_blocks_takeover_without_headroom() -> Test
         active_models: 1,
         ..Limits::default()
     });
-    session.start("input", 1, task).await?;
-    session.drive().await?;
+    session
+        .start("input", 1, task)
+        .await
+        .map_err(|e| format!("fixture start: {e:?}"))?;
+    session
+        .drive()
+        .await
+        .map_err(|e| format!("fixture drive: {e:?}"))?;
     session.disconnect().await;
     let original = recovery::prefix(&*harness.store.lock().await, "model.attempt.intent")?;
     let payload = original
@@ -423,11 +430,15 @@ async fn canonical_output_reservation_blocks_takeover_without_headroom() -> Test
     let state: SessionSnapshot = serde_json::from_value(payload.checkpoint.state.clone())?;
     let root = state.agent_id;
     let allowance = state.agents[&root].turn.as_ref().ok_or("turn")?.steps[0].attempts[0]
-        .canonical_output_bytes
-        .ok_or("allowance")?;
+        .attempt_report_bytes
+        .ok_or("report allowance")?;
+    // Keep a fixed legacy cleanup margin; the newer canonical policy is
+    // smaller and is no longer a useful estimate of legacy cleanup overhead.
+    let legacy_margin = 16 * 1024;
+    assert!(allowance * 7 > legacy_margin as u64);
     let padding = (128 * 1024usize)
         .checked_sub(serde_json::to_vec(&payload)?.len())
-        .and_then(|bytes| bytes.checked_sub(usize::try_from(allowance / 2).ok()?))
+        .and_then(|bytes| bytes.checked_sub(legacy_margin))
         .ok_or("fixture has no padding capacity")?;
     for legacy in [false, true] {
         let mut store = original.clone();
@@ -441,6 +452,7 @@ async fn canonical_output_reservation_blocks_takeover_without_headroom() -> Test
                 {
                     attempt.remove("canonical_output_bytes");
                     attempt.remove("canonical_output_version");
+                    attempt.remove("attempt_report_bytes");
                 }
                 strip_ledger_allowances(&mut payload.checkpoint.state);
             }
@@ -450,7 +462,7 @@ async fn canonical_output_reservation_blocks_takeover_without_headroom() -> Test
         let request = recovery::request(&*replacement.store.lock().await, false)?;
         let restored = recovery::restore(request, replacement.clone(), Vec::new()).await;
         if legacy {
-            let (restored, executor) = restored?;
+            let (restored, executor) = restored.map_err(|e| format!("legacy restore: {e:?}"))?;
             assert!(
                 restored.snapshot().await.root_turn().ok_or("turn")?.steps[0].attempts[0]
                     .canonical_output_bytes
@@ -480,6 +492,7 @@ fn strip_ledger_allowances(state: &mut serde_json::Value) {
                     if let Some(source) = entry["provider_source"].as_object_mut() {
                         source.remove("canonical_output_bytes");
                         source.remove("canonical_output_version");
+                        source.remove("attempt_report_bytes");
                     }
                 }
             }
@@ -605,16 +618,24 @@ async fn full_canonical_allowance_reaches_response_history_and_terminal_answer()
 }
 
 #[tokio::test]
-async fn canonical_delivery_policy_validates_versions_and_restores_v1() -> TestResult {
+async fn canonical_delivery_policy_validates_versions_and_restores_older_contracts() -> TestResult {
     let original = recovery::completed_store().await?;
-    for mode in ["v1", "unknown", "missing_bytes", "mismatched_inventory"] {
+    for mode in [
+        "v1",
+        "v2",
+        "unknown",
+        "missing_bytes",
+        "mismatched_inventory",
+        "report_missing",
+        "report_wrong_size",
+    ] {
         let mut store = original.clone();
         tool_payloads::rewrite_last(&mut store, |payload| {
             let state = &mut payload.checkpoint.state;
-            let v1_bound = state["run"]["limits"]["checkpoint_bytes"]
+            let legacy_bound = state["run"]["limits"]["checkpoint_bytes"]
                 .as_u64()
                 .zip(state["run"]["limits"]["active_models"].as_u64())
-                .map(|(bytes, active)| bytes / (2 * (active + 1)));
+                .map(|(bytes, active)| bytes / (if mode == "v2" { 8 } else { 2 } * (active + 1)));
             if let Some(agents) = state["agents"].as_object_mut() {
                 for agent in agents.values_mut() {
                     if let Some(steps) = agent["turn"]["steps"].as_array_mut() {
@@ -622,12 +643,26 @@ async fn canonical_delivery_policy_validates_versions_and_restores_v1() -> TestR
                             if let Some(attempts) = step["attempts"].as_array_mut() {
                                 for attempt in attempts {
                                     match mode {
-                                        "v1" => {
-                                            attempt["canonical_output_version"] =
+                                        "v1" | "v2" => {
+                                            attempt["attempt_report_bytes"] =
                                                 serde_json::Value::Null;
-                                            attempt["canonical_output_bytes"] = json!(v1_bound);
+                                            attempt["canonical_output_version"] = if mode == "v2" {
+                                                json!(2)
+                                            } else {
+                                                serde_json::Value::Null
+                                            };
+                                            attempt["canonical_output_bytes"] = json!(legacy_bound);
                                         }
-                                        "unknown" => attempt["canonical_output_version"] = json!(3),
+                                        "unknown" => {
+                                            attempt["canonical_output_version"] = json!(99)
+                                        }
+                                        "report_missing" => {
+                                            attempt["attempt_report_bytes"] =
+                                                serde_json::Value::Null
+                                        }
+                                        "report_wrong_size" => {
+                                            attempt["attempt_report_bytes"] = json!(1)
+                                        }
                                         "missing_bytes" => {
                                             attempt["canonical_output_bytes"] =
                                                 serde_json::Value::Null
@@ -646,15 +681,23 @@ async fn canonical_delivery_policy_validates_versions_and_restores_v1() -> TestR
                         for item in work.values_mut() {
                             if let Some(source) = item["provider_source"].as_object_mut() {
                                 match mode {
-                                    "v1" => {
+                                    "v1" | "v2" => {
                                         source.remove("canonical_output_version");
+                                        source.remove("attempt_report_bytes");
+                                        if mode == "v2" {
+                                            source.insert(
+                                                "canonical_output_version".into(),
+                                                json!(2),
+                                            );
+                                        }
                                         source.insert(
                                             "canonical_output_bytes".into(),
-                                            json!(v1_bound),
+                                            json!(legacy_bound),
                                         );
                                     }
                                     "mismatched_inventory" => {
                                         source.remove("canonical_output_version");
+                                        source.remove("attempt_report_bytes");
                                     }
                                     _ => {}
                                 }
@@ -668,7 +711,7 @@ async fn canonical_delivery_policy_validates_versions_and_restores_v1() -> TestR
         let before = harness.store.lock().await.head.clone();
         let request = recovery::request(&*harness.store.lock().await, false)?;
         let restored = recovery::restore(request, harness.clone(), Vec::new()).await;
-        if mode == "v1" {
+        if mode == "v1" || mode == "v2" {
             let (session, executor) = restored?;
             assert!(
                 session
@@ -679,8 +722,10 @@ async fn canonical_delivery_policy_validates_versions_and_restores_v1() -> TestR
                     .steps
                     .iter()
                     .flat_map(|step| &step.attempts)
-                    .all(|attempt| attempt.canonical_output_version.is_none()
-                        && attempt.canonical_output_bytes.is_some())
+                    .all(|attempt| attempt.canonical_output_version
+                        == if mode == "v2" { Some(2) } else { None }
+                        && attempt.canonical_output_bytes.is_some()
+                        && attempt.attempt_report_bytes.is_none())
             );
             assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
         } else {
@@ -975,6 +1020,201 @@ async fn full_child_output_reaches_model_wait_after_ack_loss_and_restore() -> Te
                 }
             }
         }
+        restored
+            .release("release", restored.head().await.state_revision)
+            .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn oversized_attempt_error_commits_terminal_failure_without_fallback() -> TestResult {
+    for fault in [None, Some(false), Some(true)] {
+        let harness = Arc::new(Harness::new(None, None));
+        let port: Arc<dyn HarnessPort> = match fault {
+            None => harness.clone(),
+            Some(committed) => Arc::new(reconnect::FaultPort::new(
+                harness.clone(),
+                "model.attempt.outcome",
+                committed,
+            )),
+        };
+        let (session, executor, _) = setup(
+            vec![
+                MockResponse::Error(bitrouter_sdk::BitrouterError::Upstream {
+                    status: 500,
+                    message: "\0\"error".repeat(100_000),
+                }),
+                output(vec![call("must-not-run")]),
+            ],
+            port,
+            true,
+        )
+        .await?;
+        let mut task = input();
+        task.limits = Some(Limits {
+            checkpoint_bytes: 256 * 1024,
+            ..Limits::default()
+        });
+        session.start("input", 1, task).await?;
+        if fault.is_some() {
+            assert!(session.drive().await.is_err());
+            reconnect::reconnect(&session, &harness).await?;
+        }
+        let done = session.drive().await?;
+        assert_eq!(
+            done.run.as_ref().map(|run| run.status),
+            Some(RunStatus::Failed)
+        );
+        let attempt = &done.root_turn().ok_or("turn")?.steps[0].attempts[0];
+        let receipt = attempt.receipt.as_ref().ok_or("receipt")?;
+        let rejected = receipt
+            .report
+            .report_rejection
+            .as_ref()
+            .ok_or("rejection")?;
+        assert_eq!(attempt.canonical_output_version, Some(3));
+        assert_eq!(Some(rejected.byte_limit), attempt.attempt_report_bytes);
+        assert!(rejected.original.bytes > rejected.byte_limit);
+        assert!(serde_json::to_vec(&receipt.report)?.len() as u64 <= rejected.byte_limit);
+        assert!(
+            !rejected.had_result
+                && rejected.actual_provider.is_none()
+                && rejected.actual_model.is_none()
+        );
+        assert!(receipt.cost_micro_usd.is_none());
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert!(harness.sent.lock().await.is_empty());
+        session.disconnect().await;
+        let replacement = recovery::harness_at(harness.store.lock().await.clone()).await;
+        let request = recovery::request(&*replacement.store.lock().await, false)?;
+        let (restored, executor) =
+            recovery::restore(request, replacement.clone(), Vec::new()).await?;
+        assert_eq!(
+            restored.drive().await?.run.as_ref().map(|run| run.status),
+            Some(RunStatus::Failed)
+        );
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+        assert!(replacement.sent.lock().await.is_empty());
+        restored
+            .release("release", restored.head().await.state_revision)
+            .await?;
+    }
+    Ok(())
+}
+
+struct MetadataCost {
+    amount: u64,
+    non_finite: bool,
+}
+
+impl bitrouter_sdk::language_model::native_accounting::NativeCostEstimator for MetadataCost {
+    fn estimate(
+        &self,
+        report: &bitrouter_sdk::language_model::native::NativeAttemptReport,
+    ) -> bitrouter_sdk::language_model::native_accounting::NativeTokenCost {
+        use bitrouter_sdk::language_model::native_accounting::NativeTokenCost;
+        let mut cost = accounting::FixtureCost.estimate(report);
+        if let NativeTokenCost::ConfiguredEstimate {
+            micro_usd,
+            rates,
+            pricing_version,
+            ..
+        } = &mut cost
+        {
+            *micro_usd = self.amount;
+            if self.non_finite {
+                rates.output = Some(f64::INFINITY);
+            } else {
+                *pricing_version = "price\0\"".repeat(20_000);
+            }
+        }
+        cost
+    }
+}
+
+#[tokio::test]
+async fn report_metadata_rejection_restores_estimates_after_outcome_ack_loss() -> TestResult {
+    for (amount, non_finite, committed) in [(0, false, false), (7, false, true), (7, true, false)] {
+        let harness = Arc::new(Harness::new(None, None));
+        let port = Arc::new(reconnect::FaultPort::new(
+            harness.clone(),
+            "model.attempt.outcome",
+            committed,
+        ));
+        let executor = Arc::new(RecordingExecutor {
+            mock: MockExecutor::new(vec![output(vec![call("must-not-run")])]),
+            agent_once: Mutex::new(Default::default()),
+            prompts: Mutex::new(Vec::new()),
+            calls: AtomicUsize::new(0),
+        });
+        let table = StaticRoutingTable::new();
+        table.insert("fixture-model", vec![target("first"), target("fallback")]);
+        let records = UsageRecords::default();
+        let app = App::builder()
+            .language_model(|builder| {
+                builder
+                    .routing_table(Arc::new(table))
+                    .executor(executor.clone())
+                    .native_cost_estimator(Arc::new(MetadataCost { amount, non_finite }))
+                    .settlement_recorder(records.clone());
+            })
+            .build()?;
+        let session = bind_app(Arc::new(app), port).await?;
+        let mut task = input();
+        task.limits = Some(Limits {
+            checkpoint_bytes: 256 * 1024,
+            ..Limits::default()
+        });
+        session.start("input", 1, task).await?;
+        assert!(session.drive().await.is_err());
+        reconnect::reconnect(&session, &harness).await?;
+        let state = session.drive().await?;
+        assert_eq!(
+            state.run.as_ref().map(|run| run.status),
+            Some(RunStatus::Failed)
+        );
+        let receipt = state.root_turn().ok_or("turn")?.steps[0].attempts[0]
+            .receipt
+            .as_ref()
+            .ok_or("receipt")?;
+        assert_eq!(receipt.cost_micro_usd, Some(amount));
+        assert_eq!(receipt.cost_source, "configured_token_estimate");
+        assert!(receipt.report.result.is_none() && receipt.report.output_rejection.is_none());
+        let rejected = receipt
+            .report
+            .report_rejection
+            .as_ref()
+            .ok_or("report rejection")?;
+        assert!(rejected.had_result);
+        assert_eq!(
+            rejected
+                .usage
+                .as_ref()
+                .map(|usage| (usage.prompt_tokens, usage.completion_tokens)),
+            Some((7, 3))
+        );
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(*records.0.lock().await, vec![(7, 3, false)]);
+        assert!(harness.sent.lock().await.is_empty());
+        session.disconnect().await;
+        let replacement = recovery::harness_at(harness.store.lock().await.clone()).await;
+        let request = recovery::request(&*replacement.store.lock().await, false)?;
+        let (restored, executor) =
+            recovery::restore(request, replacement.clone(), Vec::new()).await?;
+        let after = restored.drive().await?;
+        assert_eq!(
+            after.run.as_ref().map(|run| run.status),
+            Some(RunStatus::Failed)
+        );
+        let retained = after.root_turn().ok_or("turn")?.steps[0].attempts[0]
+            .receipt
+            .as_ref()
+            .ok_or("receipt")?;
+        assert_eq!(retained.report, receipt.report);
+        assert_eq!(retained.cost_micro_usd, Some(amount));
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+        assert!(replacement.sent.lock().await.is_empty());
         restored
             .release("release", restored.head().await.state_revision)
             .await?;

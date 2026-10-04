@@ -91,6 +91,20 @@ pub struct NativeTokenRates {
     pub output: Option<f64>,
 }
 
+/// Lossless pricing floats in a bounded report-rejection summary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeTokenRateBits {
+    /// Uncached-input rate as f64::to_bits.
+    pub uncached_input: Option<u64>,
+    /// Cache-read rate as f64::to_bits.
+    pub cache_read: Option<u64>,
+    /// Cache-write rate as f64::to_bits.
+    pub cache_write: Option<u64>,
+    /// Output rate as f64::to_bits.
+    pub output: Option<u64>,
+}
+
 /// Model-token estimate only: excludes provider tools, storage, counter fees,
 /// taxes and account-specific adjustments. It is not a final provider invoice.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -100,6 +114,25 @@ pub enum NativeTokenCost {
     Unknown {
         /// Stable local reason, never upstream diagnostic text.
         reason: String,
+    },
+    /// The estimate remains unknown; its original diagnostic is committed.
+    UnknownCommitment {
+        /// Commitment to the original reason string or prior commitment.
+        reason: super::native::NativeEvidenceCommitment,
+    },
+    /// The amount and numeric evidence remain available after metadata rejection.
+    /// This is still an estimate, never a provider-reported or reconciled bill.
+    ConfiguredEstimateCommitment {
+        /// Host-estimated micro-USD, including an explicitly estimated zero.
+        micro_usd: u64,
+        /// Provenance of the counters used by the estimator.
+        usage_origin: UsageOrigin,
+        /// Non-overlapping input and output counters used for the estimate.
+        normalized_usage: NormalizedUsage,
+        /// Exact IEEE-754 bits, preserving non-finite evidence without JSON nulls.
+        rates: NativeTokenRateBits,
+        /// Commitment to original pricing identity fields or a prior commitment.
+        pricing_metadata: super::native::NativeEvidenceCommitment,
     },
     /// The host applied a frozen configured price to canonical usage.
     ConfiguredEstimate {
@@ -131,8 +164,9 @@ impl NativeTokenCost {
     /// Known configured token estimate, never a claim of an authoritative bill.
     pub fn estimated_micro_usd(&self) -> Option<u64> {
         match self {
-            Self::ConfiguredEstimate { micro_usd, .. } => Some(*micro_usd),
-            Self::Unknown { .. } => None,
+            Self::ConfiguredEstimate { micro_usd, .. }
+            | Self::ConfiguredEstimateCommitment { micro_usd, .. } => Some(*micro_usd),
+            Self::Unknown { .. } | Self::UnknownCommitment { .. } => None,
         }
     }
 }

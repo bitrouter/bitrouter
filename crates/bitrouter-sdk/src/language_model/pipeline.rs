@@ -1786,6 +1786,21 @@ impl Pipeline {
             {
                 counted.select(route.input_count.as_ref())?;
             }
+            let report_limit = match attempt_control {
+                Some((control, route)) => {
+                    let limit = control.attempt_report_byte_limit(ctx.request_id(), route)?;
+                    if let Some(limit) = limit
+                        && limit
+                            < NativeAttemptReport::rejection_byte_reserve(ctx.request_id(), route)?
+                    {
+                        return Err(BitrouterError::bad_request(
+                            "attempt report limit cannot hold rejection evidence",
+                        ));
+                    }
+                    limit
+                }
+                None => None,
+            };
             self.wait_before_fallback(dispatched).await;
             dispatched += 1;
             self.observe_hop_start(ctx, target).await;
@@ -1841,6 +1856,7 @@ impl Pipeline {
             if let Some(runtime) = &work {
                 runtime.flush().await;
             }
+            let mut report_rejected = false;
             if let Some((control, route)) = attempt_control {
                 let mut report = NativeAttemptReport {
                     request_id: ctx.request_id().to_owned(),
@@ -1857,6 +1873,7 @@ impl Pipeline {
                         std::mem::replace(&mut result.result, super::native_output::empty_result())
                     }),
                     output_rejection: None,
+                    report_rejection: None,
                     error: outcome.as_ref().err().map(ToString::to_string),
                     elapsed_ms: super::timing::duration_millis(
                         work.as_ref()
@@ -1897,6 +1914,22 @@ impl Pipeline {
                         execution.result = result;
                     }
                 }
+                if let Some(limit) = report_limit {
+                    match super::native_report::admit(&mut report, limit) {
+                        Ok(rejected) => report_rejected = rejected,
+                        Err(error) => {
+                            // Even an internal projection failure cannot discard
+                            // a successful executor's original billing evidence.
+                            return match outcome {
+                                Ok(result) => Ok(ControlledExecution {
+                                    result,
+                                    output_rejection: Some(error),
+                                }),
+                                Err(_) => Err(error),
+                            };
+                        }
+                    }
+                }
                 control.after_attempt(report).await;
             }
             match &outcome {
@@ -1911,15 +1944,19 @@ impl Pipeline {
             }
             match outcome {
                 Ok(result) => {
-                    if output_rejected {
+                    if output_rejected || report_rejected {
                         // Do not let a fallible success hook discard the
                         // original billed result before rejection settlement.
                         ctx.set_successful_target(target.clone());
                         return Ok(ControlledExecution {
                             result,
                             output_rejection: Some(BitrouterError::UpstreamInvalidResponse {
-                                message: "canonical model output exceeds its admitted byte limit"
-                                    .into(),
+                                message: if report_rejected {
+                                    "attempt report metadata rejected by durable admission"
+                                } else {
+                                    "canonical model output exceeds its admitted byte limit"
+                                }
+                                .into(),
                             }),
                         });
                     }
@@ -1930,6 +1967,11 @@ impl Pipeline {
                     return Ok(ControlledExecution {
                         result,
                         output_rejection: None,
+                    });
+                }
+                Err(_) if report_rejected => {
+                    return Err(BitrouterError::UpstreamInvalidResponse {
+                        message: "attempt report metadata rejected by durable admission".into(),
                     });
                 }
                 Err(e) => match self.classify_failure(ctx, &e, target).await {

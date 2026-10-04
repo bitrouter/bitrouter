@@ -156,8 +156,8 @@ the provider. This ingress bound does not establish full physical memory
 accounting or bound allocations inside custom executors and preparation hooks.
 
 New model attempts freeze `canonical_output_bytes` and
-`canonical_output_version: 2` before provider dispatch. Version 2 allocates the
-frozen root's `checkpoint_bytes / [8 * (active_models + 1)]`, rounded down.
+`canonical_output_version: 3` before provider dispatch. Version 3 allocates the
+frozen root's `checkpoint_bytes / [16 * (active_models + 1)]`, rounded down.
 Descendants use the same policy. Admission reserves canonical receipt/event
 bytes plus future history, provisional and terminal answers, child mail and
 active Responses output. Open runtime waits reserve both cleanup views of the
@@ -175,7 +175,8 @@ SDK admission counts JSON before and after private-output sealing, including
 custom executor results and escaping. Restoration checks policy consistency
 and headroom before takeover. A missing version with a retained byte limit
 preserves the original `checkpoint_bytes / [2 * (active_models + 1)]` policy;
-missing both fields retains the earlier unversioned contract. Unknown versions
+version 2 retains its original eight-share policy; missing both fields retains
+the earlier unversioned contract. Unknown versions
 or inconsistent attempt/inventory fields are rejected.
 
 A rejected complete result has no deliverable content in its attempt report.
@@ -197,7 +198,33 @@ cleanup-only admission; normal legacy wait completion still needs available
 space. Unknown versions, markers on other actions and policy changes within a
 restored journal are rejected before takeover.
 
-New tool intents, later model prompts, full report metadata, future archive
+Version 3 also freezes `attempt_report_bytes` in the attempt and cost inventory.
+It covers the complete serialized `NativeAttemptReport`, including actual
+identity, error and pricing metadata, and equals the canonical allowance plus
+the SDK rejection envelope for the frozen request/route. Before dispatch core
+reserves report, receipt/event, cost-inventory and failure-delivery contributions.
+A recorded error retains its prospective terminal reason/conclusion capacity
+until application. Retired attempts preserve their original report contract.
+
+Oversized reports become terminal `report_rejection` summaries. Version 1 hashes
+the serde JSON report after canonical admission and estimation, before metadata
+projection; this is distinct from the durable projected-outcome hash. Actual
+provider/model and pricing identities become explicit byte-count/SHA-256
+commitments. These hashes do not retain readable diagnostics or raw reports and
+must not be presented as the selected route's actual serving identity. Numeric
+usage, cache observations and known zero/nonzero configured estimates survive.
+Unknown estimates remain unknown. Non-finite pricing also rejects the report;
+rate values survive as exact `f64::to_bits` integers instead of JSON nulls.
+
+The original executor result and raw usage still reach SDK settlement once.
+Rejected reports authorize neither tools nor fallback, including after outcome
+ACK loss or cold restoration. The SDK checks that the rejection envelope fits
+before dispatch. Its envelope uses the SDK's controlled cache labels/reasons;
+custom executor and estimator allocations retain their separate memory limits.
+Harnesses must preserve these fields and cost variants verbatim. Legacy report
+contracts remain unchanged; this addition is not a new public API endpoint.
+
+New tool intents, later model prompts, other callback reports, future archive
 growth, physical copies and trusted extension allocations remain separate
 admission obligations. The delivery checks do not
 establish complete memory/storage or end-to-end conformance.

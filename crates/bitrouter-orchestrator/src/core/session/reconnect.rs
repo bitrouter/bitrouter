@@ -468,7 +468,11 @@ fn apply_evidence(
             "provider evidence differs from frozen attempt admission",
         ));
     }
-    model_output::validate_report(source.canonical_output_bytes, &evidence.report)?;
+    model_output::validate_report(
+        source.canonical_output_bytes,
+        source.attempt_report_bytes,
+        &evidence.report,
+    )?;
     let report_sha256 = report_digest(&evidence.report)?;
     let first = work.outcome_sha256.is_none();
     if work
@@ -554,7 +558,7 @@ fn apply_evidence(
         .provider_evidence
         .insert(evidence.attempt_id.clone(), evidence.clone());
     if first
-        && evidence.report.output_rejection.is_some()
+        && evidence.report.rejection_reason().is_some()
         && state
             .run
             .as_ref()

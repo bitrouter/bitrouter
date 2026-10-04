@@ -276,6 +276,10 @@ pub struct NativeAttemptReport {
     /// Its bounded usage summary does not authorize content or tool execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_rejection: Option<NativeOutputRejection>,
+    /// Complete report metadata was rejected before durable delivery. Its
+    /// commitments do not retain readable raw diagnostics or actual identities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_rejection: Option<NativeReportRejection>,
     /// Failure detail when no successful upstream result was obtained.
     pub error: Option<String>,
     /// Provider execution wall time, excluding durable admission waits.
@@ -292,6 +296,81 @@ pub struct NativeAttemptReport {
     /// Actual provider-state use and output artifact evidence.
     #[serde(default)]
     pub continuation: super::native_continuation::NativeContinuationObservation,
+}
+
+/// SHA-256 commitment to the exact serde JSON encoding of a named value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeEvidenceCommitment {
+    /// Serialized JSON bytes, including escaping and string quotes.
+    pub bytes: u64,
+    /// Lowercase hexadecimal SHA-256 of those JSON bytes.
+    pub sha256: String,
+}
+
+/// Why a complete managed attempt report cannot enter durable state verbatim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeReportRejectionReason {
+    /// The serialized report exceeds its frozen allowance.
+    ByteLimit,
+    /// Pricing floats cannot round-trip through JSON; their bits are retained.
+    NonFinitePricing,
+}
+
+/// Bounded metadata outcome, after canonical output admission and estimation,
+/// before metadata projection. Version 1 hashes the serde JSON representation
+/// of NativeAttemptReport with report_rejection absent, not provider wire bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeReportRejection {
+    /// Commitment and projection schema version.
+    pub version: u32,
+    /// Frozen complete-report allowance for this attempt.
+    pub byte_limit: u64,
+    /// Explicit rejection cause, independent of provider execution success.
+    pub reason: NativeReportRejectionReason,
+    /// Commitment to the report before metadata projection. This differs from
+    /// the durable outcome digest, which commits to the projected report.
+    pub original: NativeEvidenceCommitment,
+    /// Actual execution identities are commitments, never selected-route aliases.
+    pub actual_provider: Option<NativeEvidenceCommitment>,
+    /// Commitment to the actual served model, when execution supplied one.
+    pub actual_model: Option<NativeEvidenceCommitment>,
+    /// A complete canonical output was received, possibly already rejected.
+    pub had_result: bool,
+    /// Original counters without opaque raw usage; the SDK settles the original.
+    pub usage: Option<NativeOutputUsage>,
+}
+
+impl NativeAttemptReport {
+    /// Upper bound for the largest version-1 rejection envelope. The dynamic
+    /// selected route and request ID remain verbatim. Other fields use bounded
+    /// schemas and the SDK's controlled cache source/reason vocabulary (at most
+    /// 128 ASCII bytes each). The SDK verifies this before provider admission.
+    pub fn rejection_byte_reserve(request_id: &str, route: &NativeRoute) -> Result<u64> {
+        super::native_report::rejection_byte_reserve(request_id, route)
+    }
+
+    /// A rejected outcome is terminal and cannot authorize tools or a retry.
+    pub fn rejection_reason(&self) -> Option<&'static str> {
+        match self
+            .report_rejection
+            .as_ref()
+            .map(|rejected| rejected.reason)
+        {
+            Some(NativeReportRejectionReason::ByteLimit) => {
+                Some("attempt report exceeds its admitted byte limit")
+            }
+            Some(NativeReportRejectionReason::NonFinitePricing) => {
+                Some("attempt report has non-finite pricing evidence")
+            }
+            None if self.output_rejection.is_some() => {
+                Some("canonical model output exceeds its admitted byte limit")
+            }
+            None => None,
+        }
+    }
 }
 
 /// Bounded evidence for a complete canonical output rejected before delivery.
@@ -341,6 +420,18 @@ pub trait NativeExecutionControl: Send + Sync {
     /// not bound allocations inside the executor or trusted extension hooks.
     fn canonical_output_byte_limit(&self) -> Option<u64> {
         None
+    }
+
+    /// Bound the complete report, including diagnostics and estimator metadata.
+    /// The selected route and request ID remain intact. A rejected report keeps
+    /// bounded commitments and accounting evidence; original SDK settlement is
+    /// still required. Returning no limit preserves legacy embedding behavior.
+    fn attempt_report_byte_limit(
+        &self,
+        _request_id: &str,
+        _route: &NativeRoute,
+    ) -> Result<Option<u64>> {
+        Ok(None)
     }
 
     /// Request cancellation of active provider I/O. The SDK still reports the

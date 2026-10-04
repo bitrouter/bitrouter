@@ -3092,3 +3092,68 @@ check passed in 19.132 seconds. Formatting, diff and tracked-ignore checks
 passed. Final independent review, including the adjusted saturation fixture,
 found no remaining actionable P1/P2 in this increment. New-head remote CI
 remains a separate gate; the full core acceptance goal remains incomplete.
+
+
+## C4 complete provider-attempt report admission
+
+An oversized provider error could previously disconnect durable authority while
+recording its outcome. Canonical-result admission did not bound actual serving
+identities, pricing metadata or error strings. Version 3 freezes a complete
+`attempt_report_bytes` contract in each attempt and its retained cost inventory.
+The canonical allowance uses sixteen shares per active-model slot plus one;
+the report adds a rejection envelope for the known request and selected route.
+Pre-dispatch admission covers the complete receipt/event, ledger, late evidence
+and terminal-error contributions, while known errors retain their prospective
+failure-delivery capacity through application. Versions 2 and unversioned
+contracts keep their original semantics during restoration.
+
+The SDK estimates cost from the original execution evidence first. A report
+that exceeds its contract becomes an explicit terminal rejection summary with
+versioned byte-count/SHA-256 commitments to the pre-projection report, actual
+serving identities and pricing metadata. The report hash covers serde JSON after
+canonical admission; it does not claim to hash raw provider wire bytes. The
+summary does not preserve readable raw diagnostics. Canonical counters, cache
+observations and zero/nonzero configured estimates retain their original meaning;
+unknown cost remains unknown. Non-finite pricing rejects even a small report,
+with exact floating-point bits retained independently of JSON serialization.
+
+Success and failure rejections both stop fallback. Successful executor results
+still reach SDK settlement with original usage and serving identities, including
+when a fallible execution hook would otherwise discard them. Reconnect and cold
+restoration treat the report as terminal without authorizing its tool content.
+Retired evidence is checked against the original report contract. This does not
+bound other preparation/callback reports, later prompts/tool intents, physical
+allocations or cumulative archive storage. The complete core acceptance goal
+and production harness integration remain open.
+
+Twenty-one targeted tests passed, covering exact and over-limit reports, the
+maximum rejection envelope, original settlement identities/raw usage, missing
+envelope rejection before dispatch, zero/nonzero estimates, non-finite pricing,
+outcome ACK loss and cold restoration, legacy policies and forged contracts.
+An exact host-capacity test fills an unrejected report with serving identity and
+cost metadata, then separately fills a failure report and spends released space
+before terminal application. A retired attempt likewise admits a full canonical
+result and a full report after competing state exhausts admission; one extra
+metadata byte is rejected without changing its durable head.
+
+The legacy-takeover fixture now retains a fixed 16 KiB cleanup margin rather than
+half the canonical allowance: version 3's smaller canonical allowance is no
+longer a useful legacy-cleanup estimate. The same padded state still admits the
+unversioned contract and rejects takeover with the new reservation. No frozen
+output limits or production policies were relaxed for this fixture.
+
+Two surgical negative checks kept all version-3 frozen limits unchanged, then
+separately removed the pre-receipt report reservation or the post-receipt error
+reservation. Both exact-boundary cases failed with checkpoint cleanup capacity
+exhausted; production source was restored after each check. Final independent review of the implementation, tests and OSS documentation
+found no remaining actionable P1/P2 in this increment; it does not establish
+full-goal acceptance. Previous head `97c77cf7` passed CI 37185091360, including platform jobs.
+
+
+Final workspace/all-feature nextest passed **4038 tests, 22 skipped** in
+207.446 seconds with four test threads (359.514 seconds including compilation).
+Strict workspace/all-target/all-feature clippy passed in 49.922 seconds, strict
+rustdoc in 28.711 seconds, workspace doctests passed five tests with one ignored,
+and Rust 1.93.0 workspace/all-feature check passed in 23.855 seconds. Formatting,
+diff and tracked-ignore checks passed. New-head remote CI remains a separate
+gate; the full C4–C6/A01–A23 acceptance contract remains incomplete.

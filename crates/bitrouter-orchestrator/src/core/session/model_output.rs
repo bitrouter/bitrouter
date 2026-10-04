@@ -1,5 +1,5 @@
 //! Canonical result and delivery contributions reserved before dispatch.
-//! Tool intents, report metadata, later prompts and physical allocations retain
+//! Tool intents, later prompts and physical allocations retain
 //! separate admission obligations; no placeholder here is execution evidence.
 
 use super::*;
@@ -7,9 +7,10 @@ use crate::core::accounting::work::CostWorkState;
 use crate::core::checkpoint::serialized_bytes;
 
 pub(super) const DELIVERY_VERSION: u32 = 2;
+pub(super) const CURRENT_VERSION: u32 = 3;
 
 pub(super) fn allowance(limits: &Limits) -> Result<u64, CoreError> {
-    policy_allowance(limits, Some(DELIVERY_VERSION))
+    policy_allowance(limits, Some(CURRENT_VERSION))
 }
 
 fn policy_allowance(limits: &Limits, version: Option<u32>) -> Result<u64, CoreError> {
@@ -18,6 +19,8 @@ fn policy_allowance(limits: &Limits, version: Option<u32>) -> Result<u64, CoreEr
         // Receipt/event, history, turn/run answers, response output/answer and
         // a terminal event. Additional wait targets are admitted dynamically.
         Some(DELIVERY_VERSION) => 8,
+        // Complete reports also enter receipts, events and the cost inventory.
+        Some(CURRENT_VERSION) => 16,
         _ => {
             return Err(reject(
                 ErrorCode::CheckpointConflict,
@@ -64,17 +67,38 @@ pub(super) fn reserved(state: &SessionSnapshot) -> Result<u64, CoreError> {
                 let contract = (
                     attempt.canonical_output_bytes,
                     attempt.canonical_output_version,
+                    attempt.attempt_report_bytes,
                 );
                 retained.insert(&attempt.attempt_id, contract);
-                validate_limit(state, &turn.run_id, contract)?;
+                validate_limit(state, &turn.run_id, (contract.0, contract.1))?;
+                if let Some(bytes) = contract.2 {
+                    let plan = step.plan.as_ref().ok_or_else(|| {
+                        reject(
+                            ErrorCode::CheckpointConflict,
+                            "report contract has no frozen plan",
+                        )
+                    })?;
+                    let route = plan.routes.get(attempt.index as usize).ok_or_else(|| {
+                        reject(
+                            ErrorCode::CheckpointConflict,
+                            "report contract has no frozen route",
+                        )
+                    })?;
+                    validate_report_allowance(contract, bytes, &plan.request_id, route)?;
+                } else if contract.1 == Some(CURRENT_VERSION) {
+                    return Err(reject(
+                        ErrorCode::CheckpointConflict,
+                        "report contract is missing",
+                    ));
+                }
                 let Some(limit) = contract.0 else { continue };
                 let mut bytes = if let Some(receipt) = &attempt.receipt {
-                    validate_report(Some(limit), &receipt.report)?;
+                    validate_report(Some(limit), contract.2, &receipt.report)?;
                     0
                 } else {
-                    times(limit, 2)?
+                    pending_report_bytes(limit, contract.2)?
                 };
-                if contract.1 == Some(DELIVERY_VERSION)
+                if matches!(contract.1, Some(DELIVERY_VERSION | CURRENT_VERSION))
                     && !step.settled
                     && !turn.status.terminal()
                     && turn.status != AgentStatus::Cancelling
@@ -90,6 +114,16 @@ pub(super) fn reserved(state: &SessionSnapshot) -> Result<u64, CoreError> {
                     };
                     if let Some(result_bytes) = result_bytes {
                         bytes = sum(bytes, delivery(state, agent, turn, step, result_bytes)?)?;
+                    }
+                    if contract.2.is_some()
+                        && let Some(error) = attempt
+                            .receipt
+                            .as_ref()
+                            .and_then(|receipt| receipt.report.error.as_ref())
+                    {
+                        // A reported failure may become the turn reason, child
+                        // conclusion and failure event before the step settles.
+                        bytes = sum(bytes, times(sum(serialized_bytes(error)?, 128)?, 3)?)?;
                     }
                 }
                 pending.insert(&attempt.attempt_id, bytes);
@@ -107,6 +141,7 @@ pub(super) fn reserved(state: &SessionSnapshot) -> Result<u64, CoreError> {
             let contract = (
                 source.canonical_output_bytes,
                 source.canonical_output_version,
+                source.attempt_report_bytes,
             );
             if retained
                 .get(id)
@@ -117,13 +152,29 @@ pub(super) fn reserved(state: &SessionSnapshot) -> Result<u64, CoreError> {
                     "retained attempt and cost inventory disagree on output allowance",
                 ));
             }
-            validate_limit(state, run_id, contract)?;
+            validate_limit(state, run_id, (contract.0, contract.1))?;
+            if let Some(bytes) = contract.2 {
+                let request_id = work.request_id.as_deref().ok_or_else(|| {
+                    reject(
+                        ErrorCode::CheckpointConflict,
+                        "report inventory has no request",
+                    )
+                })?;
+                validate_report_allowance(contract, bytes, request_id, &source.route)?;
+            } else if contract.1 == Some(CURRENT_VERSION) {
+                return Err(reject(
+                    ErrorCode::CheckpointConflict,
+                    "report inventory contract is missing",
+                ));
+            }
             let Some(limit) = contract.0 else { continue };
             if let Some(evidence) = state.provider_evidence.get(id) {
-                validate_report(Some(limit), &evidence.report)?;
+                validate_report(Some(limit), contract.2, &evidence.report)?;
             }
             if work.state == CostWorkState::IntentRecorded {
-                pending.entry(id).or_insert(times(limit, 2)?);
+                pending
+                    .entry(id)
+                    .or_insert(pending_report_bytes(limit, contract.2)?);
             }
         }
     }
@@ -208,7 +259,7 @@ fn validate_limit(
     contract: (Option<u64>, Option<u32>),
 ) -> Result<(), CoreError> {
     let (limit, version) = contract;
-    if version.is_some_and(|version| version != DELIVERY_VERSION)
+    if version.is_some_and(|version| !matches!(version, DELIVERY_VERSION | CURRENT_VERSION))
         || (version.is_some() && limit.is_none())
     {
         return Err(reject(
@@ -232,10 +283,51 @@ fn validate_limit(
     Ok(())
 }
 
+pub(super) fn report_allowance(
+    canonical: u64,
+    request_id: &str,
+    route: &bitrouter_sdk::language_model::native::NativeRoute,
+) -> Result<u64, CoreError> {
+    let envelope = NativeAttemptReport::rejection_byte_reserve(request_id, route)
+        .map_err(|error| reject(ErrorCode::LimitExceeded, &error.to_string()))?;
+    sum(canonical, envelope)
+}
+
+fn validate_report_allowance(
+    contract: (Option<u64>, Option<u32>, Option<u64>),
+    bytes: u64,
+    request_id: &str,
+    route: &bitrouter_sdk::language_model::native::NativeRoute,
+) -> Result<(), CoreError> {
+    if contract.1 != Some(CURRENT_VERSION)
+        || contract
+            .0
+            .is_none_or(|canonical| report_allowance(canonical, request_id, route) != Ok(bytes))
+    {
+        return Err(reject(
+            ErrorCode::CheckpointConflict,
+            "attempt report allowance differs from frozen policy",
+        ));
+    }
+    Ok(())
+}
+
+fn pending_report_bytes(canonical: u64, report: Option<u64>) -> Result<u64, CoreError> {
+    match report {
+        // Receipt/event, repeated cache source, ledger estimate and late evidence
+        // together fit four report contributions. Three more cover a failed
+        // report's terminal reason, conclusion and event before settlement.
+        Some(bytes) => sum(times(bytes, 7)?, 4096),
+        None => times(canonical, 2),
+    }
+}
+
 pub(super) fn validate_report(
     limit: Option<u64>,
+    report_limit: Option<u64>,
     report: &NativeAttemptReport,
 ) -> Result<(), CoreError> {
+    validate_complete_report(report_limit, report)?;
     let Some(limit) = limit else { return Ok(()) };
     if report
         .result
@@ -254,4 +346,173 @@ pub(super) fn validate_report(
         ));
     }
     Ok(())
+}
+
+fn validate_complete_report(
+    limit: Option<u64>,
+    report: &NativeAttemptReport,
+) -> Result<(), CoreError> {
+    use bitrouter_sdk::language_model::native::{
+        NativeEvidenceCommitment, NativeReportRejectionReason,
+    };
+    use bitrouter_sdk::language_model::native_accounting::NativeTokenCost;
+    let invalid = || {
+        reject(
+            ErrorCode::CheckpointConflict,
+            "attempt report violates its frozen contract",
+        )
+    };
+    let digest = |value: &NativeEvidenceCommitment| {
+        value.bytes > 0
+            && value.sha256.len() == 64
+            && value
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    };
+    if let Some(limit) = limit
+        && serialized_bytes(report)? > limit
+    {
+        return Err(invalid());
+    }
+    let Some(rejected) = &report.report_rejection else {
+        return Ok(());
+    };
+    let limit = limit.ok_or_else(invalid)?;
+    if rejected.version != 1
+        || rejected.byte_limit != limit
+        || !digest(&rejected.original)
+        || (rejected.reason == NativeReportRejectionReason::ByteLimit
+            && rejected.original.bytes <= limit)
+        || rejected
+            .actual_provider
+            .as_ref()
+            .is_some_and(|value| !digest(value))
+        || rejected
+            .actual_model
+            .as_ref()
+            .is_some_and(|value| !digest(value))
+        || rejected.had_result != rejected.actual_provider.is_some()
+        || rejected.had_result != rejected.actual_model.is_some()
+        || (!rejected.had_result && rejected.usage.is_some())
+        || report.result.is_some()
+        || report.actual_provider.is_some()
+        || report.actual_model.is_some()
+        || report.error.as_deref() != report.rejection_reason()
+        || report
+            .output_rejection
+            .as_ref()
+            .is_some_and(|value| !rejected.had_result || value.usage != rejected.usage)
+    {
+        return Err(invalid());
+    }
+    match &report.token_cost {
+        NativeTokenCost::UnknownCommitment { reason }
+            if digest(reason)
+                && rejected.reason != NativeReportRejectionReason::NonFinitePricing => {}
+        NativeTokenCost::ConfiguredEstimateCommitment {
+            rates,
+            pricing_metadata,
+            ..
+        } if digest(pricing_metadata) => {
+            let non_finite = [
+                rates.uncached_input,
+                rates.cache_read,
+                rates.cache_write,
+                rates.output,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|rate| !f64::from_bits(rate).is_finite());
+            if non_finite != (rejected.reason == NativeReportRejectionReason::NonFinitePricing) {
+                return Err(invalid());
+            }
+        }
+        _ => return Err(invalid()),
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitrouter_sdk::language_model::native::NativeRouteConstraints;
+
+    #[test]
+    fn report_rejection_contract_rejects_inconsistent_evidence()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let digest = json!({"bytes":100,"sha256":"a".repeat(64)});
+        let value = json!({
+            "request_id":"request","attempt_index":0,"elapsed_ms":0,
+            "route":{"provider":"provider","model":"model","protocol":"chat_completions","constraints":NativeRouteConstraints::default()},
+            "error":"attempt report exceeds its admitted byte limit",
+            "token_cost":{"status":"unknown_commitment","reason":digest},
+            "report_rejection":{"version":1,"byte_limit":8192,"reason":"byte_limit",
+                "original":{"bytes":8193,"sha256":"b".repeat(64)},"had_result":false}
+        });
+        let valid: NativeAttemptReport = serde_json::from_value(value.clone())?;
+        validate_report(None, Some(8192), &valid)?;
+        assert_eq!(
+            validate_report(None, None, &valid)
+                .err()
+                .map(|error| error.code),
+            Some(ErrorCode::CheckpointConflict)
+        );
+        for mode in [
+            "version",
+            "limit",
+            "original_size",
+            "digest",
+            "empty_commitment",
+            "partial_identity",
+            "missing_identity",
+            "deliverable_result",
+            "original_error",
+            "non_finite_without_rates",
+            "uncommitted_cost",
+            "report_overflow",
+        ] {
+            let mut forged = value.clone();
+            match mode {
+                "version" => forged["report_rejection"]["version"] = json!(2),
+                "limit" => forged["report_rejection"]["byte_limit"] = json!(8193),
+                "original_size" => forged["report_rejection"]["original"]["bytes"] = json!(8192),
+                "digest" => {
+                    forged["report_rejection"]["original"]["sha256"] = json!("z".repeat(64))
+                }
+                "empty_commitment" => forged["token_cost"]["reason"]["bytes"] = json!(0),
+                "partial_identity" => {
+                    forged["report_rejection"]["actual_provider"] = digest.clone()
+                }
+                "missing_identity" => forged["report_rejection"]["had_result"] = json!(true),
+                "deliverable_result" => {
+                    forged["result"] =
+                        json!({"content":[],"finish_reason":"stop","provider_metadata":{}})
+                }
+                "original_error" => forged["error"] = json!("original provider error"),
+                "non_finite_without_rates" => {
+                    forged["report_rejection"]["reason"] = json!("non_finite_pricing")
+                }
+                "uncommitted_cost" => {
+                    forged["token_cost"] = json!({"status":"unknown","reason":"missing"})
+                }
+                "report_overflow" => forged["cache"]["source"] = json!("x".repeat(8192)),
+                _ => return Err("unknown corruption case".into()),
+            }
+            if mode == "report_overflow" {
+                forged["cache"]["read_tokens"] = Value::Null;
+                forged["cache"]["write_tokens"] = Value::Null;
+                forged["cache"]["unknown_reason"] = Value::Null;
+            }
+            let forged: NativeAttemptReport = serde_json::from_value(forged)?;
+            assert_eq!(
+                validate_report(None, Some(8192), &forged)
+                    .err()
+                    .map(|error| error.code),
+                Some(ErrorCode::CheckpointConflict),
+                "{mode}"
+            );
+        }
+        Ok(())
+    }
 }

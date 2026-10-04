@@ -4,7 +4,7 @@
 use super::native::{NativeOutputRejection, NativeOutputUsage};
 use super::types::GenerateResult;
 
-pub(super) fn fits(result: &GenerateResult, limit: u64) -> bool {
+pub(super) fn fits(result: &impl serde::Serialize, limit: u64) -> bool {
     serde_json::to_writer(BoundedCounter(limit), result).is_ok()
 }
 
