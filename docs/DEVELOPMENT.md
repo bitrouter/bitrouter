@@ -101,6 +101,12 @@ over, and which runtime it has — so the pump stays in the app
 `cargo tree -p bitrouter-tui | rg -c '^tokio'` printing `0` is how that is
 checked.
 
+BRO native tools are `read`, `glob`, `grep`, `write`, `edit`, and `shell`.
+`read` dispatches known workspace paths to file lines or direct directory
+entries. The three inspection tools form the read-only profile. The server
+resolves one interpreter before a coding execution; model commands and
+verification share it. See [the six-tool contract](BRO_BASE_TOOLS_SPEC.md).
+
 The current BRO runtime lives for one `bro serve` instance. CLI and TUI run only
 client projections; detaching does not cancel a task. Snapshot registration and event
 cutoffs share one state lock, and slow observers receive a fresh snapshot.

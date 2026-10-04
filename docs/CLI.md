@@ -56,24 +56,33 @@ without it verification is `not_requested`. `--read-only` forbids effectful
 tools and cannot be combined with `--check`. Explicit remote contexts fail
 without local fallback. `bro run <agent>` remains the separate ACP harness path.
 
-BRO coding tasks expose `read(path, offset?, limit?)`, `ls(path?, limit?)`,
-`find(pattern, path?, limit?)`, `grep(pattern, path?, glob?, ignoreCase?, literal?, limit?)`,
-`write(path, content)`, `edit(path, edits[{oldText, newText}])`, and a shell
-tool: `bash(command, timeout?)` on Unix or `powershell(command, timeout?)` on Windows. Read-only
-tasks expose only `read`, `ls`, `find`, and `grep`. The server rejects other
-tool calls in that mode even if a model supplies one. File paths are relative
-to the selected workspace.
-`read` accepts UTF-8 files up to 2 MiB and returns at most 2,000 lines or
-50 KiB per call. `ls` includes dotfiles. `find` matches globs and `grep`
-searches regexes (or literal text); both respect `.gitignore`, skip symlinks,
-and return workspace-relative paths. Search results are bounded to 50 KiB;
-defaults are 500 directory entries, 1,000 paths, and 100 matches. `write`
-creates parent directories and overwrites files.
-Every `edit` replacement must identify one unique, nonoverlapping span in the
-original file; the whole edit fails if any span is invalid. It preserves
-untouched text, a UTF-8 BOM, and the file's line-ending style. Shell commands start
-in the workspace, default to a 30-second timeout, and accept at most 120
-seconds. The workspace path check is not an OS sandbox for shell commands.
+BRO coding Turns expose six tools: `read(path, offset?, limit?)`,
+`glob(pattern, path?, limit?)`, `grep(pattern, path?, glob?, ignoreCase?, literal?, limit?)`,
+`write(path, content)`, `edit(path, edits[{oldText, newText}])`, and
+`shell(command, timeout?)`. Read-only Turns expose only `read`, `glob`, and `grep`.
+Unavailable tools and legacy `ls`, `find`, `bash`, and `powershell` names are
+rejected before approval or execution. File paths are relative to the workspace.
+
+`read` accepts UTF-8 files up to 2 MiB or one directory, including `path: "."`.
+One-based offsets count file lines or directory entries. Directory listings
+include hidden/ignored children and identify symlinks; complete pages fit in
+50 KiB and return the next offset when truncated. `glob` and `grep` respect
+project ignore rules, skip child symlinks, and return workspace-relative paths.
+Defaults are 500 directory entries, 1,000 glob results, and 100 grep matches;
+limits may be raised to 2,000. `write` creates parent directories and overwrites
+files. `edit` requires unique, nonoverlapping spans in the original file and
+preserves untouched text, BOM and line-ending style.
+
+Coding execution selects Bash then sh on Unix, or pwsh then powershell.exe on
+Windows, before model sampling. The declaration and shell result identify the
+selected executable/dialect; launch failure never retries another interpreter.
+Verification shares the Turn's selected executor. No supported interpreter
+fails coding admission; read-only execution needs none. Shell commands start in
+the workspace, default to 30 seconds, and allow at most 120 seconds. Workspace
+path checks are not an OS sandbox for commands. Read workers remain bounded;
+write, edit, shell and verification retain exclusive execution and durable
+intent/result commit boundaries. Historical names/IDs/results remain unchanged;
+unsettled legacy work never executes through aliases or reuses old approvals.
 
 The local native protocol is **v14**, bound to the negotiated server instance.
 Older daemons fail the handshake before submission. `command_id` correlates

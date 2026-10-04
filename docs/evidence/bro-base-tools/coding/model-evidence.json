@@ -1,0 +1,396 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "name": "read",
+      "description": "Read a workspace UTF-8 file or list one directory. Use path '.' for the root. offset is one-based; offset and limit count file lines or directory entries. Directories include hidden and ignored children. Output is limited to 50 KiB; use the returned offset to continue.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "glob",
+      "description": "Find workspace files and directories by glob, respecting project ignore rules. Patterns without '/' match basenames recursively; patterns with '/' match relative to path. Returns workspace-relative paths; default 1000 results, maximum 2000, bounded output.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "grep",
+      "description": "Search workspace text files by regex, respecting .gitignore. Returns path:line matches, at most 100 matches or 50 KiB by default. Set literal for exact text.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "glob": {
+            "type": "string"
+          },
+          "ignoreCase": {
+            "type": "boolean"
+          },
+          "literal": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "write",
+      "description": "Create or overwrite a UTF-8 workspace file, creating parent directories as needed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "edit",
+      "description": "Edit one existing workspace file. Each nonempty oldText must match exactly one non-overlapping region of the original file; all edits apply together.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "edits": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "oldText": {
+                  "type": "string"
+                },
+                "newText": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "oldText",
+                "newText"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "path",
+          "edits"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "shell",
+      "description": "Run a noninteractive command in the server workspace. Uses Bash at /bin/bash on the server. Commands can affect paths outside the workspace. Returns exit status and bounded stdout/stderr. timeout is in seconds (default 30, maximum 120).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    }
+  ],
+  "records": [
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "glob",
+        "grep",
+        "write",
+        "edit",
+        "shell"
+      ],
+      "tools_sha256": "52c4fd884e51433e907198f78f27a8485d42cf50ce72de699c06be7220bd246f"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 729,
+        "completion_tokens": 24,
+        "reasoning_tokens": 0,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 729,
+          "completion_tokens": 24,
+          "total_tokens": 753
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "glob",
+        "grep",
+        "write",
+        "edit",
+        "shell"
+      ],
+      "tools_sha256": "52c4fd884e51433e907198f78f27a8485d42cf50ce72de699c06be7220bd246f"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 792,
+        "completion_tokens": 24,
+        "reasoning_tokens": 0,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 792,
+          "completion_tokens": 24,
+          "total_tokens": 816
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "glob",
+        "grep",
+        "write",
+        "edit",
+        "shell"
+      ],
+      "tools_sha256": "52c4fd884e51433e907198f78f27a8485d42cf50ce72de699c06be7220bd246f"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 847,
+        "completion_tokens": 68,
+        "reasoning_tokens": 0,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 847,
+          "completion_tokens": 68,
+          "total_tokens": 915
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "glob",
+        "grep",
+        "write",
+        "edit",
+        "shell"
+      ],
+      "tools_sha256": "52c4fd884e51433e907198f78f27a8485d42cf50ce72de699c06be7220bd246f"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 1004,
+        "completion_tokens": 25,
+        "reasoning_tokens": 0,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 1004,
+          "completion_tokens": 25,
+          "total_tokens": 1029
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "glob",
+        "grep",
+        "write",
+        "edit",
+        "shell"
+      ],
+      "tools_sha256": "52c4fd884e51433e907198f78f27a8485d42cf50ce72de699c06be7220bd246f"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 1063,
+        "completion_tokens": 57,
+        "reasoning_tokens": 0,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 1063,
+          "completion_tokens": 57,
+          "total_tokens": 1120
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "glob",
+        "grep",
+        "write",
+        "edit",
+        "shell"
+      ],
+      "tools_sha256": "52c4fd884e51433e907198f78f27a8485d42cf50ce72de699c06be7220bd246f"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 1190,
+        "completion_tokens": 66,
+        "reasoning_tokens": 0,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 1190,
+          "completion_tokens": 66,
+          "total_tokens": 1256
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "glob",
+        "grep",
+        "write",
+        "edit",
+        "shell"
+      ],
+      "tools_sha256": "52c4fd884e51433e907198f78f27a8485d42cf50ce72de699c06be7220bd246f"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 1277,
+        "completion_tokens": 26,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 1152,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 1277,
+          "completion_tokens": 26,
+          "total_tokens": 1303,
+          "prompt_tokens_details": {
+            "cached_tokens": 1152
+          }
+        }
+      }
+    },
+    {
+      "record": "model_request",
+      "tool_names": [
+        "read",
+        "glob",
+        "grep",
+        "write",
+        "edit",
+        "shell"
+      ],
+      "tools_sha256": "52c4fd884e51433e907198f78f27a8485d42cf50ce72de699c06be7220bd246f"
+    },
+    {
+      "record": "model_response",
+      "usage": {
+        "prompt_tokens": 1401,
+        "completion_tokens": 45,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 1152,
+        "origin": "provider_reported",
+        "raw": {
+          "prompt_tokens": 1401,
+          "completion_tokens": 45,
+          "total_tokens": 1446,
+          "prompt_tokens_details": {
+            "cached_tokens": 1152
+          }
+        }
+      }
+    }
+  ]
+}

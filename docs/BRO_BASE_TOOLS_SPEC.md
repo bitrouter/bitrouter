@@ -1,10 +1,11 @@
 # BRO six base tools
 
-Version: **v0.1**. Updated: **2026-10-01**.
+Version: **v0.2**. Updated: **2026-10-04**.
 
-Status: **proposed implementation contract for maintainer review; not implemented.**
-This document defines the six-tool interface and its execution, pagination,
-and compatibility requirements for review before runtime changes.
+Status: **implemented in #951 and adapted to #945's Thread/Turn runtime.**
+The [acceptance record](BRO_BASE_TOOLS_ACCEPTANCE.md) separates original
+macOS/Windows/real-model evidence from integration validation. Runtime authority,
+commit ordering and recovery remain governed by the current runtime contracts.
 
 ## Scope and authority
 
@@ -13,12 +14,12 @@ tools. Merge directory listing into `read`, rename `find` to `glob`, and expose
 one `shell` backed by a server-selected interpreter. Preserve the native
 read-only profile without a general command executor.
 
-This is a proposed amendment to the tool portions of
-[BRO agent runtime MVP](BRO_AGENT_RUNTIME_SPEC.md). Until approved and
-implemented, that document and delivered CLI documentation continue to describe
-the existing tools. Thread/Turn/Item, permissions, commit ordering, concurrency,
-and recovery requirements remain owned by the runtime spec. This proposal does
-not establish completion of any runtime phase.
+This is the approved amendment to the tool portions of
+[BRO agent runtime MVP](BRO_AGENT_RUNTIME_SPEC.md). Runtime tables and delivered
+CLI/skill descriptions now use these six tools. Thread/Turn/Item, permissions,
+commit ordering, concurrency, and recovery requirements remain owned by the
+runtime spec. This tool change does not establish completion of any runtime
+phase.
 
 External ACP harnesses retain their own tool names and behavior. The change
 does not rename external tools or cross-harness observation markers. New CLI
@@ -263,13 +264,15 @@ Preserve historical names, arguments, provider call IDs, Item IDs, results, and
 approval records exactly. Completed history stays readable; do not rewrite
 stored assistant calls or manufacture new results under renamed tools.
 
-If future continuation/recovery encounters pending work created against the
+If continuation/recovery encounters pending work created against the
 old declarations, treat it as incompatible work requiring explicit resolution.
 Settle safely unstarted calls through the runtime's not-executed path; unknown
 or potentially started effects retain recovery blocking. Do not execute old
 calls through aliases, reuse old approvals, or automatically replay effects.
 A confirmed safe continuation may issue a fresh request with the new tools.
-This requirement does not claim that cross-restart continuation exists today.
+The Thread/Turn runtime admits only proved-safe settled checkpoints; unresolved
+calls block recovery. Prior Task root formats remain unsupported; this tool
+change does not introduce a legacy-root migration.
 
 ## Implementation scope and documentation
 
@@ -287,27 +290,27 @@ The implementation change must update `skills/bitrouter/SKILL.md`, relevant
 references, `docs/CLI.md`, and current development/implementation documentation.
 Review `.claude-plugin/`, `.codex-plugin/`, and `.agents/plugins/marketplace.json`
 and update affected CLI/harness references in lockstep. Do not rewrite historical
-spec bodies or advertise proposed behavior as shipped. This spec-only change
-keeps delivered skill/CLI descriptions intact.
+spec bodies or treat local implementation as release publication.
 
 ## Acceptance and review
 
-All gates below are pending implementation:
+The gates below remain the contract. macOS evidence is recorded separately;
+combined Unix/Windows gates stay unchecked until Windows runtime checks pass:
 
 - [ ] Unix and Windows coding declarations expose exactly the six canonical
   names; read-only declarations expose only `read`, `glob`, and `grep`.
-- [ ] Forged effectful/legacy calls are rejected before launch; new shell naming
+- [x] Forged effectful/legacy calls are rejected before launch; new shell naming
   preserves approval, workspace exclusion, and verification restrictions.
-- [ ] SDK requests preserve omitted optional arguments and the actual server
+- [x] SDK requests preserve omitted optional arguments and the actual server
   interpreter description; validation rejects malformed/unknown arguments.
-- [ ] File reading preserves line numbers/UTF-8 limits. Root and child-directory
+- [x] File reading preserves line numbers/UTF-8 limits. Root and child-directory
   reads include hidden/ignored entries and paginate in deterministic order,
   including case ties, empty/end pages, escaped names, and symlink entries.
-- [ ] Traversal/absolute-path/symlink escapes and special-file reads fail;
+- [x] Traversal/absolute-path/symlink escapes and special-file reads fail;
   boundary-size results stay bounded and continuation always makes progress.
-- [ ] Rename regression tests preserve `glob` basename/path behavior, ignore
+- [x] Rename regression tests preserve `glob` basename/path behavior, ignore
   filtering, file/directory results, cancellation, and symlink exclusions.
-- [ ] Interpreter selection happens before sampling. Missing preferred
+- [x] Interpreter selection happens before sampling. Missing preferred
   interpreters select the documented fallback; loss after selection never
   re-executes a command under another interpreter. Read-only works without one.
 - [ ] Commands stream bounded output and preserve exit/timeout/cancellation
@@ -315,12 +318,12 @@ All gates below are pending implementation:
   futures and background children after the parent exits.
 - [ ] Verification shares interpreter selection; historic records keep their
   names/IDs and pending old calls cannot reuse approvals or replay effects.
-- [ ] Required source checks pass: `cargo nextest run --all-features` (or
+- [x] Required source checks pass: `cargo nextest run --all-features` (or
   `cargo test --all-features`), `cargo clippy --all-features`, and
   `cargo fmt -- --check`. Report platform evidence separately from local checks.
-- [ ] Skills and affected harness manifests match delivered behavior.
+- [x] Skills and affected harness manifests match delivered behavior.
 
-Review the directory output/pagination rules, availability-only shell fallback,
-and rejection of legacy dispatch aliases before implementation. Model-quality
-comparisons may follow delivery; functional checks do not establish a quality
-or cost improvement.
+Directory pagination, availability-only fallback, and rejection of legacy
+dispatch aliases are implemented. Historical facts are not rewritten; pending and unknown effects remain subject
+to the current Thread/Turn recovery gates. The controlled
+real-model comparison establishes functionality, not a quality or cost improvement.

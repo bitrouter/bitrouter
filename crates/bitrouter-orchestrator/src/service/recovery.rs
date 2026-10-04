@@ -64,7 +64,6 @@ struct RecoveredRun {
     input: RunInput,
     agent: Agent,
     verification: Option<String>,
-    workspace: PathBuf,
     cancel: CancellationToken,
 }
 
@@ -283,7 +282,6 @@ impl ThreadService {
                     },
                     agent,
                     verification: thread.verification_command.clone(),
-                    workspace: thread.snapshot.workspace.clone(),
                     cancel,
                 })
             };
@@ -507,7 +505,6 @@ impl ThreadService {
                 run.agent,
                 run.input,
                 run.verification,
-                run.workspace,
                 run.cancel,
             ));
         }
