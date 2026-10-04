@@ -12,6 +12,10 @@ pub(super) struct FaultPort {
 }
 
 impl FaultPort {
+    pub(super) fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::SeqCst);
+    }
+
     pub(super) fn new(harness: Arc<Harness>, kind: &'static str, committed: bool) -> Self {
         Self {
             harness,

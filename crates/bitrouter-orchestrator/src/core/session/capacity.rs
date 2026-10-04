@@ -176,6 +176,7 @@ pub(super) fn check(
     let mut projected = state.clone();
     let mut reserve = Reservation::default();
     reserve.add(model_output::reserved(state)?)?;
+    reserve.add(wait_output::reserved(state, host)?)?;
     let mut event_payloads = vec![json!({"reason":"x".repeat(128)})];
     if let Some(event) = responses::reserve_terminal(&mut projected)? {
         event_payloads.push(event);
@@ -533,6 +534,16 @@ mod tests {
     #[test]
     fn saturated_model_delivery_covers_wait_answers_and_retained_sources()
     -> Result<(), Box<dyn std::error::Error>> {
+        model_delivery_boundary(false)
+    }
+
+    #[test]
+    fn saturated_model_wait_delivery_preserves_results_history_and_sources()
+    -> Result<(), Box<dyn std::error::Error>> {
+        model_delivery_boundary(true)
+    }
+
+    fn model_delivery_boundary(model_waits: bool) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = fixture()?;
         let root = state.agents.get("root").ok_or("root")?.clone();
         let mut child = root.clone();
@@ -554,6 +565,11 @@ mod tests {
         state.agents.insert("child".into(), child);
         let limits = Limits {
             checkpoint_bytes: 2 * 1024 * 1024,
+            active_models: if model_waits {
+                16
+            } else {
+                Limits::default().active_models
+            },
             ..Limits::default()
         };
         state.run.as_mut().ok_or("run")?.limits = limits.clone();
@@ -580,6 +596,48 @@ mod tests {
                     result: None,
                 },
             );
+        }
+        if model_waits {
+            let wait = state
+                .waits
+                .get("wait-0")
+                .ok_or("runtime wait")?
+                .state
+                .clone();
+            let root = agent_mut(&mut state, "root")?;
+            let turn = root.turn.as_mut().ok_or("root turn")?;
+            turn.status = AgentStatus::WaitingMessage;
+            let mut content = Vec::new();
+            for index in 0..2 {
+                let id = format!("model-wait-{index}");
+                let action = Action::Wait {
+                    agent_ids: vec!["child".into()],
+                    timeout_ms: 600_000,
+                };
+                content.push(Content::ToolCall {
+                    id: id.clone(),
+                    name: "wait_agent".into(),
+                    arguments: json!({"agent_ids":["child"],"timeout_ms":600_000}).to_string(),
+                    provider_executed: false,
+                    dynamic: false,
+                    provider_metadata: Default::default(),
+                });
+                turn.core_calls.push(Call {
+                    invocation_id: id.clone(),
+                    public_call_id: id.clone(),
+                    provider_call_id: id,
+                    step_id: "root-step".into(),
+                    action,
+                    wait_output_version: Some(wait_output::VERSION),
+                    wait: Some(wait.clone()),
+                    result: None,
+                    consumed: false,
+                });
+            }
+            root.history.push(Message {
+                role: Role::Assistant,
+                content,
+            });
         }
         let prompt: Prompt =
             serde_json::from_value(json!({"model":"model", "messages":[], "stream":false}))?;
@@ -665,6 +723,214 @@ mod tests {
                 5
             );
         }
+        if model_waits {
+            let mut legacy = state.clone();
+            for call in &mut agent_turn(&mut legacy, "root")?.core_calls {
+                call.wait_output_version = None;
+            }
+            let legacy_host = saturated_host(&legacy, &grant, &host)?;
+            assert_eq!(wait_output::reserved(&legacy, &legacy_host)?, 0);
+            assert_eq!(
+                check(&state, &proposal(&state, &grant)?, &legacy_host, &grant)
+                    .err()
+                    .map(|error| error.code),
+                Some(ErrorCode::LimitExceeded)
+            );
+            host = saturated_host(&state, &grant, &host)?;
+            for index in 0..2 {
+                let wait = state.agents["root"].turn.as_ref().ok_or("root")?.core_calls[index]
+                    .wait
+                    .clone()
+                    .ok_or("wait")?;
+                let result =
+                    json!({"ok":true,"value":collaboration::wait_result(&state, &wait, 0)});
+                let call = &mut agent_turn(&mut state, "root")?.core_calls[index];
+                call.result = Some(result.clone());
+                let event = DurableEvent {
+                    event_seq: 3 + index as u64,
+                    kind: "collaboration.applied".into(),
+                    run_id: Some("run".into()),
+                    agent_id: Some("root".into()),
+                    payload: json!({"source":"model","invocation_id":call.invocation_id,"operation":"wait_agent","result":result}),
+                };
+                responses::capture(&mut state, &event)?;
+                check(&state, &proposal(&state, &grant)?, &host, &grant)?;
+            }
+            pairing::consume(agent_mut(&mut state, "root")?)?;
+            check(&state, &proposal(&state, &grant)?, &host, &grant)?;
+            let root = &state.agents["root"];
+            assert_eq!(root.context_sources.len(), 5);
+            assert_eq!(root.history.len(), 3);
+            for message in &root.history[1..] {
+                let Content::ToolResult {
+                    output: bitrouter_sdk::language_model::types::ToolResultOutput::Text { value },
+                    ..
+                } = &message.content[0]
+                else {
+                    return Err("unpaired model wait result".into());
+                };
+                let value: Value = serde_json::from_str(value)?;
+                assert_eq!(
+                    value["value"]["agents"][0]["final_answer"],
+                    json!(turn_answer(&state)?)
+                );
+                assert_eq!(
+                    value["value"]["agents"][0]["context_sources"]
+                        .as_array()
+                        .ok_or("sources")?
+                        .len(),
+                    5
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn saturated_host(
+        state: &SessionSnapshot,
+        grant: &OwnershipGrant,
+        limits: &Limits,
+    ) -> Result<Limits, CoreError> {
+        let proposed = proposal(state, grant)?;
+        let mut host = limits.clone();
+        check(state, &proposed, &host, grant)?;
+        let (mut low, mut high) = (0, host.checkpoint_bytes);
+        while low < high {
+            let middle = low + (high - low) / 2;
+            host.checkpoint_bytes = middle;
+            match check(state, &proposed, &host, grant) {
+                Ok(()) => high = middle,
+                Err(error) if error.code == ErrorCode::LimitExceeded => low = middle + 1,
+                Err(error) => return Err(error),
+            }
+        }
+        host.checkpoint_bytes = high;
+        check(state, &proposed, &host, grant)?;
+        Ok(host)
+    }
+
+    #[test]
+    fn saturated_model_wait_keeps_verification_sources_through_pairing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut state = fixture()?;
+        let mut child = state.agents["root"].clone();
+        child.agent_id = "child".into();
+        child.parent_id = Some("root".into());
+        child.display_path = "/root/child".into();
+        child.depth = 1;
+        let turn = child.turn.as_mut().ok_or("child turn")?;
+        turn.agent_turn_id = "child-turn".into();
+        turn.status = AgentStatus::WaitingTool;
+        turn.final_answer = Some("provisional answer".into());
+        let limits = Limits {
+            checkpoint_bytes: 4 * 1024 * 1024,
+            ..Limits::default()
+        };
+        state.run.as_mut().ok_or("run")?.limits = limits.clone();
+        let result_limits =
+            crate::core::protocol::ToolResultLimits::for_input(limits.input_bytes, 1024)?;
+        let call: Invocation = serde_json::from_value(json!({
+            "dispatch":{"invocation_id":"verification","attempt_id":"tool-attempt","run_id":"run","agent_id":"child",
+                "agent_turn_id":"child-turn","step_id":"settled-step","context_revision":0,"tool":"verify","arguments":{},
+                "tool_manifest_digest":state.manifest.tool_manifest_digest,"permission_revision":1,"workspace_id":"workspace",
+                "execution_epoch":1,"authorizing_event_seq":1,"verification":true,"result_limits":result_limits},
+            "public_call_id":"verification","provider_call_id":"verification","consumed":false,
+            "result_limit_bytes":1024,"effect":"read","signal_revision":0
+        }))?;
+        let mut result = ToolResult {
+            invocation_id: "verification".into(),
+            attempt_id: "tool-attempt".into(),
+            status: ToolOutcome::Succeeded,
+            output: String::new(),
+            evidence: Vec::new(),
+            workspace_revision: Some(String::new()),
+        };
+        let padding = result_limits
+            .payload_bytes
+            .checked_sub(serialized_bytes(&result)?)
+            .ok_or("result envelope")?;
+        // Quotes force the second JSON-string encoding in model-wait history.
+        result.workspace_revision = Some(
+            "\"".repeat(usize::try_from(padding / 2)?) + &"x".repeat(usize::try_from(padding % 2)?),
+        );
+        assert_eq!(serialized_bytes(&result)?, result_limits.payload_bytes);
+        result_limits.validate_result(&result)?;
+        turn.invocations.push(call);
+        state.agents.insert("child".into(), child);
+        let root = agent_mut(&mut state, "root")?;
+        let turn = root.turn.as_mut().ok_or("root turn")?;
+        turn.status = AgentStatus::WaitingMessage;
+        for index in 0..2 {
+            let id = format!("model-wait-{index}");
+            let action = Action::Wait {
+                agent_ids: vec!["child".into()],
+                timeout_ms: 600_000,
+            };
+            turn.core_calls.push(Call {
+                invocation_id: id.clone(),
+                public_call_id: id.clone(),
+                provider_call_id: id,
+                step_id: "root-step".into(),
+                action,
+                wait_output_version: Some(wait_output::VERSION),
+                wait: Some(collaboration::WaitState {
+                    targets: BTreeMap::from([(
+                        "child".into(),
+                        collaboration::WaitTarget {
+                            agent_turn_id: "child-turn".into(),
+                            status: Some(AgentStatus::WaitingTool),
+                        },
+                    )]),
+                    deadline_ms: 600_000,
+                }),
+                result: None,
+                consumed: false,
+            });
+        }
+        responses::begin(&mut state, "input", "run", None, 1)?;
+        let grant = OwnershipGrant {
+            session_id: "session".into(),
+            harness_id: "harness".into(),
+            core_instance_id: "core".into(),
+            execution_epoch: 1,
+        };
+        let host = saturated_host(&state, &grant, &limits)?;
+        agent_turn(&mut state, "child")?.invocations[0].result = Some(result.clone());
+        check(&state, &proposal(&state, &grant)?, &host, &grant)?;
+        // Spend every other available byte after the receipt is durable; its
+        // downstream source obligation must survive until canonical pairing.
+        let host = saturated_host(&state, &grant, &host)?;
+        pairing::consume(agent_mut(&mut state, "child")?)?;
+        check(&state, &proposal(&state, &grant)?, &host, &grant)?;
+        assert_eq!(
+            state.agents["child"].context_sources[0].workspace_revision,
+            result.workspace_revision
+        );
+        let host = saturated_host(&state, &grant, &host)?;
+        for index in 0..2 {
+            let wait = state.agents["root"].turn.as_ref().ok_or("turn")?.core_calls[index]
+                .wait
+                .clone()
+                .ok_or("wait")?;
+            let value = json!({"ok":true,"value":collaboration::wait_result(&state, &wait, 0)});
+            let call = &mut agent_turn(&mut state, "root")?.core_calls[index];
+            call.result = Some(value.clone());
+            let event = DurableEvent {
+                event_seq: 3 + index as u64,
+                kind: "collaboration.applied".into(),
+                run_id: Some("run".into()),
+                agent_id: Some("root".into()),
+                payload: json!({"source":"model","invocation_id":call.invocation_id,"operation":"wait_agent","result":value}),
+            };
+            responses::capture(&mut state, &event)?;
+            check(&state, &proposal(&state, &grant)?, &host, &grant)?;
+        }
+        pairing::consume(agent_mut(&mut state, "root")?)?;
+        check(&state, &proposal(&state, &grant)?, &host, &grant)?;
+        assert_eq!(
+            state.agents["root"].context_sources,
+            state.agents["child"].context_sources
+        );
         Ok(())
     }
 

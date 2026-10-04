@@ -281,8 +281,10 @@ async fn saturated_tree_preserves_waits_pairing_and_child_delivery_after_ack_los
             input_bytes: 4096,
             mailbox_messages: 4,
             queued_runs: 2,
-            checkpoint_bytes: 384 * 1024,
-            unacknowledged_bytes: 768 * 1024,
+            // Admit the additional normal-wait source obligation before the
+            // same test deliberately exhausts remaining optional capacity.
+            checkpoint_bytes: 640 * 1024,
+            unacknowledged_bytes: 1280 * 1024,
             ..Limits::default()
         });
         let accepted = session.start("input", 1, task).await?;
@@ -531,8 +533,8 @@ async fn saturated_tree_preserves_waits_pairing_and_child_delivery_after_ack_los
             .release("release", session.head().await.state_revision)
             .await?;
         for batch in &harness.store.lock().await.batches {
-            assert!(batch.wire_bytes()? <= 768 * 1024);
-            assert!(serde_json::to_vec(&batch.decode(&Limits::default())?)?.len() <= 384 * 1024);
+            assert!(batch.wire_bytes()? <= 1280 * 1024);
+            assert!(serde_json::to_vec(&batch.decode(&Limits::default())?)?.len() <= 640 * 1024);
         }
     }
     Ok(())

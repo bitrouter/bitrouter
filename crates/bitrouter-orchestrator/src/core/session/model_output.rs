@@ -177,6 +177,14 @@ fn delivery(
         // Source also enters the parent conclusion and pending wait results.
         reserved = sum(reserved, times(serialized_bytes(&source)?, copies)?)?;
     }
+    let mut sources = serialized_bytes(&agent.context_sources)?;
+    if !agent.context_sources.contains(&source) {
+        sources = sum(sources, sum(serialized_bytes(&source)?, 1)?)?;
+    }
+    reserved = sum(
+        reserved,
+        wait_output::future(state, &agent.agent_id, bytes, sources)?,
+    )?;
     if response {
         reserved = sum(
             reserved,

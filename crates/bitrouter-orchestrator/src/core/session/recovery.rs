@@ -301,11 +301,13 @@ async fn restore_snapshot(
     let mut activity_history = None;
     let mut resource_history = budget::ResourceHistory::default();
     let mut response_history = None;
+    let mut wait_output_history = BTreeMap::new();
     for (batch, mut payload) in payloads {
         archive::hydrate(&mut payload, harness, &binding.limits).await?;
         release::validate_history(&payload, &mut releases)?;
         budget::validate_history(&payload, &mut resource_history)?;
         responses::validate_history(&payload, &mut response_history)?;
+        wait_output::validate_history(&payload, &mut wait_output_history)?;
         recovery_time::validate_history(
             &payload,
             CheckpointAck::for_batch(batch, &payload).head(),
@@ -368,6 +370,7 @@ fn validate_snapshot(
     root_queue::validate(state, &binding.limits)?;
     budget::validate(state)?;
     model_output::reserved(state)?;
+    wait_output::validate(state)?;
     responses::validate(state, binding)?;
     steering::validate(state, &binding.limits, binding.durable_head.state_revision)?;
     let root = state

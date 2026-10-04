@@ -56,6 +56,7 @@ pub mod root_queue;
 pub mod steering;
 mod tool_payloads;
 mod tool_status;
+mod wait_output;
 
 /// Implemented by the authenticated durable harness connection, including an
 /// in-process harness. Returning an ACK means the atomic append is durable.
@@ -2783,9 +2784,11 @@ impl CoreSession {
                         ));
                     }
                     if core_owned {
+                        let action = Action::parse(name, arguments)?;
+                        let wait_output_version = matches!(action, Action::Wait { .. }).then_some(wait_output::VERSION);
                         core_calls.push(Call {
                             invocation_id: id("collaboration"), public_call_id: id("call"), provider_call_id: call_id.clone(), step_id: step_id.to_owned(),
-                            action: Action::parse(name, arguments)?, wait: None, result: None, consumed: false,
+                            action, wait_output_version, wait: None, result: None, consumed: false,
                         });
                         continue;
                     }

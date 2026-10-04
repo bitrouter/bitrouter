@@ -697,3 +697,287 @@ async fn canonical_delivery_policy_validates_versions_and_restores_v1() -> TestR
     }
     Ok(())
 }
+
+struct WaitDeliveryExecutor {
+    child_id: Mutex<String>,
+    child: ConcurrentOutput,
+    root_calls: AtomicUsize,
+}
+
+#[async_trait]
+impl Executor for WaitDeliveryExecutor {
+    async fn execute(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+    ) -> bitrouter_sdk::Result<ExecutionResult> {
+        let child = self.child_id.lock().await.clone();
+        if prompt.system.as_deref().is_some_and(|system| {
+            system.starts_with(&format!("You are agent {child} for this task."))
+        }) {
+            return self.child.execute(target, prompt, ctx).await;
+        }
+        let response = if self.root_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            output(vec![core_call(
+                "wait_agent",
+                json!({"agent_ids":[child],"timeout_ms":600_000}),
+                "wait-for-child",
+            )])
+        } else {
+            output(vec![text("root completed")])
+        };
+        MockExecutor::new(vec![response])
+            .execute(target, prompt, ctx)
+            .await
+    }
+    async fn execute_stream(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> bitrouter_sdk::Result<StreamPartStream> {
+        Err(bitrouter_sdk::BitrouterError::internal("unexpected stream"))
+    }
+}
+
+#[tokio::test]
+async fn full_child_output_reaches_model_wait_after_ack_loss_and_restore() -> TestResult {
+    for lost_ack in [None, Some(false), Some(true)] {
+        let harness = Arc::new(Harness::new(None, None));
+        let fault = Arc::new(reconnect::FaultPort::new(
+            harness.clone(),
+            "collaboration.applied",
+            lost_ack.unwrap_or(false),
+        ));
+        fault.set_enabled(false);
+        let executor = Arc::new(WaitDeliveryExecutor {
+            child_id: Mutex::new(String::new()),
+            child: ConcurrentOutput {
+                seen: Semaphore::new(0),
+                resume: Semaphore::new(0),
+                bytes: AtomicUsize::new(0),
+                calls: AtomicUsize::new(0),
+            },
+            root_calls: AtomicUsize::new(0),
+        });
+        let records = UsageRecords::default();
+        let table = StaticRoutingTable::new();
+        table.insert("fixture-model", vec![target("first")]);
+        let app = App::builder()
+            .language_model(|builder| {
+                builder
+                    .routing_table(Arc::new(table))
+                    .executor(executor.clone())
+                    .settlement_recorder(records.clone());
+            })
+            .build()?;
+        let session = bind_app(Arc::new(app), fault.clone()).await?;
+        let mut task = input();
+        task.limits = Some(Limits {
+            checkpoint_bytes: 4 * 1024 * 1024,
+            ..Limits::default()
+        });
+        let accepted = session.start_response("input", 1, task).await?;
+        let response_id = accepted.assigned_ids["response_id"].clone();
+        let spawned = session
+            .collaborate(
+                "spawn",
+                session.head().await.state_revision,
+                &accepted.assigned_ids["agent_id"],
+                Action::Spawn {
+                    task: work("child result"),
+                },
+            )
+            .await?;
+        let child_id = spawned.assigned_ids["agent_id"].clone();
+        *executor.child_id.lock().await = child_id.clone();
+        let driver = tokio::spawn({
+            let session = session.clone();
+            let response_id = response_id.clone();
+            async move { session.drive_response(&response_id).await }
+        });
+        tokio::time::timeout(Duration::from_secs(30), executor.child.seen.acquire())
+            .await??
+            .forget();
+        let before = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let state = session.snapshot().await;
+                if state.root_turn().is_some_and(|turn| {
+                    turn.core_calls
+                        .iter()
+                        .any(|call| call.wait.is_some() && call.result.is_none())
+                }) {
+                    break state;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert_eq!(
+            before.root_turn().ok_or("root")?.core_calls[0].wait_output_version,
+            Some(1)
+        );
+        let bound = before.agents[&child_id].turn.as_ref().ok_or("child")?.steps[0].attempts[0]
+            .canonical_output_bytes
+            .ok_or("bound")?;
+        executor
+            .child
+            .bytes
+            .store(usize::try_from(bound)?, Ordering::SeqCst);
+        fault.set_enabled(lost_ack.is_some());
+        executor.child.resume.add_permits(1);
+        let outcome = tokio::time::timeout(Duration::from_secs(30), driver).await??;
+        let response = if lost_ack.is_some() {
+            assert!(outcome.is_err());
+            reconnect::reconnect(&session, &harness).await?;
+            session.drive_response(&response_id).await?
+        } else {
+            outcome?
+        };
+        assert_eq!(response.run_status, Some(RunStatus::Completed));
+        let state = session.snapshot().await;
+        let child = &state.agents[&child_id];
+        let child_turn = child.turn.as_ref().ok_or("child turn")?;
+        let output = child_turn.steps[0].attempts[0]
+            .receipt
+            .as_ref()
+            .ok_or("receipt")?
+            .report
+            .result
+            .as_ref()
+            .ok_or("result")?;
+        assert_eq!(serde_json::to_vec(output)?.len() as u64, bound);
+        let root = state.root_turn().ok_or("root turn")?;
+        let wait = root.core_calls[0].result.as_ref().ok_or("wait result")?;
+        assert_eq!(wait["ok"], json!(true));
+        assert_eq!(
+            wait["value"]["agents"][0]["final_answer"],
+            json!(child_turn.final_answer)
+        );
+        assert_eq!(
+            wait["value"]["agents"][0]["context_sources"],
+            json!(child.context_sources)
+        );
+        assert!(root.core_calls[0].consumed);
+        let paired = state.agents[&state.agent_id]
+            .history
+            .iter()
+            .flat_map(|message| &message.content)
+            .find_map(|content| match content {
+                Content::ToolResult {
+                    call_id,
+                    output: bitrouter_sdk::language_model::types::ToolResultOutput::Text { value },
+                    ..
+                } if call_id == "wait-for-child" => Some(value),
+                _ => None,
+            })
+            .ok_or("paired model wait")?;
+        assert_eq!(serde_json::from_str::<serde_json::Value>(paired)?, *wait);
+        assert_eq!(
+            response
+                .events
+                .iter()
+                .filter(|event| event.event.kind == "collaboration.applied"
+                    && event.event.payload["result"] == *wait)
+                .count(),
+            1
+        );
+        assert_eq!(executor.child.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            records.0.lock().await.len(),
+            1 + executor.root_calls.load(Ordering::SeqCst)
+        );
+        assert!(harness.sent.lock().await.is_empty());
+        let proposals = fault.proposals.lock().await;
+        let results = proposals
+            .iter()
+            .filter_map(|batch| {
+                batch
+                    .decode(&Limits::default())
+                    .ok()
+                    .map(|payload| (batch, payload))
+            })
+            .filter(|(_, payload)| {
+                payload.events.iter().any(|event| {
+                    event.kind == "collaboration.applied" && event.payload["result"] == *wait
+                })
+            })
+            .map(|(batch, _)| batch)
+            .collect::<Vec<_>>();
+        assert_eq!(results.len(), if lost_ack == Some(false) { 2 } else { 1 });
+        if results.len() == 2 {
+            assert_eq!(results[0], results[1]);
+        }
+        drop(proposals);
+        session.disconnect().await;
+        let store = harness.store.lock().await.clone();
+        let replacement = recovery::harness_at(store.clone()).await;
+        let request = recovery::request(&*replacement.store.lock().await, false)?;
+        let (restored, restored_executor) =
+            recovery::restore(request, replacement, Vec::new()).await?;
+        assert_eq!(restored.drive_response(&response_id).await?, response);
+        assert_eq!(restored_executor.calls.load(Ordering::SeqCst), 0);
+        if lost_ack.is_none() {
+            for mode in ["legacy", "unknown", "wrong_action", "changed_in_journal"] {
+                let mut changed = store.clone();
+                tool_payloads::rewrite_last(&mut changed, |payload| {
+                    let call = &mut payload.checkpoint.state["agents"][&state.agent_id]["turn"]["core_calls"]
+                        [0];
+                    match mode {
+                        "unknown" => call["wait_output_version"] = json!(2),
+                        "wrong_action" => {
+                            call["action"] = json!({"name":"list_agents","arguments":{}})
+                        }
+                        _ => {
+                            if let Some(call) = call.as_object_mut() {
+                                call.remove("wait_output_version");
+                            }
+                        }
+                    }
+                })?;
+                let replacement = recovery::harness_at(changed).await;
+                let head = replacement.store.lock().await.head.clone();
+                let mut request = recovery::request(&*replacement.store.lock().await, false)?;
+                if mode == "changed_in_journal" {
+                    // Use a bounded journal suffix; the entire fixture's full
+                    // snapshots exceed the restore control envelope together.
+                    let store = replacement.store.lock().await;
+                    request.binding.checkpoint =
+                        store.batches.get(store.batches.len() - 2).cloned();
+                    request.journal_tail = store.batches.last().cloned().into_iter().collect();
+                }
+                let restored = recovery::restore(request, replacement.clone(), Vec::new()).await;
+                if mode == "legacy" {
+                    let (restored, executor) = restored?;
+                    assert_eq!(
+                        restored
+                            .snapshot()
+                            .await
+                            .root_turn()
+                            .ok_or("legacy root")?
+                            .core_calls[0]
+                            .wait_output_version,
+                        None
+                    );
+                    assert_eq!(restored.drive_response(&response_id).await?, response);
+                    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+                } else {
+                    assert_eq!(
+                        restored
+                            .err()
+                            .ok_or("invalid wait policy accepted")?
+                            .downcast_ref::<CoreError>()
+                            .map(|error| error.code),
+                        Some(ErrorCode::CheckpointConflict)
+                    );
+                    assert_eq!(replacement.store.lock().await.head, head);
+                }
+            }
+        }
+        restored
+            .release("release", restored.head().await.state_revision)
+            .await?;
+    }
+    Ok(())
+}

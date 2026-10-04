@@ -130,6 +130,9 @@ pub struct Call {
     pub provider_call_id: String,
     pub step_id: String,
     pub action: Action,
+    /// Frozen normal-wait delivery reservation; absent on legacy intents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_output_version: Option<u32>,
     pub wait: Option<WaitState>,
     pub result: Option<Value>,
     pub consumed: bool,

@@ -23,7 +23,7 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure, canonical output admission, prospective receipt/delivery contributions and first recovery-observation archive reserves implemented; physical storage/future archive exhaustion, full report metadata, model-wait/prompt growth and the remaining fault matrix remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure, canonical output admission, prospective receipt/delivery contributions and first recovery-observation archive reserves implemented; physical storage/future archive exhaustion, full report metadata, later prompt growth and the remaining fault matrix remain |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, incremental HTTP/SSE projection and separate bounded WebSocket control lane connected to the service host; independent clients cover binding/release ACK loss, released-epoch restoration and read-only head queries during provider work; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
 | Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Pending |
@@ -3023,3 +3023,72 @@ check passed in 19.174 seconds. Formatting, diff and tracked-ignore checks passe
 Final independent code/test/documentation review found no remaining actionable
 P1/P2 in this increment. Commit `abc628ab` passed CI 37181083836; new-head remote
 CI remains a separate gate.
+
+
+## C4 normal model-wait delivery and source propagation
+
+New model-owned `wait_agent` intents freeze `wait_output_version: 1`. Admission
+now forecasts a normal result as well as cancellation cleanup: the call result,
+JSON-string tool history, durable event, Responses event and inherited context
+sources. The history forecast shares the production renderer to preserve JSON
+escaping. Two queue views cover answer visibility before and after cancellation;
+source propagation counts parent conclusions, runtime waits and model-wait
+consumers, visiting each receiving agent once while retaining separate calls.
+
+Unapplied model outputs reserve future answer and source contributions. An
+independent review identified another handoff: a verification tool can append a
+large workspace revision after its model step has settled. Unknown tool sources
+now retain downstream wait capacity through a definite receipt and until
+canonical pairing. Completed but unpaired model-wait sources retain the same
+obligation. Forecasts never become execution evidence or replace actual results.
+
+Legacy intents without the marker keep their prior cleanup-only contract;
+normal completion still requires ordinary admission. Restoration rejects unknown
+versions, markers on non-wait actions and marker changes across the supplied
+journal, without advancing ownership. New core intents retain the marker even
+after their result is consumed. This is a checkpoint addition, not a new API
+endpoint or a harness tool-execution requirement.
+
+Boundary tests search the exact host limit while retaining the original run
+policy. They exercise a full canonical child result, two model waits, four
+runtime waits, substantial retained sources and Responses capture. A separate
+verification regression fills the entire tool JSON payload with an escaped
+workspace revision, then saturates again between receipt, source pairing and
+wait completion. These tests validate reservation arithmetic. A real scheduling
+test separately checks a full-allowance child result through model wait/history,
+ACK loss before and after persistence, exact batch retransmission, single child
+execution and settlement, cold response replay and release. Policy restoration
+covers legacy snapshots, unknown versions, non-wait markers and journal removal.
+
+New tool intents, later model prompts, full report metadata, future archive and
+physical allocation obligations remain separate. Remote running-tool time
+handoff, production harness integration and the complete C4–C6/A01–A23 acceptance
+contract remain open. Final checks and independent review are recorded below.
+
+Eleven focused tests passed in 25.265 seconds. Three surgical negative checks
+kept all frozen result limits unchanged and separately disabled prospective
+model contributions, known normal-wait forecasts, and incoming source
+contributions. Each exact-boundary regression then failed with
+`checkpoint cleanup capacity exhausted`; source was restored after every check.
+The last test edit additionally verifies that a legacy pending wait remains
+admissible at a boundary that cannot admit the new normal-wait obligation.
+Final workspace validation follows. Previous head `3a91eef7` passed
+CI 37182810873, including the platform test jobs.
+
+The first workspace run passed 4028 tests but exposed one existing tree fixture
+that could no longer admit its initial model wait under a 384 KiB checkpoint
+limit. The failure preceded optional-capacity saturation. That fixture now
+allows 640 KiB (1280 KiB wire) for the new normal-source obligation, then still
+fills optional observations until the actual checkpoint-capacity failure. Full
+replies, waits, mailboxes, ACK-loss assertions and every batch-size check remain.
+Independent review confirmed that this adjustment preserves the saturation
+requirement; final validation is recorded separately.
+
+Final Rust 1.99.0 workspace/all-feature nextest passed **4029 tests, 22 skipped**
+in 150.546 seconds with four test threads. Strict workspace/all-target/all-feature
+clippy passed in 31.860 seconds, strict rustdoc in 18.382 seconds, workspace
+doctests passed five tests with one ignored, and Rust 1.93.0 workspace/all-feature
+check passed in 19.132 seconds. Formatting, diff and tracked-ignore checks
+passed. Final independent review, including the adjusted saturation fixture,
+found no remaining actionable P1/P2 in this increment. New-head remote CI
+remains a separate gate; the full core acceptance goal remains incomplete.

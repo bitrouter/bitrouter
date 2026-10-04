@@ -70,18 +70,7 @@ pub(super) fn consume(agent: &mut AgentState) -> Result<(), CoreError> {
                 context_sources.extend(sources);
             }
         }
-        messages.push(Message {
-            role: Role::Tool,
-            content: vec![Content::ToolResult {
-                call_id: call.provider_call_id.clone(),
-                tool_name: Some(call.action.name().into()),
-                dynamic: false,
-                output: ToolResultOutput::Text {
-                    value: serde_json::to_string(result).map_err(json_error)?,
-                },
-                provider_metadata: Default::default(),
-            }],
-        });
+        messages.push(core_message(call, result)?);
         call.consumed = true;
     }
     if turn.status != AgentStatus::Cancelling {
@@ -101,4 +90,19 @@ pub(super) fn consume(agent: &mut AgentState) -> Result<(), CoreError> {
         .checked_add(1)
         .ok_or_else(|| reject(ErrorCode::LimitExceeded, "context revision exhausted"))?;
     Ok(())
+}
+
+pub(super) fn core_message(call: &Call, result: &Value) -> Result<Message, CoreError> {
+    Ok(Message {
+        role: Role::Tool,
+        content: vec![Content::ToolResult {
+            call_id: call.provider_call_id.clone(),
+            tool_name: Some(call.action.name().into()),
+            dynamic: false,
+            output: ToolResultOutput::Text {
+                value: serde_json::to_string(result).map_err(json_error)?,
+            },
+            provider_metadata: Default::default(),
+        }],
+    })
 }

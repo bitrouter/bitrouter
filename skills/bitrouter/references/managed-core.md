@@ -187,7 +187,17 @@ loss retries that rejected result or authorizes its tool calls. An exact
 response replay retains its original failure. Missing usage remains unknown.
 Late evidence remains attributed to its original attempt; a newer run, model
 step or applied steering input cannot be failed by an older rejected output.
-New tool intents, later model prompts, model-originated wait expansion, full
-report metadata, future archive growth, physical copies and trusted extension
-allocations remain separate admission obligations. The delivery checks do not
+New model-originated `wait_agent` intents also freeze
+`wait_output_version: 1`. Before admission, core reserves normal result, paired
+JSON-string history, durable/Responses event and inherited context-source
+contributions, including queue cancellation views. Pending model outputs and
+workspace tool sources retain that obligation through receipt and pairing.
+Harnesses must preserve the marker unchanged. Missing markers retain legacy
+cleanup-only admission; normal legacy wait completion still needs available
+space. Unknown versions, markers on other actions and policy changes within a
+restored journal are rejected before takeover.
+
+New tool intents, later model prompts, full report metadata, future archive
+growth, physical copies and trusted extension allocations remain separate
+admission obligations. The delivery checks do not
 establish complete memory/storage or end-to-end conformance.
