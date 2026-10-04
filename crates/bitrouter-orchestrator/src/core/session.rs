@@ -42,6 +42,7 @@ mod archive;
 mod artifact_storage;
 mod budget;
 mod capacity;
+mod model_output;
 mod pairing;
 mod preparation_work;
 mod provider_work;
@@ -129,6 +130,10 @@ pub struct AttemptRecord {
     pub attempt_id: String,
     pub index: u32,
     pub receipt: Option<ExecutionReceipt>,
+    /// Frozen canonical-result allowance reserved before provider dispatch.
+    /// Missing legacy fields do not create a retrospective output contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_output_bytes: Option<u64>,
     /// Actual integration work, including internal HTTP authentication retries.
     /// Empty legacy/custom-executor records do not prove complete coverage.
     #[serde(default)]
@@ -2498,6 +2503,7 @@ impl CoreSession {
         })
         .await?;
         let control = Arc::new(StepControl {
+            canonical_output_bytes: model_output::allowance(&run.limits)?,
             provider_response_bytes: run
                 .limits
                 .checkpoint_bytes
@@ -3522,6 +3528,7 @@ impl CoreSession {
 
 struct StepControl {
     provider_response_bytes: u64,
+    canonical_output_bytes: u64,
     validation_gate_time: super::activity::GateTime,
     session: CoreSession,
     agent_id: String,
@@ -3564,7 +3571,7 @@ impl NativeExecutionControl for StepControl {
     }
 
     fn canonical_output_byte_limit(&self) -> Option<u64> {
-        Some(self.provider_response_bytes)
+        Some(self.canonical_output_bytes)
     }
 
     async fn provider_cancelled(&self) {
@@ -4157,7 +4164,7 @@ impl NativeExecutionControl for StepControl {
                 return Err(reject(ErrorCode::OperationConflict, "attempt does not follow its immutable model plan"));
             }
             let attempt_id = id("attempt");
-            step.attempts.push(AttemptRecord { attempt_id: attempt_id.clone(), index: attempt_index, receipt: None, provider_work: Vec::new() });
+            step.attempts.push(AttemptRecord { attempt_id: attempt_id.clone(), index: attempt_index, receipt: None, canonical_output_bytes: Some(self.canonical_output_bytes), provider_work: Vec::new() });
             active_run(state)?.model_attempts += 1;
             Ok(json!({"attempt_id":attempt_id,"request_id":request_id,"attempt_index":attempt_index}))
         }).await.map_err(sdk_error)?;

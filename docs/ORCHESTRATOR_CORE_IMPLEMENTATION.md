@@ -2787,9 +2787,11 @@ The complete C4–C6 and A01–A23 acceptance requirements remain open. Commit
 Managed execution now counts serialized canonical result bytes before private
 output sealing and durable-report cloning, including custom executor output.
 It checks again after sealing to include newly attached policy metadata. The
-bound is the minimum of the frozen root run and session checkpoint limits;
-the provider HTTP entity bound remains a separate ingress check. Counting
-stops at the bound without building an encoded copy and includes JSON escaping.
+initial bound was the minimum of the frozen root run and session checkpoint
+limits; the prospective reservation increment below replaces it for new
+attempts. The provider HTTP entity bound remains a separate ingress check.
+Counting stops at the bound without building an encoded copy and includes JSON
+escaping.
 
 A complete rejected result has a bounded `output_rejection` summary with
 canonical usage counters and provenance. It does not carry result content or
@@ -2912,3 +2914,54 @@ with one ignored, and Rust 1.93.0 workspace/all-feature check passed in 0.557
 seconds. Formatting, diff and tracked-ignore checks passed. Previous head
 `a989cb56` passed all jobs of CI 37177871654. New-head remote CI remains a
 separate gate.
+
+## C4 prospective canonical model output contributions
+
+New attempts freeze `canonical_output_bytes` in their acknowledged intent before
+provider dispatch. The allowance is the frozen root run's `checkpoint_bytes`
+divided by `2 * (active_models + 1)`, rounded down. All agents use that policy.
+The provider HTTP entity bound remains independent. Checkpoint cleanup admission
+reserves twice each unresolved attempt's allowance for its canonical receipt and
+outcome-event contributions; retained results replace that reservation with
+actual candidate bytes. SDK checks before and after private-output sealing use
+the frozen allowance, preserving oversized-result usage and settlement behavior.
+
+The cost inventory stores the same contract in `ProviderAttemptSource`, keeping
+an unresolved attempt's reservation after its root run or child turn retires.
+Current attempt and inventory fields must agree. Late provider evidence is
+validated against the original allowance before any state change; both result
+bytes and a rejection's stated byte limit are checked. Restoration validates
+retained policies and pending capacity before ownership takeover. Missing legacy
+fields retain their earlier contract without a retrospective restriction.
+
+Independent review found that scanning current turns alone lost the reservation
+when an interrupted turn was replaced. Persistent inventory accounting fixes
+that gap. Re-review found no new P1/P2. Regressions cover two overlapping model
+calls returning their complete allowances, competing signals, cancelled-turn
+settlement and release, forged/legacy checkpoints, insufficient takeover space,
+and a retired attempt's complete late result after competing state saturates
+capacity. Invalid late evidence leaves the head and operation inventory intact;
+valid evidence is idempotent and does not rerun the provider.
+
+This increment reserves canonical result contributions, not arbitrary report
+metadata, later history/response/archive expansion, physical SDK copies or
+custom executor/preparation-hook allocation. The concurrent-results test cancels
+after both receipts commit and before history application; it does not prove
+full-sized results can proceed through every later projection. Physical storage
+leases, remote running-tool time handoff, production harness conformance and
+complete C4–C6/A01–A23 acceptance remain open. Final validation is recorded below.
+
+The retired-attempt regression passed in 2.506 seconds. A negative check disabled
+only the cost inventory's reservation for attempts absent from current turns;
+the same test then rejected valid late evidence with `checkpoint cleanup
+capacity exhausted / not_committed`. Production source was restored before the
+final workspace gates. This isolates the turn-retirement reservation gap.
+
+Final-source Rust 1.99.0 workspace/all-feature nextest passed **4023 tests,
+22 skipped** in 125.635 seconds using four test threads. Strict workspace/all-
+target/all-feature clippy passed in 33.211 seconds, strict rustdoc in 18.152
+seconds, and Rust 1.93.0 workspace/all-feature check in 19.397 seconds.
+Workspace doctests passed five tests with one ignored. Formatting, diff and
+tracked-ignore checks passed. Final independent code/test/documentation review
+found no remaining actionable P1/P2 in this increment. Previous head `421a5196`
+passed CI 37178987902; new-head remote CI remains a separate gate.

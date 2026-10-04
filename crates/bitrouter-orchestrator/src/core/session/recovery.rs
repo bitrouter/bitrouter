@@ -367,6 +367,7 @@ fn validate_snapshot(
     release::validate(state, binding)?;
     root_queue::validate(state, &binding.limits)?;
     budget::validate(state)?;
+    model_output::reserved(state)?;
     responses::validate(state, binding)?;
     steering::validate(state, &binding.limits, binding.durable_head.state_revision)?;
     let root = state

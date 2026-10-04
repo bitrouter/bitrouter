@@ -468,6 +468,7 @@ fn apply_evidence(
             "provider evidence differs from frozen attempt admission",
         ));
     }
+    model_output::validate_report(source.canonical_output_bytes, &evidence.report)?;
     let report_sha256 = report_digest(&evidence.report)?;
     let first = work.outcome_sha256.is_none();
     if work

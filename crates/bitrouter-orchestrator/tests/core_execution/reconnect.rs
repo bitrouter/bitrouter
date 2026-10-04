@@ -595,6 +595,137 @@ async fn late_provider_evidence_remains_owned_after_the_original_run_is_replaced
     Ok(())
 }
 
+#[tokio::test]
+async fn retired_attempt_keeps_output_capacity_and_contract_for_late_evidence() -> TestResult {
+    let harness = Arc::new(Harness::new(None, None));
+    let (original, _, _) =
+        setup(vec![output(vec![text("original")])], harness.clone(), false).await?;
+    let mut task = input();
+    task.limits = Some(Limits {
+        checkpoint_bytes: 256 * 1024,
+        input_bytes: 16 * 1024,
+        active_models: 2,
+        ..Limits::default()
+    });
+    original.start("input", 1, task).await?;
+    original.drive().await?;
+    original.disconnect().await;
+    let store = harness.store.lock().await.clone();
+    let mut evidence = evidence_from(&store)?;
+    let intent = recovery::prefix(&store, "model.attempt.intent")?;
+    let harness = recovery::harness_at(intent).await;
+    let request = recovery::request(&*harness.store.lock().await, false)?;
+    let (session, executor) =
+        recovery::restore(request, harness.clone(), vec![output(vec![text("retry")])]).await?;
+    session.drive().await?;
+    let mut replacement = input();
+    replacement.limits = Some(Limits {
+        checkpoint_bytes: 192 * 1024,
+        input_bytes: 16 * 1024,
+        active_models: 2,
+        ..Limits::default()
+    });
+    session
+        .start(
+            "replacement",
+            session.head().await.state_revision,
+            replacement,
+        )
+        .await?;
+    let state = session.snapshot().await;
+    let work = &state.cost_work[&evidence.run_id].work[&evidence.attempt_id];
+    let bound = work
+        .provider_source
+        .as_ref()
+        .ok_or("retired source")?
+        .canonical_output_bytes
+        .ok_or("retired allowance")?;
+    assert_eq!(work.state, CostWorkState::IntentRecorded);
+    assert!(
+        state
+            .agents
+            .values()
+            .filter_map(|agent| agent.turn.as_ref())
+            .flat_map(|turn| &turn.steps)
+            .flat_map(|step| &step.attempts)
+            .all(|attempt| attempt.attempt_id != evidence.attempt_id)
+    );
+    let result = evidence.report.result.as_mut().ok_or("result")?;
+    result.content = vec![text("")];
+    let padding = usize::try_from(bound)?
+        .checked_sub(serde_json::to_vec(result)?.len())
+        .ok_or("result envelope exceeds allowance")?;
+    result.content = vec![text(&"x".repeat(padding))];
+    assert_eq!(serde_json::to_vec(result)?.len() as u64, bound);
+    let mut exhausted = false;
+    for index in 1..512 {
+        let mut update = signal_update(&session, Vec::new()).await;
+        update.facts.insert(
+            "competing_state".into(),
+            json!("f".repeat((index * 1280).min(56 * 1024))),
+        );
+        let operation = format!("fill-{index}-{}", "x".repeat(100));
+        match session.signals(&operation, update).await {
+            Ok(_) => {}
+            Err(error) => {
+                assert_eq!(
+                    (error.code, error.commit_status),
+                    (ErrorCode::LimitExceeded, CommitStatus::NotCommitted)
+                );
+                assert_eq!(session.snapshot().await.run.ok_or("run")?.resource_constraint,
+                    Some(bitrouter_orchestrator::core::session::ResourceConstraint::CheckpointCapacity));
+                exhausted = true;
+                break;
+            }
+        }
+    }
+    assert!(exhausted, "fixture did not fill competing state");
+    for rejection in [false, true] {
+        let mut invalid = evidence.clone();
+        if rejection {
+            invalid.report.result = None;
+            invalid.report.output_rejection = Some(
+                bitrouter_sdk::language_model::native::NativeOutputRejection {
+                    byte_limit: bound + 1,
+                    usage: None,
+                },
+            );
+        } else if let Some(result) = &mut invalid.report.result {
+            result.content.push(text("one byte too many"));
+        }
+        let before = session.head().await;
+        let operation = format!("invalid-{rejection}");
+        assert_eq!(
+            session
+                .provider_evidence(&operation, invalid)
+                .await
+                .err()
+                .map(|error| error.code),
+            Some(ErrorCode::CheckpointConflict)
+        );
+        assert_eq!(session.head().await, before);
+        assert!(session.operation(&operation).await.is_none());
+    }
+    let accepted = session.provider_evidence("late", evidence.clone()).await?;
+    assert_eq!(
+        session.provider_evidence("late", evidence.clone()).await?,
+        accepted
+    );
+    let state = session.snapshot().await;
+    assert_eq!(state.provider_evidence[&evidence.attempt_id], evidence);
+    assert_eq!(
+        state.cost_work[&evidence.run_id].work[&evidence.attempt_id].state,
+        CostWorkState::OutcomeRecorded
+    );
+    assert_eq!(
+        session.drive().await?.run.map(|run| run.status),
+        Some(RunStatus::Failed)
+    );
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    assert!(harness.sent.lock().await.is_empty());
+    Ok(())
+}
+
 struct DropFlag(Arc<AtomicBool>);
 impl Drop for DropFlag {
     fn drop(&mut self) {

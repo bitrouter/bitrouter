@@ -14,6 +14,9 @@ use crate::core::session::{AgentStatus, AgentTurn, ModelStep, SessionSnapshot};
 pub struct ProviderAttemptSource {
     pub attempt_index: u32,
     pub route: bitrouter_sdk::language_model::native::NativeRoute,
+    /// Canonical output contract remains live after the original turn retires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_output_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,6 +213,7 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                         .map(|route| ProviderAttemptSource {
                             attempt_index: attempt.index,
                             route: route.clone(),
+                            canonical_output_bytes: attempt.canonical_output_bytes,
                         })
                 });
                 if let Some(receipt) = &attempt.receipt {

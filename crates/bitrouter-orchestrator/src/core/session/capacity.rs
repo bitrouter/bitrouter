@@ -1,7 +1,7 @@
 //! Admission reserves a conservative cancellation/settlement projection. The
 //! projection is never committed or executed: real outcomes still come only
-//! from authenticated evidence. Unknown provider responses are a separate
-//! admission problem; these bounds cover retained state and admitted tools.
+//! from authenticated evidence. Canonical model results have frozen allowances;
+//! provider metadata and physical allocations remain separate obligations.
 
 use super::*;
 use crate::core::checkpoint::{ToolStartFence, serialized_bytes};
@@ -175,6 +175,7 @@ pub(super) fn check(
     )?;
     let mut projected = state.clone();
     let mut reserve = Reservation::default();
+    reserve.add(model_output::reserved(state)?)?;
     let mut event_payloads = vec![json!({"reason":"x".repeat(128)})];
     if let Some(event) = responses::reserve_terminal(&mut projected)? {
         event_payloads.push(event);
