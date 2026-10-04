@@ -548,6 +548,7 @@ async fn native_agents_navigation_opens_durable_history_without_submitting() -> 
     let binary = env!("CARGO_BIN_EXE_bro");
     let mut server = Command::new(binary)
         .arg("serve")
+        .arg("--managed-child")
         .arg("--config")
         .arg(&config)
         .stdout(std::process::Stdio::null())
@@ -573,6 +574,15 @@ async fn native_agents_navigation_opens_durable_history_without_submitting() -> 
     wait_status(&socket, &first, TurnStatus::Completed).await?;
     let second = submit(&socket, &workspace, None).await?;
     wait_status(&socket, &second, TurnStatus::Completed).await?;
+    let handoff = bitrouter::daemon::send_command(
+        &bitrouter::daemon::socket_path_for(&source, &cfg),
+        &bitrouter::daemon::DaemonCommand::HandoffPrepare,
+    )
+    .await?;
+    ensure!(
+        matches!(handoff, bitrouter::daemon::DaemonResponse::HandoffBusy { ref reason } if reason.contains("operations")),
+        "resident native runtime did not block automatic daemon replacement: {handoff:?}"
+    );
     let requests_before = upstream
         .received_requests()
         .await

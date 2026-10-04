@@ -112,6 +112,7 @@ and Ctrl-D detaches. Reattach with `--thread-id`; `--task-id` is removed.
 `read` also paginates directories. Shell/verification share the declared server interpreter; no launch-time retry. `code <agent>` / `run <agent>` remain ACP. Local protocol is v15; opt-in HTTP uses `/agent/v2`. Durable history/keys
 survive hot unload. Lost instances/unknown effects never trigger automatic resubmission.
 See `references/cli.md` for permissions, controls, retries and recovery.
+Resident BRO daemons defer automatic replacement; finish work and use explicit `bro restart` after binary updates.
 Built-in ACP adapters require Node.js 22+ and `npx`. For the harness's native
 interface, use the reversible per-process launcher:
 

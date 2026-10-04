@@ -1238,6 +1238,36 @@ impl Supervisor {
         Ok(SessionResponse::RunSummaries { runs: summaries })
     }
 
+    /// A process remains active while its turn is idle or its UI is detached.
+    pub async fn active_run_count(&self) -> usize {
+        let starting = self
+            .inner
+            .starts
+            .lock()
+            .await
+            .values()
+            .filter(|state| matches!(state, StartState::Starting { .. }))
+            .count();
+        let runs = self
+            .inner
+            .runs
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut active = starting;
+        for run in runs {
+            if matches!(
+                run.snapshot().await.process,
+                ProcessState::Starting | ProcessState::Running | ProcessState::Stopping
+            ) {
+                active += 1;
+            }
+        }
+        active
+    }
+
     async fn peek_all(&self) -> Result<SessionResponse> {
         let runs = self
             .inner

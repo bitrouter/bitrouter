@@ -5,6 +5,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [`LOCAL_DAEMON_UPGRADE_SPEC.md`](LOCAL_DAEMON_UPGRADE_SPEC.md) — **implemented
+  and locally verified.** Safe local daemon handoff after a CLI upgrade: version and
+  capability detection, idle-only restart, migration preflight, and truthful
+  recovery states.
 - [`GUARDRAILS_EXTENSION.md`](GUARDRAILS_EXTENSION.md) — Independent input checker
   setup, migration boundaries, distribution and process-level validation.
 - [`GUARDRAILS_EXTENSION_ACCEPTANCE.md`](GUARDRAILS_EXTENSION_ACCEPTANCE.md) —

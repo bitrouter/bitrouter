@@ -32,10 +32,22 @@ pub struct UpdateReport {
     /// `delegated`: the exact command to run to upgrade out-of-band.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upgrade_command: Option<String>,
-    /// `updated`: the running daemon's fate — `restarted` (we restarted it) or
-    /// `restart_needed` (still on the old binary). Absent when no daemon runs.
+    /// `updated`: `restarted`, `compatible`, or `deferred`. Absent when no
+    /// daemon runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon: Option<&'static str>,
+    /// Why an installed binary could not take over the running daemon.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_reason: Option<String>,
+    /// Verified state of the daemon after an update attempt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_instance_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_listen: Option<String>,
 }
 
 impl UpdateReport {
@@ -54,6 +66,11 @@ impl UpdateReport {
             install_method: Some(install_method),
             upgrade_command: Some(upgrade_command),
             daemon: None,
+            daemon_reason: None,
+            daemon_pid: None,
+            daemon_version: None,
+            daemon_instance_id: None,
+            daemon_listen: None,
         }
     }
 
@@ -71,6 +88,11 @@ impl UpdateReport {
             install_method: None,
             upgrade_command: None,
             daemon: None,
+            daemon_reason: None,
+            daemon_pid: None,
+            daemon_version: None,
+            daemon_instance_id: None,
+            daemon_listen: None,
         }
     }
 
@@ -84,6 +106,11 @@ impl UpdateReport {
             install_method: None,
             upgrade_command: None,
             daemon: None,
+            daemon_reason: None,
+            daemon_pid: None,
+            daemon_version: None,
+            daemon_instance_id: None,
+            daemon_listen: None,
         }
     }
 
@@ -97,6 +124,11 @@ impl UpdateReport {
             install_method: None,
             upgrade_command: None,
             daemon: None,
+            daemon_reason: None,
+            daemon_pid: None,
+            daemon_version: None,
+            daemon_instance_id: None,
+            daemon_listen: None,
         }
     }
 
@@ -115,11 +147,20 @@ impl UpdateReport {
             install_method: None,
             upgrade_command: None,
             daemon,
+            daemon_reason: None,
+            daemon_pid: None,
+            daemon_version: None,
+            daemon_instance_id: None,
+            daemon_listen: None,
         }
     }
 }
 
 impl CliReport for UpdateReport {
+    fn exit_code(&self) -> i32 {
+        i32::from(self.daemon == Some("deferred"))
+    }
+
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         match self.status {
             "delegated" => {
@@ -156,12 +197,32 @@ impl CliReport for UpdateReport {
                 h.line(&format!("✓ updated {} -> {new}", self.current_version))?;
                 match self.daemon {
                     Some("restarted") => h.note(&format!("Restarted the running daemon on {new}.")),
+                    Some("compatible") => h.note(&format!("The running daemon is serving {new}.")),
                     Some("restart_needed") => h.note(&format!(
                         "A daemon is running the old binary. Run `{} restart` to serve {new}.",
                         bitrouter_sdk::invocation::name()
                     )),
+                    Some("deferred") => h.note(&format!(
+                        "Daemon handoff deferred: {}",
+                        self.daemon_reason
+                            .as_deref()
+                            .unwrap_or("reason unavailable")
+                    )),
                     _ => Ok(()),
+                }?;
+                if let Some(pid) = self.daemon_pid {
+                    h.field("daemon pid", pid)?;
                 }
+                if let Some(version) = &self.daemon_version {
+                    h.field("daemon version", version)?;
+                }
+                if let Some(instance) = &self.daemon_instance_id {
+                    h.field("daemon instance", instance)?;
+                }
+                if let Some(listen) = &self.daemon_listen {
+                    h.field("daemon listen", listen)?;
+                }
+                Ok(())
             }
             other => h.line(other),
         }
@@ -300,6 +361,30 @@ mod tests {
             h.contains("Restarted the running daemon on 1.0.0-alpha.20"),
             "{h:?}"
         );
+    }
+
+    #[test]
+    fn already_compatible_daemon_does_not_claim_restart() {
+        let report = UpdateReport::updated(
+            "1.0.0-alpha.31".into(),
+            "1.0.0-alpha.32".into(),
+            Some("compatible"),
+        );
+        assert_eq!(report.exit_code(), 0);
+        assert!(human(&report).contains("The running daemon is serving 1.0.0-alpha.32"));
+    }
+
+    #[test]
+    fn updated_binary_with_deferred_daemon_is_not_a_success() {
+        let mut report = UpdateReport::updated(
+            "1.0.0-alpha.31".into(),
+            "1.0.0-alpha.32".into(),
+            Some("deferred"),
+        );
+        report.daemon_reason = Some("one supervised run is still active".into());
+        assert_eq!(report.exit_code(), 1);
+        assert_eq!(json(&report)["daemon"], "deferred");
+        assert!(human(&report).contains("one supervised run is still active"));
     }
 
     #[test]

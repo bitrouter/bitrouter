@@ -74,6 +74,11 @@ existing cold query bounds apply. Listing installs no context, worker, subscribe
 lease or queue runner, and performs no durable writes. Each page refreshes every
 two seconds while the menu is resident; refresh explicitly resets membership.
 
+When integrated with main's daemon upgrade mechanism, the standalone native
+endpoint holds daemon admission for its lifetime. ACP/HTTP idleness alone cannot
+authorize replacing its epoch. Automatic replacement is deferred; explicit
+restart remains available until native queue/worker handoff is implemented.
+
 ## Acceptance
 
 1. Directory pagination includes unloaded durable roots, filters foreign callers
