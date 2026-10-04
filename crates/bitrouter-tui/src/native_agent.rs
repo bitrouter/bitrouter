@@ -174,7 +174,12 @@ impl NativeView {
         let mut dock = Terminal::new(TestBackend::new(size.width.max(1), height.max(1)))?;
         let frame = dock.draw(|frame| render_dock(frame, state))?;
         let footer = buffer_lines(frame.buffer);
-        self.writer.docked_frame(&self.document, &footer)?;
+        let rows = self
+            .document
+            .iter()
+            .flat_map(|line| wrap(line, size.width))
+            .collect::<Vec<_>>();
+        self.writer.docked_frame(&rows, &footer)?;
         let cursor = if state.menu.is_open() {
             None
         } else {
@@ -253,7 +258,7 @@ fn document(state: &NativeState, width: u16) -> Vec<Line<'static>> {
     if let Some(live) = &state.live {
         lines.extend(safe(live).lines().map(|line| Line::from(line.to_owned())));
     }
-    lines.iter().flat_map(|line| wrap(line, width)).collect()
+    lines
 }
 
 fn composer_rows(editor: &Editor, width: u16) -> (Vec<Line<'static>>, Position) {
