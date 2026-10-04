@@ -291,6 +291,92 @@ impl ThreadService {
         Ok(receipt)
     }
 
+    /// Scan a bounded page of durable roots and return only authorized public
+    /// views. Cold reads install no worker, subscriber, context or queue runner.
+    pub async fn list_threads(
+        &self,
+        epoch: &str,
+        caller: &CallerContext,
+        after: u64,
+        cutoff: Option<u64>,
+        limit: usize,
+    ) -> Result<crate::thread::ThreadDirectoryPage, ServiceError> {
+        self.ensure_instance(Some(epoch))?;
+        if caller.is_anonymous()
+            || !(1..=16).contains(&limit)
+            || cutoff.is_some_and(|cutoff| after > cutoff)
+        {
+            return Err("authenticated caller and valid bounded directory page required".into());
+        }
+        let page = self
+            .inner
+            .store
+            .read_index(after, cutoff, limit, self.inner.limits.recovery_page_bytes)
+            .await
+            .map_err(ServiceError::storage)?;
+        if after > page.cutoff
+            || cutoff.is_some_and(|cutoff| cutoff != page.cutoff)
+            || page.entries.len() > limit
+        {
+            return Err(ServiceError::storage("invalid Thread directory page"));
+        }
+        let mut entries = Vec::new();
+        let mut previous = after;
+        for head in page.entries {
+            if head.position <= previous || head.position > page.cutoff {
+                return Err(ServiceError::storage("invalid Thread directory position"));
+            }
+            previous = head.position;
+            let target = ThreadTarget {
+                thread_id: head.execution_id,
+                server_instance_id: epoch.into(),
+            };
+            let view = match self.read_stored_thread_view(&target, caller).await {
+                Ok(view) => view,
+                Err(error)
+                    if matches!(
+                        error.code,
+                        ErrorCode::Unauthorized | ErrorCode::UnknownThread
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            entries.push(crate::thread::ThreadDirectoryEntry {
+                turn_status: view.latest_turn.as_ref().map(|turn| turn.status),
+                turn_id: view.latest_turn.as_ref().map(|turn| turn.turn_id.clone()),
+                needs_input: view
+                    .latest_turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.pending_input_id.is_some()),
+                thread: view.thread,
+            });
+        }
+        if page
+            .next_after
+            .is_some_and(|next| next != previous || next <= after)
+        {
+            return Err(ServiceError::storage("Thread directory made no progress"));
+        }
+        let result = crate::thread::ThreadDirectoryPage {
+            cutoff: page.cutoff,
+            next_after: page.next_after,
+            entries,
+        };
+        if serde_json::to_vec(&result)
+            .map_err(|error| ServiceError::storage(error.to_string()))?
+            .len()
+            > self.inner.limits.history_page_bytes
+        {
+            return Err(ServiceError::new(
+                ErrorCode::Overloaded,
+                "Thread directory byte bound exceeded",
+            ));
+        }
+        Ok(result)
+    }
+
     pub async fn create_thread(
         &self,
         server_instance_id: &str,

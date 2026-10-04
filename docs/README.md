@@ -184,3 +184,5 @@ The **product** documentation that used to live here now lives in the
 - [Real Codex subscription ACP pilot](ACP_SUBSCRIPTION_PILOT.md): controlled tasks, frozen evidence, model-reference comparisons and observed follow-up issues.
 - [Rubric v2 fresh-task comparison](ACP_RUBRIC_V2_HOLDOUT.md): four additional subscription task families, revised responsibility semantics, preserved unknown validation and version-compatibility checks.
 - [TS goal audit](ACP_TS_GOAL_AUDIT.md): requirement-level evidence for the controlled reward pilot, learner experiments and serving implementation; separate limits on natural-history and live-benefit claims.
+
+- [BRO Conversation and durable Threads navigation](BRO_CONVERSATION_UI_SPEC.md) — PR #952 UI integration into the native Thread client.

@@ -15,6 +15,52 @@ use crate::agents::{
     AgentAttention, AgentDeckSnapshot, AgentProcessState, AgentRunView, AgentTurnState,
 };
 
+/// Presentation facts supplied by either ACP inventory or the BRO Thread client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuEntry {
+    pub id: String,
+    pub label: String,
+    pub directory: String,
+    pub status: String,
+    pub needs_input: bool,
+    pub working: bool,
+    pub metadata: Vec<String>,
+}
+
+fn acp_entries(snapshot: &AgentDeckSnapshot) -> Vec<MenuEntry> {
+    snapshot
+        .runs
+        .iter()
+        .map(|run| MenuEntry {
+            id: run.run_id.clone(),
+            label: run.label.clone(),
+            directory: run.directory.clone(),
+            status: status(run).into(),
+            needs_input: matches!(
+                run.attention,
+                AgentAttention::Question { .. } | AgentAttention::Permission(_)
+            ),
+            working: matches!(
+                run.turn,
+                AgentTurnState::Submitting | AgentTurnState::Working | AgentTurnState::Cancelling
+            ),
+            metadata: vec![
+                format!("Agent: {} · Run: {}", run.agent, run.run_id),
+                format!("Directory: {}", run.directory),
+                format!(
+                    "Session: {}",
+                    run.native_session_id.as_deref().unwrap_or("unreported")
+                ),
+                format!(
+                    "Route: {} · Cost: {}",
+                    run.confirmed_route.as_deref().unwrap_or("unreported"),
+                    run.attributed_cost.as_deref().unwrap_or("unreported")
+                ),
+            ],
+        })
+        .collect()
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum Filter {
     #[default]
@@ -22,21 +68,24 @@ enum Filter {
     NeedsInput,
     Working,
     Inactive,
+    Paused,
+    Recovery,
 }
 
 impl Filter {
-    fn matches(self, run: &AgentRunView) -> bool {
+    fn matches(self, run: &MenuEntry) -> bool {
         match self {
             Self::All => true,
-            Self::NeedsInput => matches!(
-                run.attention,
-                AgentAttention::Question { .. } | AgentAttention::Permission(_)
-            ),
-            Self::Working => matches!(
-                run.turn,
-                AgentTurnState::Submitting | AgentTurnState::Working | AgentTurnState::Cancelling
-            ),
-            Self::Inactive => !Self::NeedsInput.matches(run) && !Self::Working.matches(run),
+            Self::NeedsInput => run.needs_input,
+            Self::Working => run.working,
+            Self::Inactive => {
+                !run.needs_input
+                    && !run.working
+                    && run.status != "paused"
+                    && run.status != "recovery required"
+            }
+            Self::Paused => run.status == "paused",
+            Self::Recovery => run.status == "recovery required",
         }
     }
 
@@ -44,7 +93,9 @@ impl Filter {
         match (self, reverse) {
             (Self::All, false) | (Self::Working, true) => Self::NeedsInput,
             (Self::NeedsInput, false) | (Self::Inactive, true) => Self::Working,
-            (Self::Working, false) | (Self::All, true) => Self::Inactive,
+            (Self::Working, false) | (Self::Paused, true) => Self::Inactive,
+            (Self::Inactive, false) | (Self::Recovery, true) => Self::Paused,
+            (Self::Paused, false) | (Self::All, true) => Self::Recovery,
             _ => Self::All,
         }
     }
@@ -55,6 +106,8 @@ impl Filter {
             Self::NeedsInput => "Needs input",
             Self::Working => "Working",
             Self::Inactive => "Inactive",
+            Self::Paused => "Paused",
+            Self::Recovery => "Recovery",
         }
     }
 }
@@ -74,11 +127,44 @@ pub struct AgentsMenu {
 }
 
 impl AgentsMenu {
+    pub fn open(&mut self, snapshot: &AgentDeckSnapshot) {
+        self.open_entries(&acp_entries(snapshot));
+    }
+    pub fn receive_snapshot(&mut self, snapshot: &AgentDeckSnapshot) -> bool {
+        self.receive_entries(&acp_entries(snapshot))
+    }
+    pub fn event(&mut self, event: &Event, snapshot: &AgentDeckSnapshot, page_size: usize) {
+        self.event_entries(event, &acp_entries(snapshot), page_size);
+    }
+    pub fn render(
+        &self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        snapshot: &AgentDeckSnapshot,
+        permissions: usize,
+    ) {
+        self.render_entries(frame, area, &acp_entries(snapshot), permissions, false);
+    }
+    /// An explicit open action is available only after inspecting a row.
+    pub fn previewed_id(&self) -> Option<&str> {
+        (self.preview && !self.searching && self.ready && self.error.is_none())
+            .then_some(self.selected.as_deref())
+            .flatten()
+    }
+    pub fn is_listing(&self) -> bool {
+        self.open && !self.preview && !self.searching
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
+        self.preview = false;
+    }
+
     pub fn is_open(&self) -> bool {
         self.open
     }
 
-    pub fn open(&mut self, snapshot: &AgentDeckSnapshot) {
+    pub fn open_entries(&mut self, snapshot: &[MenuEntry]) {
         self.open = true;
         self.refresh(snapshot);
     }
@@ -87,7 +173,7 @@ impl AgentsMenu {
         self.error = message;
     }
 
-    pub fn receive_snapshot(&mut self, snapshot: &AgentDeckSnapshot) -> bool {
+    pub fn receive_entries(&mut self, snapshot: &[MenuEntry]) -> bool {
         let changed = !self.ready || self.error.is_some();
         self.ready = true;
         self.error = None;
@@ -95,38 +181,34 @@ impl AgentsMenu {
         changed
     }
 
-    fn rows<'a>(&self, snapshot: &'a AgentDeckSnapshot) -> Vec<&'a AgentRunView> {
+    fn rows<'a>(&self, snapshot: &'a [MenuEntry]) -> Vec<&'a MenuEntry> {
         let query = self.query.to_lowercase();
         snapshot
-            .runs
             .iter()
             .filter(|run| {
                 self.filter.matches(run)
                     && (query.is_empty()
-                        || format!(
-                            "{} {} {} {}",
-                            run.label, run.agent, run.directory, run.run_id
-                        )
-                        .to_lowercase()
-                        .contains(&query))
+                        || format!("{} {} {}", run.label, run.directory, run.id)
+                            .to_lowercase()
+                            .contains(&query))
             })
             .collect()
     }
 
-    fn refresh(&mut self, snapshot: &AgentDeckSnapshot) {
+    fn refresh(&mut self, snapshot: &[MenuEntry]) {
         let rows = self.rows(snapshot);
         self.selected_index = rows
             .iter()
-            .position(|run| self.selected.as_deref() == Some(run.run_id.as_str()))
+            .position(|run| self.selected.as_deref() == Some(run.id.as_str()))
             .unwrap_or(self.selected_index.min(rows.len().saturating_sub(1)));
-        self.selected = rows.get(self.selected_index).map(|run| run.run_id.clone());
+        self.selected = rows.get(self.selected_index).map(|run| run.id.clone());
         if self.selected.is_none() {
             self.preview = false;
         }
     }
 
     /// Handle only menu-local input. Ctrl-C remains the host's foreground policy.
-    pub fn event(&mut self, event: &Event, snapshot: &AgentDeckSnapshot, page_size: usize) {
+    pub fn event_entries(&mut self, event: &Event, snapshot: &[MenuEntry], page_size: usize) {
         if let Event::Paste(text) = event {
             if self.searching {
                 self.query.push_str(text);
@@ -170,9 +252,16 @@ impl AgentsMenu {
                 }
                 KeyCode::Enter => self.preview = self.selected.is_some(),
                 KeyCode::Tab | KeyCode::BackTab => {
-                    self.filter = self.filter.next(
-                        key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT),
-                    );
+                    let reverse =
+                        key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+                    loop {
+                        self.filter = self.filter.next(reverse);
+                        if !matches!(self.filter, Filter::Paused | Filter::Recovery)
+                            || snapshot.iter().any(|entry| self.filter.matches(entry))
+                        {
+                            break;
+                        }
+                    }
                     self.preview = false;
                 }
                 KeyCode::Up | KeyCode::PageUp => {
@@ -199,12 +288,13 @@ impl AgentsMenu {
         self.refresh(snapshot);
     }
 
-    pub fn render(
+    pub fn render_entries(
         &self,
         frame: &mut Frame<'_>,
         area: Rect,
-        snapshot: &AgentDeckSnapshot,
+        snapshot: &[MenuEntry],
         permissions: usize,
+        openable: bool,
     ) {
         let [heading, filters, content, help] = Layout::vertical([
             Constraint::Length(1),
@@ -234,14 +324,16 @@ impl AgentsMenu {
             Filter::NeedsInput,
             Filter::Working,
             Filter::Inactive,
+            Filter::Paused,
+            Filter::Recovery,
         ]
         .into_iter()
+        .filter(|filter| {
+            !matches!(filter, Filter::Paused | Filter::Recovery)
+                || snapshot.iter().any(|entry| filter.matches(entry))
+        })
         .map(|filter| {
-            let count = snapshot
-                .runs
-                .iter()
-                .filter(|run| filter.matches(run))
-                .count();
+            let count = snapshot.iter().filter(|run| filter.matches(run)).count();
             Span::styled(
                 format!("{} {count}  ", filter.label()),
                 if self.filter == filter {
@@ -262,7 +354,6 @@ impl AgentsMenu {
             );
         } else if area.width < 68 {
             let count = snapshot
-                .runs
                 .iter()
                 .filter(|run| self.filter.matches(run))
                 .count();
@@ -270,7 +361,7 @@ impl AgentsMenu {
                 Paragraph::new(format!(
                     "{} {count} · {} total",
                     self.filter.label(),
-                    snapshot.runs.len()
+                    snapshot.len()
                 ))
                 .style(Style::default().fg(Color::Cyan)),
                 filters,
@@ -295,32 +386,25 @@ impl AgentsMenu {
         } else if !self.ready {
             vec![Line::from("Loading agent inventory…")]
         } else if rows.is_empty() {
-            vec![Line::from(if snapshot.runs.is_empty() {
-                "No supervised agents"
+            vec![Line::from(if snapshot.is_empty() {
+                if openable {
+                    "No BRO conversations"
+                } else {
+                    "No supervised agents"
+                }
             } else {
                 "No agents match this filter"
             })]
         } else if self.preview {
             rows.get(self.selected_index)
                 .map(|run| {
-                    vec![
-                        Line::from(format!("{} · {}", sanitize(&run.label), status(run))),
-                        Line::from(format!(
-                            "Agent: {} · Run: {}",
-                            sanitize(&run.agent),
-                            sanitize(&run.run_id)
-                        )),
-                        Line::from(format!("Directory: {}", sanitize(&run.directory))),
-                        Line::from(format!(
-                            "Session: {}",
-                            sanitize(run.native_session_id.as_deref().unwrap_or("unreported"))
-                        )),
-                        Line::from(format!(
-                            "Route: {} · Cost: {}",
-                            sanitize(run.confirmed_route.as_deref().unwrap_or("unreported")),
-                            sanitize(run.attributed_cost.as_deref().unwrap_or("unreported"))
-                        )),
-                    ]
+                    std::iter::once(Line::from(format!(
+                        "{} · {}",
+                        sanitize(&run.label),
+                        sanitize(&run.status)
+                    )))
+                    .chain(run.metadata.iter().map(|line| Line::from(sanitize(line))))
+                    .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
         } else {
@@ -334,7 +418,7 @@ impl AgentsMenu {
                     let selected = index == self.selected_index;
                     let label = sanitize(&run.label);
                     let available =
-                        usize::from(content.width).saturating_sub(status(run).width() + 5);
+                        usize::from(content.width).saturating_sub(run.status.width() + 5);
                     let mut width = 0;
                     let label = label
                         .graphemes(true)
@@ -346,7 +430,7 @@ impl AgentsMenu {
                     let text = format!(
                         "{} {label} · {}",
                         if selected { "›" } else { " " },
-                        status(run)
+                        sanitize(&run.status)
                     );
                     Line::styled(
                         text,
@@ -365,7 +449,11 @@ impl AgentsMenu {
         let help_text = if self.searching {
             "Enter / Esc list · type to search"
         } else if self.preview {
-            "Esc list · read-only metadata"
+            if openable {
+                "o Open conversation · Esc list"
+            } else {
+                "Esc list · read-only metadata"
+            }
         } else if self.selected.is_none() {
             if area.width < 68 {
                 "Esc back · / search"
@@ -385,7 +473,10 @@ impl AgentsMenu {
 }
 
 fn status(run: &AgentRunView) -> &'static str {
-    if Filter::NeedsInput.matches(run) {
+    if matches!(
+        run.attention,
+        AgentAttention::Question { .. } | AgentAttention::Permission(_)
+    ) {
         return "needs input";
     }
     match run.process {
@@ -394,7 +485,14 @@ fn status(run: &AgentRunView) -> &'static str {
         AgentProcessState::Interrupted => "interrupted",
         AgentProcessState::Starting => "starting",
         AgentProcessState::Stopping => "stopping",
-        AgentProcessState::Running if Filter::Working.matches(run) => "working",
+        AgentProcessState::Running
+            if matches!(
+                run.turn,
+                AgentTurnState::Submitting | AgentTurnState::Working | AgentTurnState::Cancelling
+            ) =>
+        {
+            "working"
+        }
         AgentProcessState::Running => "inactive",
     }
 }
@@ -450,7 +548,7 @@ mod tests {
         menu.event(&key(KeyCode::Char('/')), &inventory, 3);
         menu.event(&Event::Paste("审查".to_string()), &inventory, 3);
         menu.event(&key(KeyCode::Enter), &inventory, 3);
-        assert_eq!(menu.rows(&inventory).len(), 1);
+        assert_eq!(menu.rows(&acp_entries(&inventory)).len(), 1);
         menu.event(&key(KeyCode::Enter), &inventory, 3);
         assert!(menu.preview);
         for code in ['r', 's', 'c', 'n'] {

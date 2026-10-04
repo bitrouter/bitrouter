@@ -75,7 +75,7 @@ untouched text, a UTF-8 BOM, and the file's line-ending style. Shell commands st
 in the workspace, default to a 30-second timeout, and accept at most 120
 seconds. The workspace path check is not an OS sandbox for shell commands.
 
-The local native protocol is **v14**, bound to the negotiated server instance.
+The local native protocol is **v15**, bound to the negotiated server instance.
 Older daemons fail the handshake before submission. `command_id` correlates
 transport replies; durable `idempotency_key` identifies accepted operations.
 Every Thread operation checks its authenticated caller, stored permission
@@ -91,6 +91,23 @@ clears only after acceptance. Same-instance reconnect uses the Thread cursor
 and preserves the in-process draft; instance loss never resubmits input.
 `--thread-id` reattaches stored configuration and permissions; `--task-id` has
 been removed. No draft persistence across process exit is provided.
+
+Conversation and Agents use the terminal's normal buffer and native scrollback.
+An empty composer permits plain Left to open the **BRO conversation directory**;
+a separate model editor is used when no model was supplied, retaining the draft.
+The directory shows authorized durable Threads, their current Turn state, queue,
+workspace, model and permission profile. It does not list ACP supervisor runs.
+Up/Down selects; Tab filters; `/` searches the current page; Enter previews;
+`o` in the preview explicitly opens the selected conversation; Esc returns.
+`r` refreshes directory membership; `n`/`p` change pages when available. A page
+scans at most 16 roots; unauthorized roots are omitted, so pages may be empty.
+The directory cutoff fixes membership, while status is refreshed every two seconds.
+Listing does not install model context, workers or observation subscriptions.
+Opening restores committed public history and subscribes to that Thread; it does
+not start a Turn, resume a queue, answer an approval, or replay tools. Pending
+acceptance must be resolved before switching. Recovery-blocked Threads remain
+inspectable without granting continuation. Client drafts are process-local and
+are not persisted on detach. Below 40×16, submission and approvals are disabled.
 
 The same Thread service can expose an optional HTTP listener:
 
@@ -907,12 +924,12 @@ bro --context <name> code
 ```
 
 Bare local `code` opens a native Thread conversation. It chooses a model from
-`--model` or `chat.model`, or asks in the editor. Subsequent prompts reuse that
+`--model` or `chat.model`, or asks in a separate model editor. Subsequent prompts reuse that
 Thread's settled context. Enter starts or enqueues; Ctrl-Enter steers; Ctrl-R
 resumes a paused queue. With an empty composer, `y`/`n` answers an identified
 approval. Ctrl-C cancels the active Turn and Ctrl-D detaches. `--thread-id`
-reattaches stored configuration without replaying effects. The header shows
-Thread/Turn state and verification, including `not_requested` without a check.
+reattaches stored configuration without replaying effects. The footer shows
+Thread state and the server queue; verification is shown in wider terminals.
 `--socket` alone keeps the read-only operations view; native flags select an
 already-running local native server. Explicit remote contexts keep the
 operations view. See the native section above for recovery and draft behavior.

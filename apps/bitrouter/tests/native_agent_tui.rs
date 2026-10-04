@@ -21,6 +21,8 @@ struct TerminalClient {
     output: Receiver<Vec<u8>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     screen: vt100::Parser,
+    raw: Vec<u8>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
 impl TerminalClient {
@@ -68,7 +70,9 @@ impl TerminalClient {
             writer,
             output,
             child,
-            screen: vt100::Parser::new(24, 100, 0),
+            screen: vt100::Parser::new(24, 100, 2000),
+            raw: Vec::new(),
+            master: pty.master,
         })
     }
 
@@ -81,6 +85,7 @@ impl TerminalClient {
             let remaining = deadline.saturating_duration_since(Instant::now());
             match self.output.recv_timeout(remaining) {
                 Ok(bytes) => {
+                    self.raw.extend_from_slice(&bytes);
                     self.screen.process(&bytes);
                 }
                 Err(error) => anyhow::bail!(
@@ -95,9 +100,55 @@ impl TerminalClient {
         )
     }
 
+    fn wait_for_raw_since(&mut self, offset: usize, needle: &[u8]) -> Result<usize> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(position) = self.raw[offset..]
+                .windows(needle.len())
+                .position(|window| window == needle)
+            {
+                return Ok(offset + position + needle.len());
+            }
+            let bytes = self
+                .output
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+            self.raw.extend_from_slice(&bytes);
+            self.screen.process(&bytes);
+        }
+    }
+
+    fn wait_for_frame_since(&mut self, offset: usize) -> Result<()> {
+        let end = b"\x1b[?2026l";
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if self.raw[offset..]
+                .windows(end.len())
+                .any(|window| window == end)
+            {
+                return Ok(());
+            }
+            let bytes = self
+                .output
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+            self.raw.extend_from_slice(&bytes);
+            self.screen.process(&bytes);
+        }
+    }
+
     fn send(&mut self, bytes: &[u8]) -> Result<()> {
         self.writer.write_all(bytes)?;
         self.writer.flush()?;
+        Ok(())
+    }
+
+    fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
+        self.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        self.screen.set_size(rows, cols);
         Ok(())
     }
 
@@ -105,6 +156,12 @@ impl TerminalClient {
         self.send(b"\x04")?;
         let _ = self.child.wait()?;
         Ok(())
+    }
+}
+
+impl Drop for TerminalClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
     }
 }
 
@@ -465,4 +522,196 @@ async fn observation_proxy(
             Some(_)=connections.join_next(),if !connections.is_empty()=> {},
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_agents_navigation_opens_durable_history_without_submitting() -> Result<()> {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/chat/completions"))
+        .respond_with(|_: &Request| ResponseTemplate::new(200).set_body_raw(format!("data: {}\n\ndata: [DONE]\n\n", json!({
+            "id":"reply", "object":"chat.completion.chunk", "model":"test-model",
+            "choices":[{"index":0,"delta":{"role":"assistant","content":"Retained answer for this conversation."},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":4,"completion_tokens":4,"total_tokens":8}
+        })), "text/event-stream")).mount(&upstream).await;
+    let home = tempfile::tempdir()?;
+    let workspace = home.path().join("project");
+    std::fs::create_dir(&workspace)?;
+    let config = home.path().join("bitrouter.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "inherit_defaults: false\nserver:\n  listen: '127.0.0.1:0'\n  skip_auth: true\ndatabase:\n  url: 'sqlite://{}?mode=rwc'\nproviders:\n  mock:\n    api_base: {}\n    api_key: fixture\n    api_protocol:\n      - '*': chat_completions\n    models: [{{id: test-model}}]\n",
+            home.path().join("bitrouter.db").display(),
+            upstream.uri()
+        ),
+    )?;
+    let binary = env!("CARGO_BIN_EXE_bro");
+    let mut server = Command::new(binary)
+        .arg("serve")
+        .arg("--config")
+        .arg(&config)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let source = bitrouter::paths::ConfigSource::File(config.clone());
+    let cfg = bitrouter::paths::load_config(&source).await?;
+    let socket =
+        bitrouter::agent_local::socket_path(&bitrouter::daemon::socket_path_for(&source, &cfg));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if matches!(
+            bitrouter::agent_local::request(&socket, Operation::Capabilities).await,
+            Ok(ReplyResult::Capabilities { .. })
+        ) {
+            break;
+        }
+        ensure!(tokio::time::Instant::now() < deadline, "server unavailable");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let first = submit(&socket, &workspace, None).await?;
+    wait_status(&socket, &first, TurnStatus::Completed).await?;
+    let second = submit(&socket, &workspace, None).await?;
+    wait_status(&socket, &second, TurnStatus::Completed).await?;
+    let requests_before = upstream
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing requests"))?
+        .len();
+    let mut tui = TerminalClient::open(binary, &config, &first)?;
+    tui.wait_for("Retained answer for this conversation.")?;
+    tui.wait_for("← agents")?;
+    tui.send(b"\x1b[D")?;
+    tui.wait_for("Agents")?;
+    tui.wait_for("Enter view")?;
+    tui.resize(16, 40)?;
+    tui.send(b"\x0c")?;
+    tui.wait_for("Agents")?;
+    tui.wait_for("Enter view")?;
+    let pid = tui
+        .child
+        .process_id()
+        .ok_or_else(|| anyhow::anyhow!("PTY process has no PID"))?;
+    ensure!(
+        Command::new("kill")
+            .arg("-TSTP")
+            .arg(pid.to_string())
+            .status()
+            .await?
+            .success()
+    );
+    let stopped_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let status = Command::new("ps")
+            .args(["-o", "state=", "-p"])
+            .arg(pid.to_string())
+            .output()
+            .await?;
+        if String::from_utf8_lossy(&status.stdout).contains('T') {
+            break;
+        }
+        ensure!(
+            tokio::time::Instant::now() < stopped_deadline,
+            "native UI did not suspend"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let frame_offset = tui.raw.len();
+    ensure!(
+        Command::new("kill")
+            .arg("-CONT")
+            .arg(pid.to_string())
+            .status()
+            .await?
+            .success()
+    );
+    tui.resize(24, 100)?;
+    tui.send(b"\x0c")?;
+    let resume_frame = tui.wait_for_raw_since(frame_offset, b"\x1b[?2004h")?;
+    tui.wait_for_frame_since(resume_frame)?;
+    tui.wait_for("Enter view")?;
+    tui.send(b"/")?;
+    tui.send(second.thread_id.as_bytes())?;
+    tui.send(b"\r\r")?;
+    tui.wait_for("o Open conversation")?;
+    tui.wait_for(&format!("Thread: {}", second.thread_id))?;
+    ensure!(
+        upstream
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("missing requests"))?
+            .len()
+            == requests_before,
+        "preview submitted or executed"
+    );
+    tui.send(b"o")?;
+    tui.wait_for(&format!(
+        "thread: {}",
+        second
+            .thread_id
+            .get(..8)
+            .ok_or_else(|| anyhow::anyhow!("short Thread ID"))?
+    ))?;
+    tui.wait_for("Retained answer for this conversation.")?;
+    ensure!(
+        upstream
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("missing requests"))?
+            .len()
+            == requests_before,
+        "opening history started a Turn"
+    );
+    ensure!(
+        !tui.screen.screen().alternate_screen(),
+        "native view entered alternate screen"
+    );
+    for forbidden in [
+        b"\x1b[?1049h".as_slice(),
+        b"\x1b[?1047h",
+        b"\x1b[?47h",
+        b"\x1b[3J",
+    ] {
+        ensure!(
+            !tui.raw
+                .windows(forbidden.len())
+                .any(|window| window == forbidden),
+            "native view cleared/replaced terminal history"
+        );
+    }
+    tui.send(b"Continue the opened conversation\r")?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let requests = upstream
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("missing requests"))?;
+        if let Some(last) = requests.last()
+            && requests.len() > requests_before
+        {
+            let body: serde_json::Value = serde_json::from_slice(&last.body)?;
+            let messages = body["messages"].to_string();
+            ensure!(
+                messages.contains("Continue the opened conversation")
+                    && messages.contains("Retained answer for this conversation.")
+                    && messages.contains("Change note.txt"),
+                "opened Thread lost context"
+            );
+            break;
+        }
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "next Turn not submitted"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tui.close()?;
+    let _ = Command::new(binary)
+        .arg("stop")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .await;
+    let _ = server.wait().await;
+    Ok(())
 }

@@ -27,7 +27,7 @@ without it verification is `not_requested`. `--read-only` forbids effectful
 tools and cannot be combined with `--check`. Explicit remote contexts fail
 without local fallback. `bro run <agent>` remains the separate ACP harness path.
 
-The local native protocol is **v14**, bound to the negotiated server instance.
+The local native protocol is **v15**, bound to the negotiated server instance.
 Older daemons fail the handshake before submission. `command_id` correlates
 transport replies; durable `idempotency_key` identifies accepted operations.
 Every Thread operation checks its authenticated caller, stored permission
@@ -43,6 +43,23 @@ clears only after acceptance. Same-instance reconnect uses the Thread cursor
 and preserves the in-process draft; instance loss never resubmits input.
 `--thread-id` reattaches stored configuration and permissions; `--task-id` has
 been removed. No draft persistence across process exit is provided.
+
+Conversation and Agents use the terminal's normal buffer and native scrollback.
+An empty composer permits plain Left to open the **BRO conversation directory**;
+a separate model editor is used when no model was supplied, retaining the draft.
+The directory shows authorized durable Threads, their current Turn state, queue,
+workspace, model and permission profile. It does not list ACP supervisor runs.
+Up/Down selects; Tab filters; `/` searches the current page; Enter previews;
+`o` in the preview explicitly opens the selected conversation; Esc returns.
+`r` refreshes directory membership; `n`/`p` change pages when available. A page
+scans at most 16 roots; unauthorized roots are omitted, so pages may be empty.
+The directory cutoff fixes membership, while status is refreshed every two seconds.
+Listing does not install model context, workers or observation subscriptions.
+Opening restores committed public history and subscribes to that Thread; it does
+not start a Turn, resume a queue, answer an approval, or replay tools. Pending
+acceptance must be resolved before switching. Recovery-blocked Threads remain
+inspectable without granting continuation. Client drafts are process-local and
+are not persisted on detach. Below 40×16, submission and approvals are disabled.
 
 The same Thread service can expose an optional HTTP listener:
 

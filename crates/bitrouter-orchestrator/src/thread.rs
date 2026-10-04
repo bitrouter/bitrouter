@@ -59,6 +59,23 @@ pub struct ThreadSnapshot {
     pub waiting_for_capacity: bool,
 }
 
+/// A cold directory projection. Listing does not load context or subscribe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadDirectoryEntry {
+    pub thread: ThreadSnapshot,
+    pub turn_status: Option<TurnStatus>,
+    pub turn_id: Option<String>,
+    pub needs_input: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadDirectoryPage {
+    /// Fixes directory membership, not the mutable status of each Thread.
+    pub cutoff: u64,
+    pub next_after: Option<u64>,
+    pub entries: Vec<ThreadDirectoryEntry>,
+}
+
 /// Presentation comes from committed facts. SDK messages are not reconstructed
 /// from this view or from its evictable live-output cache.
 #[derive(Debug, Clone, Serialize, Deserialize)]

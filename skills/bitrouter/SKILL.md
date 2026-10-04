@@ -85,10 +85,11 @@ covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supp
 ### 5. Start the desired agent interface
 
 BitRouter uses native scrollback and explicit inspectors. Empty-composer Left
-opens read-only Agents; Esc returns; navigation never attaches or stops a run:
+opens Agents; Enter previews and `o` explicitly opens a BRO conversation.
+Esc returns; browsing never submits, approves, resumes or stops work:
 
 ```bash
-bro code --model openai/gpt-5  # BRO native interactive coding view
+bro code --model openai/gpt-5  # BRO scrollback Conversation; ← opens durable Threads
 bro code codex              # explicit interactive ACP session
 bro run claude "summarize this repo"  # headless ACP turn
 bro task run "fix the failing test" --model openai/gpt-5 --check "cargo test"  # BRO native task
@@ -108,7 +109,7 @@ it is `not_requested`. Bare `bro code` keeps one Thread: Enter starts/enqueues,
 Ctrl-Enter steers, Ctrl-R resumes a paused queue, empty-composer `y`/`n` approves,
 and Ctrl-D detaches. Reattach with `--thread-id`; `--task-id` is removed.
 `--read-only` permits `read`, `ls`, `find`, `grep`; coding adds `write`, unique-span
-`edit`, and Unix `bash` or Windows `powershell`. `code <agent>` / `run <agent>` remain ACP. Local protocol is v14; opt-in HTTP uses `/agent/v2`. Durable history/keys
+`edit`, and Unix `bash` or Windows `powershell`. `code <agent>` / `run <agent>` remain ACP. Local protocol is v15; opt-in HTTP uses `/agent/v2`. Durable history/keys
 survive hot unload. Lost instances/unknown effects never trigger automatic resubmission.
 See `references/cli.md` for permissions, controls, retries and recovery.
 
@@ -122,9 +123,7 @@ bro codex -- --search
 
 `launch <agent>` accepts catalog native harnesses; `claude`, `claude-code`, and
 `codex` are shortcuts. Everything after `--` is forwarded verbatim, and user
-configuration is not edited.
-
-Keep the harness's model on its subscription by default; use BitRouter for
+configuration is not edited. Keep the harness's model on its subscription by default; use BitRouter for
 subagents, bulk work, and models the plan lacks.
 
 **The restart handoff — say it every time.** Existing harness processes need a
@@ -152,8 +151,7 @@ For administration from another computer, use a named `--context`; see
 `references/remote-administration.md` for token scopes, tunnel setup, and host
 boundaries. Remote errors never fall back to this machine's configuration.
 
-## References — read on demand, not upfront
-
+## References — read on demand
 | File | When to read |
 |---|---|
 | `references/cli.md` | Full subcommand reference — the primary reference |

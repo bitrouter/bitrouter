@@ -11,6 +11,9 @@
 用户已批准本文并要求按 U1–U5 实施；阶段结果、验收和未验证边界见
 [独立实施记录](BRO_THREAD_TURN_UNIFICATION_IMPLEMENTATION.md)。
 
+原生 UI 和本地协议已由后续 [Conversation UI 契约](BRO_CONVERSATION_UI_SPEC.md)
+更新；本文保留 Thread/Turn 统一设计和当时的验证基线。
+
 ## 范围和设计依据
 
 源码审查基线为 [PR #945](https://github.com/bitrouter/bitrouter/pull/945) 的

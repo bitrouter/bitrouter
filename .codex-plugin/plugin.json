@@ -2,7 +2,7 @@
   "name": "bitrouter",
   "displayName": "BitRouter",
   "version": "0.1.0",
-  "description": "Route model calls and run BRO Thread/Turn conversations with FIFO input, steering, bounded read workers and durable execution records on a background server. Bundles the BitRouter setup and operations skill, including ACP harnesses, request checks, and custom-host setup.",
+  "description": "Route model calls and browse durable BRO conversations in native scrollback and run Thread/Turn conversations with FIFO input, steering, bounded read workers and durable execution records on a background server. Bundles the BitRouter setup and operations skill, including ACP harnesses, request checks, and custom-host setup.",
   "homepage": "https://bitrouter.ai",
   "repository": "https://github.com/bitrouter/bitrouter",
   "license": "Apache-2.0",

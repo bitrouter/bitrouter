@@ -14,7 +14,6 @@ use crossterm::cursor::Hide;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use ratatui::backend::{CrosstermBackend, TestBackend};
-use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect, Size};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -28,13 +27,14 @@ use crate::agents::{
     AgentHistoryEvent, AgentHistorySnapshot, NewAgentRunChoices,
 };
 use crate::agents_menu::AgentsMenu;
+use crate::composer::layout as composer_layout;
 use crate::cost;
 use crate::editor::{Edit, Editor};
 use crate::journal::{Entry, EntryId, Journal, Voice};
 use crate::permission::Prompt;
 use crate::render::{self, Registry, ToolContext};
 use crate::wrap::wrap;
-use crate::writer::Writer;
+use crate::writer::{Writer, buffer_lines};
 
 /// The four persistent conversation facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4091,21 +4091,6 @@ fn render_detached_frame(frame: &mut Frame<'_>, state: &CodeState) {
     }
 }
 
-fn buffer_lines(buffer: &Buffer) -> Vec<Line<'static>> {
-    (buffer.area.top()..buffer.area.bottom())
-        .map(|y| {
-            let mut spans = Vec::new();
-            let mut x = buffer.area.left();
-            while x < buffer.area.right() {
-                let cell = &buffer[(x, y)];
-                spans.push(Span::styled(cell.symbol().to_string(), cell.style()));
-                x = x.saturating_add(u16::try_from(cell.symbol().width()).unwrap_or(1).max(1));
-            }
-            Line::from(spans)
-        })
-        .collect()
-}
-
 #[derive(Clone)]
 struct DocumentRow {
     line: Line<'static>,
@@ -4669,148 +4654,6 @@ fn composer_cursor_position(area: Rect, state: &CodeState) -> Option<Position> {
         .saturating_add(y_offset)
         .min(inner.bottom().saturating_sub(1));
     Some(Position::new(x, y))
-}
-
-#[derive(Clone)]
-struct ComposerLayout {
-    rows: Vec<Line<'static>>,
-    cursor_row: usize,
-    cursor_column: u16,
-}
-
-#[derive(Clone, Copy)]
-struct ComposerFormat {
-    cursor: usize,
-    content_width: u16,
-    rail: &'static str,
-    rail_style: Style,
-}
-
-fn composer_layout(
-    text: &str,
-    cursor: usize,
-    content_width: u16,
-    rail: &'static str,
-    rail_style: Style,
-) -> ComposerLayout {
-    let mut rows = Vec::new();
-    let mut cursor_position = None;
-    let format = ComposerFormat {
-        cursor,
-        content_width,
-        rail,
-        rail_style,
-    };
-    let mut start = 0_usize;
-    let bytes = text.as_bytes();
-    let mut index = 0_usize;
-
-    while index < bytes.len() {
-        let newline = matches!(bytes[index], b'\n' | b'\r');
-        if !newline {
-            index = index.saturating_add(1);
-            continue;
-        }
-        append_composer_line(
-            &mut rows,
-            &mut cursor_position,
-            &text[start..index],
-            start,
-            &format,
-        );
-        let mut next = index.saturating_add(1);
-        if bytes[index] == b'\r' && bytes.get(next) == Some(&b'\n') {
-            next = next.saturating_add(1);
-        }
-        if cursor > index && cursor < next {
-            cursor_position = rows.last().map(|line| {
-                (
-                    rows.len().saturating_sub(1),
-                    u16::try_from(line_width(line)).unwrap_or(u16::MAX),
-                )
-            });
-        }
-        start = next;
-        index = next;
-    }
-    append_composer_line(
-        &mut rows,
-        &mut cursor_position,
-        &text[start..],
-        start,
-        &format,
-    );
-    let (cursor_row, cursor_column) = cursor_position.unwrap_or_else(|| {
-        let row = rows.len().saturating_sub(1);
-        let column = rows
-            .last()
-            .map(|line| u16::try_from(line_width(line)).unwrap_or(u16::MAX))
-            .unwrap_or(2);
-        (row, column)
-    });
-    ComposerLayout {
-        rows,
-        cursor_row,
-        cursor_column,
-    }
-}
-
-fn append_composer_line(
-    rows: &mut Vec<Line<'static>>,
-    cursor_position: &mut Option<(usize, u16)>,
-    text: &str,
-    start: usize,
-    format: &ComposerFormat,
-) {
-    let mut content = String::new();
-    let mut cells = 0_u16;
-    let width = format.content_width.max(1);
-    let mut row_start = start;
-
-    for (offset, grapheme) in text.grapheme_indices(true) {
-        let position = start.saturating_add(offset);
-        if cursor_position.is_none() && format.cursor == position {
-            *cursor_position = Some((
-                rows.len(),
-                u16::try_from(2_usize.saturating_add(usize::from(cells))).unwrap_or(u16::MAX),
-            ));
-        }
-        let rendered = sanitize(grapheme);
-        let grapheme_cells = u16::try_from(rendered.width()).unwrap_or(u16::MAX);
-        if !content.is_empty() && cells.saturating_add(grapheme_cells) > width {
-            rows.push(composer_row(
-                std::mem::take(&mut content),
-                format.rail,
-                format.rail_style,
-            ));
-            row_start = position;
-            cells = 0;
-        }
-        if cursor_position.is_none() && format.cursor == row_start {
-            *cursor_position = Some((rows.len(), 2));
-        }
-        content.push_str(&rendered);
-        cells = cells.saturating_add(grapheme_cells);
-    }
-    let end = start.saturating_add(text.len());
-    if cursor_position.is_none() && format.cursor == end {
-        *cursor_position = Some((
-            rows.len(),
-            u16::try_from(2_usize.saturating_add(usize::from(cells))).unwrap_or(u16::MAX),
-        ));
-    }
-    rows.push(composer_row(content, format.rail, format.rail_style));
-}
-
-fn composer_row(content: String, rail: &'static str, rail_style: Style) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{rail} "), rail_style),
-        Span::raw(content),
-    ])
-}
-
-fn line_width(line: &Line<'_>) -> usize {
-    line.spans.iter().map(|span| span.content.width()).sum()
 }
 
 fn hint(state: &CodeState) -> String {

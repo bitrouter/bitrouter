@@ -606,3 +606,77 @@ async fn accepted_retry_can_be_overloaded_without_rejecting_the_original_input()
     service.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn directory_is_cold_paginated_and_caller_filtered() -> Result<(), Box<dyn std::error::Error>>
+{
+    let workspace = TempDir::new()?;
+    let store = Arc::new(MemoryExecutionStore::default());
+    let service =
+        ThreadService::with_store(app(vec![])?, &[workspace.path().into()], store.clone())?;
+    let caller = CallerContext::local();
+    let visible = service
+        .create_thread(
+            &service.inner.instance_id,
+            thread_request(&workspace, "visible"),
+        )
+        .await?;
+    let mut foreign = thread_request(&workspace, "foreign");
+    foreign.caller = CallerContext::new("foreign", "foreign");
+    service
+        .create_thread(&service.inner.instance_id, foreign)
+        .await?;
+    service.unload_thread(&target(&visible), &caller).await?;
+    let before = store
+        .load(&visible.thread_id)
+        .await?
+        .ok_or("missing root")?
+        .version;
+    let page = service
+        .list_threads(&service.inner.instance_id, &caller, 0, None, 1)
+        .await?;
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].thread.thread_id, visible.thread_id);
+    let next = page.next_after.ok_or("missing pagination")?;
+    let second = service
+        .list_threads(
+            &service.inner.instance_id,
+            &caller,
+            next,
+            Some(page.cutoff),
+            1,
+        )
+        .await?;
+    assert!(second.entries.is_empty());
+    assert!(second.next_after.is_none());
+    assert!(
+        !service
+            .lock_state()
+            .threads
+            .contains_key(&visible.thread_id)
+    );
+    assert!(service.lock_state().running_turns.is_empty());
+    assert_eq!(
+        store
+            .load(&visible.thread_id)
+            .await?
+            .ok_or("missing root")?
+            .version,
+        before
+    );
+    service
+        .lock_state()
+        .workspace_profiles
+        .remove(&visible.workspace);
+    let revoked = service
+        .list_threads(&service.inner.instance_id, &caller, 0, None, 16)
+        .await?;
+    assert!(revoked.entries.is_empty());
+    assert!(
+        service
+            .list_threads(&service.inner.instance_id, &caller, 0, None, 17)
+            .await
+            .is_err()
+    );
+    Ok(())
+}

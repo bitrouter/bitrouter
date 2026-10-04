@@ -22,7 +22,7 @@ use bitrouter_orchestrator::thread::{
     ThreadTarget, ThreadView, TurnReceipt, TurnRequest,
 };
 
-pub const CONTRACT_VERSION: u32 = 14;
+pub const CONTRACT_VERSION: u32 = 15;
 const MAX_COMMAND_BYTES: u64 = 64 * 1024;
 const MAX_REPLY_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -80,6 +80,11 @@ pub struct ThreadCommand {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Operation {
     Capabilities,
+    ListThreads {
+        after: u64,
+        cutoff: Option<u64>,
+        limit: usize,
+    },
     CreateThread {
         workspace: PathBuf,
         model: String,
@@ -159,6 +164,9 @@ pub struct ThreadReply {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReplyResult {
+    Directory {
+        page: bitrouter_orchestrator::thread::ThreadDirectoryPage,
+    },
     Capabilities {
         operations: Vec<String>,
         runtime: Box<RuntimeCapabilities>,
@@ -366,6 +374,7 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
             return ReplyResult::Capabilities {
                 runtime: Box::new(service.capabilities()),
                 operations: [
+                    "list_threads",
                     "create_thread",
                     "read_thread",
                     "read_turn",
@@ -385,6 +394,14 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
                 .collect(),
             };
         }
+        Operation::ListThreads {
+            after,
+            cutoff,
+            limit,
+        } => service
+            .list_threads(&epoch, &caller, after, cutoff, limit)
+            .await
+            .map(|page| ReplyResult::Directory { page }),
         Operation::CreateThread {
             workspace,
             model,
@@ -572,6 +589,7 @@ fn target(
 
 /// A client stays bound to the instance it negotiated. Network retries never
 /// renegotiate identity or repeat a submit implicitly.
+#[derive(Clone)]
 pub struct ThreadClient {
     socket: PathBuf,
     pub server_instance_id: String,
