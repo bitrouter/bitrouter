@@ -1,7 +1,7 @@
 # BRO Conversation UI integration evidence
 
 Date: 2026-10-04. Contract: [BRO_CONVERSATION_UI_SPEC.md](BRO_CONVERSATION_UI_SPEC.md).
-Validated source: `9e09ce40` on macOS with Rust 1.97.0. This ledger is a
+Validated source: `485728f9` on macOS with Rust 1.97.0. This ledger is a
 documentation-only follow-up to that source. Builds used incremental=0 and
 dev/test debug=0. Hosted CI for the published head is a separate gate.
 
@@ -10,6 +10,8 @@ dev/test debug=0. Hosted CI for the published head is a separate gate.
 - PR #952 (`281619ff`) is an ancestor of this integration, including its shared
   ACP navigation and PTY behavior. PR #945's subsequent six-tool integration
   (`348106a7`) is retained. Explicit `bro code <agent>` remains ACP.
+  Current main (`d8b66a9e`) is integrated, including daemon upgrade and registry
+  updates; its CLI dispatch retains both native Task and managed Serve entries.
 - Bare `bro code` uses the normal-buffer Writer, chronological committed Items,
   Markdown, a replaceable live tail, and the shared grapheme-aware composer.
   A separate model editor preserves the conversation draft.
@@ -33,6 +35,12 @@ dev/test debug=0. Hosted CI for the published head is a separate gate.
 - Resize rewraps the frozen transcript; suspend/resume restores raw mode,
   bracketed paste and the input stream while retaining state. Opening another
   Thread begins below the prior document in native terminal history.
+- The native endpoint holds daemon admission for its lifetime. Main's ACP/HTTP
+  idleness checks cannot authorize replacing the BRO epoch until native request,
+  worker and recovery admission participates in the same atomic handoff. Even
+  idle native daemons therefore defer automatic replacement; explicit restart
+  remains available. This is a conservative integration boundary, not completed
+  native handoff support.
 - CLI, README, architecture, skill and all three plugin manifests describe the
   delivered entry points and protocol. The skill entry remains under 200 lines.
 
@@ -40,12 +48,13 @@ dev/test debug=0. Hosted CI for the published head is a separate gate.
 
 | Gate | Result |
 | --- | --- |
-| `cargo +1.97.0 nextest run --workspace --all-features` | **3,712 passed, 22 skipped**; no reported leaks. Run `f4b9989f-97b8-4129-bcb0-75ddeaad2bc3`. |
+| `cargo +1.97.0 nextest run --workspace --all-features` | **3,720 passed, 22 skipped**; no reported leaks. Run `56fc2b62-a79e-466b-8035-46523d7a92a1`. |
 | `cargo +1.97.0 test --doc --workspace --all-features` | **5 passed, 1 ignored**. |
 | `cargo +1.97.0 clippy --workspace --all-features --all-targets -- -D warnings` | Passed. |
 | `cargo fmt --all -- --check`; `git diff --check` | Passed. |
 | `RUSTDOCFLAGS="-D warnings" cargo +1.97.0 doc --workspace --all-features --no-deps` | Passed. |
-| Plugin JSON; seven changed internal-document relative-link/fence checks; skill size | Passed. |
+| Plugin JSON; ten changed internal-document relative-link/fence checks; skill size | Passed. |
+| `cargo +1.97.0 run -p dist-helper -- registry validate`, `registry build`, `check` | Passed; regenerated catalogs leave the worktree unchanged. |
 
 The complete suite includes these specific proofs:
 
@@ -58,7 +67,8 @@ The complete suite includes these specific proofs:
   zero model requests. A subsequent request includes the selected Thread's
   retained user/assistant context. Navigation survives 40×16 resize and actual
   SIGTSTP/SIGCONT. Raw output contains no alternate-screen or scrollback-clear
-  sequence.
+  sequence. The managed daemon also rejects HandoffPrepare while the native
+  endpoint is resident, including after both initial Turns have completed.
 - `busy_enter_enqueues_and_control_enter_targets_active_turn`: a protocol
   fixture distinguishes enqueue from targeted steering; key release and narrow
   viewport cannot submit, and the active Turn ID remains unchanged.
@@ -68,8 +78,12 @@ The complete suite includes these specific proofs:
   external-editor and terminal-lifecycle tests also pass.
 
 An early focused run reported a leak in the existing inspection-tools test.
-Both subsequent complete suites passed without leaks, including the final
-six-tool combination. Earlier suspend fixture failures were traced to accepting
+Subsequent complete suites passed without leaks, including the final
+six-tool/main combination. Main's preflight fixture previously assumed the
+router-identity migration was last; after BRO migrations were appended it failed
+during setup. The fixture now locates that specific migration and proves the
+duplicate-column error occurs on a snapshot while live lineage stays unchanged.
+Earlier suspend fixture failures were traced to accepting
 a queued pre-suspend frame; the test now waits for post-resume bracketed-paste
 enablement and a subsequent synchronized frame before typing.
 
