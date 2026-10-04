@@ -2872,3 +2872,43 @@ seconds, and Rust 1.93.0 workspace/all-feature check in 19.386 seconds.
 Workspace doctests passed five tests with one ignored. Formatting, diff and
 tracked-ignore checks passed. Final independent code/test/documentation review
 found no new P1/P2. New-head remote CI remains a separate gate.
+
+## C4 tree and wait cleanup under checkpoint saturation
+
+The `saturated_tree_preserves_waits_pairing_and_child_delivery_after_ack_loss`
+integration test drives a root, two children and a grandchild through real core
+transitions. Four workspace tools remain outstanding after five model calls. A
+model-originated wait and eight runtime waits are pending; each agent mailbox
+is full and a child has two accepted follow-up assignments. Repeated optional
+tool observations fill the checkpoint until core commits its independent
+capacity-failure transition and rejects the unaccepted observation.
+
+All four dispatched tools then submit their full frozen JSON payloads. The test
+loses the first child-result delivery ACK both before and after persistence,
+reconciles the original grant/head, and verifies exact-batch retransmission or
+adoption. The tree reaches a failed run with all tool results paired into
+history, one interruption result for the model wait, durable runtime wait
+results with their original target identities, retained accepted operation
+identities and pre-existing mail, and one attributed conclusion per child with
+its context provenance. Queued follow-ups do not launch model work. Every
+committed checkpoint and wire batch stays within the frozen bounds; settled
+ownership release succeeds.
+
+This covers a combined A06/A08/A12/A16/A20 fault scenario using the in-process
+durable harness fixture. It does not establish full acceptance, maximum tree
+width/depth pressure, unbounded history, physical storage admission, concurrent
+provider output reservations or production harness conformance. Runtime waits
+observe cancelling turns without final answers; completed-child answer and
+source growth in wait results need separate coverage. No production contract
+is relaxed by the test. Independent read-only review of the test and related
+capacity, interruption, pairing, wait and notification paths found no P1/P2.
+The fixture reports Running consistently with its already started tools.
+
+Final-source workspace/all-feature nextest passed **4019 tests, 22 skipped**
+in 121.428 seconds with four test threads; the new combined test passed in
+25.146 seconds. Strict workspace/all-target/all-feature clippy passed in 6.477
+seconds, strict rustdoc in 1.911 seconds, workspace doctests passed five tests
+with one ignored, and Rust 1.93.0 workspace/all-feature check passed in 0.557
+seconds. Formatting, diff and tracked-ignore checks passed. Previous head
+`a989cb56` passed all jobs of CI 37177871654. New-head remote CI remains a
+separate gate.

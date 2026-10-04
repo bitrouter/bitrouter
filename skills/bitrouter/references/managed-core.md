@@ -63,6 +63,15 @@ Absent allowances remain legacy state. Additional distinct artifact bodies,
 repeated archive observations and extra handoffs require fresh capacity. These
 logical checks do not reserve physical staging or historical-checkpoint storage.
 
+After `run.capacity_reached`, retain rejected input until its own operation
+receipt confirms acceptance. Continue committing cleanup and submitting the
+frozen replies for dispatched tools. Core settles pending collaboration calls,
+retains runtime wait results and archives child conclusions even when the
+parent mailbox is full. A lost child-delivery ACK uses the same grant/head
+reconciliation; it must not launch another tool or duplicate a parent notice.
+The run ends as failed after its owned effects settle, then ownership can be
+released. A capacity-failure ACK alone does not establish completed cleanup.
+
 After the cancellation checkpoint is acknowledged, `run.cancel` stops live
 provider executor futures throughout the run; `agent.cancel` and
 `interrupt_agent` affect only the target subtree. While a cancellation is

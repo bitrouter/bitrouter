@@ -265,6 +265,280 @@ async fn cleanup_capacity_survives_saturation_full_tool_outcomes_and_release() -
 }
 
 #[tokio::test]
+async fn saturated_tree_preserves_waits_pairing_and_child_delivery_after_ack_loss() -> TestResult {
+    use bitrouter_orchestrator::core::session::AgentStatus;
+
+    for committed in [false, true] {
+        let harness = Arc::new(Harness::new(None, None));
+        let port = Arc::new(reconnect::FaultPort::new(
+            harness.clone(),
+            "agent.result.delivered",
+            committed,
+        ));
+        let (session, executor, _) = setup(Vec::new(), port.clone(), false).await?;
+        let mut task = input();
+        task.limits = Some(Limits {
+            input_bytes: 4096,
+            mailbox_messages: 4,
+            queued_runs: 2,
+            checkpoint_bytes: 384 * 1024,
+            unacknowledged_bytes: 768 * 1024,
+            ..Limits::default()
+        });
+        let accepted = session.start("input", 1, task).await?;
+        let root = accepted.assigned_ids["agent_id"].clone();
+        let mut agents = vec![root.clone()];
+        for (index, parent) in [0, 0, 1].into_iter().enumerate() {
+            let child = session
+                .collaborate(
+                    &format!("spawn-{index}"),
+                    session.head().await.state_revision,
+                    &agents[parent],
+                    Action::Spawn {
+                        task: work("settle owned workspace evidence"),
+                    },
+                )
+                .await?
+                .assigned_ids["agent_id"]
+                .clone();
+            agents.push(child);
+        }
+        for (index, agent) in agents.iter().enumerate() {
+            executor
+                .agent_once
+                .lock()
+                .await
+                .insert(agent.clone(), vec![call(&format!("read-{index}"))]);
+        }
+        session.drive().await?;
+        assert_eq!(harness.sent.lock().await.len(), agents.len());
+        assert_eq!(executor.calls.load(Ordering::SeqCst), agents.len());
+        let first_root = harness
+            .sent
+            .lock()
+            .await
+            .iter()
+            .find(|command| command.agent_id == root)
+            .ok_or("root tool")?
+            .clone();
+        executor.agent_once.lock().await.insert(
+            root.clone(),
+            vec![
+                call("root-second-read"),
+                core_call(
+                    "wait_agent",
+                    json!({"agent_ids":agents[1..],"timeout_ms":600_000}),
+                    "model-wait",
+                ),
+            ],
+        );
+        session
+            .tool_result("root-first", result(&first_root))
+            .await?;
+        session.drive().await?;
+        let commands = harness
+            .sent
+            .lock()
+            .await
+            .iter()
+            .filter(|command| command.invocation_id != first_root.invocation_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(commands.len(), agents.len());
+
+        // Several independent wait operations retain the same graph view. A
+        // queued follow-up changes their observed target without executing it.
+        for index in 0..8 {
+            session
+                .collaborate(
+                    &format!("wait-{index}-{}", "w".repeat(100)),
+                    session.head().await.state_revision,
+                    &root,
+                    Action::Wait {
+                        agent_ids: agents[1..].to_vec(),
+                        timeout_ms: 600_000,
+                    },
+                )
+                .await?;
+        }
+        for index in 0..2 {
+            let mut followup = work("must be cancelled without model dispatch");
+            followup.fresh_context = false;
+            session
+                .collaborate(
+                    &format!("queued-{index}"),
+                    session.head().await.state_revision,
+                    &root,
+                    Action::Followup {
+                        agent_id: agents[1].clone(),
+                        task: followup,
+                    },
+                )
+                .await?;
+        }
+        for (index, agent) in agents.iter().enumerate() {
+            for slot in 0..4 {
+                session
+                    .collaborate(
+                        &format!("mail-{index}-{slot}"),
+                        session.head().await.state_revision,
+                        &root,
+                        Action::Message {
+                            agent_id: agent.clone(),
+                            text: format!("retained mail {index}/{slot}"),
+                        },
+                    )
+                    .await?;
+            }
+        }
+        let before = session.snapshot().await;
+        assert_eq!(before.waits.len(), 8);
+        assert!(before.waits.values().all(|wait| wait.result.is_none()));
+        assert_eq!(before.agents[&agents[1]].queue.len(), 2);
+        assert!(before.agents.values().all(|agent| agent.mailbox.len() == 4));
+        let model_wait = &before.root_turn().ok_or("root turn")?.core_calls[0];
+        assert!(model_wait.wait.is_some());
+        assert!(model_wait.result.is_none());
+        fill_optional_observations(&session, &commands[0], ToolStatus::Running).await?;
+
+        // Every already dispatched tool may still report its full contracted
+        // payload after the independent capacity-failure checkpoint commits.
+        let mut outcomes = Vec::new();
+        for (index, command) in commands.iter().enumerate() {
+            let outcome = full_result(
+                &harness,
+                command,
+                ToolOutcome::Succeeded,
+                &format!("tree-proof-{index}"),
+            )
+            .await?;
+            session
+                .tool_result(&format!("result-{index}"), outcome.clone())
+                .await?;
+            outcomes.push(outcome);
+        }
+        let error = session
+            .drive()
+            .await
+            .err()
+            .ok_or("missing delivery ACK loss")?;
+        assert_eq!(error.commit_status, CommitStatus::Unknown);
+        let original = port
+            .proposals
+            .lock()
+            .await
+            .last()
+            .ok_or("delivery proposal")?
+            .clone();
+        let payload = original.decode(&Limits::default())?;
+        assert_eq!(payload.events[0].kind, "agent.result.delivered");
+        reconnect::reconnect(&session, &harness).await?;
+        let done = tokio::time::timeout(Duration::from_secs(30), session.drive()).await??;
+        assert_eq!(
+            done.run.as_ref().map(|run| run.status),
+            Some(RunStatus::Failed)
+        );
+        assert!(done.agents.values().all(|agent| {
+            agent.queue.is_empty()
+                && agent.turn.as_ref().is_some_and(|turn| {
+                    turn.status == AgentStatus::Interrupted
+                        && (agent.parent_id.is_none() || turn.notified)
+                        && turn.invocations.iter().all(|call| call.consumed)
+                })
+        }));
+        assert!(done.waits.values().all(|wait| {
+            wait.result.as_ref().is_some_and(|result| {
+                result["agents"]
+                    .as_array()
+                    .is_some_and(|agents| agents.len() == 3)
+            })
+        }));
+        for (id, wait) in &before.waits {
+            assert_eq!(
+                serde_json::to_value(&done.waits[id].state)?,
+                serde_json::to_value(&wait.state)?
+            );
+            assert!(session.operation(id).await.is_some());
+        }
+        for index in 0..2 {
+            assert!(
+                session
+                    .operation(&format!("queued-{index}"))
+                    .await
+                    .is_some()
+            );
+        }
+        let model_wait = &done.root_turn().ok_or("root turn")?.core_calls[0];
+        assert!(model_wait.consumed);
+        assert_eq!(
+            model_wait.result,
+            Some(json!({"ok":false,"reason":"agent interrupted"}))
+        );
+        let paired_waits = done.agents[&root]
+            .history
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter(|part| matches!(part, Content::ToolResult { call_id, .. } if call_id == "model-wait"))
+            .count();
+        assert_eq!(paired_waits, 1);
+        for (command, outcome) in commands.iter().zip(&outcomes) {
+            let agent = &done.agents[&command.agent_id];
+            assert_eq!(
+                agent
+                    .turn
+                    .as_ref()
+                    .ok_or("turn")?
+                    .invocations
+                    .iter()
+                    .find(|call| call.dispatch.invocation_id == command.invocation_id)
+                    .ok_or("invocation")?
+                    .result
+                    .as_ref(),
+                Some(outcome)
+            );
+            assert!(agent.history.iter().flat_map(|message| &message.content).any(|part| {
+                matches!(part, Content::ToolResult { output: bitrouter_sdk::language_model::types::ToolResultOutput::Text { value }, .. } if value == &outcome.output)
+            }));
+            assert!(before.agents[&command.agent_id].mailbox.iter().all(|mail| {
+                agent.mailbox.iter().any(|retained| {
+                    retained.message_id == mail.message_id && retained.content == mail.content
+                })
+            }));
+        }
+        for child_id in &agents[1..] {
+            let child = &done.agents[child_id];
+            let turn = child.turn.as_ref().ok_or("child turn")?;
+            let notifications = done.agents[&turn.assigned_by]
+                .mailbox
+                .iter()
+                .filter(|mail| mail.kind == "agent_result" && mail.sender_id == *child_id)
+                .collect::<Vec<_>>();
+            assert_eq!(notifications.len(), 1);
+            assert_eq!(notifications[0].context_sources, child.context_sources);
+        }
+        assert_eq!(
+            port.proposals
+                .lock()
+                .await
+                .iter()
+                .filter(|batch| **batch == original)
+                .count(),
+            if committed { 1 } else { 2 }
+        );
+        assert_eq!(executor.calls.load(Ordering::SeqCst), agents.len() + 1);
+        assert_eq!(harness.sent.lock().await.len(), commands.len() + 1);
+        session
+            .release("release", session.head().await.state_revision)
+            .await?;
+        for batch in &harness.store.lock().await.batches {
+            assert!(batch.wire_bytes()? <= 768 * 1024);
+            assert!(serde_json::to_vec(&batch.decode(&Limits::default())?)?.len() <= 384 * 1024);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn cleanup_capacity_preserves_running_recovery_at_saturation() -> TestResult {
     let harness = Arc::new(Harness::new(None, None));
     let (session, _, _) = setup(vec![output(vec![call("read")])], harness.clone(), false).await?;
