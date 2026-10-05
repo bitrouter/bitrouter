@@ -16,6 +16,31 @@ use bitrouter_sdk::language_model::{
     Prompt, Role, Tool,
 };
 
+#[tokio::test]
+async fn router_authorization_checks_the_requested_selector() -> anyhow::Result<()> {
+    let store = Arc::new(PolicyStore::from_policies([
+        Policy {
+            id: "router-access".into(),
+            allowed_models: Some(vec!["bitrouter/coding".into()]),
+            ..Default::default()
+        },
+        Policy {
+            id: "physical-access".into(),
+            allowed_models: Some(vec!["vendor:physical".into()]),
+            ..Default::default()
+        },
+    ]));
+    let hook = PolicyHook::new(store, None);
+    let mut alias = ctx("bitrouter/coding", Some("router-access"));
+    assert!(matches!(hook.check(&mut alias).await?, HookDecision::Allow));
+    let mut physical_only = ctx("bitrouter/coding", Some("physical-access"));
+    assert!(matches!(
+        hook.check(&mut physical_only).await?,
+        HookDecision::Deny(_)
+    ));
+    Ok(())
+}
+
 fn test_charge_evidence(charge_micro_usd: i64) -> ChargeEvidence {
     ChargeEvidence {
         status: ChargeStatus::Computed,
@@ -269,6 +294,9 @@ async fn spend_cap_is_enforced_via_metering_store() {
             api_key_id: "k1".into(),
             launch_id: None,
             session_identity: None,
+            router_id: None,
+            binding_digest: None,
+            original_selector: None,
             model_id: "gpt-5".into(),
             provider_id: "openai".into(),
             prompt_tokens: 10,
@@ -306,6 +334,9 @@ async fn spend_cap_is_enforced_via_metering_store() {
             api_key_id: "k1".into(),
             launch_id: None,
             session_identity: None,
+            router_id: None,
+            binding_digest: None,
+            original_selector: None,
             model_id: "gpt-5".into(),
             provider_id: "openai".into(),
             prompt_tokens: 10,
@@ -353,6 +384,9 @@ async fn spend_cap_fails_closed_when_prior_charge_is_unknown() {
             api_key_id: "k1".into(),
             launch_id: None,
             session_identity: None,
+            router_id: None,
+            binding_digest: None,
+            original_selector: None,
             model_id: "unpriced-model".into(),
             provider_id: "unknown-provider".into(),
             prompt_tokens: 10,
@@ -413,6 +447,9 @@ async fn rate_limit_is_enforced_via_metering_store() {
                 api_key_id: "k1".into(),
                 launch_id: None,
                 session_identity: None,
+                router_id: None,
+                binding_digest: None,
+                original_selector: None,
                 model_id: "gpt-5".into(),
                 provider_id: "openai".into(),
                 prompt_tokens: 1,

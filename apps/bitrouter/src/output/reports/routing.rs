@@ -1,35 +1,55 @@
 //! Reports for `models` and `providers list`.
 
-use bitrouter_mcp::actions::models::{ModelsReport, ModelsSource};
+use crate::actions::models::{ModelsReport, ModelsSource};
+use bitrouter_sdk::invocation;
 use serde::Serialize;
 
 use crate::output::CliReport;
 use crate::output::human::{Human, Table};
 
-/// The human view of `bitrouter models`.
+/// The human view of `bro models`.
 ///
 /// The report type itself is
-/// [`bitrouter_mcp::actions::models::ModelsReport`]: the
-/// `list_models` tool returns the same type, so `bitrouter models --json` and
+/// [`crate::actions::models::ModelsReport`]: the
+/// `list_models` tool returns the same type, so `bro models --json` and
 /// the tool's structured content are the same bytes. Rendering stays here — a
 /// local trait on a foreign type is legal, and it keeps [`Human`] out of the
 /// crate.
 impl CliReport for ModelsReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         if self.models.is_empty() {
-            return h.line("(no routable models)");
+            h.line("(no routable models)")?;
+        } else {
+            for m in &self.models {
+                h.line(&format!("{}\t{}", m.id, m.providers.join(", ")))?;
+            }
         }
-        for m in &self.models {
-            h.line(&format!("{}\t{}", m.id, m.providers.join(", ")))?;
+        if let Some(routers) = &self.routers {
+            h.blank()?;
+            if routers.is_empty() {
+                h.line("(no routers configured)")?;
+            } else {
+                let mut table = Table::new(["ROUTER", "READINESS", "SOURCE", "REASON"]);
+                for router in routers {
+                    table.push([
+                        router.address.clone(),
+                        format!("{:?}", router.readiness).to_ascii_lowercase(),
+                        format!("{:?}", router.source).to_ascii_lowercase(),
+                        router.reason.clone().unwrap_or_else(|| "—".to_string()),
+                    ]);
+                }
+                h.table(&table)?;
+            }
         }
         // Which view answered, stated only where it is a caveat: a live
         // catalog needs no annotation, a projected one does — a provider whose
         // credential only resolves at daemon start-up is missing from it.
         if self.resolved_via == ModelsSource::Config {
-            return h.note(
+            return h.note(&format!(
                 "Listed from config — no daemon answered. \
-                 Run `bitrouter start` for the live catalog.",
-            );
+                 Run `{} start` for the live catalog.",
+                invocation::name()
+            ));
         }
         Ok(())
     }
@@ -44,7 +64,7 @@ pub struct ProviderRow {
     pub api_base: String,
 }
 
-/// Result of `bitrouter providers list`.
+/// Result of `bro providers list`.
 #[derive(Serialize)]
 pub struct ProvidersReport {
     pub providers: Vec<ProviderRow>,

@@ -158,6 +158,40 @@ models:
         cache_write: 0
       output_tokens:
         text: 4.4
+  - id: qwen/qwen3.8-flash
+    provider_model_id: qwen3.8-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.016
+        cache_write: 0.2
+      output_tokens:
+        text: 0.47
+  - id: moonshotai/kimi-k3
+    provider_model_id: kimi-k3
+    pricing:
+      input_tokens:
+        no_cache: 3
+        cache_read: 0.3
+      output_tokens:
+        text: 15
+  - id: qwen/qwen3.7-flash
+    provider_model_id: qwen3.7-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.03
+        cache_read: 0.003
+        cache_write: 0.0375
+      output_tokens:
+        text: 0.13
+  - id: qwen/qwen3.8-omni-flash
+    provider_model_id: qwen3.8-omni-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.016
+      output_tokens:
+        text: 0.47
 status: active
 weight: 1
 submitted_at: 2026-05-25

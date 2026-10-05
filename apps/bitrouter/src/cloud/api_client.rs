@@ -143,7 +143,12 @@ impl CloudApiClient {
             .current()
             .await
             .context("reading BitRouter Cloud credentials")?
-            .context("no stored credentials — run `bitrouter cloud login` first")?;
+            .with_context(|| {
+                format!(
+                    "no stored credentials — run `{} cloud login` first",
+                    bitrouter_sdk::invocation::name()
+                )
+            })?;
         let base_url = Url::parse(credential.base_url()).with_context(|| {
             format!(
                 "parsing the BitRouter Cloud URL stored in {}",

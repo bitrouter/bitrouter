@@ -11,7 +11,7 @@ Eval Exchange results; the optimizer advances the signed policy one step.
 Create a named adaptive policy with a strong champion and an economy tier:
 
 ```bash
-bitrouter policy init auto --preset auto --economy provider:model
+bro policy init auto --preset auto --economy provider:model
 ```
 
 Then run the coding agent or Terminal Bench normally through `bitrouter/auto`.
@@ -32,9 +32,9 @@ Use the `evaluating-bitrouter-routes` skill or another generic Eval adapter to
 seal subjects and submit immutable results:
 
 ```bash
-bitrouter eval subject seal subject-draft.json --output subject.json
-bitrouter eval subject put subject.json --config bitrouter.yaml
-bitrouter eval result submit result.json --config bitrouter.yaml
+bro eval subject seal subject-draft.json --output subject.json
+bro eval subject put subject.json --config bitrouter.yaml
+bro eval result submit result.json --config bitrouter.yaml
 ```
 
 The evaluator stops after admission. It never freezes snapshots, compiles a
@@ -54,8 +54,8 @@ promotion cost.
 ## Advance one autonomous step
 
 ```bash
-bitrouter optimize run --policy auto --config bitrouter.yaml
-bitrouter optimize status --policy auto --config bitrouter.yaml
+bro optimize run --policy auto --config bitrouter.yaml
+bro optimize status --policy auto --config bitrouter.yaml
 ```
 
 Calling `optimize run` is authorization for exactly one autonomous controller

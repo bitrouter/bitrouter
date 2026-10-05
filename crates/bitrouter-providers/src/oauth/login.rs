@@ -69,7 +69,8 @@ pub enum LoginError {
     },
     /// User pasted nothing (or only whitespace) in manual-fallback mode.
     #[error(
-        "manual redirect paste was empty — re-run `bitrouter providers login <provider>` to try again"
+        "manual redirect paste was empty — re-run `{} providers login <provider>` to try again",
+        bitrouter_sdk::invocation::name()
     )]
     EmptyPaste,
     /// `state` echoed by the redirect didn't match what we sent on the

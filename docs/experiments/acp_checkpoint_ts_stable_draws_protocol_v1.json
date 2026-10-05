@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-09T16:55:10.598384+00:00",
+  "status": "recorded_before_v3_runs",
+  "purpose": "Revalidate enacted TS allocation/publication after fixing provenance-dependent numerical resampling; no claim to fix inaccurate reward labels or establish live cost savings.",
+  "learner_version": "checkpoint-normal-inverse-gamma-ts-v3",
+  "change": "Common production trial_seed(experiment_id) used by live reconstruction and simulator. Full revision digests still fence publication. Existing v2 warm-up, priors, gates, batch size and assignment randomness unchanged.",
+  "design": {
+    "scenarios": [
+      "beneficial",
+      "harmful",
+      "delayed",
+      "revised_short",
+      "revised_long",
+      "drift",
+      "missing",
+      "assessed_unknown",
+      "correlated_forks"
+    ],
+    "strategies": [
+      "baseline",
+      "guarded_fixed",
+      "thompson",
+      "thompson_without_adoption_monitor"
+    ],
+    "seeds": 16,
+    "seed_start": 0,
+    "sessions_per_run": 1200,
+    "batch_sessions": 16,
+    "runs": 576
+  },
+  "analysis": [
+    "Verify all seed/scenario/strategy cells and unchanged configuration against historical v2.",
+    "Report adoption within workload and after feedback drain separately, including harmful adoption and deployment exposure.",
+    "Verify pending and cumulative trial caps, effective-family handling and latched rollback.",
+    "These workload seeds were already inspected in earlier studies; this is regression/sensitivity evidence, not a new held-out experiment.",
+    "Do not infer TS superiority or reward calibration from fixture tests or these synthetic outcomes."
+  ],
+  "source_sha256": {
+    "apps/bitrouter/examples/checkpoint_ts_publication.rs": "7f2cb1c4b48f00f3ef113a8ca537a9d8641cad58f92213b49abbb06feab9f646",
+    "apps/bitrouter/src/evolution/bandit.rs": "13136c16561305902a1edfdb1e40592b327ff2651b143e843967b0d9a8b394ea",
+    "apps/bitrouter/src/evolution/control.rs": "9d09442d61d8f1247a26b36e3d3b1119fff440dd890d313e89a6846167b5ddc6",
+    "apps/bitrouter/src/evolution/learning.rs": "9d0743dfd796ed7676b7a5bb5c5f689efb7ccfbb1af3b4a52bff5254419eb33a"
+  }
+}

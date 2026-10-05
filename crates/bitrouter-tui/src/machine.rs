@@ -70,6 +70,10 @@ const NO_ROUTES: &str = "no routes to choose between";
 /// What the session says when a route lease is dropped and the daemon's own
 /// default takes over again.
 const ROUTE_RESET: &str = "route reset to the daemon's default";
+/// What Ctrl-D says when the composer still holds a recoverable draft.
+const DRAFT_EXIT_GUIDANCE: &str = "draft preserved; Ctrl-D exits from an empty composer";
+/// The retained reducer cannot suspend and restore a terminal for an editor.
+const EXTERNAL_EDITOR_UNAVAILABLE: &str = "external editor is unavailable in this session";
 
 /// One of BitRouter's own slash commands, as the reducer needs to know it.
 ///
@@ -159,9 +163,10 @@ pub enum Resolution {
 /// A free function over a slice, not a method, so the piped loop and the
 /// headless one-shot path can run the same resolution the terminal does.
 pub fn resolve(commands: &[Command], prompt_commands: &[PromptCommand], line: &str) -> Resolution {
+    let original = line;
     let line = line.trim();
     let Some(rest) = line.strip_prefix('/') else {
-        return Resolution::Prompt(line.to_string());
+        return Resolution::Prompt(original.to_string());
     };
     let words: Vec<&str> = rest.split_whitespace().collect();
     // Longest name first, so `/route reset` is not `/route` with an argument.
@@ -207,7 +212,7 @@ pub fn resolve(commands: &[Command], prompt_commands: &[PromptCommand], line: &s
                 .replace("$ARGUMENTS", &words[1..].join(" ")),
         );
     }
-    Resolution::Prompt(line.to_string())
+    Resolution::Prompt(original.to_string())
 }
 
 /// What the session is doing, and therefore what a key means.
@@ -520,6 +525,14 @@ fn idle_key(state: &mut State, event: &Event) -> Vec<Effect> {
             Edit::Changed => vec![Effect::Echo, Effect::Paint(Trigger::Key)],
             Edit::Redrawn => vec![Effect::Echo, Effect::Redraw],
             Edit::Submitted => submit(state),
+            Edit::OpenExternalEditor => vec![
+                Effect::Notice(Notice::Say(EXTERNAL_EDITOR_UNAVAILABLE.to_string())),
+                Effect::Paint(Trigger::Key),
+            ],
+            Edit::ExitRequested => vec![
+                Effect::Notice(Notice::Say(DRAFT_EXIT_GUIDANCE.to_string())),
+                Effect::Paint(Trigger::Key),
+            ],
             // Ctrl-C or Ctrl-D at an idle prompt. The session is over.
             Edit::Ended => vec![Effect::Exit],
         },
@@ -830,6 +843,19 @@ fn turn_ended(state: &mut State, result: Result<StopReason, String>) -> Vec<Effe
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn prompt_fallback_preserves_composer_bytes() {
+        for prompt in [
+            "  中文 👩‍💻\n\ntrailing spaces  \n",
+            "  /unknown  keep\n spacing  ",
+        ] {
+            assert_eq!(
+                super::resolve(&[], &[], prompt),
+                super::Resolution::Prompt(prompt.to_string())
+            );
+        }
+    }
+
     use agent_client_protocol_schema::v1::{PermissionOption, PermissionOptionId};
     use agent_client_protocol_schema::v1::{PermissionOptionKind, RequestPermissionOutcome};
     use crossterm::event::{KeyEvent, KeyEventKind};
@@ -1034,8 +1060,8 @@ mod tests {
             ("turn", ctrl('l'), &["redraw"], "turn"),
             ("answering", ctrl('l'), &["redraw"], "answering"),
             ("routing", ctrl('l'), &["redraw"], "routing"),
-            // Ctrl-W: delete a word / ignored / deny / close.
-            ("idle", ctrl('w'), &["echo", "paint"], "idle"),
+            // Ctrl-W: this draft is empty, so deletion does not repaint.
+            ("idle", ctrl('w'), &[], "idle"),
             ("turn", ctrl('w'), &[], "turn"),
             (
                 "answering",
@@ -1091,12 +1117,7 @@ mod tests {
             // Backspace: the picker is the only phase that reads it as its
             // own, widening the filter again rather than editing a line that
             // is not on screen.
-            (
-                "idle",
-                press(KeyCode::Backspace),
-                &["echo", "paint"],
-                "idle",
-            ),
+            ("idle", press(KeyCode::Backspace), &[], "idle"),
             ("turn", press(KeyCode::Backspace), &[], "turn"),
             ("answering", press(KeyCode::Backspace), &[], "answering"),
             (

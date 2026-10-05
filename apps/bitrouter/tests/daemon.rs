@@ -32,6 +32,113 @@ impl daemon::DaemonReloader for RoutingTableReloader {
 }
 use bitrouter_sdk::config;
 
+#[tokio::test]
+async fn recording_coverage_is_acknowledged_by_the_serving_runtime_over_ipc() -> anyhow::Result<()>
+{
+    use bitrouter::acp_trajectory::{CanonicalStore, RecordingScope};
+    let dir = tempdir("coverage");
+    let cfg_path = write_config(&dir, "sqlite::memory:").await;
+    let cfg = config::load(&cfg_path).await?;
+    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await?;
+    let recorder = CanonicalStore::new(assembled.db.clone())
+        .recorder(RecordingScope {
+            owner: "local".into(),
+            source: "fixture".into(),
+            controller_instance_id: Some("controller".into()),
+            route_scope_id: Some("principal".into()),
+        })
+        .await?;
+    let socket = dir.join("bitrouter.sock");
+    let server = tokio::spawn(daemon::run_control_socket_with_acp_runtime(
+        socket.clone(),
+        Arc::new(assembled.app),
+        "127.0.0.1:1234".into(),
+        Arc::new(NoopReloader),
+        Arc::new(NoopObserveStatus { compiled_in: false }),
+        daemon::AcpControlPlane {
+            runtime: assembled.acp_runtime,
+            metering: MeteringStore::new(assembled.db.clone()),
+            inventory: Some(assembled.evolution.inventory()),
+            evolution: Some(assembled.evolution.clone()),
+        },
+    ));
+    wait_until_ready(&socket).await;
+    let command = |principal: &str| DaemonCommand::AcpRecordingRegister {
+        connection_id: recorder.connection_id().into(),
+        api_principal: principal.into(),
+        controller_instance_id: "controller".into(),
+    };
+    assert!(matches!(
+        daemon::send_command(&socket, &command("other")).await?,
+        DaemonResponse::Error { .. }
+    ));
+    let response = daemon::send_command(&socket, &command("principal")).await?;
+    let DaemonResponse::AcpRecordingRegistered { registration } = response else {
+        anyhow::bail!("coverage acknowledgement missing");
+    };
+    assert_eq!(registration.connection_id, recorder.connection_id());
+    assert_eq!(
+        registration.version,
+        bitrouter::evolution::inventory::INVENTORY_VERSION
+    );
+    assert!(registration.invalid_reason.is_none());
+    use bitrouter::evolution::{
+        control::EvolutionMode,
+        operator::{EvolutionOperation, EvolutionReport},
+    };
+    let response = daemon::send_command(
+        &socket,
+        &DaemonCommand::Evolution {
+            operation: EvolutionOperation::Status,
+        },
+    )
+    .await?;
+    let DaemonResponse::Evolution { report } = response else {
+        anyhow::bail!("evolution status missing");
+    };
+    let EvolutionReport::Status(status) = *report else {
+        anyhow::bail!("unexpected evolution report");
+    };
+    assert_eq!(status.control.mode, EvolutionMode::Off);
+    assert!(matches!(
+        daemon::send_command(
+            &socket,
+            &DaemonCommand::Evolution {
+                operation: EvolutionOperation::Mode {
+                    mode: EvolutionMode::Automatic,
+                    judge_model: None
+                },
+            }
+        )
+        .await?,
+        DaemonResponse::Error { .. }
+    ));
+    for mode in [EvolutionMode::Manual, EvolutionMode::Off] {
+        let response = daemon::send_command(
+            &socket,
+            &DaemonCommand::Evolution {
+                operation: EvolutionOperation::Mode {
+                    mode,
+                    judge_model: None,
+                },
+            },
+        )
+        .await?;
+        let DaemonResponse::Evolution { report } = response else {
+            anyhow::bail!("evolution mutation receipt missing");
+        };
+        let EvolutionReport::Status(status) = *report else {
+            anyhow::bail!("unexpected evolution report");
+        };
+        assert_eq!(status.control.mode, mode);
+        assert!(status.jobs.is_empty());
+    }
+    daemon::send_command(&socket, &DaemonCommand::Stop).await?;
+    server.await??;
+    tokio::fs::remove_dir_all(dir).await?;
+    Ok(())
+}
+
 fn tiny_config_yaml(db_url: &str) -> String {
     // Two providers declare overlapping models so Route returns a real chain.
     format!(
@@ -211,7 +318,7 @@ async fn status_route_and_stop_roundtrip_over_the_control_socket() {
     .await
     .unwrap();
     match route {
-        DaemonResponse::Route { chain } => {
+        DaemonResponse::Route { chain, .. } => {
             assert_eq!(chain.len(), 2);
             assert_eq!(chain[0].provider, "anthropic");
             assert_eq!(chain[1].provider, "openai");
@@ -264,6 +371,8 @@ async fn api_principal_scoped_acp_routes_roundtrip_over_the_control_socket() {
         daemon::AcpControlPlane {
             runtime: runtime.clone(),
             metering: MeteringStore::new(assembled.db.clone()),
+            inventory: Some(assembled.evolution.inventory()),
+            evolution: Some(assembled.evolution.clone()),
         },
     ));
     wait_until_ready(&socket).await;
@@ -497,7 +606,7 @@ providers:
     .await
     .unwrap();
     match route {
-        DaemonResponse::Route { chain } => {
+        DaemonResponse::Route { chain, .. } => {
             assert_eq!(chain.len(), 1, "anthropic should be gone after reload");
             assert_eq!(chain[0].provider, "openai");
         }
@@ -520,12 +629,12 @@ providers:
 /// cannot fix this — it sits below `bitrouter-providers` — so the reloader
 /// rebuilds the config in the app layer.
 #[tokio::test]
-async fn reload_re_applies_builtin_provider_catalog() {
+async fn reload_re_applies_builtin_provider_catalog() -> anyhow::Result<()> {
     use bitrouter::daemon::DaemonReloader;
     use bitrouter::reload::{AppReloader, ReloadSource};
 
     let dir = tempdir("reload-builtin");
-    tokio::fs::create_dir_all(&dir).await.unwrap();
+    tokio::fs::create_dir_all(&dir).await?;
     let cfg_path = dir.join("bitrouter.yaml");
     // `bitrouter` is the compiled-in cloud gateway: `api_base` is omitted and
     // must be filled from the catalog. Explicit `models` keep the canonical
@@ -542,10 +651,12 @@ providers:
     api_key: k1
     models: [{ id: gpt-5 }]
 "#;
-    tokio::fs::write(&cfg_path, yaml).await.unwrap();
+    tokio::fs::write(&cfg_path, yaml).await?;
 
-    let cfg = config::load(&cfg_path).await.unwrap();
-    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await.unwrap();
+    let mut cfg = config::load(&cfg_path).await?;
+    bitrouter::claude_code::enable_if_logged_in(&mut cfg);
+    bitrouter::merge_registry_into(&mut cfg).await;
+    let assembled = build_app_with_path(&cfg, Some(&cfg_path)).await?;
 
     // Sanity: assembly already filled the catalog `api_base`.
     assert_eq!(
@@ -559,7 +670,7 @@ providers:
         assembled.upstream_executor.clone(),
         ReloadSource::File(cfg_path.clone()),
     );
-    reloader.reload().await.expect("reload succeeds");
+    reloader.reload().await?;
 
     // The reloaded config must STILL carry the catalog `api_base` and
     // `api_protocol` — the reload re-applies `apply_builtin_defaults`,
@@ -568,7 +679,7 @@ providers:
     let gateway = after
         .providers
         .get("bitrouter")
-        .expect("bitrouter still present");
+        .ok_or_else(|| anyhow::anyhow!("bitrouter provider disappeared after reload"))?;
     assert_eq!(
         gateway.api_base, "https://api.bitrouter.ai/v1",
         "built-in `api_base` must survive a file reload",
@@ -579,6 +690,7 @@ providers:
     );
 
     let _ = tokio::fs::remove_dir_all(&dir).await;
+    Ok(())
 }
 
 #[tokio::test]
@@ -893,6 +1005,8 @@ async fn acp_session_spend_roundtrips_over_the_control_socket() {
         daemon::AcpControlPlane {
             runtime: runtime.clone(),
             metering: metering.clone(),
+            inventory: Some(assembled.evolution.inventory()),
+            evolution: Some(assembled.evolution.clone()),
         },
     ));
     wait_until_ready(&socket).await;

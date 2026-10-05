@@ -16,7 +16,7 @@
       ]
     },
     "AcpAgentConfig": {
-      "description": "One configured upstream ACP agent, as written in `bitrouter.yaml` under\n`agents:`.\n\nThe same `name` is what every `bitrouter acp` subcommand addresses an\nagent by, and what [`AcpAgentConfig::validate`] constrains.",
+      "description": "One configured upstream ACP agent, as written in `bitrouter.yaml` under\n`agents:`.\n\nThe same `name` is what every `bro acp` subcommand addresses an\nagent by, and what [`AcpAgentConfig::validate`] constrains.",
       "properties": {
         "name": {
           "description": "Agent id. Non-empty; no `/`.",
@@ -31,6 +31,17 @@
         "name",
         "transport"
       ],
+      "type": "object"
+    },
+    "AcpRecordingConfig": {
+      "description": "Local ACP conversation content recording, independent of routing evidence.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Store observable session messages and tool results until explicitly deleted.\nNo content is recorded or sent to an evaluator by default.",
+          "type": "boolean"
+        }
+      },
       "type": "object"
     },
     "AcpTransport": {
@@ -274,14 +285,30 @@
       "type": "object"
     },
     "ChatConfig": {
-      "description": "`bitrouter chat`'s own configuration.",
+      "description": "`bro chat`'s own configuration.",
       "properties": {
+        "agent": {
+          "default": null,
+          "description": "Default ACP harness for bare `bitrouter` (catalog id or configured agent).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "commands": {
-          "description": "Prompt-expansion commands.\n\n`/name args` in `bitrouter chat`, or `bitrouter acp prompt \"/name args\"`,\nsends `prompt` with `$ARGUMENTS` replaced by everything typed after the\nname.\n\nThere is deliberately no key that *runs* anything. A command here\nproduces a prompt and nothing else, which is what lets the registry be\nopen — user-authored, unreviewed — while the registry of commands that\nreach BitRouter's own ports stays closed and guarded.",
+          "description": "Prompt-expansion commands.\n\n`/name args` in `bro chat`, or `bro acp prompt \"/name args\"`,\nsends `prompt` with `$ARGUMENTS` replaced by everything typed after the\nname.\n\nThere is deliberately no key that *runs* anything. A command here\nproduces a prompt and nothing else, which is what lets the registry be\nopen — user-authored, unreviewed — while the registry of commands that\nreach BitRouter's own ports stays closed and guarded.",
           "items": {
             "$ref": "#/$defs/PromptCommandConfig"
           },
           "type": "array"
+        },
+        "model": {
+          "default": null,
+          "description": "Default daemon-routable model for the chat session.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -300,6 +327,25 @@
           "type": "string"
         }
       ]
+    },
+    "CheckerConfig": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "description": "A callback registered under this checker id by the host.",
+          "properties": {
+            "native": {
+              "$ref": "#/$defs/NativeCheckerConfig",
+              "description": "Expected code/rules revision; registration must match exactly."
+            }
+          },
+          "required": [
+            "native"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A request-check implementation explicitly linked by a custom host.\n\nThe existing `native.revision` configuration shape remains supported. Former\nHTTP declarations are rejected with a migration diagnostic, never ignored."
     },
     "ContinuationConfig": {
       "description": "Always-active durable provider continuation lifecycle settings.",
@@ -320,6 +366,72 @@
         }
       },
       "type": "object"
+    },
+    "ControlConfig": {
+      "additionalProperties": false,
+      "description": "Scoped operator administration API settings.\n\nThe control API is deliberately separate from the inference listener and\nthe local control socket. It is disabled by default, may bind only to a\nloopback address, and authenticates named credentials when configured.\nOtherwise `BITROUTER_CONTROL_TOKEN` grants read-only access.\n[`ServerConfig::skip_auth`] never applies to it.",
+      "properties": {
+        "credentials": {
+          "description": "Explicit operator credentials. Empty keeps the legacy read-only token.",
+          "items": {
+            "$ref": "#/$defs/ControlCredentialConfig"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": false,
+          "description": "Whether to start the HTTP control listener.",
+          "type": "boolean"
+        },
+        "listen": {
+          "default": "127.0.0.1:4358",
+          "description": "Loopback `host:port` to listen on.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ControlCredentialConfig": {
+      "additionalProperties": false,
+      "description": "A token reference only; configuration never stores the bearer value.",
+      "properties": {
+        "id": {
+          "description": "Non-secret operator identifier used for ownership and audit events.",
+          "type": "string"
+        },
+        "scopes": {
+          "description": "Explicit management authority, unrelated to inference authentication.",
+          "items": {
+            "$ref": "#/$defs/ControlScope"
+          },
+          "type": "array"
+        },
+        "token_env": {
+          "description": "Host environment variable that contains this credential's bearer token.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "token_env",
+        "scopes"
+      ],
+      "type": "object"
+    },
+    "ControlScope": {
+      "description": "Authority granted by a host operator, independently of inference credentials.",
+      "oneOf": [
+        {
+          "const": "control:read",
+          "description": "Host-wide operational inspection, including usage and policy metadata.",
+          "type": "string"
+        },
+        {
+          "const": "control:reload",
+          "description": "Reload server-owned configuration; requires the read grant as well.",
+          "type": "string"
+        }
+      ]
     },
     "DatabaseConfig": {
       "description": "Database connection settings.",
@@ -645,16 +757,21 @@
       ]
     },
     "McpUpstreamProtocol": {
-      "description": "`mcp.upstream_protocol` — the startup lifecycle and protocol version the\ngateway uses when dialing upstream MCP servers.\n\n`latest` keeps the legacy `initialize` path. `2026-07-28` starts with\n`server/discover` and falls back to `initialize` only when discovery returns\nJSON-RPC `METHOD_NOT_FOUND`. Any other discovery error fails the connection,\nso opt in only for upstreams expected to support the modern lifecycle.",
+      "description": "`mcp.upstream_protocol` — the startup lifecycle and protocol version the\ngateway uses when dialing upstream MCP servers.\n\n`auto` (the default) starts with modern `server/discover` and uses rmcp's\nclassified legacy fallback. `latest` forces the legacy `initialize` path;\n`2026-07-28` is the explicit spelling of the modern preference.",
       "oneOf": [
         {
+          "const": "auto",
+          "description": "Prefer `server/discover` and `2026-07-28`, falling back through rmcp's\ncompatibility path when the upstream identifies itself as legacy.",
+          "type": "string"
+        },
+        {
           "const": "latest",
-          "description": "Use the legacy `initialize` lifecycle with the latest version the MCP\nSDK treats as current — today `2025-11-25`. This is the default.",
+          "description": "Use the legacy `initialize` lifecycle with the latest version the MCP\nSDK treats as current — today `2025-11-25`.",
           "type": "string"
         },
         {
           "const": "2026-07-28",
-          "description": "Use `server/discover` and the modern `2026-07-28` lifecycle, falling\nback to legacy `initialize` only on `METHOD_NOT_FOUND`. Other discovery\nerrors fail the connection. Opting in also lets upstreams answer\n`tools/call` with MRTR `input_required` or a Tasks `task` handle;\nneither is a shape this gateway can carry, so both surface as explicit\nerrors (see `docs/MCP_2026_07_28_SPEC.md` D1).",
+          "description": "Use `server/discover` and the modern `2026-07-28` lifecycle. rmcp falls\nback after its discovery timeout or a correlated JSON-RPC error it\nclassifies as legacy; transport failures, malformed or uncorrelated\nresponses, and modern rejection codes fail the connection. Opting in\nalso lets upstreams answer `tools/call` with MRTR `input_required` or a\nTasks `task` handle; neither is a shape this gateway can carry, so both\nsurface as explicit errors (see `docs/MCP_2026_07_28_SPEC.md` D1).",
           "type": "string"
         }
       ]
@@ -672,6 +789,20 @@
           "description": "Chat Completions-specific request settings."
         }
       },
+      "type": "object"
+    },
+    "NativeCheckerConfig": {
+      "additionalProperties": false,
+      "description": "Startup identity for trusted, compiled-in request-check code.",
+      "properties": {
+        "revision": {
+          "description": "Operator-chosen code/rules revision. Change it when behavior changes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "revision"
+      ],
       "type": "object"
     },
     "PatternMap_for_ProtocolList": {
@@ -846,6 +977,12 @@
         },
         "routing": {
           "$ref": "#/$defs/RoutingConfig",
+          "default": {
+            "ignore": [],
+            "only": [],
+            "require_tags": [],
+            "sort": null
+          },
           "description": "Routing knobs fed into the cascade."
         },
         "system_prompt": {
@@ -1098,11 +1235,18 @@
         },
         "derives": {
           "default": null,
-          "description": "Inherit defaults from another provider in this config (acceptance F20 /\nv0 `derives`). The named provider's `api_protocol`, `rate_limits`,\n`models`, `tags` and `auto_discover` flow into *this* provider's empty\nfields; explicit fields here win. Resolved by\n[`resolve_derivations`] after the config is parsed.",
+          "description": "Inherit defaults from another provider in this config (acceptance F20 /\nv0 `derives`). The named provider's `headers`, `api_protocol`,\n`rate_limits`, `models`, `tags` and `auto_discover` flow into *this*\nprovider's empty fields; explicit fields here win. Resolved by\n[`resolve_derivations`] after the config is parsed.",
           "type": [
             "string",
             "null"
           ]
+        },
+        "headers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ProviderHeaderConfig"
+          },
+          "description": "Additional headers applied to every inference request for this\nprovider. A string is shorthand for a static default. The expanded\nform can opt into forwarding the same inbound header, which overrides\nthe default for that request.",
+          "type": "object"
         },
         "models": {
           "description": "Declared model entries. Empty + `auto_discover` triggers discovery.",
@@ -1143,6 +1287,39 @@
         "timeouts": {
           "$ref": "#/$defs/TimeoutConfig",
           "description": "Per-provider upstream timeout overrides. Each set field layers over the\nresolved global [`UpstreamConfig::timeouts`]; unset fields inherit it.\nNot inherited via [`derives`](Self::derives)."
+        }
+      },
+      "type": "object"
+    },
+    "ProviderHeaderConfig": {
+      "anyOf": [
+        {
+          "description": "Static value; equivalent to `{ default: value, passthrough: false }`.",
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/ProviderHeaderPolicy",
+          "description": "Expanded default/passthrough policy."
+        }
+      ],
+      "description": "One provider header entry in `bitrouter.yaml`.\n\nA scalar string is shorthand for a static default with passthrough\ndisabled. The mapping form supports an optional `default` and an explicit\ninbound `passthrough` switch."
+    },
+    "ProviderHeaderPolicy": {
+      "additionalProperties": false,
+      "description": "Expanded provider header behavior.",
+      "properties": {
+        "default": {
+          "default": null,
+          "description": "Static value used when no allowed inbound value is present.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "passthrough": {
+          "default": false,
+          "description": "Allow the inbound request's value(s) to override the static default.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -1350,6 +1527,206 @@
       },
       "type": "object"
     },
+    "RouterChecks": {
+      "additionalProperties": false,
+      "description": "Request checks attached to a named router.",
+      "properties": {
+        "request": {
+          "default": [],
+          "description": "Ordered compiled checks. Every checker must allow the request.",
+          "items": {
+            "$ref": "#/$defs/RouterRequestCheck"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "RouterConfig": {
+      "additionalProperties": false,
+      "description": "One named router definition.",
+      "properties": {
+        "checks": {
+          "$ref": "#/$defs/RouterChecks",
+          "default": {
+            "request": []
+          },
+          "description": "Fail-closed checks run before this router may contact an upstream."
+        },
+        "defaults": {
+          "$ref": "#/$defs/RouterDefaults",
+          "default": {
+            "params": {},
+            "system_prompt": null
+          },
+          "description": "Request values filled only when the caller omitted them."
+        },
+        "selection": {
+          "$ref": "#/$defs/RouterSelection",
+          "description": "The model or policy selection performed by this router."
+        }
+      },
+      "required": [
+        "selection"
+      ],
+      "type": "object"
+    },
+    "RouterDefaults": {
+      "additionalProperties": false,
+      "description": "Defaults supplied by a named router.",
+      "properties": {
+        "params": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "Generation parameters shallow-merged behind explicit request values.",
+          "type": "object"
+        },
+        "system_prompt": {
+          "default": null,
+          "description": "System prompt used only when the request did not provide one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RouterRequestCheck": {
+      "additionalProperties": false,
+      "description": "One router-to-checker binding.",
+      "properties": {
+        "checker": {
+          "description": "Checker id under the top-level `checkers` map.",
+          "type": "string"
+        },
+        "max_input_bytes": {
+          "default": 262144,
+          "description": "Maximum projected text bytes. Oversize input is rejected, never truncated.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout_ms": {
+          "default": 500,
+          "description": "Total checker deadline, including queue admission and callback execution.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "checker"
+      ],
+      "type": "object"
+    },
+    "RouterRoutingConfig": {
+      "additionalProperties": false,
+      "description": "Provider routing preferences accepted by a named router.",
+      "properties": {
+        "ignore": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "only": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "require_tags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sort": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SortOrder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "RouterSelection": {
+      "description": "Model selection performed by a named router.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Resolve one existing model selector.",
+          "properties": {
+            "kind": {
+              "const": "model",
+              "type": "string"
+            },
+            "model": {
+              "description": "Existing physical or virtual model selector.",
+              "type": "string"
+            },
+            "routing": {
+              "$ref": "#/$defs/RouterRoutingConfig",
+              "default": {
+                "ignore": [],
+                "only": [],
+                "require_tags": [],
+                "sort": null
+              },
+              "description": "Provider preferences applied by the existing cascade resolver."
+            }
+          },
+          "required": [
+            "kind",
+            "model"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Let one existing policy choose the effective model.",
+          "properties": {
+            "base_model": {
+              "description": "Exact base-model input retained by the current policy runtime.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "policy",
+              "type": "string"
+            },
+            "policy": {
+              "description": "Policy name in `policy-lock.yaml`.",
+              "type": "string"
+            },
+            "routing": {
+              "$ref": "#/$defs/RouterRoutingConfig",
+              "default": {
+                "ignore": [],
+                "only": [],
+                "require_tags": [],
+                "sort": null
+              },
+              "description": "Provider preferences applied after the policy selects a model."
+            }
+          },
+          "required": [
+            "kind",
+            "policy",
+            "base_model"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RoutingConfig": {
       "description": "Routing knobs shared by presets and variants.",
       "properties": {
@@ -1407,12 +1784,12 @@
         },
         "log_level": {
           "default": "info",
-          "description": "Log filter for the daemon, in `tracing-subscriber` `EnvFilter` syntax —\na bare level (`debug`) or a per-target list (`info,bitrouter=debug`).\n\n`RUST_LOG` overrides this when set, following the Rust convention. The\nfilter is resolved once at startup, so changing it needs a restart —\n`bitrouter reload` will not pick it up. Applies to `bitrouter serve`\n(and therefore `start`); other subcommands install their subscriber\nbefore any config is read and honour `RUST_LOG` only.",
+          "description": "Log filter for the daemon, in `tracing-subscriber` `EnvFilter` syntax —\na bare level (`debug`) or a per-target list (`info,bitrouter=debug`).\n\n`RUST_LOG` overrides this when set, following the Rust convention. The\nfilter is resolved once at startup, so changing it needs a restart —\n`bro reload` will not pick it up. Applies to `bro serve`\n(and therefore `start`); other subcommands install their subscriber\nbefore any config is read and honour `RUST_LOG` only.",
           "type": "string"
         },
         "skip_auth": {
           "default": false,
-          "description": "SDK-level flag: when `true`, credential-less requests are admitted with\na synthesised local caller. Code default is **`false`** — only the\nconfig file produced by `bitrouter init` writes `true`.",
+          "description": "SDK-level flag: when `true`, credential-less requests are admitted with\na synthesised local caller. Code default is **`false`** — only the\nconfig file produced by `bro init` writes `true`.",
           "type": "boolean"
         }
       },
@@ -1611,6 +1988,12 @@
       "properties": {
         "routing": {
           "$ref": "#/$defs/RoutingConfig",
+          "default": {
+            "ignore": [],
+            "only": [],
+            "require_tags": [],
+            "sort": null
+          },
           "description": "Routing knobs fed into the cascade."
         }
       },
@@ -1970,21 +2353,36 @@
       "type": "object"
     }
   },
-  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.27/config.schema.json",
+  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.33/config.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "The top-level configuration.",
   "properties": {
+    "acp_recording": {
+      "$ref": "#/$defs/AcpRecordingConfig",
+      "default": {
+        "enabled": false
+      },
+      "description": "Opt-in local storage of observable ACP conversation content."
+    },
     "agents": {
       "additionalProperties": {
         "$ref": "#/$defs/AcpAgentConfig"
       },
       "default": {},
-      "description": "Upstream ACP agents, keyed by agent id. Surfaced by the\n`bitrouter agents` CLI (list / check / install). Empty by default.",
+      "description": "Upstream ACP agents, keyed by agent id. Surfaced by the\n`bro agents` CLI (list / check / install). Empty by default.",
       "type": "object"
     },
     "chat": {
       "$ref": "#/$defs/ChatConfig",
       "description": "The interactive session's own configuration."
+    },
+    "checkers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CheckerConfig"
+      },
+      "default": {},
+      "description": "Compiled request-check extensions, keyed by the ids referenced from named routers.",
+      "type": "object"
     },
     "continuation": {
       "$ref": "#/$defs/ContinuationConfig",
@@ -1993,6 +2391,10 @@
         "retention_days": 30
       },
       "description": "Durable provider continuation mapping lifecycle."
+    },
+    "control": {
+      "$ref": "#/$defs/ControlConfig",
+      "description": "Opt-in, read-only operator control API settings."
     },
     "database": {
       "$ref": "#/$defs/DatabaseConfig",
@@ -2087,6 +2489,14 @@
     "registry": {
       "$ref": "#/$defs/RegistryConfig",
       "description": "Public registry integration: whether to fetch + merge the registry's\nBYOK providers, where to fetch it from, and the provider-class priority\nladder used to order the auto-cascade."
+    },
+    "routers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/RouterConfig"
+      },
+      "default": {},
+      "description": "Named request routers, addressed as `bitrouter/<id>`.",
+      "type": "object"
     },
     "server": {
       "$ref": "#/$defs/ServerConfig",

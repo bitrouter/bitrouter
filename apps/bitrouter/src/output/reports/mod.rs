@@ -5,6 +5,7 @@
 //! implementations. Submodules are added as groups are converted.
 
 pub mod admin;
+pub mod administration;
 pub mod agents;
 pub mod commands;
 pub mod config;
@@ -12,6 +13,7 @@ pub mod daemon;
 pub mod eval;
 pub mod mcp;
 pub mod observe;
+pub mod operations;
 pub mod optimization;
 pub mod policy;
 pub mod requests;

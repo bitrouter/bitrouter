@@ -25,6 +25,7 @@
   open_weights: true
   family: glm
 - id: z-ai/glm-5.1
+  deprecation_date: 2026-10-05
   name: 'Zhipu: GLM-5.1'
   input_modalities:
   - text
@@ -48,6 +49,7 @@
   open_weights: true
   family: glm
 - id: z-ai/glm-4.7
+  deprecation_date: 2026-10-05
   name: 'Zhipu: GLM-4.7'
   input_modalities:
   - text
@@ -58,3 +60,23 @@
   release_date: 2025-12-23
   open_weights: true
   family: glm
+- id: z-ai/glm-5.3-flashx
+  name: 'Z.ai: GLM 5.3 FlashX'
+  input_modalities:
+  - image
+  - text
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 131072
+  release_date: 2026-09-18
+- id: z-ai/glm-5.3-prime
+  name: 'Z.ai: GLM 5.3 Prime'
+  input_modalities:
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 131072
+  release_date: 2026-09-23

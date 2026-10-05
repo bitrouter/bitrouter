@@ -19,7 +19,7 @@ Consecutive non-green iterations on this task: 0
 - [x] T4 — SessionPorts, /status, G4, G5, A1
 - [x] T5 — /models and /preview
 - [x] T6 — CommandsReport and its builder
-- [x] T7 — bitrouter acp commands, /commands through the shared report
+- [x] T7 — bro acp commands, /commands through the shared report
 - [x] T8 — the prompt-expansion registry
 - [x] T9 — acceptance sweep
 
@@ -123,7 +123,7 @@ Consecutive non-green iterations on this task: 0
 
   **The 60-column check found a defect, not a fit problem.**
   `ModelsReport::render` emits a literal tab between its columns — deliberate,
-  so `bitrouter models --human | cut -f1` works. On a ratatui screen that is
+  so `bro models --human | cut -f1` works. On a ratatui screen that is
   unsafe: the differential writer measures rows with `unicode-width`, where a
   tab is one column, while the terminal advances to the next tab stop, so every
   row after the tab is misplaced. It appears in the *narrow* common case
@@ -155,7 +155,7 @@ Consecutive non-green iterations on this task: 0
   The rendering is deliberately tab-free, with a test pinning it — the direct
   consequence of what T5 found.
 
-- **T7** — `bitrouter acp commands` leaf, `/commands` on the shared report,
+- **T7** — `bro acp commands` leaf, `/commands` on the shared report,
   `commands_received` on the journal, `hint` carried through `translate.rs`,
   and T3's scaffolding renderer deleted (77 lines + 78 of its tests, whose
   coverage moved to `commands_report` in T6). 3046 tests pass — five fewer
@@ -213,7 +213,7 @@ Consecutive non-green iterations on this task: 0
   | the three pre-existing guards unchanged **in text** | pass — byte-identical to base (15 / 24 / 26 lines) |
   | `multitenant_http.rs` unchanged | pass — 0 diff lines vs base |
   | `bitrouter-tui` gained no `bitrouter-*` dependency | pass — 0 added |
-  | session notice bytes == `render_to_vec` of the same report | pass — **live**: piped `/status` against `claude-acp` is byte-identical to `bitrouter status --human` (7 lines) |
+  | session notice bytes == `render_to_vec` of the same report | pass — **live**: piped `/status` against `claude-acp` is byte-identical to `bro status --human` (7 lines) |
   | `acp commands` against a real harness | pass — 6 bitrouter rows + 70 agent rows, hints rendered, `received: true` |
   | `acp commands` against an empty-list and a silent harness | **not run live** — no stub harness available. Covered by unit tests (`silence_and_an_empty_list_are_different_answers`) |
   | by-hand: routed chat, `--direct`, piped, at 60 columns; `stty` restored | **partially run** — the piped path was exercised live and exits 0. The two interactive paths need a TTY, which this session does not have. Not verified |

@@ -6,8 +6,8 @@ Wire Hermes Agent to route its model calls through BitRouter at `http://localhos
 
 ## Prerequisites
 
-- BitRouter installed and running (`bitrouter status` shows green).
-- Whichever provider Hermes targets is `active` in `bitrouter providers list`.
+- BitRouter installed and running (`bro status` shows green).
+- Whichever provider Hermes targets is `active` in `bro providers list`.
 - Hermes Agent installed.
 
 ## Configuration

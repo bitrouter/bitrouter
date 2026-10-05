@@ -11,7 +11,7 @@ gate `registry_agents_match_the_compiled_catalog` proving the data agrees with
 code:
 
 - **Ids are today's catalog ids** (`claude-acp`, not `claude-agent-acp`).
-  Renaming would break `bitrouter spawn claude-acp` for no gain.
+  Renaming would break `bro spawn claude-acp` for no gain.
 - **`acp.capabilities` is not written yet.** It is asserted by conformance T0,
   which lands in phase 3; an unverified capability list is worse than none.
 - **`config_file` templates and the `args` override list are not written yet.**
@@ -43,7 +43,7 @@ code:
   harnesses. Because a config-file harness's ACP facet launches direct
   (SPAWN_SPEC §6), T2 reports `skipped` for those four rather than verifying a
   facet BitRouter does not route.
-- **Phase 3 has landed, minus T1.** `bitrouter agents conformance` runs
+- **Phase 3 has landed, minus T1.** `bro agents conformance` runs
   `acp_compat_1` — T0 handshake and T2 routability — against an ephemeral
   loopback `StubGateway`, needing no provider credentials. Runtime entries take
   a `conformance:` block, and the validator enforces its provenance plus the
@@ -91,7 +91,7 @@ Three problems, one cause.
    `OpenclawProfile`) exist only because each harness wants its redirection
    written to a config file in a slightly different shape. They are
    structurally identical and could be one declarative form.
-3. **"ACP-compatible" is asserted, never verified.** `bitrouter agents check`
+3. **"ACP-compatible" is asserted, never verified.** `bro agents check`
    sends `initialize` and stops
    ([`up.rs:329`](../crates/bitrouter-sdk/src/acp/up.rs)). Nothing checks that a
    session can be created, that updates stream, that permissions round-trip, or
@@ -115,7 +115,7 @@ anyway.
 - A declarative routing contract that covers every redirection shape in today's
   `Routing` enum except `OwnAuth`, so no new harness needs a Rust patch to be
   routed.
-- `bitrouter agents conformance` — a three-tier ACP-compatibility suite whose
+- `bro agents conformance` — a three-tier ACP-compatibility suite whose
   lower two tiers need no provider credentials and can therefore run in CI on a
   contributor's PR.
 - A contribution flow with the same shape as a provider contribution:
@@ -141,7 +141,7 @@ anyway.
 | `registry/models/<vendor>.yaml` — canonical ids, limits, modalities, `benchmarks:` | `registry/agents/<vendor>.yaml` — bare harness ids, ACP capabilities, routing contract |
 | `registry/providers/<name>.yaml` — `api_base`, auth, protocol, per-model `pricing` | `registry/runtimes/<name>.yaml` — where it executes, auth, isolation, per-harness `transport` + `conformance` |
 | a model is routable because an **active provider serves it** | an agent is launchable because an **active runtime can run it** |
-| `GET /v1/models` = de-duplicated union of active providers' models | `bitrouter agents list` = union of active runtimes' harnesses |
+| `GET /v1/models` = de-duplicated union of active providers' models | `bro agents list` = union of active runtimes' harnesses |
 | a provider may serve models beyond the curated set → advisory | a runtime may run harnesses beyond the curated set → advisory |
 | `status` gates routing; only `active` is served | identical |
 | `provider_model_id` — the same model, packaged differently per provider | `transport` — the same harness, invoked differently per runtime |
@@ -173,7 +173,7 @@ ids matter: with vendor-prefixed ids, `e2b/claude-acp` and
 `/` separator would be ambiguous. With bare ids the first segment is always a
 runtime.
 
-`local/` is the eliding default: `bitrouter spawn claude-acp` resolves to
+`local/` is the eliding default: `bro spawn claude-acp` resolves to
 `local/claude-acp`. A bare harness id that no active runtime lists is an
 error naming the runtimes that *do* list it.
 
@@ -206,7 +206,7 @@ changes depending on where the agent runs belongs in §6 instead.
     auth_env: ANTHROPIC_AUTH_TOKEN
     bearer_auth: true
     model_env: ANTHROPIC_MODEL
-  # Optional `bitrouter launch` facet — the harness's own native TUI. Local
+  # Optional `bro launch` facet — the harness's own native TUI. Local
   # runtime only.
   interactive_binary: claude
   # Substring that maps a user-renamed `agents:` entry back to this catalog
@@ -226,7 +226,7 @@ an absent one, because conformance T0 will assert it.
 | `acp.protocol_version` | yes | integer ACP major version |
 | `acp.capabilities` | no | asserted against the `initialize` response by T0 |
 | `routing` | yes | §7; `kind: none` for agents that cannot be redirected |
-| `interactive_binary` | no | presence declares a `bitrouter launch` facet |
+| `interactive_binary` | no | presence declares a `bro launch` facet |
 | `package_marker` | yes | invocation → catalog matching |
 
 ## 6. `registry/runtimes/` — where an agent executes
@@ -504,13 +504,13 @@ Per `CLAUDE.md`, changes confined to `registry/` are validated with
 ## 11. CLI surface
 
 ```
-bitrouter agents list [--runtime <name>] [--remote]
-bitrouter agents check
-bitrouter agents install <runtime>/<harness>
-bitrouter agents conformance <runtime>/<harness> [--suite acp_compat_1]
+bro agents list [--runtime <name>] [--remote]
+bro agents check
+bro agents install <runtime>/<harness>
+bro agents conformance <runtime>/<harness> [--suite acp_compat_1]
                                                  [--tier t0|t1|t2] [--report <path>]
-bitrouter spawn <runtime>/<harness> -p "…"
-bitrouter launch --agent <harness>
+bro spawn <runtime>/<harness> -p "…"
+bro launch --agent <harness>
 ```
 
 `list` gains a runtime column and lists the union of active runtimes'
@@ -624,7 +624,7 @@ Registry data needs no Rust tests (`CLAUDE.md`). Code does:
 |---|---|---|
 | 1 | **Done.** `registry/{agents,runtimes}/` source, validator rules, `{agents,runtimes}.json` build, drift gate asserting catalog ≡ registry. No behaviour change. | data-only |
 | 2 | **Done.** Generated catalog is the source; declarative `config_file` replaced the four synthesis variants (differential test, then delete); `grok`/`antigravity` split out. | medium — routing regressions |
-| 3 | **Done (T0 + T2).** `bitrouter agents conformance` + ephemeral stub gateway + CI job + contributor docs in `registry/README.md`. **Registration opens here.** T1 lifecycle deferred. | new surface |
+| 3 | **Done (T0 + T2).** `bro agents conformance` + ephemeral stub gateway + CI job + contributor docs in `registry/README.md`. **Registration opens here.** T1 lifecycle deferred. | new surface |
 | 4 | `container` runtime, then `remote` (new `AcpTransport` variant, OQ1 resolved). Ties into #735. | largest |
 
 ## 17. Open questions

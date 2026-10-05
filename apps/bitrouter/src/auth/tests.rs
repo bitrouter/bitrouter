@@ -10,6 +10,7 @@ use bitrouter_sdk::language_model::{
     GenerationParams, HookDecision, Message, PipelineContext, PipelineRequest, PreRequestHook,
     Prompt, Role,
 };
+use bitrouter_sdk::mcp::{McpContext, McpRequest};
 
 use crate::auth::db::{self, NewApiKey};
 use crate::auth::events::{ApiPrincipalEstablished, Authenticated};
@@ -45,6 +46,16 @@ fn ctx_with(caller: CallerContext, bearer: Option<&str>) -> PipelineContext {
             .insert("authorization", format!("Bearer {token}").parse().unwrap());
     }
     PipelineContext::new(req)
+}
+
+fn mcp_ctx_with(caller: CallerContext, bearer: Option<&str>) -> McpContext {
+    let mut request = McpRequest::direct("catalog", "tools/list", serde_json::json!({}), caller);
+    if let Some(token) = bearer {
+        request
+            .headers
+            .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    }
+    McpContext::new(request)
 }
 
 /// Insert a fresh active key, returning its plaintext secret + id.
@@ -93,6 +104,38 @@ async fn valid_key_authenticates_and_emits_event() {
             .route_scope_id,
         keys::hash_key(&secret)
     );
+}
+
+#[tokio::test]
+async fn valid_key_authenticates_mcp_and_emits_identity_events() {
+    let pool = pool().await;
+    let (secret, key_id) = insert_active_key(&pool, "mcp-user").await;
+    let hook = AuthHook::new(pool);
+    let mut ctx = mcp_ctx_with(CallerContext::anonymous(), Some(&secret));
+
+    let decision = bitrouter_sdk::mcp::PreRequestHook::check(&hook, &mut ctx)
+        .await
+        .unwrap();
+    assert!(matches!(decision, HookDecision::Allow));
+    assert_eq!(ctx.caller().api_key_id(), key_id);
+    assert_eq!(ctx.caller().user_id(), "mcp-user");
+    assert!(ctx.has_event::<Authenticated>());
+    assert!(ctx.has_event::<ApiPrincipalEstablished>());
+}
+
+#[tokio::test]
+async fn anonymous_mcp_request_is_denied_when_auth_is_enabled() {
+    let hook = AuthHook::new(pool().await);
+    let mut ctx = mcp_ctx_with(CallerContext::anonymous(), None);
+
+    let decision = bitrouter_sdk::mcp::PreRequestHook::check(&hook, &mut ctx)
+        .await
+        .unwrap();
+    let HookDecision::Deny(reason) = decision else {
+        panic!("anonymous MCP request must be denied");
+    };
+    let error: bitrouter_sdk::BitrouterError = reason.into();
+    assert_eq!(error.status(), 401);
 }
 
 #[tokio::test]

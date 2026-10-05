@@ -12,6 +12,7 @@ use sea_orm::DatabaseConnection;
 use bitrouter_sdk::App;
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
+use bitrouter_sdk::invocation;
 use bitrouter_sdk::language_model::protocol::OutboundDispatch;
 use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
 use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
@@ -48,7 +49,6 @@ use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
 use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
 use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
 
-use bitrouter_guardrails::{GuardrailConfig, GuardrailsPlugin};
 use bitrouter_sdk::MetricsRenderer;
 use bitrouter_telemetry::OTEL_ENABLED;
 use bitrouter_telemetry::otel::{
@@ -82,13 +82,16 @@ pub struct Assembled {
     /// In-memory API-principal-scoped ACP route leases.
     pub acp_runtime: Arc<AcpRuntime>,
     /// The policy store wired into the language_model pipeline. Held by the
-    /// caller (the daemon) so `bitrouter reload` / SIGHUP can call
+    /// caller (the daemon) so `bro reload` / SIGHUP can call
     /// [`PolicyStore::reload`] alongside the routing-table reload — reload
     /// must not affect in-flight requests.
     pub policy_store: Arc<PolicyStore>,
     /// Live named routing policies loaded from `policy-lock.yaml`. The model
     /// selector and daemon reloader share this last-known-good registry.
     pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
+    /// Canonical checkpoint evolution. Mode is owner-scoped and disabled until
+    /// explicitly enabled; this handle shares the serving routing snapshots.
+    pub evolution: crate::evolution::runtime::EvolutionRuntime,
     /// Generic eval exchange used by the local CLI and REST control plane.
     pub eval_service: EvalService,
     /// Always-active encrypted provider continuation registry.
@@ -113,7 +116,7 @@ pub struct Assembled {
     /// concrete handle to swap a freshly built spec into it, because the
     /// transform itself cannot be re-registered on a built `App`.
     pub policy_table_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
-    /// Snapshot provider for `bitrouter observe status`. When the OTel
+    /// Snapshot provider for `bro observe status`. When the OTel
     /// exporter is wired, this reports its live state; when not, it
     /// reports `compiled_in` truthfully and everything else blank.
     pub observe: Arc<dyn ObserveStatusProvider>,
@@ -128,8 +131,9 @@ pub struct Assembled {
     /// the subscriber on the `serve` path, so logging directly here
     /// would be dropped.
     pub otel_init_error: Option<String>,
-    /// Configuration this binary read but will not act on — an unrecognised
-    /// `plugins.<id>` block, or an environment variable that has been renamed.
+    /// Startup diagnostics for ignored configuration or inactive registrations:
+    /// an unrecognised `plugins.<id>` block, a renamed environment variable,
+    /// or a compiled capability that configuration does not declare.
     ///
     /// Carried out rather than logged in place, for the same reason as
     /// [`Self::otel_init_error`]: on the `serve` path assembly runs *before*
@@ -222,11 +226,27 @@ impl ObserveStatusProvider for OtelExporterStatus {
 /// It shipped wrong exactly once, for exactly that reason: `bitrouter-policy`
 /// is read through a line-wrapped `config` / `.plugins` / `.get(…)` chain that
 /// a single-line grep did not see. Hence the scan.
-pub const KNOWN_PLUGIN_IDS: &[&str] = &[
-    "bitrouter-guardrails",
-    "bitrouter-policy",
-    "bitrouter-telemetry",
-];
+pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry"];
+
+/// Reject removed built-in configuration before activating the default host.
+///
+/// Presence, not content, is the migration fence: even null/empty legacy config
+/// must be explicitly removed after the operator has reviewed protection scope.
+/// This belongs to the product host, not the SDK parser: trusted custom hosts
+/// may still explicitly install the compatibility guardrails plugin.
+pub fn validate_host_configuration(config: &Config) -> Result<()> {
+    anyhow::ensure!(
+        !config.plugins.contains_key("bitrouter-guardrails"),
+        "plugins.bitrouter-guardrails requires migration: the default bro no longer \
+         includes the guardrails matcher. Compile the regex extension into a custom host, \
+         register it through bitrouter_sdk::extension::ExtensionApi, and bind it through \
+         routers.<id>.checks.request. The request-check capability checks input \
+         only and does not replace global or output block/redact protection. Review \
+         every protected entry point and output requirement before explicitly removing \
+         the old key, including empty/null configuration; see docs/GUARDRAILS_EXTENSION.md."
+    );
+    Ok(())
+}
 
 /// Sub-keys that were removed, and the block they sat under. Reported for the
 /// same reason as [`RENAMED_ENV_VARS`]: the guard below is id-level, so a
@@ -276,7 +296,7 @@ const RENAMED_ENV_VARS: &[(&str, &str)] = &[
 
 /// The `plugins.*` keys in `config` that this binary does not read, sorted.
 ///
-/// Pure so `bitrouter config validate` can report the same set the daemon
+/// Pure so `bro config validate` can report the same set the daemon
 /// warns about, without building an `App`.
 pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
     let mut unknown: Vec<String> = config
@@ -292,11 +312,11 @@ pub fn unknown_plugin_ids(config: &Config) -> Vec<String> {
 /// Everything this binary read but will not act on, as operator-facing lines.
 ///
 /// Collected in [`build_app_with_path`] so it covers every daemon start rather
-/// than only `bitrouter config validate` — validation is opt-in and the daemon
+/// than only `bro config validate` — validation is opt-in and the daemon
 /// always runs, which is the wrong way round for a failure this quiet. The
 /// caller emits them; see [`Assembled::ignored_config`] for why.
 ///
-/// Public because `bitrouter config validate` reports the same set from a
+/// Public because `bro config validate` reports the same set from a
 /// file it may never run against — see [`ignored_config_warnings`] for why the
 /// environment half is split off.
 pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
@@ -318,12 +338,12 @@ pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
 
 /// [`ignored_config_file_warnings`] plus the environment ones.
 ///
-/// The split is what `bitrouter config validate` needs: it validates a *file*,
+/// The split is what `bro config validate` needs: it validates a *file*,
 /// possibly one belonging to another machine, so reporting this process's
 /// environment there would be noise at best and misleading at worst. Every
 /// runtime surface wants both.
 ///
-/// Public because `bitrouter acp serve|prompt|chat` never builds an `App`: it
+/// Public because `bro acp serve|prompt|chat` never builds an `App`: it
 /// takes its exporter straight from
 /// `build_otel_exporter_standalone_with_credentials`, which reads the same
 /// config. A guard covering only the daemon would leave those surfaces exactly
@@ -358,20 +378,62 @@ fn renamed_env_warnings(is_set: impl Fn(&str) -> bool) -> Vec<String> {
         .collect()
 }
 
-/// Assemble an [`App`] from a parsed config: connect the database, run every
-/// plugin's migrations, build the routing table + executor, and wire the
+/// Assemble an [`App`] from a parsed config: connect the database, run the
+/// host's migrations, build the routing table + executor, and wire the
 /// builtin hooks onto the `language_model` pipeline.
 pub async fn build_app(config: &Config) -> Result<Assembled> {
     build_app_with_path(config, None).await
 }
 
 /// Like [`build_app`], but remembering the config's source path so the routing
-/// table's `reload()` (driven by `bitrouter reload` / `SIGHUP`) can re-read it.
+/// table's `reload()` (driven by `bro reload` / `SIGHUP`) can re-read it.
 pub async fn build_app_with_path(
     config: &Config,
     config_path: Option<&std::path::Path>,
 ) -> Result<Assembled> {
-    let ignored_config = ignored_config_warnings(config);
+    build_app_with_extensions(config, config_path, |_| Ok(())).await
+}
+
+/// Assemble a custom host through the unified, capability-scoped extension API.
+///
+/// Registration completes before configuration validation, database access or
+/// any other startup work. Registered capabilities remain inert until the
+/// configuration binds them to a router.
+pub async fn build_app_with_extensions(
+    config: &Config,
+    config_path: Option<&std::path::Path>,
+    register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
+) -> Result<Assembled> {
+    let mut extensions = bitrouter_sdk::extension::ExtensionApi::new();
+    register(&mut extensions).context("registering extensions")?;
+    let native = extensions
+        .into_registrations()
+        .context("registering extensions")?;
+    assemble_app(config, config_path, native).await
+}
+
+async fn assemble_app(
+    config: &Config,
+    config_path: Option<&std::path::Path>,
+    native: std::collections::HashMap<
+        String,
+        bitrouter_sdk::extension::request_check::Registration,
+    >,
+) -> Result<Assembled> {
+    validate_host_configuration(config)?;
+    config.validate_router_config()?;
+    let mut inactive = native
+        .keys()
+        .filter(|id| !config.checkers.contains_key(*id))
+        .collect::<Vec<_>>();
+    inactive.sort();
+    let mut ignored_config = ignored_config_warnings(config);
+    ignored_config.extend(inactive.into_iter().map(|id| {
+        format!("request-check registration '{id}' is inactive: no checkers.{id} declaration")
+    }));
+    let request_checks = Arc::new(
+        crate::request_checks::RequestCheckRuntime::activate_with_registrations(config, native)?,
+    );
     // Validate and construct ingress aliases before opening the database or
     // performing any other startup work. A custom transform must not run ahead
     // of Stage 0 and shadow `@preset` or reserved `bitrouter/` addresses.
@@ -491,7 +553,7 @@ pub async fn build_app_with_path(
     );
     let executor_for_reload = executor.clone();
 
-    // ---- pricing, metering, policy, guardrails — all derived from config ----
+    // ---- pricing, metering, policy — all derived from config ----
     let pricing = Arc::new(build_pricing_table(config));
     let metering_store = MeteringStore::new(db.clone());
     let metering_store_for_policy = metering_store.clone();
@@ -499,9 +561,6 @@ pub async fn build_app_with_path(
     let pricing_for_recorder = pricing.clone();
     let policy_store: Arc<PolicyStore> = Arc::new(load_policy_store(config).await?);
     let policy_store_for_reload = policy_store.clone();
-    let guardrail_rules = build_guardrail_config(config)?
-        .compile()
-        .context("compiling guardrail patterns")?;
 
     // Metrics are now pushed via OTLP, not pulled from /metrics
     // Keep metrics_renderer for compatibility but return empty response
@@ -535,9 +594,10 @@ pub async fn build_app_with_path(
                             .await;
                             if source.is_none() && warn_if_unmet {
                                 tracing::warn!(
-                                    "telemetry: attribution=account but no signed-in session is \
-                                     available — exporting anonymously (sign in with \
-                                     `bitrouter cloud login`)"
+                                    "telemetry: attribution=account but no signed-in session \
+                                     is available — exporting anonymously (sign in with `{} \
+                                     cloud login`)",
+                                    invocation::name()
                                 );
                             }
                             source
@@ -769,6 +829,13 @@ pub async fn build_app_with_path(
     .await
     .context("loading policy-lock.yaml")?;
     let policy_runtime_for_selector = policy_runtime.clone();
+    let evolution = crate::evolution::runtime::EvolutionRuntime::new(
+        db.clone(),
+        routing_table.clone(),
+        policy_runtime.clone(),
+    );
+    let evolution_for_hooks = evolution.clone();
+    let judge_costs = crate::evolution::costs::JudgeCosts::new(db.clone());
     #[cfg(test)]
     let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
@@ -777,12 +844,15 @@ pub async fn build_app_with_path(
     let eval_store_for_recorder = eval_service.store().clone();
     let pricing_for_eval = pricing.clone();
     let db_for_hooks = db.clone();
+    let db_for_mcp_auth = db.clone();
     let acp_runtime_for_session = Arc::clone(&acp_runtime);
+    let request_checks_for_pipeline = request_checks.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
+            lm.request_checker_runner(request_checks_for_pipeline);
             lm.fallback_backoff(
                 config
                     .upstream
@@ -794,6 +864,7 @@ pub async fn build_app_with_path(
             lm.model_selector(policy_runtime_for_selector);
             lm.route_hook(continuation_for_route);
             lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
+            lm.route_hook(evolution_for_hooks.clone());
             lm.required_finalizer(continuation_for_finalization);
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion
@@ -801,17 +872,22 @@ pub async fn build_app_with_path(
             // and stashes it, before auth, so the toolsets can read it
             // regardless of credential state.
             if server_tools_enabled {
-                lm.pre_request_hook(ServerToolDeclarationsHook);
+                lm.pre_resolution_hook(ServerToolDeclarationsHook);
             }
-            // Stage 1, in order: auth → request-session normalization →
-            // continuation → policy. Session normalization may apply a
+            // Reserved judge IDs are checked even before auth, so an early
+            // rejection cannot overwrite an existing attempt's metering row.
+            lm.pre_resolution_hook(judge_costs.clone());
+            // Authenticate and normalize the selector before freezing the router
+            // binding and applying its defaults. Session normalization may apply a
             // API-principal-scoped route lease before Stage 2 model selection;
             // explicit routes and provider continuations retain precedence.
-            // The guardrail plugin appends its hooks after this closure (see
-            // `.plugin(...)` below), preserving the policy → guardrail order.
-            lm.pre_request_hook(AuthHook::new(db_for_hooks.clone()));
-            lm.pre_request_hook(SessionContextHook::new(acp_runtime_for_session));
-            lm.pre_request_hook(continuation_for_pre_request);
+            // The pipeline runs bound external checks after these local hooks.
+            lm.pre_resolution_hook(AuthHook::new(db_for_hooks.clone()));
+            lm.pre_resolution_hook(SessionContextHook::new(acp_runtime_for_session));
+            lm.pre_resolution_hook(continuation_for_pre_request);
+            // Candidate recipe selection may replace defaults and the policy,
+            // but cannot replace the ingress router's frozen checker bindings.
+            lm.router_preparation_hook(evolution_for_hooks.clone());
             lm.pre_request_hook(PolicyHook::new(
                 policy_store.clone(),
                 Some(metering_store_for_policy),
@@ -823,6 +899,8 @@ pub async fn build_app_with_path(
                 lm.observe_hook(OtelObserveHook::new(exporter));
             }
             lm.observe_hook(response_observer);
+            lm.observe_hook(evolution_for_hooks.clone());
+            lm.observe_hook(judge_costs.clone());
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
@@ -831,6 +909,8 @@ pub async fn build_app_with_path(
                 MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
                     .with_reconciliation_provider("bitrouter"),
             );
+            lm.settlement_recorder(evolution_for_hooks);
+            lm.settlement_recorder(judge_costs);
             let eval_recorder = EvalSettlementRecorder::new(
                 eval_store_for_recorder,
                 pending_eval_decisions,
@@ -846,14 +926,6 @@ pub async fn build_app_with_path(
                 lm.server_tool_loop(server_loop);
             }
         });
-    // Stage-1 guardrail plugin, appended after the closure so its hooks land
-    // after auth + policy in registration order. Skipped when no rules are
-    // configured, so a guardrail-free deployment registers nothing.
-    let app = if guardrail_rules.is_empty() {
-        app
-    } else {
-        app.plugin(GuardrailsPlugin::with_static(guardrail_rules))
-    };
     // The bitrouter/fusion model alias: an ingress prompt transform that
     // rewrites the alias onto a real outer model and attaches the Fusion
     // declaration. Wired only when `server_tools.fusion` resolves an alias.
@@ -870,6 +942,12 @@ pub async fn build_app_with_path(
     let app = app.prompt_transform(
         Arc::new(crate::claude_code::ClaudeCodeRouter) as Arc<dyn PromptTransform>
     );
+    // Codex ACP keeps its native default/model picker. Qualify known native
+    // names at ingress when the Codex subscription is active, without making
+    // personal subscriptions part of the generic API auto-cascade.
+    let app = app.prompt_transform(Arc::new(crate::codex_router::CodexRouter::new(Arc::clone(
+        &routing_table_for_reload,
+    ))) as Arc<dyn PromptTransform>);
     // Config-driven per-request model routing (`policy_table:`): an ingress
     // transform that fingerprints the agent-loop step and rewrites `prompt.model`
     // to the tier the policy table assigns, enforcing the tool-use guardrail.
@@ -898,7 +976,9 @@ pub async fn build_app_with_path(
     let app = match (mcp_routing, mcp_executor) {
         (Some(table), Some(exec)) => {
             let app = app.mcp(move |m| {
-                m.routing_table(table).executor(exec);
+                m.routing_table(table)
+                    .executor(exec)
+                    .pre_request_hook(AuthHook::new(db_for_mcp_auth));
             });
             if let Some(route) = mcp_aggregate_route {
                 app.mcp_aggregate_route(route)
@@ -916,6 +996,7 @@ pub async fn build_app_with_path(
         acp_runtime,
         policy_store: policy_store_for_reload,
         policy_runtime,
+        evolution,
         eval_service,
         continuation_registry,
         #[cfg(test)]
@@ -964,10 +1045,10 @@ pub async fn merge_registry_into(config: &mut Config) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
-    // Fetched dist when reachable; otherwise the disk cache. `None` (never
-    // fetched + unreachable) means an empty registry — skip the merge entirely.
-    let Some(data) = bitrouter_providers::registry::apply::load_or_cached(&config.registry).await
-    else {
+    crate::bundled_registry::enable_logged_in(config);
+    // Supplement the public registry with the ACP providers shipped in this
+    // binary. Explicitly disabled/custom registries keep their own policy.
+    let Some(data) = crate::bundled_registry::load(&config.registry).await else {
         bitrouter_providers::apply_builtin_defaults(config);
         return;
     };
@@ -1219,7 +1300,7 @@ fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> 
 /// Build the per-provider `AuthAppliers` registry. Each entry covers a
 /// provider whose credential flow needs more than the per-protocol
 /// `Transport::authorise` default — today: `bitrouter` (the official
-/// hosted gateway; OAuth from `bitrouter cloud login` with a
+/// hosted gateway; OAuth from `bro cloud login` with a
 /// `BITROUTER_API_KEY` fallback), GitHub Copilot (device-code OAuth +
 /// token exchange), Anthropic Platform API (`x-api-key`), the Claude
 /// Pro/Max subscription (`claude-code`, OAuth / live `~/.claude` session),
@@ -1378,16 +1459,6 @@ async fn load_policy_store(config: &Config) -> Result<PolicyStore> {
     }
 }
 
-/// Parse the guardrail data contract from `plugins.bitrouter-guardrails`
-/// (its `custom_patterns` array of `{ name, pattern, action: "block" |
-/// "redact" }`). The plugin owns the shape; this just deserialises it.
-fn build_guardrail_config(config: &Config) -> Result<GuardrailConfig> {
-    let Some(value) = config.plugins.get("bitrouter-guardrails") else {
-        return Ok(GuardrailConfig::default());
-    };
-    serde_json::from_value(value.clone()).context("plugins.bitrouter-guardrails failed to parse")
-}
-
 /// Empty metrics renderer for /metrics endpoint compatibility.
 /// Returns empty response since metrics are now pushed via OTLP.
 struct EmptyMetricsRenderer;
@@ -1418,7 +1489,7 @@ enum BearerPlan {
     StaticOnly,
 }
 
-/// Build the OTel exporter for **out-of-daemon** surfaces (`bitrouter acp
+/// Build the OTel exporter for **out-of-daemon** surfaces (`bro acp
 /// serve|prompt`). Same config resolution as the daemon path (the telemetry
 /// opt-in, the `otel:` block, env vars), including the live account-bearer
 /// plan. Returns `None` when nothing opts telemetry in; telemetry failures are
@@ -1444,7 +1515,8 @@ pub(crate) async fn build_otel_exporter_standalone_with_credentials(
             if source.is_none() && warn_if_unmet {
                 tracing::warn!(
                     "telemetry: attribution=account but no signed-in session is available — \
-                     exporting anonymously (sign in with `bitrouter cloud login`)"
+                     exporting anonymously (sign in with `{} cloud login`)",
+                    invocation::name()
                 );
             }
             source
@@ -1596,7 +1668,7 @@ enum TelemetryLevel {
 #[derive(Debug, Clone, Copy, serde::Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum TelemetryAttribution {
-    /// Account-attributed when a `bitrouter cloud login` session (or an explicit
+    /// Account-attributed when a `bro cloud login` session (or an explicit
     /// `bearer_token`) is available; anonymous otherwise. The default — signing
     /// in upgrades attribution automatically, with no config change.
     #[default]

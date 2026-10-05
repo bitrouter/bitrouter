@@ -9,12 +9,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use bitrouter_mcp::actions::models::ModelsQuery;
-use bitrouter_mcp::actions::route::{RouteInput, RouteQuery};
-use bitrouter_mcp::actions::status::StatusQuery;
-use bitrouter_mcp::actions::{ACTIONS, Requires};
-use bitrouter_mcp::backend::CallerAuth;
-use bitrouter_mcp::error::ToolError;
+use crate::actions::ToolError;
+use crate::actions::models::ModelsQuery;
+use crate::actions::route::{RouteInput, RouteQuery};
+use crate::actions::status::StatusQuery;
+use crate::actions::{ACTIONS, Requires};
 use bitrouter_sdk::acp::client::{AcpClient, RouteMethod};
 use bitrouter_tui::machine::Command;
 
@@ -56,6 +55,16 @@ pub fn summary_for(action: &str) -> &'static str {
 /// control the session cannot run should say why rather than vanish.
 pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
     let capability = client.route_control();
+    offered_route_commands(
+        capability.allows(RouteMethod::List),
+        capability.allows(RouteMethod::Set),
+        capability.allows(RouteMethod::Reset),
+    )
+}
+
+/// Resolve the same command inventory for a supervised client's negotiated
+/// snapshot without granting that presentation a direct controller handle.
+pub(crate) fn offered_route_commands(list: bool, set: bool, reset: bool) -> Vec<Command> {
     ACTIONS
         .iter()
         .filter_map(|row| {
@@ -64,14 +73,10 @@ pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
                 (Requires::Nothing, _) => None,
                 // `reset` is advertised separately from `list`/`set`, so it is
                 // asked about separately.
-                (Requires::Binding, "route_reset") => {
-                    (!capability.allows(RouteMethod::Reset)).then_some(NOT_RESETTABLE)
-                }
+                (Requires::Binding, "route_reset") => (!reset).then_some(NOT_RESETTABLE),
                 // The picker lists with one method and sets with another, so
                 // both must be there for it to be worth opening.
-                (Requires::Binding, _) => (!(capability.allows(RouteMethod::List)
-                    && capability.allows(RouteMethod::Set)))
-                .then_some(NOT_ROUTABLE),
+                (Requires::Binding, _) => (!(list && set)).then_some(NOT_ROUTABLE),
             };
             Some(Command {
                 name,
@@ -116,8 +121,8 @@ pub struct SessionPorts {
 }
 
 impl SessionPorts {
-    /// The same three constructors `bitrouter status`, `bitrouter models` and
-    /// `bitrouter route` call, with the same arguments.
+    /// The same three constructors `bro status`, `bro models` and
+    /// `bro route` call, with the same arguments.
     pub fn open(source: ConfigSource, socket: PathBuf) -> Self {
         Self {
             status: Arc::new(crate::actions::status::DaemonStatus::new(
@@ -146,9 +151,6 @@ impl SessionPorts {
         action: &str,
         args: &[String],
     ) -> Result<Box<dyn CliReport>, ToolError> {
-        // Local and single-tenant, exactly as the stdio MCP profile: the local
-        // implementations document that they ignore the caller.
-        let caller = CallerAuth::default();
         match action {
             "status" => {
                 // Nothing to take, so what was typed is refused rather than
@@ -156,14 +158,14 @@ impl SessionPorts {
                 if !args.is_empty() {
                     return Err(ToolError::new("usage: /status"));
                 }
-                Ok(Box::new(self.status.status(&caller).await?))
+                Ok(Box::new(self.status.status().await?))
             }
             // The filter is applied to the report, not asked of the port —
             // the same `filtered` the CLI leaf calls, so both surfaces mean
             // the same thing by "declared by this provider".
             "list_models" => Ok(Box::new(
                 self.models
-                    .list_models(&caller)
+                    .list_models()
                     .await?
                     .filtered(args.first().map(String::as_str)),
             )),
@@ -193,8 +195,7 @@ impl SessionPorts {
 /// overlap — so the overlap is refused here, once, when the config loads,
 /// rather than resolved by a precedence rule at every keystroke.
 ///
-/// It cannot live in the SDK: the check needs `ACTIONS`, and `bitrouter-mcp`
-/// depends on `bitrouter-sdk`, not the reverse.
+/// It cannot live in the SDK: the check needs the app-owned `ACTIONS` table.
 pub fn prompt_commands(
     config: &bitrouter_sdk::config::ChatConfig,
 ) -> anyhow::Result<Vec<bitrouter_tui::machine::PromptCommand>> {
@@ -291,6 +292,7 @@ providers:
         };
         let commands = |names: &[&str]| ChatConfig {
             commands: names.iter().map(|name| entry(name)).collect(),
+            ..Default::default()
         };
 
         let ok = prompt_commands(&commands(&["review", "ship"])).expect("no clash");
@@ -317,7 +319,7 @@ providers:
 
     /// The third surface answers with the second's bytes.
     ///
-    /// `bitrouter status` constructs `DaemonStatus` and calls `report()`;
+    /// `bro status` constructs `DaemonStatus` and calls `report()`;
     /// `/status` goes through `SessionPorts`. This holds `open` to constructing
     /// the action the leaf constructs, from the same source and the same
     /// socket — a mismatch shows up as a different `socket` in the report.
@@ -374,7 +376,7 @@ providers:
         );
     }
 
-    /// `/models` answers with what `bitrouter models --provider` answers,
+    /// `/models` answers with what `bro models --provider` answers,
     /// filter included — the filter is the report's, so both surfaces read
     /// "declared by this provider" the same way.
     #[tokio::test]
@@ -402,7 +404,7 @@ providers:
         assert!(!leaf.models.is_empty(), "the fixture declares one model");
     }
 
-    /// `/preview <model>` answers with what `bitrouter route <model>` answers.
+    /// `/preview <model>` answers with what `bro route <model>` answers.
     #[tokio::test]
     async fn the_preview_surface_answers_with_the_cli_leafs_bytes() {
         let dir = tempfile::tempdir().expect("tempdir");

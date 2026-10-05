@@ -9,7 +9,8 @@
 //! # One stack
 //!
 //! [`controller`] is the manager-facing, connection-level server: it owns one
-//! harness connection and no session data, forwarding ACP verbatim in both
+//! harness connection and delegates optional durable evidence capture to an
+//! app-owned [`capture::CapturePort`], forwarding ACP verbatim in both
 //! directions apart from the initialize gate, the endpoint plan it applies,
 //! `_bitrouter/route/*`, and the attributed cost it decorates
 //! `usage_update` with.
@@ -46,6 +47,9 @@ pub mod transport;
 
 #[cfg(feature = "acp")]
 pub mod client;
+
+#[cfg(feature = "acp")]
+pub mod capture;
 
 #[cfg(feature = "acp")]
 pub mod controller;

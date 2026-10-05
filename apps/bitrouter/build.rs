@@ -2,7 +2,7 @@
 //!
 //! `registry/agents/` + `registry/runtimes/` are the source of truth for which
 //! agents BitRouter can drive and how their traffic is routed; this turns the
-//! generated `dist/registry/{agents,runtimes}.json` into the `&'static`
+//! generated `dist/registry/{agents,runtimes}.json` snapshot into the `&'static`
 //! catalog `harness.rs` exposes. Editing the registry and rebuilding the dist
 //! artifacts is therefore enough to add or change an agent — no Rust edit.
 //!
@@ -11,20 +11,54 @@
 //! also means a malformed artifact is a build error rather than a startup
 //! failure.
 //!
-//! Interactive-only harnesses (`grok`, `antigravity`) are **not** here: they
-//! have no ACP adapter, so they are not registry entries. `harness.rs` keeps
-//! them in a short hand-written list.
+//! The provider registry is bundled from the same dist snapshot so first-run
+//! selection, login and model discovery also work without a registry cache.
 
 use std::error::Error;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?)
-        .join("../..")
-        .join("dist/registry");
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
+    let mut handoff_hash = Sha256::new();
+    for file in [
+        "src/daemon.rs",
+        "src/daemon_handoff.rs",
+        "src/supervisor.rs",
+        "src/evolution/scheduler.rs",
+        "src/main.rs",
+        "src/upgrade.rs",
+        "src/upgrade_preflight.rs",
+    ] {
+        let path = manifest.join(file);
+        println!("cargo::rerun-if-changed={}", path.display());
+        handoff_hash.update(std::fs::read(path)?);
+    }
+    let migration_dir = manifest.join("src/db/migration");
+    println!("cargo::rerun-if-changed={}", migration_dir.display());
+    let mut migrations = std::fs::read_dir(migration_dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    migrations.sort();
+    for path in migrations {
+        if path.extension().is_some_and(|extension| extension == "rs") {
+            println!("cargo::rerun-if-changed={}", path.display());
+            handoff_hash.update(std::fs::read(path)?);
+        }
+    }
+    let handoff_build_id = handoff_hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    println!("cargo::rustc-env=BITROUTER_HANDOFF_BUILD_ID={handoff_build_id}");
+    // The package-local snapshot is generated together with `dist/registry`.
+    // Keeping the build input inside the crate is required by `cargo package`,
+    // whose verification build cannot read files outside the packaged crate.
+    let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?).join("registry-dist");
     let agents_path = root.join("agents.json");
     let runtimes_path = root.join("runtimes.json");
     println!("cargo::rerun-if-changed={}", agents_path.display());
@@ -60,6 +94,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let dest = PathBuf::from(std::env::var("OUT_DIR")?).join("catalog_generated.rs");
     std::fs::write(&dest, out)?;
+    let providers_path = root.join("providers.json");
+    let models_path = root.join("models.json");
+    println!("cargo::rerun-if-changed={}", providers_path.display());
+    println!("cargo::rerun-if-changed={}", models_path.display());
+    let providers = read_data(&providers_path)?;
+    let canonical = read_data(&models_path)?;
+    let bundled = serde_json::json!({"providers": providers, "canonical": canonical});
+    std::fs::write(
+        dest.with_file_name("provider_registry.json"),
+        serde_json::to_vec(&bundled)?,
+    )?;
     Ok(())
 }
 

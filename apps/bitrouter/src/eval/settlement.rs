@@ -648,6 +648,9 @@ impl EvalSettlementRecorder {
 #[async_trait]
 impl SettlementRecorder for EvalSettlementRecorder {
     async fn record(&self, context: &mut SettlementContext) -> BitrouterResult<()> {
+        if context.has_event::<crate::evolution::runtime::CanonicalRequestReplayRejected>() {
+            return Ok(());
+        }
         let invocation = context.get_event::<EvalInvocation>().cloned();
         let pending = invocation
             .as_ref()

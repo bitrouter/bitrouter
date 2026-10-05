@@ -31,6 +31,7 @@ use sea_orm::DatabaseConnection;
 
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{DenyReason, HookDecision, PipelineContext, PreRequestHook};
+use bitrouter_sdk::mcp::{McpContext, PreRequestHook as McpPreRequestHook};
 use bitrouter_sdk::{PluginId, Result};
 use http::HeaderMap;
 
@@ -53,6 +54,16 @@ pub struct AuthHook {
     db: DatabaseConnection,
 }
 
+enum Authentication {
+    Local,
+    Authenticated {
+        caller: CallerContext,
+        record: ApiKeyRecord,
+        route_scope_id: String,
+    },
+    Denied(String),
+}
+
 impl AuthHook {
     /// Build an `AuthHook` over a database connection. The database must
     /// already carry this module's tables (`crate::db::run_migrations`).
@@ -60,16 +71,51 @@ impl AuthHook {
         Self { db }
     }
 
-    /// Extract a presented API-key credential from the request headers.
-    /// Both the OpenAI-style `Authorization: Bearer …` and the
-    /// Anthropic-style `x-api-key: …` headers are accepted.
-    fn extract_credential(ctx: &PipelineContext) -> Option<String> {
-        credential_from_headers(ctx.headers())
-    }
-
     /// Turn a validated key record into a `CallerContext`.
     fn caller_from_record(record: &ApiKeyRecord) -> CallerContext {
         CallerContext::new(&record.id, &record.user_id)
+    }
+
+    /// Authenticate headers for any protocol pipeline. The language-model and
+    /// MCP hooks deliberately share this path so `server.skip_auth` and virtual
+    /// key expiry/activation cannot drift between public surfaces.
+    async fn authenticate(
+        &self,
+        headers: &HeaderMap,
+        caller: &CallerContext,
+    ) -> Result<Authentication> {
+        if caller.is_local() {
+            return Ok(Authentication::Local);
+        }
+
+        let Some(credential) = credential_from_headers(headers) else {
+            return Ok(Authentication::Denied("missing API key".to_string()));
+        };
+        if !keys::looks_like_virtual_key(&credential) {
+            return Ok(Authentication::Denied(
+                "credential is not a brvk_ virtual key".to_string(),
+            ));
+        }
+
+        let route_scope_id = keys::hash_key(&credential);
+        let record = db::find_key_by_hash(&self.db, &route_scope_id).await?;
+        let Some(record) = record else {
+            return Ok(Authentication::Denied("unknown API key".to_string()));
+        };
+        if !record.active {
+            return Ok(Authentication::Denied("API key is inactive".to_string()));
+        }
+        if let Some(expires_at) = record.expires_at
+            && expires_at <= Utc::now()
+        {
+            return Ok(Authentication::Denied("API key has expired".to_string()));
+        }
+
+        Ok(Authentication::Authenticated {
+            caller: Self::caller_from_record(&record),
+            record,
+            route_scope_id,
+        })
     }
 }
 
@@ -96,70 +142,59 @@ pub(crate) fn credential_from_headers(headers: &HeaderMap) -> Option<String> {
 #[async_trait]
 impl PreRequestHook for AuthHook {
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
-        let credential = Self::extract_credential(ctx);
-        // `skip_auth=true` on the SDK side synthesises a local caller
-        // for *every* inbound request — admit immediately regardless of
-        // any presented header. Validating a stray `Authorization`
-        // bearer would otherwise reject zero-config clients that
-        // auto-inject a placeholder token (Claude Code, litellm, …).
-        if ctx.caller().is_local() {
-            return Ok(HookDecision::Allow);
+        match self.authenticate(ctx.headers(), ctx.caller()).await? {
+            Authentication::Local => Ok(HookDecision::Allow),
+            Authentication::Denied(message) => {
+                Ok(HookDecision::Deny(DenyReason::Unauthorized(message)))
+            }
+            Authentication::Authenticated {
+                caller,
+                record,
+                route_scope_id,
+            } => {
+                ctx.set_caller(caller);
+                ctx.set_metadata(
+                    &plugin_id(),
+                    serde_json::json!({
+                        "api_key_id": record.id,
+                        "user_id": record.user_id,
+                        "policy_id": record.policy_id,
+                    }),
+                );
+                ctx.emit(Authenticated {
+                    api_key_id: record.id,
+                    user_id: record.user_id,
+                    policy_id: record.policy_id,
+                });
+                ctx.emit(ApiPrincipalEstablished { route_scope_id });
+                Ok(HookDecision::Allow)
+            }
         }
+    }
+}
 
-        // API-key path.
-        let Some(credential) = credential else {
-            return Ok(HookDecision::Deny(DenyReason::Unauthorized(
-                "missing API key".to_string(),
-            )));
-        };
-
-        // v1 has no JWT path — the credential must be a `brvk_` virtual key.
-        if !keys::looks_like_virtual_key(&credential) {
-            return Ok(HookDecision::Deny(DenyReason::Unauthorized(
-                "credential is not a brvk_ virtual key".to_string(),
-            )));
+#[async_trait]
+impl McpPreRequestHook for AuthHook {
+    async fn check(&self, ctx: &mut McpContext) -> Result<HookDecision> {
+        match self.authenticate(ctx.headers(), ctx.caller()).await? {
+            Authentication::Local => Ok(HookDecision::Allow),
+            Authentication::Denied(message) => {
+                Ok(HookDecision::Deny(DenyReason::Unauthorized(message)))
+            }
+            Authentication::Authenticated {
+                caller,
+                record,
+                route_scope_id,
+            } => {
+                ctx.set_caller(caller);
+                ctx.emit(Authenticated {
+                    api_key_id: record.id,
+                    user_id: record.user_id,
+                    policy_id: record.policy_id,
+                });
+                ctx.emit(ApiPrincipalEstablished { route_scope_id });
+                Ok(HookDecision::Allow)
+            }
         }
-
-        let hash = keys::hash_key(&credential);
-        let record = db::find_key_by_hash(&self.db, &hash).await?;
-        let Some(record) = record else {
-            return Ok(HookDecision::Deny(DenyReason::Unauthorized(
-                "unknown API key".to_string(),
-            )));
-        };
-
-        if !record.active {
-            return Ok(HookDecision::Deny(DenyReason::Unauthorized(
-                "API key is inactive".to_string(),
-            )));
-        }
-        if let Some(expires_at) = record.expires_at
-            && expires_at <= Utc::now()
-        {
-            return Ok(HookDecision::Deny(DenyReason::Unauthorized(
-                "API key has expired".to_string(),
-            )));
-        }
-
-        // Establish identity: upgrade the pre-auth caller and broadcast it.
-        let caller = Self::caller_from_record(&record);
-        ctx.set_caller(caller);
-        ctx.set_metadata(
-            &plugin_id(),
-            serde_json::json!({
-                "api_key_id": record.id,
-                "user_id": record.user_id,
-                "policy_id": record.policy_id,
-            }),
-        );
-        ctx.emit(Authenticated {
-            api_key_id: record.id,
-            user_id: record.user_id,
-            policy_id: record.policy_id,
-        });
-        ctx.emit(ApiPrincipalEstablished {
-            route_scope_id: hash,
-        });
-        Ok(HookDecision::Allow)
     }
 }

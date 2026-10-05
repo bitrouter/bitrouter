@@ -4,7 +4,7 @@
 //!
 //! ACP's `UsageUpdate.cost` is specified as this session's cumulative cost,
 //! so a figure that arrives there is never wider than the session — the
-//! daemon's total is answered by `bitrouter status --requests`, not here. What
+//! daemon's total is answered by `bro status --requests`, not here. What
 //! the specification cannot say is *who wrote the number*: two parties can. A
 //! harness may report its own provider relationship, and BitRouter may report
 //! its meter. They are different numbers, and a subscription harness's figure
@@ -74,13 +74,16 @@ impl Cost {
         let figure = format!("{} {:.4}", self.currency, self.amount);
         match self.provenance {
             Provenance::Router => Line::from(Span::styled(
-                figure,
+                format!("{figure} (router)"),
                 Style::default().add_modifier(Modifier::DIM),
             )),
             // The qualifier is part of the figure, not a footnote: whatever
             // truncates this line must lose the number before the caveat.
             Provenance::Harness => Line::from(vec![
-                Span::styled("agent ", Style::default().add_modifier(Modifier::DIM)),
+                Span::styled(
+                    "agent-reported ",
+                    Style::default().add_modifier(Modifier::DIM),
+                ),
                 Span::styled(figure, Style::default().add_modifier(Modifier::DIM)),
             ]),
         }

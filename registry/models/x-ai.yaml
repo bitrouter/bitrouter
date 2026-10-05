@@ -1,4 +1,5 @@
 - id: x-ai/grok-4.20-multi-agent
+  deprecation_date: 2026-10-22
   name: 'xAI: Grok 4.20 Multi-Agent'
   input_modalities:
   - text
@@ -9,6 +10,7 @@
   open_weights: false
   family: grok
 - id: x-ai/grok-4.20
+  deprecation_date: 2026-10-22
   name: 'xAI: Grok 4.20'
   input_modalities:
   - text
@@ -65,3 +67,14 @@
   max_input_tokens: 256000
   open_weights: false
   family: grok
+- id: x-ai/grok-4.7
+  name: 'SpaceXAI: Grok 4.7'
+  input_modalities:
+  - file
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 500000
+  max_output_tokens: 450000
+  release_date: 2026-09-21

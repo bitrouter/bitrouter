@@ -309,7 +309,7 @@ async fn reliability_report_cli_replays_persisted_events_without_mutating_databa
         .unwrap();
 
     for output_path in [&first_output, &second_output] {
-        let output = std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
             .args([
                 "workflow-state",
                 "reliability-report",
@@ -721,7 +721,7 @@ async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_priv
     PolicyDecisionRecord::write_jsonl(&decisions_path, &[generic_decision, terminus_decision])
         .unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
         .args([
             "workflow-state",
             "apply-reward-feedback",
@@ -809,7 +809,7 @@ async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_priv
         .unwrap();
     PolicyDecisionRecord::write_jsonl(&conflicting_decisions_path, &[conflicting_decision])
         .unwrap();
-    let conflicting_output = std::process::Command::new(env!("CARGO_BIN_EXE_bitrouter"))
+    let conflicting_output = std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
         .args([
             "workflow-state",
             "apply-reward-feedback",

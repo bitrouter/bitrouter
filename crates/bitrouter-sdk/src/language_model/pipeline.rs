@@ -1,5 +1,4 @@
-//! The `language_model` pipeline — the four-stage flight pipeline plus the
-//! interleaved StreamHook stage.
+//! The `language_model` flight pipeline plus its interleaved StreamHook stage.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -13,12 +12,18 @@ use futures_core::Stream;
 use tracing::Instrument;
 
 use crate::error::{BitrouterError, Result};
+use crate::extension::request_check::{Decision, Input};
 use crate::language_model::context::PipelineContext;
 use crate::language_model::executor::{Executor, StreamPartStream};
 use crate::language_model::hooks::{
     ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
     RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
+use crate::language_model::request_checks::{
+    CheckerFailure, CheckerFailureKind, CheckerResult, MAX_REQUEST_CHECKS_PER_ROUTER,
+    RequestCheckBinding, RequestCheckerRunner, content_fragments,
+};
+use crate::language_model::routing::ModelResolution;
 use crate::language_model::routing::{FallbackPolicy, RoutingTable};
 use crate::language_model::server_tools::loop_controller::{ServerToolLoop, UpstreamTurn};
 use crate::language_model::server_tools::stream::UpstreamStream;
@@ -40,6 +45,45 @@ struct StreamingExecution {
     stream: StreamPartStream,
     target: RoutingTarget,
     provider_started_at: Instant,
+}
+
+struct ResolvedRequestBinding {
+    resolution: ModelResolution,
+    request_checks: Vec<RequestCheckBinding>,
+    resolved_selector: String,
+}
+
+struct PreparedEntry {
+    ctx: PipelineContext,
+    chain: Vec<RoutingTarget>,
+}
+
+struct EntryPreparationFailure {
+    error: BitrouterError,
+    requires_settlement: bool,
+}
+
+impl EntryPreparationFailure {
+    fn pre_request(error: BitrouterError) -> Self {
+        Self {
+            error,
+            requires_settlement: false,
+        }
+    }
+
+    fn request_check(error: BitrouterError) -> Self {
+        Self {
+            error,
+            requires_settlement: false,
+        }
+    }
+
+    fn route(error: BitrouterError) -> Self {
+        Self {
+            error,
+            requires_settlement: true,
+        }
+    }
 }
 
 pub(crate) struct DeliveryPermit {
@@ -135,6 +179,14 @@ pub(crate) struct PreparedStreamPart {
 pub(crate) struct PreparedPipelineResponse {
     pub(crate) response: PipelineResponse,
     pub(crate) delivery: DeliveryPermit,
+    #[cfg(feature = "server")]
+    pub(crate) model_id: String,
+}
+
+pub(crate) struct PreparedPipelineStream {
+    pub(crate) parts: Pin<Box<dyn Stream<Item = Result<PreparedStreamPart>> + Send>>,
+    #[cfg(feature = "server")]
+    pub(crate) model_id: String,
 }
 
 enum DeliveryAuthorizationOutcome {
@@ -229,6 +281,8 @@ struct StreamAttempt {
 /// stage plus the routing table, fallback policy and executor. Built via
 /// [`crate::language_model::PipelineBuilder`].
 pub struct Pipeline {
+    pub(crate) pre_resolution_hooks: Vec<Arc<dyn PreRequestHook>>,
+    pub(crate) router_preparation_hooks: Vec<Arc<dyn PreRequestHook>>,
     pub(crate) pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
     pub(crate) route_hooks: Vec<Arc<dyn RouteHook>>,
     pub(crate) model_selectors: Vec<Arc<dyn crate::language_model::routing::ModelSelector>>,
@@ -263,6 +317,7 @@ pub struct Pipeline {
     /// and await it so a SIGTERM can't cut a request that the upstream is still
     /// billing us for.
     pub(crate) detached_executions: tokio_util::task::TaskTracker,
+    pub(crate) request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
 }
 
 /// Adapts the pipeline's fallback execution into an [`UpstreamTurn`] so the
@@ -497,32 +552,7 @@ impl Pipeline {
     }
 
     async fn execute_prepared(&self, req: PipelineRequest) -> Result<PreparedPipelineResponse> {
-        let mut ctx = PipelineContext::new(req);
-        self.observe_start(&ctx).await;
-
-        // ---- Stage 1: pre-request checks ----
-        if let Err(e) = self.run_pre_request(&mut ctx).await {
-            log_request_resolve_failed(&ctx, &e);
-            self.observe_end(&ctx, RequestOutcome::Failed(e.clone()))
-                .await;
-            return Err(e);
-        }
-        self.observe_after(Phase::PreRequest, &ctx).await;
-
-        // ---- Stage 2: route resolution ----
-        let chain = match self.resolve_route(&mut ctx).await {
-            Ok(chain) => chain,
-            Err(e) => {
-                log_request_resolve_failed(&ctx, &e);
-                self.run_settlement(&mut ctx, false, Some(e.clone())).await;
-                self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(&ctx, RequestOutcome::Failed(e.clone()))
-                    .await;
-                return Err(e);
-            }
-        };
-        self.observe_after(Phase::Route, &ctx).await;
-        log_request_received(&ctx, chain.first(), false);
+        let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, false).await?;
 
         // ---- Stage 3: execution (with the server-side tool loop when configured) ----
         let exec_outcome = match &self.server_tool_loop {
@@ -619,6 +649,11 @@ impl Pipeline {
         self.run_settlement(&mut ctx, false, None).await;
         self.observe_after(Phase::Settlement, &ctx).await;
         let response = ctx.response();
+        #[cfg(feature = "server")]
+        let model_id = ctx
+            .successful_target()
+            .and_then(|target| self.routing_table.canonical_model_id(ctx.model(), &target))
+            .unwrap_or_else(|| ctx.model().to_owned());
         let (delivery, authorization) = finalization.begin_delivery();
         let observe_hooks = self.observe_hooks.clone();
         self.spawn_stream_finalization(async move {
@@ -637,7 +672,12 @@ impl Pipeline {
             }
         });
 
-        Ok(PreparedPipelineResponse { response, delivery })
+        Ok(PreparedPipelineResponse {
+            response,
+            delivery,
+            #[cfg(feature = "server")]
+            model_id,
+        })
     }
 
     /// Execute a streaming request: Stages 1–3 run eagerly (so pre-stream
@@ -648,7 +688,7 @@ impl Pipeline {
         req: PipelineRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>> {
         let prepared = self.execute_stream_prepared(req).await?;
-        Ok(Box::pin(prepared.then(|item| async move {
+        Ok(Box::pin(prepared.parts.then(|item| async move {
             let PreparedStreamPart { part, delivery } = item?;
             if let Some(delivery) = delivery {
                 delivery.deliver().await?;
@@ -660,31 +700,8 @@ impl Pipeline {
     pub(crate) async fn execute_stream_prepared(
         self: Arc<Self>,
         req: PipelineRequest,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<PreparedStreamPart>> + Send>>> {
-        let mut ctx = PipelineContext::new(req);
-        self.observe_start(&ctx).await;
-
-        if let Err(e) = self.run_pre_request(&mut ctx).await {
-            log_request_resolve_failed(&ctx, &e);
-            self.observe_end(&ctx, RequestOutcome::Failed(e.clone()))
-                .await;
-            return Err(e);
-        }
-        self.observe_after(Phase::PreRequest, &ctx).await;
-
-        let chain = match self.resolve_route(&mut ctx).await {
-            Ok(chain) => chain,
-            Err(e) => {
-                log_request_resolve_failed(&ctx, &e);
-                self.run_settlement(&mut ctx, false, Some(e.clone())).await;
-                self.observe_after(Phase::Settlement, &ctx).await;
-                self.observe_end(&ctx, RequestOutcome::Failed(e.clone()))
-                    .await;
-                return Err(e);
-            }
-        };
-        self.observe_after(Phase::Route, &ctx).await;
-        log_request_received(&ctx, chain.first(), true);
+    ) -> Result<PreparedPipelineStream> {
+        let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, true).await?;
         let latest_attempt: SharedStreamAttempt = Arc::new(std::sync::Mutex::new(None));
 
         // Route Stage 3 through the server-side tool loop when configured: the
@@ -764,16 +781,26 @@ impl Pipeline {
         });
         self.observe_after(Phase::Execution, &ctx).await;
 
+        let mut stream_context = ctx.stream_context();
+        stream_context.accumulated_usage.set_pricing(
+            self.routing_table
+                .usage_pricing(ctx.model(), &upstream.target),
+        );
         let processor = StreamProcessor::new(
             self.stream_hooks.clone(),
             self.observe_hooks.clone(),
-            ctx.stream_context(),
+            stream_context,
         );
 
         // The guard owns the processor + context. Whatever happens to the
         // returned stream — drained to completion, errored, or **dropped early
         // by the client** — `on_stream_end` and Settlement run exactly once
         // so streaming settlement is never lost.
+        #[cfg(feature = "server")]
+        let model_id = self
+            .routing_table
+            .canonical_model_id(ctx.model(), &upstream.target)
+            .unwrap_or_else(|| ctx.model().to_owned());
         let guard = StreamSettlementGuard {
             pipeline: self.clone(),
             latest_attempt,
@@ -786,7 +813,11 @@ impl Pipeline {
             ))),
         };
 
-        Ok(Box::pin(self.drive_stream(upstream.stream, guard)))
+        Ok(PreparedPipelineStream {
+            parts: Box::pin(self.drive_stream(upstream.stream, guard)),
+            #[cfg(feature = "server")]
+            model_id,
+        })
     }
 
     /// The streaming driver: feeds upstream parts through the guard's
@@ -857,11 +888,231 @@ impl Pipeline {
 
     // ===== stage helpers =====
 
-    async fn run_pre_request(&self, ctx: &mut PipelineContext) -> Result<()> {
-        for hook in &self.pre_request_hooks {
+    async fn prepare_entry(&self, req: PipelineRequest, streamed: bool) -> Result<PreparedEntry> {
+        let mut ctx = PipelineContext::new(req);
+        self.observe_start(&ctx).await;
+
+        match self.prepare_entry_stages(&mut ctx).await {
+            Ok(chain) => {
+                self.observe_after(Phase::Route, &ctx).await;
+                log_request_received(&ctx, chain.first(), streamed);
+                Ok(PreparedEntry { ctx, chain })
+            }
+            Err(failure) => {
+                log_request_resolve_failed(&ctx, &failure.error);
+                if failure.requires_settlement {
+                    self.run_settlement(&mut ctx, false, Some(failure.error.clone()))
+                        .await;
+                    self.observe_after(Phase::Settlement, &ctx).await;
+                }
+                self.observe_end(&ctx, RequestOutcome::Failed(failure.error.clone()))
+                    .await;
+                Err(failure.error)
+            }
+        }
+    }
+
+    async fn prepare_entry_stages(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> std::result::Result<Vec<RoutingTarget>, EntryPreparationFailure> {
+        // Local auth/session/continuation normalization must finish before any
+        // configured checker can cause external egress.
+        self.run_pre_resolution(ctx)
+            .await
+            .map_err(EntryPreparationFailure::pre_request)?;
+
+        // Freeze the ingress router identity and checker bindings before an
+        // app hook can choose a different effective route.
+        let mut binding = self
+            .resolve_binding(ctx)
+            .await
+            .map_err(EntryPreparationFailure::route)?;
+        self.run_router_preparation(ctx)
+            .await
+            .map_err(EntryPreparationFailure::pre_request)?;
+
+        if binding.request_checks.is_empty() {
+            // Compatibility path: before named-router request checks existed,
+            // ordinary pre-request hooks could rewrite a bare/legacy selector
+            // before its defaults were resolved. Preserve that behavior for
+            // unguarded requests so only the final selector contributes
+            // defaults, preferences, and policy.
+            self.run_pre_request(ctx, None)
+                .await
+                .map_err(EntryPreparationFailure::pre_request)?;
+            binding = self
+                .resolve_effective_binding(ctx, binding)
+                .await
+                .map_err(EntryPreparationFailure::route)?;
+        } else {
+            // Checked routers resolve preparation rewrites and defaults before
+            // local policy/guardrail hooks. The effective selector is then
+            // immutable: changing it here would either mix two sets of
+            // defaults or check content for a route that will not be served.
+            binding = self
+                .resolve_effective_binding(ctx, binding)
+                .await
+                .map_err(EntryPreparationFailure::route)?;
+            let checked_selector = binding.resolved_selector.clone();
+            self.run_pre_request(ctx, Some(&checked_selector))
+                .await
+                .map_err(EntryPreparationFailure::pre_request)?;
+        }
+
+        self.run_request_checks(ctx, &binding.request_checks)
+            .await
+            .map_err(EntryPreparationFailure::request_check)?;
+        self.observe_after(Phase::PreRequest, ctx).await;
+
+        self.resolve_route(ctx, binding)
+            .await
+            .map_err(EntryPreparationFailure::route)
+    }
+
+    async fn run_pre_resolution(&self, ctx: &mut PipelineContext) -> Result<()> {
+        for hook in &self.pre_resolution_hooks {
             match hook.check(ctx).await? {
                 HookDecision::Allow => continue,
                 HookDecision::Deny(reason) => return Err(reason.into()),
+            }
+        }
+        Ok(())
+    }
+
+    async fn run_pre_request(
+        &self,
+        ctx: &mut PipelineContext,
+        checked_selector: Option<&str>,
+    ) -> Result<()> {
+        self.run_admitted_hooks(ctx, &self.pre_request_hooks, checked_selector)
+            .await
+    }
+
+    async fn run_router_preparation(&self, ctx: &mut PipelineContext) -> Result<()> {
+        self.run_admitted_hooks(ctx, &self.router_preparation_hooks, None)
+            .await
+    }
+
+    async fn run_admitted_hooks(
+        &self,
+        ctx: &mut PipelineContext,
+        hooks: &[Arc<dyn PreRequestHook>],
+        checked_selector: Option<&str>,
+    ) -> Result<()> {
+        for hook in hooks {
+            let decision = hook.check(ctx).await?;
+            match decision {
+                HookDecision::Allow => {
+                    if checked_selector.is_some_and(|selector| ctx.model() != selector) {
+                        return Err(BitrouterError::internal(
+                            "a pre-request hook cannot change a checked router selector; register selector rewrites as router preparation hooks",
+                        ));
+                    }
+                }
+                HookDecision::Deny(reason) => return Err(reason.into()),
+            }
+        }
+        Ok(())
+    }
+
+    async fn resolve_binding(&self, ctx: &mut PipelineContext) -> Result<ResolvedRequestBinding> {
+        let resolved_selector = ctx.model().to_owned();
+        let mut resolution = self.routing_table.resolve_model(ctx.model()).await?;
+        if resolution.request_checks.len() > MAX_REQUEST_CHECKS_PER_ROUTER {
+            return Err(BitrouterError::internal(
+                "named router exceeds the maximum of 16 request checks",
+            ));
+        }
+        if let Some(mut identity) = resolution.router.take() {
+            // Preserve the documented exact ingress selector in public router
+            // identity. `resolved_selector` separately retains the
+            // post-session value used for this resolution.
+            identity.original_selector = ctx.original_model().to_owned();
+            ctx.set_router_identity(identity.clone());
+            ctx.emit(identity);
+        } else if !resolution.request_checks.is_empty() {
+            return Err(BitrouterError::internal(
+                "request checks require a named-router binding",
+            ));
+        }
+        let request_checks = resolution.request_checks.clone();
+        Ok(ResolvedRequestBinding {
+            resolution,
+            request_checks,
+            resolved_selector,
+        })
+    }
+
+    async fn resolve_effective_binding(
+        &self,
+        ctx: &mut PipelineContext,
+        mut binding: ResolvedRequestBinding,
+    ) -> Result<ResolvedRequestBinding> {
+        if ctx.model() != binding.resolved_selector {
+            let effective = self.routing_table.resolve_model(ctx.model()).await?;
+            if binding.request_checks.is_empty() && !effective.request_checks.is_empty() {
+                return Err(BitrouterError::internal(
+                    "a selector rewrite cannot introduce request checks after the ingress binding is frozen",
+                ));
+            }
+            binding.resolution = effective;
+            binding.resolved_selector = ctx.model().to_owned();
+        }
+        ctx.apply_preset_overrides(&binding.resolution.overrides);
+        Ok(binding)
+    }
+
+    async fn run_request_checks(
+        &self,
+        ctx: &mut PipelineContext,
+        bindings: &[RequestCheckBinding],
+    ) -> Result<()> {
+        if bindings.is_empty() {
+            return Ok(());
+        }
+        let runner = self.request_checker_runner.as_ref();
+        ctx.router_identity().ok_or_else(|| {
+            BitrouterError::internal("request checks lost their named-router binding")
+        })?;
+        let Some(runner) = runner else {
+            return Err(BitrouterError::internal(
+                "configured request checker is unavailable",
+            ));
+        };
+        for binding in bindings {
+            let (content, coverage) = content_fragments(ctx.prompt(), binding.max_input_bytes)
+                .map_err(|_| BitrouterError::BadRequest {
+                    message: "request exceeds the configured checker input limit".to_string(),
+                })?;
+            let result = runner
+                .check(binding.clone(), Input { content, coverage })
+                .await
+                .and_then(|result| {
+                    result.decision.validate().map_err(|_| CheckerFailure {
+                        kind: CheckerFailureKind::InvalidResponse,
+                        detail: Some("invalid_decision".to_owned()),
+                    })?;
+                    Ok(result)
+                });
+            match result {
+                Ok(CheckerResult {
+                    decision: Decision::Allow,
+                    revision: _,
+                }) => {}
+                Ok(CheckerResult {
+                    decision: Decision::Deny { reason_code: _ },
+                    revision: _,
+                }) => {
+                    return Err(BitrouterError::Forbidden(
+                        "request denied by configured checker".to_string(),
+                    ));
+                }
+                Err(_) => {
+                    return Err(BitrouterError::internal(
+                        "configured request checker failed closed",
+                    ));
+                }
             }
         }
         Ok(())
@@ -932,12 +1183,20 @@ impl Pipeline {
         Ok(Some(receipt))
     }
 
-    async fn resolve_route(&self, ctx: &mut PipelineContext) -> Result<Vec<RoutingTarget>> {
-        // Stage 0 resolves `@preset` / `:variant` exactly once. App-owned model
-        // selectors then choose an effective model without losing the preset's
-        // prompt defaults or routing preferences.
-        let resolution = self.routing_table.resolve_model(ctx.model()).await?;
-        ctx.apply_preset_overrides(&resolution.overrides);
+    async fn resolve_route(
+        &self,
+        ctx: &mut PipelineContext,
+        binding: ResolvedRequestBinding,
+    ) -> Result<Vec<RoutingTarget>> {
+        // Binding/default resolution already ran before local and external
+        // request checks. Effective model selection remains here so existing
+        // pre-request ACLs continue to see the normalized named selector.
+        if ctx.model() != binding.resolved_selector {
+            return Err(BitrouterError::internal(
+                "the effective selector changed after entry preparation",
+            ));
+        }
+        let resolution = binding.resolution;
         ctx.set_model(resolution.clean_model);
         if let Some(policy) = resolution.policy.as_deref() {
             for selector in &self.model_selectors {
@@ -1382,6 +1641,7 @@ mod policy_effort_target_tests {
             api_key_override: None,
             api_base_override: None,
             auth_scheme: Default::default(),
+            headers: Vec::new(),
         }
     }
 

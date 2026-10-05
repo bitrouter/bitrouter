@@ -105,7 +105,7 @@ The tree says the app owns observability and always did:
 - `metering/`, `trajectory/` and `adequacy/` — ~25 files of spend recording,
   durable request history, replay and a reliability ledger — are the app's own
   observation plane and were never candidates for either home.
-- `bitrouter observe status` is an app command that reads a compile-time flag
+- `bro observe status` is an app command that reads a compile-time flag
   *out of* the crate.
 
 Rename the concern and the sentence that started the whole chain becomes
@@ -374,8 +374,8 @@ no error anywhere, and semver license does not help them debug that.
 #### The guard is the load-bearing half, and it is not about telemetry
 
 `config.plugins` is an unvalidated `HashMap<String, Value>`, so it swallows
-**every** unknown key. That is a live defect today, independent of any rename
-and sharper elsewhere:
+**every** unknown key at the parser level. The original failure motivating the
+unknown-key warning was independent of telemetry and sharper elsewhere:
 
 ```yaml
 plugins:
@@ -383,12 +383,15 @@ plugins:
     custom_patterns: [...]
 ```
 
-`assemble.rs` falls through to `GuardrailConfig::default()` and the operator's
-declared block/redact patterns silently never apply. `dist/schema/bitrouter.config.schema.json`
-does not catch it either — `plugins` is `additionalProperties: true`, as
-permissive as the map.
+Before extraction, this typo fell through to `GuardrailConfig::default()` and
+the declared patterns never applied. The typo remains an unknown-plugin warning;
+the exact removed plural key `plugins.bitrouter-guardrails` now blocks default-host
+activation with a migration diagnostic, without loading a matcher. See
+[the guardrails migration guide](GUARDRAILS_EXTENSION.md). The generic JSON Schema
+still uses `additionalProperties: true` for plugins; host activation owns this
+product-specific migration check.
 
-So D6 ships an unknown-key warning **first**, at `bitrouter config validate`
+So D6 ships an unknown-key warning **first**, at `bro config validate`
 *and* at daemon startup — startup matters more, since `validate` is opt-in and
 the daemon always runs. That converts this class of failure from silent to
 loud for every plugin, and it is what makes the rename boring rather than
@@ -788,7 +791,7 @@ running something.
   directions; verified non-vacuous by deleting an id (fails) and by adding a
   phantom one (fails).
 
-- **The guard never fired on the ACP path.** `bitrouter acp serve|prompt` takes
+- **The guard never fired on the ACP path.** `bro acp serve|prompt` takes
   its exporter from `build_otel_exporter_standalone_with_credentials` and never
   builds an `App`, so the one scenario D6 exists for — a stale key, no
   exporter, no error — stayed completely silent on a surface the skill
@@ -797,7 +800,7 @@ running something.
 
   **The first fix missed half the surface.** `build_observability` is reached
   only by `chat`, `chat_piped` and `prompt`; `acp_cli::serve` — behind both
-  `bitrouter acp serve` and `bitrouter spawn --serve` — never calls it, so the
+  `bro acp serve` and `bro spawn --serve` — never calls it, so the
   path the doc comment named by name stayed exactly as silent as before. It now
   emits the same set itself, first thing, on the config as read. Pinned by
   `tests/acp.rs::serve_warns_about_ignored_plugin_blocks`, which spawns
@@ -899,7 +902,7 @@ measuring does not have to.
    `tracing-subscriber`, `tonic` and `dashmap`. This is now a CI step.
 7. **Met.** All seven resolve in `bitrouter-telemetry --all-features`; none is in
    its default tree; `axum` and `tonic` are absent from the `otel-http` tree.
-8. **Met.** `bitrouter observe status` is unchanged: `OTEL_ENABLED` moved crate
+8. **Met.** `bro observe status` is unchanged: `OTEL_ENABLED` moved crate
    but keeps its name, value and meaning, and `ObserveStatusReport` is untouched.
 9. **Met.** 2,866 passed / 0 failed / 11 skipped; clippy, `cargo doc` under
    `-D warnings`, and `cargo fmt --check` all clean.

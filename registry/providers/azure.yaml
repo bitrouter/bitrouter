@@ -194,6 +194,69 @@ models:
         cache_write: 6.25
       output_tokens:
         text: 25
+  - id: anthropic/claude-fable-5.1
+    provider_model_id: claude-fable-5-1
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 0.25
+        cache_write: 12.5
+      output_tokens:
+        text: 50
+  - id: openai/gpt-6-astra
+    provider_model_id: gpt-6-astra
+    pricing:
+      input_tokens:
+        no_cache: 10
+        cache_read: 1
+        cache_write: 12.5
+      output_tokens:
+        text: 50
+  - id: anthropic/claude-opus-5.5
+    provider_model_id: claude-opus-5-5
+    pricing:
+      input_tokens:
+        no_cache: 4
+        cache_read: 0.2
+        cache_write: 5
+      output_tokens:
+        text: 20
+  - id: openai/gpt-6-luna
+    provider_model_id: gpt-6-luna
+    pricing:
+      input_tokens:
+        no_cache: 0.1
+        cache_read: 0.01
+        cache_write: 0.125
+      output_tokens:
+        text: 0.5
+  - id: openai/gpt-6-sol
+    provider_model_id: gpt-6-sol
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+  - id: anthropic/claude-sonnet-5.5
+    provider_model_id: claude-sonnet-5-5
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.2
+        cache_write: 2.5
+      output_tokens:
+        text: 10
+  - id: openai/gpt-6.1-sol
+    provider_model_id: gpt-6.1-sol
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.1
+        cache_write: 2.5
+      output_tokens:
+        text: 10
 auto_sync:
   feed: models_dev
   key: azure

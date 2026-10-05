@@ -87,6 +87,14 @@ models:
     capabilities:
       - reasoning
       - tools
+  - id: x-ai/grok-4.7
+    provider_model_id: grok-4.7
+    pricing:
+      input_tokens:
+        no_cache: 2
+        cache_read: 0.5
+      output_tokens:
+        text: 6
 status: active
 weight: 1
 submitted_at: 2026-05-25

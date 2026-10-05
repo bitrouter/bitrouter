@@ -174,6 +174,57 @@ models:
         no_cache: 0.929
       output_tokens:
         text: 3.858
+  - id: qwen/qwen3.7-flash
+    provider_model_id: qwen3.7-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.02962
+        cache_read: 0.002962
+        cache_write: 0.03703
+      output_tokens:
+        text: 0.1185
+  - id: qwen/qwen3.8-flash
+    provider_model_id: qwen3.8-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.11875
+        cache_read: 0.01187
+        cache_write: 0.14844
+      output_tokens:
+        text: 0.40073
+  - id: deepseek/deepseek-v4.1-flash
+    provider_model_id: deepseek-v4.1-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.29754
+        cache_read: 0.01488
+      output_tokens:
+        text: 1.19015
+  - id: z-ai/glm-5.3
+    provider_model_id: glm-5.3
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.275
+        cache_write: 0
+      output_tokens:
+        text: 3.851
+  - id: moonshotai/kimi-k3
+    provider_model_id: kimi-k3
+    pricing:
+      input_tokens:
+        no_cache: 2.827
+        cache_read: 0.283
+      output_tokens:
+        text: 14.133
+  - id: qwen/qwen3.8-omni-flash
+    provider_model_id: qwen3.8-omni-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.113
+        cache_read: 0.014
+      output_tokens:
+        text: 0.382
 status: active
 weight: 1
 submitted_at: 2026-07-06

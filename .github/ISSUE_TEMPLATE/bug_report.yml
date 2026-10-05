@@ -20,7 +20,7 @@ body:
       label: Steps to reproduce
       description: List the exact steps needed to reproduce the bug.
       placeholder: |
-        1. Run `bitrouter serve`
+        1. Run `bro serve`
         2. Send a request to `/v1/chat/completions`
         3. Observe the error response
     validations:

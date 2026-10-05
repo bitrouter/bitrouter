@@ -9,7 +9,7 @@
 //! cursor to the next tab stop. `plain_lines` expands what does arrive, but a
 //! report rendered into a session should not be creating the problem.
 
-use bitrouter_mcp::actions::commands::{CommandSource, CommandsReport};
+use crate::actions::commands::{CommandSource, CommandsReport};
 
 use crate::output::CliReport;
 use crate::output::human::Human;

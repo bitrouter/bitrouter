@@ -1,4 +1,4 @@
-//! Reports for `config validate`. (`bitrouter init` now emits the onboarding
+//! Reports for `config validate`. (`bro init` now emits the onboarding
 //! result envelope via `crate::onboarding` rather than a dedicated report.)
 
 use serde::Serialize;
@@ -6,13 +6,23 @@ use serde::Serialize;
 use crate::output::CliReport;
 use crate::output::human::Human;
 
+/// What a command that writes `bitrouter.yaml` can prove about activation.
+///
+/// The write itself proves only that the file was saved. The status action is
+/// responsible for comparing it with the configuration held by a daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigActivation {
+    SavedOnly,
+}
+
 /// One unset `${VAR}` substituted with a placeholder during validation.
 #[derive(Serialize)]
 pub struct UnsetVar {
     pub unset_env: String,
 }
 
-/// Result of `bitrouter config validate`. `valid: false` carries `errors` and
+/// Result of `bro config validate`. `valid: false` carries `errors` and
 /// exits non-zero (CI-safe); `valid: true` carries the catalog counts, any
 /// unset-var `warnings`, and any `ignored_config`.
 ///
@@ -35,6 +45,12 @@ pub struct ValidateReport {
     pub models: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presets: Option<usize>,
+    /// Named router definitions in this file (legacy presets counted separately).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routers: Option<usize>,
+    /// Explicit compatibility guidance; old presets still execute normally.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub migration_hint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variants: Option<usize>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -61,6 +77,8 @@ impl ValidateReport {
             providers: Some(providers),
             models: Some(models),
             presets: Some(presets),
+            routers: None,
+            migration_hint: (presets > 0).then(|| "Legacy presets remain supported; preview conversion with `bro config migrate-routers`.".to_string()),
             variants: Some(variants),
             warnings,
             ignored_config: Vec::new(),
@@ -75,6 +93,11 @@ impl ValidateReport {
         self
     }
 
+    pub fn with_routers(mut self, count: usize) -> Self {
+        self.routers = Some(count);
+        self
+    }
+
     pub fn invalid(path: String, error: String) -> Self {
         Self {
             valid: false,
@@ -82,6 +105,8 @@ impl ValidateReport {
             providers: None,
             models: None,
             presets: None,
+            routers: None,
+            migration_hint: None,
             variants: None,
             warnings: Vec::new(),
             ignored_config: Vec::new(),
@@ -101,6 +126,12 @@ impl CliReport for ValidateReport {
                 self.presets.unwrap_or(0),
                 self.variants.unwrap_or(0),
             ))?;
+            if let Some(routers) = self.routers {
+                h.line(&format!("  routers: {routers}"))?;
+            }
+            if let Some(hint) = &self.migration_hint {
+                h.line(hint)?;
+            }
             if !self.warnings.is_empty() {
                 h.blank()?;
                 h.line(&format!(

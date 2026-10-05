@@ -56,7 +56,7 @@ impl RouteProjection {
 ```
 
 - [ ] **Step 1: Write failing projection tests.** Add literal assertions proving semantically equivalent Codex, Claude Code, Hermes, Terminus 2, OpenClaw, Smithers, and generic IR values produce the same key; changing `harness_id`, `protocol`, `active_workflow`, `subagent_role`, or `last_tool_name` must not change it. Assert normal `edit`, `test`, and `tool_followup` keys are exactly `agent_trace/v1|<state>|normal`; recovery, high context pressure, or high redo penalty produces `agent_trace/v1|<state>|guarded`.
-- [ ] **Step 2: Run `cargo test -p bitrouter --all-features workflow_state::ir::tests` and record the expected RED caused by missing projection types/methods.**
+- [ ] **Step 2: Run `cargo test -p bro --all-features workflow_state::ir::tests` and record the expected RED caused by missing projection types/methods.**
 - [ ] **Step 3: Implement the minimal projection.** `RouteRisk::Guarded` applies when recovery is likely, state is `Unknown`, `Debug`, `Review`, `Recovery`, or `Finalization`, context pressure is high, expected redo penalty is high, or output precision is high. All remaining states are normal. Keep the existing detailed `routing_key()` only as an explicitly named legacy method for reading old evidence; make the active path call `route_projection().key()`.
 - [ ] **Step 4: Add config compatibility tests.** `key_strategy: agent_trace` serializes/deserializes as `agent_trace`; `key_strategy: workflow_state` deserializes to `AgentTrace`; generated schema advertises only the new canonical spelling.
 - [ ] **Step 5: Update lock parsing/validation so old locks remain readable and new frozen locks emit `agent_trace`. Run the focused SDK, IR, and policy-lock tests until GREEN.**
@@ -95,7 +95,7 @@ pub trait WorkflowStateExtractor {
 ```
 
 - [ ] **Step 1: Write failing table tests for adapter detection without private headers.** Cover Claude Code via `anthropic-beta`, Codex via Responses plus Codex user-agent or `previous_response_id`, Hermes via native metadata/user-agent, OpenClaw via `agentRuntime`, Terminus 2 via its official prompt contract, Smithers-originated traffic via native Smithers metadata, and generic fallback. Include conflicting evidence and prove native evidence wins over `x-bitrouter-harness`.
-- [ ] **Step 2: Run `cargo test -p bitrouter --all-features workflow_state::extractors` and capture the expected RED.**
+- [ ] **Step 2: Run `cargo test -p bro --all-features workflow_state::extractors` and capture the expected RED.**
 - [ ] **Step 3: Implement deterministic adapter detection in `extractors.rs`.** Adapter selection is the only `match` over `HarnessId`. Add observed evidence for the selected adapter. Treat `x-bitrouter-harness` as a low-confidence compatibility fallback only when no native adapter matches.
 - [ ] **Step 4: Delete the Codex `x-superpowers-phase` / `x-superpowers-skill` override and the `superpowers_agent_context_key` fast path. Add regression tests proving those headers cannot change state or routing key.**
 - [ ] **Step 5: Move source-specific session extraction and Terminus compaction parsing behind adapter helpers. `session.rs` may combine adapter-produced identity hints but must not match on `HarnessId`.**
@@ -172,7 +172,7 @@ variants:
 - [ ] **Step 2: Run the focused config/template tests and capture RED because the generalized template does not exist.**
 - [ ] **Step 3: Replace the Superpowers template with the auto-router template. Use `presets.auto.policy: auto`, a top-level `variants.cost`, `key_strategy: agent_trace`, three normal mechanical projection routes, strong default, and the existing strong/economy capability guardrails. Metadata must say the policy is migrated from a same-scenario evaluation and that cross-agent quality remains unvalidated; do not claim new benchmark results.**
 - [ ] **Step 4: Replace workflow-specific template and Smithers instructions with generic adaptive-routing documentation. Document that runtime adapters enrich diagnostics, not policy keys, and private headers are unnecessary.**
-- [ ] **Step 5: Run `cargo run -p bitrouter -- config validate --config templates/auto-router/bitrouter.yaml`, `cargo run -p dist-helper -- check`, focused config/lock tests, and skill/plugin checks until GREEN.**
+- [ ] **Step 5: Run `cargo run -p bro -- config validate --config templates/auto-router/bitrouter.yaml`, `cargo run -p dist-helper -- check`, focused config/lock tests, and skill/plugin checks until GREEN.**
 - [ ] **Step 6: Commit `feat(templates): add generalized auto router`.**
 
 ## Task 5: Prove compatibility and generalization end to end

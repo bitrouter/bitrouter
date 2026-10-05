@@ -3,7 +3,7 @@
 //! Only `list` and `init` remain. The `add` / `remove` / `find` / `update`
 //! reports were removed with the skills package manager — see `crate::skills`.
 
-use bitrouter_mcp::actions::skills::SkillsReport;
+use crate::actions::skills::SkillsReport;
 use serde::Serialize;
 
 use crate::output::CliReport;
@@ -14,7 +14,7 @@ use crate::output::human::Theme;
 /// Human rendering for the shared `skills_search` report.
 ///
 /// The type is the MCP crate's — `impl CliReport for <foreign report>` is legal
-/// because the trait is ours — so `bitrouter skills list --json` is byte-for-byte
+/// because the trait is ours — so `bro skills list --json` is byte-for-byte
 /// the tool's structured content, and only this rendering is CLI-only.
 impl CliReport for SkillsReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
@@ -35,7 +35,7 @@ impl CliReport for SkillsReport {
     }
 }
 
-/// Result of `bitrouter skills init <name>`.
+/// Result of `bro skills init <name>`.
 #[derive(Serialize)]
 pub struct SkillInitReport {
     pub path: String,
@@ -52,7 +52,7 @@ impl CliReport for SkillInitReport {
 mod tests {
     use super::*;
 
-    use bitrouter_mcp::actions::skills::SkillRow;
+    use crate::actions::skills::SkillRow;
 
     fn rendered(report: &SkillsReport) -> String {
         let mut buf = Vec::new();

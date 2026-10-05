@@ -13,8 +13,8 @@
 //! | Inbound | Behaviour |
 //! |---|---|
 //! | `tools/list` | fan-out → concat tools, prepend `tool_prefix` to each name |
-//! | `resources/list` | fan-out → concat (no prefix, URIs are globally addressable) |
-//! | `resources/templates/list` | fan-out → concat |
+//! | `resources/list` | fan-out → concat; namespace origin-relative `skill://` URIs |
+//! | `resources/templates/list` | fan-out → concat; namespace `skill://` templates |
 //! | `prompts/list` | fan-out → concat, prepend `tool_prefix` to each name |
 //! | `tools/call` | strip prefix from `params.name`, dispatch to owning member |
 //! | `resources/read` | resolve the **single** owning member, or error; skill URIs round-trip the label |
@@ -42,6 +42,7 @@
 //! that method for the two resolution tiers.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream, StreamExt};
@@ -71,6 +72,63 @@ struct OwnerMatches<'m> {
     failures: Vec<String>,
 }
 
+/// Cache policy for a result assembled from one or more upstream results.
+/// Missing or malformed hints are deliberately treated as caller-private and
+/// immediately stale; a gateway must never broaden an upstream's policy.
+struct AggregateCachePolicy {
+    ttl_ms: Option<u64>,
+    public: bool,
+}
+
+impl Default for AggregateCachePolicy {
+    fn default() -> Self {
+        Self {
+            ttl_ms: None,
+            public: true,
+        }
+    }
+}
+
+impl AggregateCachePolicy {
+    fn observe(&mut self, result: &serde_json::Value) {
+        let complete =
+            result.get("resultType").and_then(serde_json::Value::as_str) == Some("complete");
+        let ttl_ms = result.get("ttlMs").and_then(serde_json::Value::as_u64);
+        let scope = result.get("cacheScope").and_then(serde_json::Value::as_str);
+        let Some(ttl_ms) = ttl_ms.filter(|_| complete) else {
+            self.observe_failure();
+            return;
+        };
+        let public = match scope {
+            Some("public") => true,
+            Some("private") => false,
+            _ => {
+                self.observe_failure();
+                return;
+            }
+        };
+        self.ttl_ms = Some(self.ttl_ms.map_or(ttl_ms, |current| current.min(ttl_ms)));
+        self.public &= public;
+    }
+
+    fn observe_failure(&mut self) {
+        self.ttl_ms = Some(0);
+        self.public = false;
+    }
+
+    fn apply(self, result: &mut serde_json::Value) {
+        result["resultType"] = "complete".into();
+        result["ttlMs"] = self.ttl_ms.unwrap_or(0).into();
+        result["cacheScope"] = if self.public { "public" } else { "private" }.into();
+    }
+}
+
+fn empty_list_result(list_key: &str) -> serde_json::Value {
+    let mut result = serde_json::json!({ list_key: [] });
+    AggregateCachePolicy::default().apply(&mut result);
+    result
+}
+
 /// Fan-out wrapper over an inner [`Executor`]. Passes [`McpTarget::Direct`]
 /// straight through to the inner; handles [`McpTarget::Aggregate`] by issuing
 /// per-member direct calls and merging the results.
@@ -97,6 +155,7 @@ impl<E: Executor> AggregatingExecutor<E> {
             params: request.params.clone(),
             caller: request.caller.clone(),
             headers: request.headers.clone(),
+            client_context: request.client_context.clone(),
         }
     }
 
@@ -113,6 +172,7 @@ impl<E: Executor> AggregatingExecutor<E> {
         request: &McpRequest,
         list_key: &str,
         prefix_field: Option<&str>,
+        namespace_field: Option<&str>,
     ) -> Result<McpResponse> {
         // Fan out concurrently — cold-cache latency is Σ→max(per-server). Errors
         // are collected as data (partial-success semantics), so there is no
@@ -122,17 +182,27 @@ impl<E: Executor> AggregatingExecutor<E> {
         let calls = members.iter().map(|member| {
             let sub_req = Self::direct_request(request, member);
             let target = Self::direct_target(member);
-            async move { (member, self.inner.execute(&target, &sub_req).await) }
+            async move {
+                let outcome = self.inner.execute(&target, &sub_req).await;
+                (member, outcome, Instant::now())
+            }
         });
         let outcomes = futures::future::join_all(calls).await;
+        let merge_at = Instant::now();
 
         let mut items: Vec<serde_json::Value> = Vec::new();
         let mut errors: Vec<serde_json::Value> = Vec::new();
-        for (member, outcome) in outcomes {
+        let mut cache_policy = AggregateCachePolicy::default();
+        for (member, outcome, received_at) in outcomes {
             match outcome {
-                Ok(resp) => match resp.result.get(list_key).and_then(|v| v.as_array()) {
-                    Some(arr) => {
-                        for entry in arr {
+                Ok(mut resp) => match resp.result.get(list_key).and_then(|v| v.as_array()) {
+                    Some(_) => {
+                        super::age_cacheable_result(
+                            &mut resp.result,
+                            merge_at.saturating_duration_since(received_at),
+                        );
+                        cache_policy.observe(&resp.result);
+                        for entry in resp.result[list_key].as_array().into_iter().flatten() {
                             let mut entry = entry.clone();
                             if let Some(field) = prefix_field
                                 && let Some(obj) = entry.as_object_mut()
@@ -141,26 +211,42 @@ impl<E: Executor> AggregatingExecutor<E> {
                                 let prefixed = format!("{}{name}", member.tool_prefix);
                                 obj.insert(field.to_string(), prefixed.into());
                             }
+                            if let Some(field) = namespace_field
+                                && let Some(obj) = entry.as_object_mut()
+                                && let Some(uri) = obj.get(field).and_then(|v| v.as_str())
+                                && uri.starts_with(SKILL_SCHEME)
+                                && let Some(namespaced) = namespace_uri(&member.server_name, uri)
+                            {
+                                obj.insert(field.to_string(), namespaced.into());
+                            }
                             items.push(entry);
                         }
                     }
-                    None => errors.push(serde_json::json!({
-                        "server": member.server_name,
-                        "error": format!(
-                            "upstream response missing or non-array '{list_key}'",
-                        ),
-                    })),
+                    None => {
+                        cache_policy.observe_failure();
+                        errors.push(serde_json::json!({
+                            "server": member.server_name,
+                            "error": format!(
+                                "upstream response missing or non-array '{list_key}'",
+                            ),
+                        }));
+                    }
                 },
-                Err(e) => errors.push(serde_json::json!({
-                    "server": member.server_name,
-                    "error": e.to_string(),
-                })),
+                Err(e) => {
+                    cache_policy.observe_failure();
+                    errors.push(serde_json::json!({
+                        "server": member.server_name,
+                        "error": e.to_string(),
+                    }));
+                }
             }
         }
         let mut result = serde_json::json!({ list_key: items });
         if !errors.is_empty() {
             result["_bitrouterErrors"] = serde_json::Value::Array(errors);
         }
+        cache_policy.apply(&mut result);
+        super::age_cacheable_result(&mut result, merge_at.elapsed());
         Ok(McpResponse {
             request_id: request.request_id.clone(),
             result,
@@ -235,21 +321,33 @@ impl<E: Executor> AggregatingExecutor<E> {
         let calls = members.iter().map(|member| {
             let sub_req = Self::direct_request(request, member);
             let target = Self::direct_target(member);
-            async move { (member, self.inner.execute(&target, &sub_req).await) }
+            async move {
+                let outcome = self.inner.execute(&target, &sub_req).await;
+                (member, outcome, Instant::now())
+            }
         });
 
         let mut skills: Vec<serde_json::Value> = Vec::new();
         let mut errors: Vec<serde_json::Value> = Vec::new();
-        for (member, outcome) in futures::future::join_all(calls).await {
+        let mut cache_policy = AggregateCachePolicy::default();
+        let outcomes = futures::future::join_all(calls).await;
+        let merge_at = Instant::now();
+        for (member, outcome, received_at) in outcomes {
             match outcome {
-                Ok(resp) => {
+                Ok(mut resp) => {
+                    super::age_cacheable_result(
+                        &mut resp.result,
+                        merge_at.saturating_duration_since(received_at),
+                    );
                     let Some(entries) = resp.result.get("skills").and_then(|v| v.as_array()) else {
+                        cache_policy.observe_failure();
                         errors.push(serde_json::json!({
                             "server": member.server_name,
                             "error": "upstream response missing or non-array 'skills'",
                         }));
                         continue;
                     };
+                    cache_policy.observe(&resp.result);
                     let mut skipped = 0usize;
                     for entry in entries {
                         match namespace_entry(&member.server_name, entry) {
@@ -258,6 +356,7 @@ impl<E: Executor> AggregatingExecutor<E> {
                         }
                     }
                     if skipped > 0 {
+                        cache_policy.observe_failure();
                         errors.push(serde_json::json!({
                             "server": member.server_name,
                             "error": format!(
@@ -268,16 +367,21 @@ impl<E: Executor> AggregatingExecutor<E> {
                         }));
                     }
                 }
-                Err(e) => errors.push(serde_json::json!({
-                    "server": member.server_name,
-                    "error": e.to_string(),
-                })),
+                Err(e) => {
+                    cache_policy.observe_failure();
+                    errors.push(serde_json::json!({
+                        "server": member.server_name,
+                        "error": e.to_string(),
+                    }));
+                }
             }
         }
         let mut result = serde_json::json!({ "skills": skills });
         if !errors.is_empty() {
             result["_bitrouterErrors"] = serde_json::Value::Array(errors);
         }
+        cache_policy.apply(&mut result);
+        super::age_cacheable_result(&mut result, merge_at.elapsed());
         Ok(McpResponse {
             request_id: request.request_id.clone(),
             result,
@@ -369,9 +473,14 @@ impl<E: Executor> AggregatingExecutor<E> {
                 ),
             });
         }
+        let mut result = response.result;
+        result["skill"] = namespaced;
+        let mut cache_policy = AggregateCachePolicy::default();
+        cache_policy.observe(&result);
+        cache_policy.apply(&mut result);
         Ok(McpResponse {
             request_id: request.request_id.clone(),
-            result: serde_json::json!({ "skill": namespaced }),
+            result,
         })
     }
 
@@ -428,6 +537,9 @@ impl<E: Executor> AggregatingExecutor<E> {
                 }
             }
         }
+        let mut cache_policy = AggregateCachePolicy::default();
+        cache_policy.observe(&response.result);
+        cache_policy.apply(&mut response.result);
         Ok(response)
     }
 
@@ -601,19 +713,19 @@ impl<E: Executor> AggregatingExecutor<E> {
             return match request.method.as_str() {
                 "tools/list" => Ok(McpResponse {
                     request_id: request.request_id.clone(),
-                    result: serde_json::json!({ "tools": [] }),
+                    result: empty_list_result("tools"),
                 }),
                 "resources/list" => Ok(McpResponse {
                     request_id: request.request_id.clone(),
-                    result: serde_json::json!({ "resources": [] }),
+                    result: empty_list_result("resources"),
                 }),
                 "resources/templates/list" => Ok(McpResponse {
                     request_id: request.request_id.clone(),
-                    result: serde_json::json!({ "resourceTemplates": [] }),
+                    result: empty_list_result("resourceTemplates"),
                 }),
                 "prompts/list" => Ok(McpResponse {
                     request_id: request.request_id.clone(),
-                    result: serde_json::json!({ "prompts": [] }),
+                    result: empty_list_result("prompts"),
                 }),
                 // The gateway declares the skills extension optimistically
                 // (it cannot know its members' capabilities at handshake
@@ -621,7 +733,7 @@ impl<E: Executor> AggregatingExecutor<E> {
                 // rather than an error.
                 SKILLS_LIST_METHOD => Ok(McpResponse {
                     request_id: request.request_id.clone(),
-                    result: serde_json::json!({ "skills": [] }),
+                    result: empty_list_result("skills"),
                 }),
                 other => Err(BitrouterError::NotFound(format!(
                     "mcp aggregate {other}: no member servers configured"
@@ -630,16 +742,25 @@ impl<E: Executor> AggregatingExecutor<E> {
         }
         match request.method.as_str() {
             "tools/list" => {
-                self.fanout_list(members, request, "tools", Some("name"))
+                self.fanout_list(members, request, "tools", Some("name"), None)
                     .await
             }
-            "resources/list" => self.fanout_list(members, request, "resources", None).await,
-            "resources/templates/list" => {
-                self.fanout_list(members, request, "resourceTemplates", None)
+            "resources/list" => {
+                self.fanout_list(members, request, "resources", None, Some("uri"))
                     .await
+            }
+            "resources/templates/list" => {
+                self.fanout_list(
+                    members,
+                    request,
+                    "resourceTemplates",
+                    None,
+                    Some("uriTemplate"),
+                )
+                .await
             }
             "prompts/list" => {
-                self.fanout_list(members, request, "prompts", Some("name"))
+                self.fanout_list(members, request, "prompts", Some("name"), None)
                     .await
             }
             "tools/call" | "prompts/get" => self.prefixed_dispatch(members, request).await,
@@ -838,6 +959,9 @@ mod tests {
         let errors = resp.result["_bitrouterErrors"].as_array().unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0]["server"], "b");
+        assert_eq!(resp.result["resultType"], "complete");
+        assert_eq!(resp.result["ttlMs"], 0);
+        assert_eq!(resp.result["cacheScope"], "private");
     }
 
     #[tokio::test]
@@ -913,6 +1037,85 @@ mod tests {
         serde_json::json!({
             "resources": uris.iter().map(|u| serde_json::json!({"uri": u})).collect::<Vec<_>>()
         })
+    }
+
+    /// A member may legitimately publish a skill whose first path segment is
+    /// also another aggregate-member label. The aggregate list must namespace
+    /// that URI at publication time so the subsequent read cannot be
+    /// mistaken for a request addressed to the other member.
+    #[tokio::test]
+    async fn resources_list_namespaces_skill_uris_before_label_routing() {
+        let inner = Arc::new(
+            CannedExecutor::new()
+                .with("a:resources/list", listing(&["skill://b/refunds/SKILL.md"]))
+                .with(
+                    "a:resources/read",
+                    serde_json::json!({"contents": [{
+                        "uri": "skill://b/refunds/SKILL.md",
+                        "text": "from-a"
+                    }]}),
+                ),
+        );
+        let exec = AggregatingExecutor::new(inner.clone());
+        let target = McpTarget::Aggregate {
+            members: vec![member("a"), member("b")],
+        };
+
+        let listed = exec
+            .execute(&target, &agg_req("resources/list", serde_json::json!({})))
+            .await
+            .expect("aggregate resources/list succeeds");
+        assert_eq!(
+            listed.result["resources"][0]["uri"],
+            "skill://a/b/refunds/SKILL.md"
+        );
+
+        let read = exec
+            .execute(
+                &target,
+                &agg_req(
+                    "resources/read",
+                    serde_json::json!({"uri": "skill://a/b/refunds/SKILL.md"}),
+                ),
+            )
+            .await
+            .expect("the namespaced URI routes back to member a");
+        assert_eq!(read.result["contents"][0]["text"], "from-a");
+        assert_eq!(
+            read.result["contents"][0]["uri"],
+            "skill://a/b/refunds/SKILL.md"
+        );
+        assert_eq!(
+            inner.uris_for("a"),
+            vec!["skill://b/refunds/SKILL.md".to_string()]
+        );
+        assert!(inner.uris_for("b").is_empty());
+    }
+
+    #[tokio::test]
+    async fn resource_templates_list_namespaces_skill_uri_templates() {
+        let inner = CannedExecutor::new().with(
+            "a:resources/templates/list",
+            serde_json::json!({
+                "resourceTemplates": [{"uriTemplate": "skill://b/{name}/SKILL.md"}]
+            }),
+        );
+        let exec = AggregatingExecutor::new(Arc::new(inner));
+        let target = McpTarget::Aggregate {
+            members: vec![member("a")],
+        };
+        let listed = exec
+            .execute(
+                &target,
+                &agg_req("resources/templates/list", serde_json::json!({})),
+            )
+            .await
+            .expect("aggregate resources/templates/list succeeds");
+
+        assert_eq!(
+            listed.result["resourceTemplates"][0]["uriTemplate"],
+            "skill://a/b/{name}/SKILL.md"
+        );
     }
 
     #[tokio::test]
@@ -1307,6 +1510,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn skills_list_merges_member_cache_hints_conservatively() {
+        let mut first = skills_result("skill://a-skill/SKILL.md", "a-skill");
+        first["resultType"] = "complete".into();
+        first["ttlMs"] = 60_000.into();
+        first["cacheScope"] = "public".into();
+        let mut second = skills_result("skill://b-skill/SKILL.md", "b-skill");
+        second["resultType"] = "complete".into();
+        second["ttlMs"] = 1_000.into();
+        second["cacheScope"] = "private".into();
+        let inner = CannedExecutor::new()
+            .with("a:skills/list", first)
+            .with("b:skills/list", second);
+        let exec = AggregatingExecutor::new(Arc::new(inner));
+        let target = McpTarget::Aggregate {
+            members: vec![member("a"), member("b")],
+        };
+        let resp = exec
+            .execute(&target, &agg_req("skills/list", serde_json::json!({})))
+            .await
+            .unwrap();
+        assert_eq!(resp.result["resultType"], "complete");
+        let ttl = resp.result["ttlMs"].as_u64().expect("ttlMs");
+        assert!(ttl <= 1_000, "fan-out cannot extend member freshness");
+        assert!(
+            ttl > 0,
+            "in-process fan-out should not consume the full TTL"
+        );
+        assert_eq!(resp.result["cacheScope"], "private");
+    }
+
+    #[tokio::test]
     async fn skills_list_skips_unaggregatable_schemes_with_a_note() {
         let inner = CannedExecutor::new()
             .with(
@@ -1358,6 +1592,8 @@ mod tests {
             .unwrap();
         assert_eq!(resp.result["skills"].as_array().unwrap().len(), 1);
         assert_eq!(resp.result["_bitrouterErrors"][0]["server"], "b");
+        assert_eq!(resp.result["ttlMs"], 0);
+        assert_eq!(resp.result["cacheScope"], "private");
     }
 
     #[tokio::test]
@@ -1367,11 +1603,17 @@ mod tests {
         // the reply came back namespaced.
         let inner = CannedExecutor::new().with(
             "acme:skills/get",
-            serde_json::json!({"skill": {
-                "uri": "skill://refunds/SKILL.md",
-                "frontmatter": {"name": "refunds", "description": "d"},
-                "resources": [{"uri": "skill://refunds/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 3871}]
-            }}),
+            serde_json::json!({
+                "resultType": "complete",
+                "ttlMs": 30_000,
+                "cacheScope": "public",
+                "_meta": {"upstream": "preserved"},
+                "skill": {
+                    "uri": "skill://refunds/SKILL.md",
+                    "frontmatter": {"name": "refunds", "description": "d"},
+                    "resources": [{"uri": "skill://refunds/SKILL.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "size": 3871}]
+                }
+            }),
         );
         let exec = AggregatingExecutor::new(Arc::new(inner));
         let target = McpTarget::Aggregate {
@@ -1396,6 +1638,10 @@ mod tests {
             resp.result["skill"]["resources"][0]["digest"],
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
+        assert_eq!(resp.result["resultType"], "complete");
+        assert_eq!(resp.result["ttlMs"], 30_000);
+        assert_eq!(resp.result["cacheScope"], "public");
+        assert_eq!(resp.result["_meta"]["upstream"], "preserved");
     }
 
     #[tokio::test]
@@ -1460,6 +1706,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.result["skills"].as_array().unwrap().len(), 0);
+        assert_eq!(resp.result["resultType"], "complete");
+        assert_eq!(resp.result["ttlMs"], 0);
+        assert_eq!(resp.result["cacheScope"], "public");
     }
 
     #[test]
@@ -1481,6 +1730,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.result["tools"].as_array().unwrap().len(), 0);
+        assert_eq!(resp.result["resultType"], "complete");
+        assert_eq!(resp.result["ttlMs"], 0);
+        assert_eq!(resp.result["cacheScope"], "public");
     }
 
     #[tokio::test]

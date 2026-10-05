@@ -1,4 +1,5 @@
 - id: moonshotai/kimi-k2.6
+  deprecation_date: 2026-10-05
   name: 'Kimi: K2.6'
   input_modalities:
   - text

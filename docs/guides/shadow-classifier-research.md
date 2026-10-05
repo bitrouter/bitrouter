@@ -59,7 +59,7 @@ silently rewriting historical labels.
 Run the built-in baseline and export the frozen case commitments:
 
 ```bash
-bitrouter workflow-state classifier-bakeoff \
+bro workflow-state classifier-bakeoff \
   --fixtures apps/bitrouter/tests/fixtures/workflow_state \
   --output scorecard-bakeoff.json
 ```
@@ -74,7 +74,7 @@ million ppm. Capability scores are multilabel and therefore do not sum to one.
 Evaluate the candidate without changing daemon or policy state:
 
 ```bash
-bitrouter workflow-state classifier-bakeoff \
+bro workflow-state classifier-bakeoff \
   --fixtures apps/bitrouter/tests/fixtures/workflow_state \
   --submission candidate.json \
   --output candidate-bakeoff.json
