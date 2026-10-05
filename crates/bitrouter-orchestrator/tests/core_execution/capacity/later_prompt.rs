@@ -6,6 +6,9 @@ use bitrouter_orchestrator::core::checkpoint::ToolStartFence;
 use bitrouter_orchestrator::core::protocol::OperationReceipt;
 use bitrouter_sdk::language_model::types::ToolResultOutput;
 
+#[path = "later_prompt/expanded.rs"]
+mod expanded;
+
 struct AcceptedReply {
     result: ToolResult,
     receipt: OperationReceipt,

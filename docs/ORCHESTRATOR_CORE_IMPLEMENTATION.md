@@ -51,9 +51,11 @@ low-quota rejection without tool execution. These are not unimplemented
 admission APIs. New tool-batch overflow after a committed model outcome now has
 failure/terminal ACK-loss and existing-tool cleanup evidence, described below.
 Accepted tool results now have focused next-model-attempt capacity failure,
-ACK-loss and cleanup evidence. These cases commit the prepared history and
-model plan before rejecting the attempt; they do not establish every earlier
-context or prompt-construction admission boundary.
+ACK-loss and cleanup evidence. Those cases commit the prepared history and
+model plan before rejecting the attempt. A separate expanded-prompt matrix now
+rejects earlier, at input-count intent or model-plan admission, preserving
+accepted history and existing-tool cleanup across failure ACK loss. This does
+not establish every context reconstruction or prompt-construction boundary.
 
 The process fixture covers checkpoint boundaries with quiescent handoff and
 in-flight incomplete provider HTTP bodies with explicitly scripted trusted
@@ -3988,3 +3990,49 @@ the close-drain observation gap and narrowing the approval claim. PR review
 preserves the full acceptance scope and distinguishes archive contents from
 checkpoint/store authority. New-head CI and final whole-goal acceptance remain
 separate requirements.
+
+
+## Expanded prompt admission at input-count intent and model-plan commit
+
+A host prompt transform adds a 512 KiB message after three full serialized tool
+results have been accepted. With a 512 KiB run checkpoint allowance, the complete
+prepared prompt cannot enter either `model.input_count.intent` (counted route)
+or `model.plan` (uncounted route). Both boundaries leave the fourth step without
+a count plan, count reports, final plan or provider attempt. The acknowledged
+preparation reports remain; no additional provider count or generation runs.
+
+Sixteen failure cases cross both routes, root-only execution versus a child
+whose parent retains Running/WaitingApproval tools, and capacity-failure versus
+terminal-failure ACK loss before/after append. Exact-batch reconciliation keeps
+accepted operation receipts, call/result pairing, model outcomes and provider-
+attempt work records. Full original tool replies still finish cleanup; input/result
+replay changes neither the durable head nor transform/count/generation and
+settlement counts, and release succeeds. The expanded transform runs once.
+Two root-only controls admit the same workload with 8 MiB checkpoint and
+16 MiB unacknowledged-byte allowances (versus 512 KiB / 1 MiB) and verify that
+the actual executor receives the expanded prompt and retained results. The provider count is scripted, not a byte-to-token estimate.
+
+This is in-process logical checkpoint admission and ACK-loss evidence. It does
+not establish physical callback allocation bounds, maximum artifact bodies,
+all reconstruction/material-selection boundaries, process takeover, remote
+Running clock handoff or production harness conformance. The actual remote
+transport still advertises `running_restore_handoff` as unsupported: its
+current restore message cannot establish a measured shared clock mapping,
+complete cumulative activity through replacement entry, or concurrent lifecycle
+watermark/drain. Arrival times and RTT are not substitutes for these inputs.
+No wire contract or production behavior is changed by this test increment.
+
+Final Rust 1.99.0 workspace/all-feature nextest: **4183 passed, 22 skipped**,
+342.747 seconds with four test threads (343.287 seconds including build checks),
+without failed, timed-out or leaky tests. Both new tests passed under full load
+in 31.553 / 3.692 seconds; the three large-tree cases passed in 82.959 / 77.269 /
+80.807 seconds. The five related prompt-admission tests passed in 27.753 seconds
+(39.898 seconds including build checks).
+
+Strict workspace/all-target/all-feature clippy (6.761 seconds), strict rustdoc,
+workspace doctests (five passed, one ignored), Rust 1.93.0 workspace/all-feature
+check, formatting, diff and tracked-ignore checks passed. Independent source
+review found no actionable P1/P2; it requested the now-present non-vacuous
+successful transform-record assertion and the precise model-plan commit and
+positive-control limit descriptions. New-head CI and full C4–C6/A01–A23
+acceptance remain separate requirements.
