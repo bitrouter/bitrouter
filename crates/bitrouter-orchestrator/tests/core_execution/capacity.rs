@@ -5,6 +5,9 @@ use bitrouter_orchestrator::core::session::ResourceConstraint;
 #[path = "capacity/tree_limits.rs"]
 mod tree_limits;
 
+#[path = "capacity/tool_intents.rs"]
+mod tool_intents;
+
 struct StopDuringArchiveRead {
     harness: Arc<Harness>,
     command: ToolExecute,

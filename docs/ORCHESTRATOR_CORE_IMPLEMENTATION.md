@@ -47,9 +47,10 @@ intents and later model prompts already pass through `prepare_checkpoint`,
 `capacity::check` and `artifact_storage::check` before acceptance/dispatch.
 `artifact_storage::recovery_archive_reservation_precedes_tool_dispatch` covers
 low-quota rejection without tool execution. These are not unimplemented
-admission APIs. Remaining boundary evidence must exercise output already
-committed before a new tool batch overflows, and accepted tool results before a
-later prompt overflows, including durable failure, ACK loss and cleanup.
+admission APIs. New tool-batch overflow after a committed model outcome now has
+failure/terminal ACK-loss and existing-tool cleanup evidence, described below.
+Accepted tool results before a later prompt overflows still need focused
+durable-failure, ACK-loss and cleanup evidence.
 
 The process fixture covers checkpoint boundaries with quiescent handoff and
 in-flight incomplete provider HTTP bodies with explicitly scripted trusted
@@ -3549,3 +3550,57 @@ and Rust 1.93.0 workspace/all-feature check passed in 0.555 seconds. Formatting,
 diff and tracked-ignore checks passed. The production protocol, limits, clocks
 and core behavior are unchanged; this increment adds conditional fault evidence.
 New-head CI and full acceptance remain separate gates.
+
+
+## C4 pending failure status during new tool-batch admission
+
+A child can finish its model request but exceed the artifact quota when core
+admits its new tool reply and recovery-archive obligations. If the independent
+capacity-failure checkpoint loses its ACK, another agent can encounter a
+blocked dispatch before the scheduler receives the original job error. The
+aggregate driver previously returned that later `checkpoint_unavailable /
+not_committed` rejection, hiding the still-unreconciled submitted batch.
+Re-entering the driver reproduced the same status loss deterministically.
+
+The shared scheduler now preserves `unknown` when a `checkpoint_unavailable /
+not_committed` error coincides with a pending checkpoint. Both ordinary driving
+and active Responses scheduling use this boundary. Other errors and a
+disconnected driver without a pending batch retain their previous status.
+Named operation APIs retain their own acceptance semantics: a rejected caller
+operation can still be `limit_exceeded / not_committed` after a separate capacity
+failure commits. Completed-exchange replay paths are outside this scheduler
+normalization; this is not a blanket change to every response error.
+
+The new admission matrix retains an acknowledged complete provider outcome
+before rejecting a tool batch, loses the capacity or terminal ACK before/after
+persistence, and reconciles exactly the same batch once. One variant has no
+existing tools; another has a root tool reported Running and another awaiting
+approval while a child requests four new tools. Six calls fit the default count
+of eight. The same workload succeeds with sufficient artifact quota and
+unchanged core limits. Failed admission preserves the original model receipt,
+usage, cost identity and settlement count without dispatching the new batch.
+It fences the unstarted tool, sends cancellation, retains full-size serialized
+Stopped/result payloads for the original tools, pairs results once, preserves
+input replay and completes failed-run cleanup and ownership release.
+
+Separate regressions cover no-pending disconnect status and active Responses
+scheduling/replay. Cancellation delivery is observed through a harness barrier,
+not assumed synchronous with the driver. Referenced artifact bodies remain
+five-byte fixtures; full serialized payloads do not prove maximum artifact-body
+capacity, physical storage reservation or production tool execution. Later
+prompt overflow, repeated recovery/archive growth, storage-full faults, measured
+remote Running handoff and production harness acceptance remain open. Prior
+head `a841e3c1` passed every job of CI 37212314200 on Linux, macOS and Windows.
+
+Focused validation passed five tests covering twelve scenarios in 3.233 seconds
+(15.462 seconds including compilation). Independent source/test review found
+no actionable P1/P2. Final Rust 1.99.0 workspace/all-feature nextest passed
+4068 tests with 22 skipped in 436.462 seconds (617.863 seconds including
+compilation, four test threads), with no failed, timed-out or leaky tests.
+Strict workspace/all-target/all-feature clippy passed in 101.402 seconds,
+strict rustdoc in 32.676 seconds, and workspace doctests passed five tests with
+one ignored. Rust 1.93.0 workspace/all-feature check passed in 103.475 seconds;
+formatting, diff and tracked-ignore checks passed. This increment changes the
+aggregate scheduler's error status and adds admission fault evidence, while
+retaining existing protocol fields, limits and clocks. New-head CI and the
+remaining full acceptance audit are separate gates.

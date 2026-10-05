@@ -1061,6 +1061,23 @@ impl CoreSession {
     }
 
     async fn drive_inner(&self) -> Result<(SessionSnapshot, u64), CoreError> {
+        match self.drive_loop().await {
+            Err(mut error)
+                if error.code == ErrorCode::CheckpointUnavailable
+                    && error.commit_status == CommitStatus::NotCommitted
+                    && self.shared.live.lock().await.gate.pending().is_some() =>
+            {
+                // The driver covers many transitions. Another agent's dispatch
+                // rejection must not hide a submitted batch whose ACK was lost.
+                // Named caller operations keep their own commit-status rules.
+                error.commit_status = CommitStatus::Unknown;
+                Err(error)
+            }
+            result => result,
+        }
+    }
+
+    async fn drive_loop(&self) -> Result<(SessionSnapshot, u64), CoreError> {
         let mut jobs = tokio::task::JoinSet::new();
         let mut running = BTreeSet::new();
         let mut first_error = None;
