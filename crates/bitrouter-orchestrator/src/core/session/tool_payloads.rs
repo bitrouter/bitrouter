@@ -125,7 +125,9 @@ pub(super) fn remaining_artifact_slots(call: &Invocation) -> u64 {
     }
     let stopped = tool_status::observed(call, ToolStatus::Stopped);
     let running = tool_status::observed(call, ToolStatus::Running);
-    let uncertain = tool_status::observed(call, ToolStatus::EffectUnknown) || call.result.is_some();
+    // An uncertain outcome does not consume the independent first uncertain
+    // observation allowance; either message can arrive first.
+    let uncertain = tool_status::observed(call, ToolStatus::EffectUnknown);
     let outcomes = if call.result.is_none() { 2 } else { 1 };
     outcomes
         + u64::from(!stopped)

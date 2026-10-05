@@ -699,7 +699,10 @@ unconsumed allowances for newly admitted tool evidence. The initial per-message
 body allowance is `artifact_quota_bytes / (5 * outstanding_tools + 2)`, frozen
 with the invocation. Five first essential messages cover running, stopped and
 unknown-effect observations and uncertain/definite outcomes. A definite outcome
-releases unused allowances. Repeated optional reports need additional room;
+releases unused allowances. An uncertain outcome does not consume the first
+unknown-effect observation allowance: either message may arrive first, and
+each retains its own payload and artifact-body reservation. Repeated optional
+reports need additional room;
 they cannot consume another invocation's reserved bytes. Current archive
 representation and acknowledged/replacement-root overlap also count before ACK,
 including before the first wire compaction. Aggregate failure uses the durable

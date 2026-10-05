@@ -1,6 +1,11 @@
 use super::*;
 use bitrouter_orchestrator::core::protocol::{ToolObservation, ToolStatus};
 
+#[path = "artifact_storage/repeated_restore.rs"]
+mod repeated_restore;
+#[path = "artifact_storage/unknown_order.rs"]
+mod unknown_order;
+
 async fn evidence(
     harness: &Harness,
     id: &str,

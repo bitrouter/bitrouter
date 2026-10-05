@@ -58,11 +58,13 @@ context or prompt-construction admission boundary.
 The process fixture covers checkpoint boundaries with quiescent handoff and
 in-flight incomplete provider HTTP bodies with explicitly scripted trusted
 activity input. The latter retains uncertain spend without applying partial
-calls, but does not establish production activity measurement. Queue/steer/cancel
-combinations, repeated restoration until archive capacity and storage-full
-staging/commit faults remain independent core conformance work. The first
-essential recovery-observation reserve does not prove unlimited future handoff
-growth.
+calls, but does not establish production activity measurement. Repeated full
+Running observations now reach logical archive-quota refusal and still allow
+first essential stopped/unknown observations and full uncertain/definite
+outcomes. Result-before-observation ordering also has artifact/checkpoint
+pressure and ACK-loss evidence. Queue/steer/cancel combinations, other recovery
+growth boundaries and storage-full staging/commit faults remain independent
+core conformance work. This does not prove unlimited future handoff growth.
 
 Production storage reservations, historical checkpoint retention/reclamation,
 workspace read/write/shell barriers, actual provider cost reconciliation and
@@ -3792,3 +3794,67 @@ formatting, diff and tracked-ignore checks passed. Independent source/test/
 documentation review found no remaining actionable P1/P2. New-head CI,
 remaining cross-transport/recovery pressure cases and full C4–C6/A01–A23
 acceptance still require their own evidence.
+
+
+## Independent uncertain-observation reserves and repeated archive pressure
+
+Independent review found that both artifact-body and checkpoint cleanup
+accounting treated an `EffectUnknown` outcome as having consumed the first
+`EffectUnknown` lifecycle observation. The API permits either order, and the
+frozen reply contract reserves these as separate messages. Two regression
+cases reproduced rejection of that first full observation after an uncertain
+result, a first stopped report and optional repeated stopped reports exhausted
+capacity: one failed on artifact quota, the other on checkpoint cleanup bytes.
+
+Both counters now determine unknown-observation consumption from actual
+observations only. The running-phase restriction after a result, separate
+outcome slots, definite-outcome release, frozen reply bounds and wire fields
+remain unchanged. The tests retain maximum serialized payloads and actual
+maximum artifact bodies for uncertain/definite results and essential reports.
+Four scenarios cover artifact/checkpoint pressure with the first unknown
+observation ACK lost before/after persistence. Exact retransmission/adoption,
+operation replay, accepted optional evidence, prior uncertainty, provider cost
+identity, failed cleanup and ownership release are checked without new model
+or workspace execution.
+
+A separate test repeatedly restores two started tools with maximum serialized
+Running observations and zero-byte evidence bodies until the growing archive
+JSON reaches logical quota refusal.
+It preserves every accepted observation and exact cumulative activity record;
+the refused restore does not advance the durable head. First stopped and
+unknown observations still commit with maximum bodies and serialized payloads,
+including restore ACK loss before/after persistence. Full uncertain results
+remain blocked until authenticated definite restoration; original uncertainty,
+input receipts, provider outcomes and histories survive through cancellation
+and release. The initial run accepted nine Running handoffs before refusal;
+the test checks the boundary rather than freezing that incidental count.
+Activity evidence is deterministic trusted fixture input, not measured remote
+handoff. Historical roots remain pinned in the fixture, so these tests do not
+establish physical storage leases or reclamation.
+
+This increment does not complete storage-full staging/commit faults, other
+recovery and transport pressure combinations, production harness integration,
+measured remote Running handoff or real-provider billing reconciliation. Full
+C4–C6/A01–A23 acceptance remains open. Final validation and independent review
+are recorded below when complete.
+
+
+Final Rust 1.99.0 workspace/all-feature nextest passed 4176 tests with 22 skipped
+in 337.113 seconds (337.647 seconds including build checks, four test threads).
+No failed, timed-out or leaky tests were reported. The three new tests passed
+under full load; the large-tree cases took 85.857, 77.522 and 80.325 seconds.
+The related artifact/tool-payload/restore group passed 24 tests in 3.030 seconds
+(3.790 seconds including build checks). Original red regressions are retained:
+both artifact and checkpoint saturation rejected essential unknown observations
+before the counter repair; the final three-test focused run passed in 1.407
+seconds.
+
+Strict workspace/all-target/all-feature clippy passed in 30.929 seconds,
+strict rustdoc in 20.614 seconds, workspace doctests passed five tests with one
+ignored, and Rust 1.93.0 workspace/all-feature check passed in 21.840 seconds.
+Formatting, diff and tracked-ignore checks passed. Independent source/test/
+documentation review found no remaining actionable P1/P2. Legacy reply limits
+are preserved; historical snapshots already lacking required cleanup capacity
+can still be refused by conservative restoration admission. Parent head
+`8c880345` passed every job of CI 37341576194, including Linux, macOS and Windows.
+New-head CI and complete C4–C6/A01–A23 acceptance remain separate gates.

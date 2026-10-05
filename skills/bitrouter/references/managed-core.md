@@ -76,6 +76,12 @@ Absent allowances remain legacy state. Additional distinct artifact bodies,
 repeated archive observations and extra handoffs require fresh capacity. These
 logical checks do not reserve physical staging or historical-checkpoint storage.
 
+An `effect_unknown` result and an `effect_unknown` status report have separate
+first-message reservations. Either may arrive first; preserve and submit both
+when they represent distinct evidence. Optional repeated reports cannot consume
+the first unknown observation's payload or artifact-body allowance. Definite
+outcomes still require authenticated recovery after uncertainty.
+
 After `run.capacity_reached`, retain rejected input until its own operation
 receipt confirms acceptance. Continue committing cleanup and submitting the
 frozen replies for dispatched tools. Core settles pending collaboration calls,

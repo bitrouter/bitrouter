@@ -104,7 +104,8 @@ fn reserve_tool(
 
     let stopped = tool_status::observed(call, ToolStatus::Stopped);
     let running = tool_status::observed(call, ToolStatus::Running);
-    let uncertain = tool_status::observed(call, ToolStatus::EffectUnknown) || call.result.is_some();
+    // An uncertain result still permits a first uncertain lifecycle report.
+    let uncertain = tool_status::observed(call, ToolStatus::EffectUnknown);
     let lifecycle = u64::from(!stopped)
         + u64::from(!stopped && !running && call.result.is_none())
         + u64::from(!uncertain);
