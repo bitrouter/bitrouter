@@ -761,7 +761,7 @@ Connects to one MCP server and prints a YAML stub suitable for pasting into the 
 `bro mcp check [server] [--config PATH]` connects to one configured upstream
 MCP server, or all of them, and reports transport, reachability, latency,
 negotiated tools capability, and advertised tool names. BitRouter OSS is the
-MCP client/gateway on this path; it does not expose a first-party origin MCP
+MCP client on this path; it does not expose a first-party origin MCP
 server.
 
 ---
@@ -1858,19 +1858,16 @@ Prints the skills under the project root, or under `~/.claude/` with `-g`. Each
 row carries the skill's `name`, `description`, its directory (`dir`) and its
 `skill_md`, plus `valid` and — when it is not — a `problem` saying why.
 
-Discovery covers all three conventional layouts of the chosen root:
-`<root>/SKILL.md`, `<root>/skills/<name>/`, and `<root>/.claude/skills/<name>/`.
-It used to read only the last, so a `./skills/foo` skill was invisible here while
-the agent could see it.
+Discovery covers `<root>/SKILL.md` and immediate skill directories under
+`<root>/`, `skills/`, `.claude/skills/`, `.agents/skills/` and `.codex/skills/`.
+Symlinks beneath the root are skipped; files over 256 KiB are reported as invalid.
+Malformed frontmatter, mismatched directory/name and invalid name/description
+are reported with `valid: false`. Listing does not activate skills or run scripts.
 
-A skill whose frontmatter does not parse, whose directory name does not match
-`frontmatter.name`, or whose name/description falls outside the Agent Skills
-bounds is listed with `valid: false` and the reason. It is *not* served over
-SEP-2640's `skills/list`, which requires an entry a host can verify — so this
-listing is where you find out why a skill you wrote is not loading.
-
-This is the same report the `skills_search` MCP tool returns, so
-`--json` here and that tool's structured content are the same bytes.
+The parser is shared with native BRO runtime discovery. Active native Turns also
+use daemon-selected global roots and retain versioned metadata; see
+[BRO harness resources](BRO_HARNESS_RESOURCES.md). There is no local origin
+`skills_search` or `skills/list` endpoint.
 
 ### `bro skills init <name>`
 
@@ -2155,3 +2152,13 @@ tracing provide content-free diagnostics; absence of telemetry is not proof that
 a check did not run. Existing `bro requests` remains the settled cost/usage
 interface. See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for the execution
 and coverage contract.
+
+### Native BRO resource configuration
+
+Native coding Turns use `mcp_servers` from the daemon configuration through the
+orchestrator's direct MCP client. `mcp check` uses the same connection/discovery
+implementation and honors `mcp.upstream_protocol`. MCP calls follow the existing
+identified approval policy; `--read-only` does not connect to MCP. Configuration
+is fixed at daemon startup: restart to replace native MCP transport/credentials.
+Skills discovery supplies metadata and versions without prompt injection.
+See [BRO harness resources](BRO_HARNESS_RESOURCES.md).

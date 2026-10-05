@@ -461,6 +461,7 @@ impl ExecutionStore for FailingStore {
         let fails = records.iter().any(|record| match turn_fact(record) {
             ExecutionRecord::ThreadCreated { .. } => self.failure == "accepted",
             ExecutionRecord::ModelResponse { .. } => self.failure == "response",
+            ExecutionRecord::HarnessInventory { .. } => self.failure == "inventory",
             ExecutionRecord::ToolIntent { .. } => self.failure == "intent",
             ExecutionRecord::ToolResult { .. } => self.failure == "result",
             ExecutionRecord::WorkspaceReleasePrepared { .. } => self.failure == "release",
@@ -486,7 +487,7 @@ impl ExecutionStore for FailingStore {
 #[tokio::test]
 async fn commit_failures_block_effects_and_preserve_uncertain_execution()
 -> Result<(), Box<dyn std::error::Error>> {
-    for failure in ["accepted", "response", "intent", "result"] {
+    for failure in ["accepted", "inventory", "response", "intent", "result"] {
         let workspace = TempDir::new()?;
         let store = Arc::new(FailingStore {
             memory: MemoryExecutionStore::default(),
@@ -531,7 +532,7 @@ async fn commit_failures_block_effects_and_preserve_uncertain_execution()
             continue;
         }
         let accepted = accepted?;
-        if failure != "response" {
+        if failure != "response" && failure != "inventory" {
             let approval =
                 wait_for(&service, &accepted.turn_id, TurnStatus::WaitingForInput).await?;
             let request_id = approval
@@ -568,6 +569,13 @@ async fn commit_failures_block_effects_and_preserve_uncertain_execution()
                 .iter()
                 .any(|record| matches!(turn_fact(record), ExecutionRecord::ToolResult { .. }))
         );
+        if failure == "inventory" {
+            assert!(
+                super::support::prompts(store.as_ref(), &accepted.thread_id, &accepted.turn_id)
+                    .await?
+                    .is_empty()
+            );
+        }
         if failure == "result" {
             assert!(
                 saved

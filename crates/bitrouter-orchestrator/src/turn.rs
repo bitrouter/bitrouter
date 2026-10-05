@@ -114,6 +114,8 @@ pub struct TurnEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<crate::harness::HarnessInventory>,
     #[serde(default)]
     pub steering: Vec<crate::turn::SteeringReceipt>,
     pub thread_id: String,

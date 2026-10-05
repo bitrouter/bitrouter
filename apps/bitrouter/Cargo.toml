@@ -86,6 +86,7 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+rmcp.workspace = true
 bitrouter-guardrails = { path = "../../extensions/regex-checker/matcher" }
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock = "0.6"

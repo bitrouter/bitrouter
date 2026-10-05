@@ -643,6 +643,12 @@ impl DatabaseExecutionStore {
                     execution::Column::Version,
                     sea_orm::sea_query::Expr::value(version),
                 )
+                .col_expr(
+                    execution::Column::FormatVersion,
+                    sea_orm::sea_query::Expr::value(
+                        i32::try_from(RUNTIME_FORMAT_VERSION).map_err(|e| e.to_string())?,
+                    ),
+                )
                 .filter(execution::Column::Id.eq(execution_id))
                 .filter(execution::Column::Version.eq(expected))
                 .exec(&transaction)

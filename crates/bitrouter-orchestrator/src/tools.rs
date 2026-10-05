@@ -320,6 +320,10 @@ impl ToolKind {
 }
 
 impl WorkspaceTools {
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub(crate) fn new(root: &Path, mode: ToolMode) -> std::io::Result<Self> {
         let root = root.canonicalize()?;
         if !root.is_dir() {

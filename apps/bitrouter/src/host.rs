@@ -277,6 +277,8 @@ async fn serve_with_options(
             &cfg.agent_api.workspaces,
             Arc::new(crate::agent_store::DatabaseExecutionStore::new(assembled.db.clone())),
         )
+        .map_err(anyhow::Error::msg)?
+        .with_resources(native_harness_config(&cfg))
         .map_err(anyhow::Error::msg)?;
         anyhow::ensure!(
             !cfg.agent_api.enabled
@@ -885,6 +887,39 @@ fn other_provider_env_var_hints() -> Vec<String> {
     vars.sort();
     vars.dedup();
     vars
+}
+
+/// Static daemon-owned resources; opening or browsing a Thread never connects.
+fn native_harness_config(
+    cfg: &bitrouter_sdk::config::Config,
+) -> bitrouter_orchestrator::harness::HarnessConfig {
+    let mut servers: Vec<_> = cfg
+        .mcp_servers
+        .iter()
+        .map(|(name, config)| {
+            let mut selected = config.clone();
+            selected.name = name.clone();
+            selected
+        })
+        .collect();
+    servers.sort_by(|a, b| a.name.cmp(&b.name));
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(std::path::PathBuf::from);
+    let mut skill_roots = home.map_or_else(Vec::new, |home| {
+        vec![
+            home.join(".agents/skills"),
+            home.join(".codex/skills"),
+            home.join(".claude/skills"),
+        ]
+    });
+    if let Some(codex_home) = std::env::var_os("CODEX_HOME") {
+        skill_roots.push(std::path::PathBuf::from(codex_home).join("skills"));
+    }
+    bitrouter_orchestrator::harness::HarnessConfig {
+        servers,
+        protocol: bitrouter_sdk::mcp::upstream_protocol_version(cfg.mcp.upstream_protocol),
+        skill_roots,
+    }
 }
 
 #[cfg(test)]

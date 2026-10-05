@@ -175,6 +175,23 @@ pub struct ThreadService {
 }
 
 impl ThreadService {
+    /// Configure local extension resources before cloning or starting the service.
+    pub fn with_resources(
+        mut self,
+        config: crate::harness::HarnessConfig,
+    ) -> Result<Self, ServiceError> {
+        if config.servers.len() > 32 || config.skill_roots.len() > 31 {
+            return Err("harness configuration exceeds resource limits".into());
+        }
+        for server in &config.servers {
+            server.validate().map_err(|error| error.to_string())?;
+        }
+        let inner = Arc::get_mut(&mut self.inner)
+            .ok_or("configure harness resources before sharing the runtime")?;
+        inner.resources = Arc::new(config);
+        Ok(self)
+    }
+
     pub fn new(app: Arc<App>, allowed_workspaces: &[PathBuf]) -> Result<Self, ServiceError> {
         Self::with_store(
             app,
@@ -251,6 +268,7 @@ impl ThreadService {
                 ownership_init: tokio::sync::Mutex::new(()),
                 cleanup_unconfirmed: std::sync::atomic::AtomicBool::new(false),
                 app,
+                resources: Arc::new(crate::harness::HarnessConfig::default()),
                 instance_id: uuid::Uuid::new_v4().to_string(),
                 tool_workers: Arc::new(tokio::sync::Semaphore::new(limits.global_tools)),
                 recovery_readers: tokio::sync::Semaphore::new(limits.recovery_readers),

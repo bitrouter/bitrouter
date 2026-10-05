@@ -382,3 +382,11 @@ activation and the acceptance ledger. The default host no longer links
 the matcher and rejects legacy `plugins.bitrouter-guardrails` configuration. See
 [GUARDRAILS_EXTENSION.md](GUARDRAILS_EXTENSION.md) for custom-host assembly,
 input-only scope, explicit migration blockers, and process-level verification.
+
+### Native harness resources
+
+`bitrouter-orchestrator::harness` owns direct MCP connections and local skills
+discovery. The app supplies daemon-owned transport configuration and global roots;
+active ThreadService Turns freeze inventories and execute MCP through existing
+durable approval/tool barriers. SDK gateway interop and routed provider generation
+retain their existing responsibilities. See [BRO harness resources](BRO_HARNESS_RESOURCES.md).

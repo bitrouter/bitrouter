@@ -71,6 +71,7 @@ impl Agent {
         }
         let cancel = control.cancel.child_token();
         let tools = self.tools.clone();
+        let resources = self.resources.clone();
         let name = call.name.clone();
         let arguments = call.arguments.clone();
         let item_id = call_record.item_id.clone();
@@ -85,6 +86,11 @@ impl Agent {
                         not_executed("tool dispatch was withdrawn"),
                         EffectStatus::NotExecuted,
                     );
+                }
+                if let Some(resources) = resources
+                    && resources.contains(&name)
+                {
+                    return resources.execute(&name, &arguments, &worker_cancel).await;
                 }
                 tools
                     .execute_with_effect(

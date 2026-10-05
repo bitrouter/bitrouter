@@ -509,6 +509,8 @@ async fn cancellation_and_each_bound_stop_before_a_new_effect()
         config.max_duration = Duration::from_millis(1);
     })?;
     let empty_report = RunReport {
+        cleanup_unconfirmed: false,
+        resources: None,
         context_version: 0,
         status: RunStatus::Failed,
         final_answer: None,

@@ -63,6 +63,7 @@ pub(super) struct Inner {
     pub(super) ownership_init: tokio::sync::Mutex<()>,
     pub(super) cleanup_unconfirmed: std::sync::atomic::AtomicBool,
     pub(super) app: Arc<App>,
+    pub(super) resources: Arc<crate::harness::HarnessConfig>,
     pub(super) instance_id: String,
     pub(super) limits: RuntimeLimits,
     pub(super) workers: TaskTracker,

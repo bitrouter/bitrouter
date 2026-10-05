@@ -425,6 +425,14 @@ pub(crate) fn project(
             turn_id: turn_id.clone(),
             lifecycle: lifecycle.clone(),
         },
+        ExecutionRecord::HarnessInventory {
+            inventory,
+            context_version,
+        } => ThreadChange::ContextAdvanced {
+            turn_id: turn,
+            context_version: *context_version,
+            resources: Some(inventory.clone()),
+        },
         ExecutionRecord::ModelRequest {
             step_id,
             item_id,
@@ -503,6 +511,7 @@ pub(crate) fn project(
         ExecutionRecord::Settled {
             context_version, ..
         } => ThreadChange::ContextAdvanced {
+            resources: None,
             turn_id: turn,
             context_version: *context_version,
         },
@@ -560,10 +569,20 @@ impl ThreadView {
                 }
                 ThreadChange::ModelStep {
                     context_version, ..
-                }
-                | ThreadChange::ContextAdvanced {
-                    context_version, ..
                 } => self.thread.context_version = *context_version,
+                ThreadChange::ContextAdvanced {
+                    turn_id,
+                    context_version,
+                    resources,
+                } => {
+                    self.thread.context_version = *context_version;
+                    if let Some(turn) = &mut self.latest_turn
+                        && &turn.turn_id == turn_id
+                        && let Some(resources) = resources
+                    {
+                        turn.resources = Some(resources.as_ref().clone());
+                    }
+                }
                 ThreadChange::AssistantResponse { turn_id, .. }
                 | ThreadChange::AssistantInterrupted { turn_id, .. }
                 | ThreadChange::ToolResult { turn_id, .. } => {
@@ -603,6 +622,7 @@ pub(super) fn empty_turn(
     turn_id: &str,
 ) -> TurnSnapshot {
     TurnSnapshot {
+        resources: None,
         steering: Vec::new(),
         thread_id: thread.thread_id.clone(),
         server_instance_id: thread.server_instance_id.clone(),

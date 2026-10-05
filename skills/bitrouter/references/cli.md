@@ -127,7 +127,7 @@ Startup claims one database owner and completes bounded cold discovery before
 admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
 Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
 records per Thread. Capabilities expose aggregate progress, not root identities
-or prompts. New roots use runtime format 2. Migration adds metadata with
+or prompts. New/updated roots use runtime format 3; format 2 remains readable without history rewriting. Migration adds metadata with
 **default 0** for old roots; unsupported formats fail before payload decoding
 or execution, with `recovery_required` / `unsupported_runtime_format`.
 They are not converted or marked safe.
@@ -377,7 +377,7 @@ empty-composer `y`/`n` answers approval, and Ctrl-D detaches. Reattach with
 `--thread-id`; `--task-id` is removed. Assistant/shell deltas are transient;
 complete model/tool facts and Thread events are committed together.
 
-Coding declares exactly `read`, `glob`, `grep`, `write`, `edit`, `shell`;
+Coding declares `read`, `glob`, `grep`, `write`, `edit`, `shell` plus configured MCP tools;
 `--read-only` declares only the first three and rejects effectful calls before
 approval. `read` covers UTF-8 files and paginated directories (`path: "."` for
 root); offsets are one-based and complete output is capped at 50 KiB. Directories
@@ -389,7 +389,7 @@ result and verification identify the same selected interpreter. Missing shells
 fail coding before sampling; read-only needs none. Loss after selection returns
 an error without retry under another interpreter. Old tool names have no aliases.
 Bounded read workers, exclusive effects and recovery blocking remain in force.
-Local protocol is v14; opt-in HTTP uses `/agent/v2`. Old execution-root formats
+Local protocol is v15; opt-in HTTP uses `/agent/v2`. Old execution-root formats
 are rejected rather than rewritten or replayed.
 
 Explicit local `bro code <agent>` opens an ACP conversation.
@@ -470,7 +470,7 @@ selection; a physical-model-only allowlist does not authorize the alias.
 |---|---|
 | `bro init [--yes] [--force] [--reset] [-c PATH] [credential flags] [--harness claude\|codex] [--after launch\|serve\|exit] [--model ID]` | Save the default ACP harness and model in the resolved configuration, or BitRouter home when absent. Credential flags: `--cloud-login`, `--api-key`, `--provider`, `--provider-api-key`, `--use-detected`. Headless setup reports-and-skips interactive logins. `--after launch` opens BitRouter ACP TUI; `--force` resets existing configuration. |
 | `bro config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, the upstream-URL (SSRF) gate, and any referenced `policy-lock.yaml`. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. Also reports `ignored_config` — `plugins.<id>` blocks the binary does not read and therefore ignores, which is otherwise silent (`bitrouter-policy` and `bitrouter-telemetry` are the supported ids). Unknown ids do **not** fail validation. The removed `plugins.bitrouter-guardrails` key is different: any presence fails validation and activation; see `references/guardrails.md` for migration and input-only coverage. The daemon, `bro acp serve`, `bro run`, and `bro code <agent>` log the same set on every start. |
-| `bro skills list [--global] [--json\|--human]` | List skills. Reads the project root by default; `--global` reads `~/.claude/`. Covers all three conventional layouts of that root (`<root>/SKILL.md`, `<root>/skills/<name>/`, `<root>/.claude/skills/<name>/`) — it used to read only the last. Each row carries `name`, `description`, `dir`, `skill_md`, `valid`, and a `problem` when `valid` is false (bad frontmatter, a directory name that does not match `frontmatter.name`, an out-of-bounds name/description). Invalid skills are listed *marked* here and in `skills_search`, and omitted from SEP-2640 `skills/list`, which requires a verifiable entry — so this is where you learn why a skill on disk will not load. Same report type as the `skills_search` tool. |
+| `bro skills list [--global] [--json\|--human]` | Inspect installed skills with the orchestrator's shared parser. The default root is the project; `--global` selects `~/.claude/`. Discovery covers direct `SKILL.md`, immediate skill children and `skills/`, `.claude/skills/`, `.agents/skills/`, `.codex/skills/` children. Invalid or over-256-KiB files are reported; child symlinks are skipped. Listing does not activate skills or execute scripts. |
 | `bro skills init <NAME> [--output PATH] [--json\|--human]` | Scaffold a spec-valid skill directory — writes `<NAME>/SKILL.md` unless `--output` names a path. `<NAME>` is written into the generated frontmatter. |
 | `bro policy create <id> [--dir DIR]` | Write a starter access-control policy file under `--dir` (default `./policies`). Bind to a key with `bro key sign --user <id> --policy <id>`. |
 | `bro policy init <name> [--router <id>] --economy <model> [--economy-effort <level>] [--strong <model>] [--strong-effort <level>] [--config PATH]` | Create or reuse deterministic `policy-lock.yaml` and bind the policy to `bitrouter/<id>`. With neither binding flag, the router id defaults to `coding`. The caller chooses both models; an equivalent existing router can supply its strong base model when `--strong` is omitted. Router initialization preserves `policy.mode`, `chat`, and harness settings; the default mode remains `frozen`. Explicit supported efforts make `(model, effort)` the target identity. `--preset <preset>` is the mutually exclusive legacy form: it binds `@preset[:variant]`, may infer that preset's strong model, and retains its historical `policy.mode: adaptive` behavior. |
@@ -627,3 +627,17 @@ registrations and revisions at startup, and emits bounded content-free tracing
 for native invocations. Checker declarations and router bindings require restart.
 Settled token/cost history remains under `bro requests`, but does not prove that
 a particular native check ran.
+
+## Native MCP and skills wiring
+
+The daemon supplies its configured `mcp_servers` to native coding Turns. MCP tools
+use the existing approval, exclusive execution and durable result barriers;
+unknown outcomes are not retried. Read-only Turns do not connect to MCP.
+`bro mcp check` uses this client and honors `mcp.upstream_protocol`. Native
+transport/credential bindings are fixed at startup; restart to change them.
+Cold Thread browsing, history and loading do not spawn MCP servers.
+
+Active Turns discover workspace skills plus the daemon user's `.agents/skills`,
+`.codex/skills`, `.claude/skills` and `$CODEX_HOME/skills` when configured. Runtime
+snapshots expose metadata and hashed versions. Discovery does not inject skill
+bodies or MCP instructions into the prompt, install skills or execute scripts.

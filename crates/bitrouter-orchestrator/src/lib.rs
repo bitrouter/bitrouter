@@ -1,9 +1,10 @@
-//! BRO's native coding agent engine. Process transports and terminal rendering
-//! are assembled by the `bro` executable, not by this crate.
+//! BRO's native durable coding runtime and workspace resource clients.
+//! The `bro` executable assembles database, host configuration and UI adapters.
 
 pub mod agent;
 mod context;
 mod control;
+pub mod harness;
 pub mod item;
 pub mod service;
 pub mod store;

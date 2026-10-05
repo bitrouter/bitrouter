@@ -109,6 +109,8 @@ pub struct ThreadRecoveryRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryTurn {
+    #[serde(default)]
+    pub resources: Option<crate::harness::HarnessInventory>,
     pub turn_id: String,
     pub user_item_id: String,
     pub cancel_requested: bool,
@@ -229,6 +231,8 @@ pub enum ThreadChange {
         tool_calls: u32,
     },
     ContextAdvanced {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resources: Option<Box<crate::harness::HarnessInventory>>,
         turn_id: String,
         context_version: u64,
     },

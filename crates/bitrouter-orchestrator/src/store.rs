@@ -57,6 +57,10 @@ pub struct SettlementOutcome {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub enum ExecutionRecord {
+    HarnessInventory {
+        context_version: u64,
+        inventory: Box<crate::harness::HarnessInventory>,
+    },
     /// Joined work and known effects/context are prepared for workspace release;
     /// the final outcome is committed before the held OS lock is dropped.
     WorkspaceReleasePrepared {
@@ -192,10 +196,10 @@ pub enum EffectStatus {
     Unknown,
 }
 
-pub const RUNTIME_FORMAT_VERSION: u32 = 2;
+pub const RUNTIME_FORMAT_VERSION: u32 = 3;
 
 pub fn validate_runtime_format(version: u32) -> Result<(), String> {
-    if version != RUNTIME_FORMAT_VERSION {
+    if version != 2 && version != RUNTIME_FORMAT_VERSION {
         return Err(format!("unsupported_runtime_format: {version}"));
     }
     Ok(())
@@ -734,6 +738,8 @@ fn commit_memory(
             version: 0,
             records: Vec::new(),
         });
+    // Upgrade the envelope atomically on append; version-2 history stays intact.
+    entry.format_version = RUNTIME_FORMAT_VERSION;
     entry.records.extend_from_slice(records);
     entry.version = version;
     for key in keys {

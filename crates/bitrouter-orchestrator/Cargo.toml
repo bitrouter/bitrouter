@@ -9,6 +9,11 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+http.workspace = true
+process-wrap = { workspace = true, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
+rmcp.workspace = true
+serde-saphyr.workspace = true
+thiserror.workspace = true
 async-trait.workspace = true
 bitrouter-sdk.workspace = true
 futures.workspace = true
@@ -27,5 +32,5 @@ uuid.workspace = true
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process"] }
 
-[target.'cfg(windows)'.dependencies]
-process-wrap = { workspace = true, features = ["tokio1", "job-object", "kill-on-drop"] }
+[dev-dependencies]
+wiremock = "0.6"

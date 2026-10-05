@@ -143,6 +143,8 @@ pub enum RunEvent {
 }
 
 pub struct RunReport {
+    pub(crate) cleanup_unconfirmed: bool,
+    pub resources: Option<crate::harness::HarnessInventory>,
     pub context_version: u64,
     pub status: RunStatus,
     pub final_answer: Option<String>,
@@ -161,6 +163,8 @@ pub struct Agent {
     app: Arc<App>,
     caller: CallerContext,
     tools: WorkspaceTools,
+    resource_config: Arc<crate::harness::HarnessConfig>,
+    resources: Option<Arc<crate::harness::HarnessResources>>,
     config: AgentConfig,
     workers: Arc<Semaphore>,
     parallel_tools: usize,
@@ -195,6 +199,43 @@ pub(crate) struct ApprovalRequest {
 }
 
 impl Agent {
+    pub(crate) fn with_resources(mut self, config: Arc<crate::harness::HarnessConfig>) -> Self {
+        self.resource_config = config;
+        self
+    }
+
+    fn declarations(&self) -> Vec<bitrouter_sdk::language_model::Tool> {
+        let mut tools = self.tools.declarations();
+        if let Some(resources) = &self.resources {
+            tools.extend(
+                resources
+                    .inventory
+                    .tools
+                    .iter()
+                    .map(crate::harness::McpTool::declaration),
+            );
+        }
+        tools
+    }
+
+    fn allowed(&self, name: &str) -> bool {
+        WorkspaceTools::allowed(self.config.tool_mode, name)
+            || self
+                .resources
+                .as_ref()
+                .is_some_and(|resources| resources.contains(name))
+    }
+
+    fn validate_call(&self, name: &str, arguments: &str) -> Result<(), String> {
+        if let Some(resources) = &self.resources
+            && resources.contains(name)
+        {
+            resources.validate_call(name, arguments)
+        } else {
+            WorkspaceTools::validate(name, arguments)
+        }
+    }
+
     pub(crate) fn verification_limits(&self) -> (Duration, u32) {
         (self.config.max_duration, self.config.max_tool_calls)
     }
@@ -236,6 +277,8 @@ impl Agent {
             app,
             caller,
             tools,
+            resource_config: Arc::new(crate::harness::HarnessConfig::default()),
+            resources: None,
             config,
             workers: Arc::new(Semaphore::new(16)),
             parallel_tools: 4,
@@ -320,6 +363,7 @@ impl Agent {
             commits,
             control,
         } = channels;
+        let mut prepared = self.clone();
         let mut report = if let Some(mut checkpoint) = input.checkpoint {
             checkpoint.final_answer = None;
             checkpoint.status = RunStatus::Failed;
@@ -329,6 +373,8 @@ impl Agent {
             let mut messages = input.messages;
             messages.push(user_message.clone());
             let mut report = RunReport {
+                cleanup_unconfirmed: false,
+                resources: None,
                 context_version: input.context_version.saturating_add(1),
                 status: RunStatus::Failed,
                 final_answer: None,
@@ -353,9 +399,96 @@ impl Agent {
             report
         };
         let started = Instant::now();
+        let initial_bound = self.bound_status(&report, started, &cancel);
+        let preparation = if let Some((_, detail)) = &initial_bound {
+            Err(crate::harness::ResourceError::from(detail.clone()))
+        } else {
+            crate::harness::HarnessResources::discover(
+                self.tools.root(),
+                &self.resource_config,
+                self.config.tool_mode,
+                &cancel,
+                self.config.max_duration,
+            )
+            .await
+        };
+        let preparation = match preparation {
+            Ok(resources) => {
+                let error = if report
+                    .resources
+                    .as_ref()
+                    .is_some_and(|old| old != &resources.inventory)
+                {
+                    Some(
+                        "harness resources changed; refuse continuation with a different inventory"
+                            .to_string(),
+                    )
+                } else if report.resources.is_none()
+                    && report.steps > 0
+                    && !resources.inventory.tools.is_empty()
+                {
+                    Some("legacy continuation has no frozen MCP inventory".to_string())
+                } else if resources
+                    .inventory
+                    .tools
+                    .iter()
+                    .any(|tool| WorkspaceTools::allowed(ToolMode::Coding, &tool.name))
+                {
+                    Some("MCP tool collides with a native tool".to_string())
+                } else {
+                    None
+                };
+                if let Some(error) = error {
+                    let cleanup = resources.shutdown().await;
+                    report.cleanup_unconfirmed |= cleanup.is_err();
+                    report.unknown_effect |= report.cleanup_unconfirmed;
+                    Err(error)
+                } else {
+                    report.resources = Some(resources.inventory.clone());
+                    prepared.resources = Some(Arc::new(resources));
+                    Ok(())
+                }
+            }
+            Err(error) => {
+                report.cleanup_unconfirmed |= error.cleanup_unknown;
+                report.unknown_effect |= report.cleanup_unconfirmed;
+                Err(error.message)
+            }
+        };
+        let self_ = &prepared;
+        let preparation_status = initial_bound.map_or_else(
+            || {
+                if cancel.is_cancelled() {
+                    RunStatus::Cancelled
+                } else if started.elapsed() >= self.config.max_duration {
+                    RunStatus::BoundExceeded
+                } else {
+                    RunStatus::Failed
+                }
+            },
+            |(status, _)| status,
+        );
+        let mut preparation = Some(preparation.map_err(|detail| (preparation_status, detail)));
         let mut approval_wait = Duration::ZERO;
         let mut active_model = None;
         let (status, detail) = 'execution: loop {
+            if let Some(result) = preparation.take() {
+                if let Err(outcome) = result {
+                    break outcome;
+                }
+                if let Some(inventory) = &report.resources
+                    && let Err(error) = commit_execution(
+                        &commits,
+                        vec![ExecutionRecord::HarnessInventory {
+                            context_version: report.context_version,
+                            inventory: Box::new(inventory.clone()),
+                        }],
+                    )
+                    .await
+                {
+                    break (RunStatus::Failed, error);
+                }
+            }
             report.active_duration_ms = prior_duration.saturating_add(
                 u64::try_from(started.elapsed().saturating_sub(approval_wait).as_millis())
                     .unwrap_or(u64::MAX),
@@ -379,12 +512,17 @@ impl Agent {
             if let Some(outcome) = self.bound_status(&report, active_started, &cancel) {
                 break outcome;
             }
+            if let Some(resources) = &prepared.resources
+                && let Err(error) = resources.validate_catalog().await
+            {
+                break (RunStatus::Failed, error);
+            }
             let prompt = match context::build(
                 &self.config.model,
                 self.config.effort,
                 &self.config.instructions,
                 &report.messages,
-                self.tools.declarations(),
+                self_.declarations(),
                 self.config.max_context_bytes,
             ) {
                 Ok(prompt) => prompt,
@@ -665,9 +803,9 @@ impl Agent {
                 let mut effect = EffectStatus::NotExecuted;
                 let output = if let Some((_, reason)) = &stop {
                     not_executed(reason)
-                } else if !WorkspaceTools::allowed(self.config.tool_mode, &call.name) {
+                } else if !self_.allowed(&call.name) {
                     not_executed("tool is unavailable in this task mode")
-                } else if let Err(error) = WorkspaceTools::validate(&call.name, &call.arguments) {
+                } else if let Err(error) = self_.validate_call(&call.name, &call.arguments) {
                     not_executed(&error)
                 } else {
                     let approved = if WorkspaceTools::read_only(&call.name) {
@@ -704,7 +842,7 @@ impl Agent {
                                 started: started + approval_wait,
                                 steering: &control,
                             };
-                            match self
+                            match self_
                                 .execute_exclusive(
                                     &step_id,
                                     &call,
@@ -808,7 +946,7 @@ impl Agent {
                 break outcome;
             }
         };
-        let (status, detail) = if let Some(attempt) = active_model {
+        let (mut status, mut detail) = if let Some(attempt) = active_model {
             let partial = attempt.collector.partial();
             let terminal = ExecutionRecord::ModelInterrupted {
                 step_id: attempt.step_id,
@@ -840,6 +978,18 @@ impl Agent {
         } else {
             (status, detail)
         };
+        report.active_duration_ms = prior_duration.saturating_add(
+            u64::try_from(started.elapsed().saturating_sub(approval_wait).as_millis())
+                .unwrap_or(u64::MAX),
+        );
+        if let Some(resources) = &prepared.resources
+            && let Err(error) = resources.shutdown().await
+        {
+            report.cleanup_unconfirmed = true;
+            report.unknown_effect = true;
+            status = RunStatus::Failed;
+            detail = error;
+        }
         report.active_duration_ms = prior_duration.saturating_add(
             u64::try_from(started.elapsed().saturating_sub(approval_wait).as_millis())
                 .unwrap_or(u64::MAX),

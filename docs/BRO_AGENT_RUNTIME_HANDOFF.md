@@ -24,7 +24,7 @@ and A01–A23 remain attributable to those sources, not PR #945.
 | --- | --- |
 | `agent.rs`, `context.rs` | One loop, legal context, stable identities, cumulative limits and model-request barriers |
 | `ThreadService` and `service/threads.rs` | One admission/FIFO/control authority and commit gate per Thread |
-| `store.rs`, app `agent_store.rs`, migrations 000022–000026 | Atomic facts/keys/public events, root format 2, bounded reads and owner/version fences |
+| `store.rs`, app `agent_store.rs`, migrations 000022–000026 | Atomic facts/keys/public events, root format 3 (readable format 2), bounded reads and owner/version fences |
 | `tools.rs`, `service/workspace.rs` | Grant checks, bounded reads, exclusive effects, tracked process cleanup and exclusion markers |
 | `service/recovery.rs`, `ownership.rs`, `startup.rs` | Exact source/cursor validation, stopped-owner proof, conservative unknown-effect/accounting handling and complete discovery |
 | `service/observation.rs`, `thread.rs` | Post-commit public projection, bounded history and observer detachment without cancellation |
@@ -62,3 +62,11 @@ separate gates. This documentation consolidation implements none of them.
 The earlier unavailable-file audit and product-document sequencing discussion
 are preserved in [the prior handoff](https://github.com/bitrouter/bitrouter/blob/65555b126e8d14982b2a7c977b618d545cd8f5b7/docs/BRO_AGENT_RUNTIME_HANDOFF.md).
 They are historical context, not a current prerequisite or authorization.
+
+## Current resource integration
+
+MCP connections and skills discovery are now owned by the standalone harness
+within this runtime; see [BRO harness resources](BRO_HARNESS_RESOURCES.md).
+Their native inventory/dispatch does not implement managed Core checkpoint/ACK
+exchange. A later Core adapter must translate these resources while preserving
+the existing permissions, immutable inventory and unknown-effect barriers.

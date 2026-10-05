@@ -7,13 +7,15 @@
 //! - `discover <server>` — connect to one server and emit a config stub a
 //!   user can paste into `bitrouter.yaml`.
 //!
-//! These are one-shot CLI invocations: each spins up a fresh
-//! [`RmcpExecutor`], dials each server once, and exits — no daemon required.
+//! The canonical check uses the workspace-scoped harness client and closes
+//! connections before returning. Hidden compatibility verbs retain the gateway
+//! executor. These one-shot CLI invocations require no daemon.
 //! See the spec for the dispatched methods:
 //! <https://modelcontextprotocol.io/specification/2025-06-18>.
 
 use std::time::{Duration, Instant};
 
+use bitrouter_orchestrator::harness::mcp::McpConnections;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::Config;
 use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
@@ -62,16 +64,15 @@ pub struct McpCheck {
 }
 
 /// Check one configured MCP server, or every server in stable name order.
-/// Each selected server receives exactly one `tools/list` round-trip, which
-/// exercises connection setup, MCP initialization, capability negotiation,
-/// and tool advertisement together.
+/// Uses the harness client lifecycle and bounded, paginated tool discovery.
 pub async fn check(config: &Config, only: Option<&str>) -> Result<Vec<McpCheck>, String> {
     if let Some(name) = only
         && !config.mcp_servers.contains_key(name)
     {
         return Err(format!("no mcp server configured for '{name}'"));
     }
-    let executor = RmcpExecutor::new();
+    let workspace = std::env::current_dir().map_err(|error| error.to_string())?;
+    let protocol = bitrouter_sdk::mcp::upstream_protocol_version(config.mcp.upstream_protocol);
     let mut servers: Vec<_> = config
         .mcp_servers
         .iter()
@@ -80,19 +81,28 @@ pub async fn check(config: &Config, only: Option<&str>) -> Result<Vec<McpCheck>,
     servers.sort_by(|a, b| a.0.cmp(b.0));
     let mut rows = Vec::with_capacity(servers.len());
     for (name, server_cfg) in servers {
-        let target = McpTarget::Direct {
-            server_name: name.clone(),
-            transport: server_cfg.transport.clone(),
-        };
-        let req = McpRequest::direct(
-            name,
-            "tools/list",
-            serde_json::json!({}),
-            CallerContext::local(),
-        );
+        let mut selected = server_cfg.clone();
+        selected.name = name.clone();
+        let prefix = selected
+            .tool_prefix
+            .clone()
+            .unwrap_or_else(|| format!("{name}__"));
         let started = Instant::now();
-        let outcome = match executor.execute(&target, &req).await {
-            Ok(response) => parse_tools(&response.result),
+        let outcome = match McpConnections::connect(&workspace, &[selected], protocol.clone()).await
+        {
+            Ok(mut client) => {
+                let tools = client.validate_catalog().map(|()| {
+                    client
+                        .tools()
+                        .iter()
+                        .map(|tool| ToolSummary {
+                            name: tool.name.strip_prefix(&prefix).unwrap_or(&tool.name).into(),
+                            description: tool.description.clone(),
+                        })
+                        .collect()
+                });
+                client.shutdown().await.and(tools)
+            }
             Err(error) => Err(error.to_string()),
         };
         rows.push(McpCheck {

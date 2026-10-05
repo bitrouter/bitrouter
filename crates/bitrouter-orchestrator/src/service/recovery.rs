@@ -47,6 +47,7 @@ struct Step {
 
 #[derive(Serialize)]
 struct Active {
+    resources: Option<crate::harness::HarnessInventory>,
     turn_id: String,
     user_item_id: String,
     messages: Vec<Message>,
@@ -279,6 +280,8 @@ impl ThreadService {
                         user_item_id: turn.user_item_id.clone(),
                         context_version,
                         checkpoint: Some(RunReport {
+                            cleanup_unconfirmed: false,
+                            resources: turn.resources.clone(),
                             context_version,
                             status: outcome.map_or(RunStatus::Failed, |outcome| outcome.status),
                             final_answer: outcome.and_then(|outcome| outcome.final_answer.clone()),
@@ -1108,6 +1111,7 @@ impl Rebuild {
                 let mut messages = self.messages.clone();
                 messages.push(Message::text(Role::User, entry.prompt));
                 self.active = Some(Active {
+                    resources: None,
                     turn_id: turn_id.clone(),
                     user_item_id: entry.user_item_id,
                     messages,
@@ -1323,6 +1327,7 @@ impl Rebuild {
                 self.blockers.push(RecoveryBlocker::BudgetUncertain { detail: "lost execution has unconfirmed active time, call charging or provider usage".into() });
             }
             report_turn = Some(RecoveryTurn {
+                resources: active.resources.clone(),
                 turn_id: active.turn_id.clone(),
                 user_item_id: active.user_item_id.clone(),
                 cancel_requested: active.cancel_requested,
@@ -1471,6 +1476,21 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
 impl Active {
     fn consume(&mut self, fact: &ExecutionRecord) -> Result<(), String> {
         match fact {
+            ExecutionRecord::HarnessInventory { inventory, .. } => {
+                inventory.validate()?;
+                if self
+                    .resources
+                    .as_ref()
+                    .is_some_and(|old| old != inventory.as_ref())
+                {
+                    return Err("harness inventory changed within a Turn".into());
+                }
+                if self.resources.is_none() && !self.steps.is_empty() && !inventory.tools.is_empty()
+                {
+                    return Err("harness inventory appears after model execution".into());
+                }
+                self.resources = Some(inventory.as_ref().clone());
+            }
             ExecutionRecord::WorkspaceReleasePrepared { .. } => {
                 if self.calls.iter().any(|call| {
                     call.intent

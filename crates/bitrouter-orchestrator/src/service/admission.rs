@@ -440,6 +440,7 @@ impl ThreadService {
                 thread.snapshot.queued.push(receipt.clone());
             }
             let snapshot = TurnSnapshot {
+                resources: None,
                 steering: Vec::new(),
                 thread_id: target.thread_id.clone(),
                 server_instance_id: self.inner.instance_id.clone(),

@@ -270,7 +270,8 @@ If all candidates are ineligible, return overloaded rather than steal a worker o
 observer. Cold public queries do not load SDK context. Reload reserves reader/hot
 capacity and cannot create a second gate for a Thread still referenced elsewhere.
 
-Runtime root format is 2. Migration 000026 labels existing development roots 0;
+Runtime root format is 3. Format 2 remains readable; a new append upgrades its
+envelope atomically without rewriting history. Migration 000026 labels existing development roots 0;
 unsupported roots fail before execution, without legacy conversion or deleting
 facts/owner/markers. Format rejection cannot become stopped-owner proof. Developer
 database cleanup is a separate authorized operation and must preserve unrelated
@@ -297,3 +298,14 @@ The native endpoint currently holds daemon admission for its serving lifetime;
 ACP/HTTP idleness does not establish safe native epoch replacement. Automatic
 native handoff remains deferred. Source-specific process/PTY/provider/platform
 proof and remaining gates belong in the acceptance records, not historical specs.
+
+## MCP and skills resource extension
+
+The production app supplies static MCP configurations and skills roots to this
+same ThreadService. Active execution discovers and durably freezes a resource
+inventory before model sampling; cold discovery/history/open does not connect.
+MCP tools use the existing exclusive intent/approval/start/result barriers and
+unknown-effect policy. Read-only mode excludes MCP connections. Skills expose
+metadata and versions without activation or system-prompt injection. See
+[BRO harness resources](BRO_HARNESS_RESOURCES.md) for lifecycle, grants, bounds,
+format compatibility and recovery behavior.

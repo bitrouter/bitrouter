@@ -72,6 +72,7 @@ impl ThreadService {
             cancel.cancel();
             return;
         }
+        let agent = agent.with_resources(self.inner.resources.clone());
         let mut prompt = prompt;
         loop {
             let restored_verification = prompt.restored_verification.take();
@@ -186,6 +187,11 @@ impl ThreadService {
                 return;
             }
             if let Some(mut report) = report {
+                if report.cleanup_unconfirmed {
+                    self.inner
+                        .cleanup_unconfirmed
+                        .store(true, std::sync::atomic::Ordering::Release);
+                }
                 while let Ok(event) = event_rx.try_recv() {
                     if self.append_agent_event(&turn_id, event).await.is_err() {
                         return;
