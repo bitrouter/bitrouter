@@ -8,7 +8,8 @@ mock-provider demonstration does not establish production integration.
 
 - The specification was frozen against main `d93ed73`.
 - Existing native BRO work is in PR #945; the six-tool and durable-record work
-  is stacked in PR #951 (`a58f40ca`). Its execution loop predates the core/harness
+  is stacked in PR #951 (integrated through `9981d7a2`; original core base
+  `a58f40ca`). Its execution loop predates the core/harness
   split. Reuse its tools and storage through a harness adapter, with a single
   managed scheduler owning each session. Keep transparent external ACP separate.
 - All changes remain on an isolated implementation branch. Do not change the
@@ -3604,3 +3605,108 @@ formatting, diff and tracked-ignore checks passed. This increment changes the
 aggregate scheduler's error status and adds admission fault evidence, while
 retaining existing protocol fields, limits and clocks. New-head CI and the
 remaining full acceptance audit are separate gates.
+
+
+## Integrating the updated native runtime base
+
+The scheduler-status fix was committed and pushed as `965a1c02`. GitHub then
+reported the stacked PR as conflicting with its updated native runtime base,
+`9981d7a2`. The base now includes durable runtime recovery, a unified Thread/Turn
+execution model, ownership and history indexes, and the six-tool integration.
+Its rewritten ancestry shares an older merge base with this branch, so the merge
+also reports conflicts in code that has no core-specific changes.
+
+Resolution compares core changes against its original `a58f40ca` base. Files
+without core changes adopt the updated native implementation. Shared integration
+files retain ManagedCoreApi startup, inference-listener routing and shutdown,
+the public core module, SDK model constraints, dependencies and managed-core
+skill/documentation entry points. The native runtime uses ThreadService and the
+updated CLI, storage migrations and plugin descriptions from its own base.
+
+This is dependency integration; it does not establish that the native runtime
+already delegates scheduling to managed core. Production harness integration,
+measured remote Running handoff, remaining capacity fault evidence and the full
+acceptance audit remain required. The earlier 4068-test result applies to
+`965a1c02`; validation and independent review of the merged tree are recorded
+separately after completion.
+
+Independent merge review found no actionable P1/P2 and confirmed preservation
+of every core change against its original base. The merged Rust 1.99.0
+workspace/all-feature nextest run passed 4165 tests with 22 skipped in 414.625
+seconds (524.835 seconds including compilation, four test threads). There were
+no failed or timed-out tests; nextest marked the unchanged SDK
+`observe::schema::tests::the_declaration_renders` test as leaky. An isolated
+all-feature SDK schema run passed all six tests in 0.030 seconds without a leak
+report (40.569 seconds including compilation). The initial report remains
+recorded; its cause was not reproduced or established by that rerun.
+
+Strict workspace/all-target/all-feature clippy passed in 38.279 seconds,
+strict rustdoc in 22.226 seconds, and workspace doctests passed five tests with
+one ignored. Rust 1.93.0 workspace/all-feature check passed in 22.462 seconds;
+formatting, diff and tracked-ignore checks passed. New merged-head CI and the
+remaining acceptance work are separate gates.
+
+
+## Reusing verified checkpoint payloads
+
+Merged head `512ef22d` failed Linux workspace CI 37317699745 in
+`maximum_tree_byte_failure_survives_terminal_ack_loss_after_persistence`.
+The 32-agent test continued advancing durable revisions but reached its
+240-second join deadline. A local direct-binary baseline passed in 80.525
+seconds. CPU sampling showed repeated full checkpoint JSON decoding in both
+core proposal validation and the durable harness fixture.
+
+`CheckpointBatch::validate_append_with_payload` now returns the admitted ACK
+and decoded payload together. Harnesses can use the same verified payload for
+artifact checks, tool-start fences and event persistence. Existing
+`validate_append` remains available with its original return type. Neither
+method performs persistence: validation, required artifact byte checks and
+atomic append/fences still belong in the harness transaction, and the ACK may
+be sent only after durability. Digest, schema, scope, epoch, base ordering,
+artifact-reference and exact-replay checks remain in place.
+
+Core proposal validation, untrusted harness admission and ACK consumption
+still decode the hashed bytes. Independent review identified that bypassing
+proposal decoding could admit JSON beyond the decoder's nesting-depth limit;
+that shortcut was removed and a regression now verifies rejection before any
+pending proposal is retained. The durable fixture reuses one validated payload,
+and its outer fault wrapper only decodes when an event-dependent fault is
+configured. No extra parsed checkpoint is retained in the gate. Test tree size,
+overlapping model futures, tool counts, product limits and deadlines remain
+unchanged.
+
+Contract regressions check foreign scope/epoch rejection without retaining a
+proposal, unchanged returned state/fences, historical ACK replay without head
+rewind, and corrupted bytes despite a retained ACK. Later model-step admission
+experiments are kept outside the compiled suite until their fault assertions
+are complete; they are not counted as acceptance evidence. Performance,
+independent review and full validation results are recorded below when complete.
+
+
+After restoring proposal decoding, focused validation passed all 27 contract
+tests and the previously failing large-tree case: 28 tests in 63.266 seconds
+(80.316 seconds including compilation). The large-tree case took 63.235 seconds,
+compared with the earlier local direct-binary baseline of 80.525 seconds.
+Random agent identities and scheduling vary; this is a local observation, not
+a cross-platform speed guarantee or a Linux CI pass. Follow-up independent
+review found no remaining actionable P1/P2. Full workspace gates follow.
+
+
+Final Rust 1.99.0 workspace/all-feature nextest passed 4168 tests with 22 skipped
+in 317.880 seconds (390.438 seconds including compilation, four test threads).
+The three large-tree cases took 84.225, 74.802 and 75.311 seconds. No tests
+failed or timed out. Nextest marked the unchanged SDK
+`observe::schema::tests::the_committed_artifact_matches_the_declaration` as
+leaky. The isolated six-test schema group then passed in 0.016 seconds without
+a leak report (0.614 seconds including build checks), using the same workspace
+feature selection. The original leak report remains recorded; its cause is
+not established by that rerun.
+
+Strict workspace/all-target/all-feature clippy passed in 31.286 seconds,
+strict rustdoc in 21.205 seconds, and workspace doctests passed five tests with
+one ignored. Rust 1.93.0 workspace/all-feature check passed in 21.714 seconds;
+formatting, diff and tracked-ignore checks passed. Independent source/test/
+documentation follow-up found no remaining actionable P1/P2. This increment
+changes a Rust admission helper and removes redundant fixture decoding; it
+does not change wire fields, limits, clocks or persistence ownership. New-head
+CI and the remaining C4–C6/A01–A23 acceptance work remain separate gates.

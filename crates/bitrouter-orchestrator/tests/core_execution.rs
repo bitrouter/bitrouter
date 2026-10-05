@@ -191,13 +191,27 @@ impl HarnessPort for Harness {
     }
 
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
-        let payload = batch.decode(&Limits::default())?;
-        if [self.hold_kind, self.hold_also_kind]
-            .into_iter()
-            .flatten()
-            .any(|kind| payload.events.iter().any(|event| event.kind == kind))
-            && self.hold_enabled.load(Ordering::SeqCst)
+        // The durable store always validates the full batch. Decode here only
+        // when this wrapper needs event kinds to inject a configured fault.
+        let (hold, fail, wrong_ack) = if self.hold_kind.is_some()
+            || self.hold_also_kind.is_some()
+            || self.fail_kind.is_some()
+            || self.wrong_ack.is_some()
         {
+            let payload = batch.decode(&Limits::default())?;
+            let has = |kind| payload.events.iter().any(|event| event.kind == kind);
+            (
+                [self.hold_kind, self.hold_also_kind]
+                    .into_iter()
+                    .flatten()
+                    .any(has),
+                self.fail_kind.is_some_and(has),
+                self.wrong_ack.is_some() && has("input.accepted"),
+            )
+        } else {
+            (false, false, false)
+        };
+        if hold && self.hold_enabled.load(Ordering::SeqCst) {
             self.seen.add_permits(1);
             self.resume
                 .acquire()
@@ -207,10 +221,7 @@ impl HarnessPort for Harness {
                 })?
                 .forget();
         }
-        if self
-            .fail_kind
-            .is_some_and(|kind| payload.events.iter().any(|event| event.kind == kind))
-        {
+        if fail {
             return Err(CoreError::rejected(
                 ErrorCode::CheckpointUnavailable,
                 "injected commit failure",
@@ -223,11 +234,7 @@ impl HarnessPort for Harness {
             .and_then(|batch| store.acknowledgements.get(&batch.identity.batch_id))
             .cloned();
         let mut ack = store.commit(&batch)?;
-        if payload
-            .events
-            .iter()
-            .any(|event| event.kind == "input.accepted")
-        {
+        if wrong_ack {
             match self.wrong_ack {
                 Some(true) => {
                     return prior.ok_or_else(|| {

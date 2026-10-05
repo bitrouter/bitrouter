@@ -328,9 +328,39 @@ impl CheckpointBatch {
         available: &BTreeMap<String, ArtifactRef>,
         retained_ack: Option<&CheckpointAck>,
     ) -> Result<CheckpointAck, CoreError> {
+        self.validate_append_with_payload(grant, head, limits, available, retained_ack)
+            .map(|(ack, _)| ack)
+    }
+
+    /// Apply the same admission checks as [`Self::validate_append`] and return
+    /// the verified payload for artifact checks, tool fences and event storage.
+    /// Keep validation and persistence in the same durable transaction; the
+    /// returned ACK does not establish that the append has been persisted.
+    pub fn validate_append_with_payload(
+        &self,
+        grant: &OwnershipGrant,
+        head: &DurableHead,
+        limits: &Limits,
+        available: &BTreeMap<String, ArtifactRef>,
+        retained_ack: Option<&CheckpointAck>,
+    ) -> Result<(CheckpointAck, CheckpointPayload), CoreError> {
         grant.validate()?;
         head.validate()?;
         let payload = self.decode(limits)?;
+        let ack = self.validate_decoded_append(&payload, grant, head, available, retained_ack)?;
+        Ok((ack, payload))
+    }
+
+    // Only call with a validated grant/head and a payload decoded from this
+    // batch. External callers must validate the hashed bytes.
+    fn validate_decoded_append(
+        &self,
+        payload: &CheckpointPayload,
+        grant: &OwnershipGrant,
+        head: &DurableHead,
+        available: &BTreeMap<String, ArtifactRef>,
+        retained_ack: Option<&CheckpointAck>,
+    ) -> Result<CheckpointAck, CoreError> {
         if self.identity.session_id != grant.session_id
             || self.identity.core_instance_id != grant.core_instance_id
         {
@@ -348,7 +378,7 @@ impl CheckpointBatch {
             ));
         }
         if let Some(previous) = retained_ack {
-            let expected = CheckpointAck::for_batch(self, &payload);
+            let expected = CheckpointAck::for_batch(self, payload);
             if previous != &expected
                 || previous.state_revision > head.state_revision
                 || previous.through_event_seq > head.event_seq
@@ -360,7 +390,7 @@ impl CheckpointBatch {
             return Ok(previous.clone());
         }
         if head.batch_id.as_deref() == Some(&self.identity.batch_id) {
-            let ack = CheckpointAck::for_batch(self, &payload);
+            let ack = CheckpointAck::for_batch(self, payload);
             if ack.head() == *head {
                 return Ok(ack);
             }
@@ -379,7 +409,7 @@ impl CheckpointBatch {
                 ));
             }
         }
-        Ok(CheckpointAck::for_batch(self, &payload))
+        Ok(CheckpointAck::for_batch(self, payload))
     }
 }
 

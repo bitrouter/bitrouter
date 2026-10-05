@@ -225,6 +225,129 @@ fn no_dispatch_before_matching_atomic_ack() -> TestResult {
 }
 
 #[test]
+fn gate_rejects_json_beyond_decoder_depth_without_retaining_a_batch() -> TestResult {
+    for in_event in [false, true] {
+        let mut gate = CommitGate::new(grant(), DurableHead::default(), Limits::default())?;
+        let mut payload = proposal(gate.head(), "deep");
+        let mut nested = serde_json::Value::Null;
+        for _ in 0..128 {
+            nested = json!([nested]);
+        }
+        if in_event {
+            payload.events[0].payload = nested;
+        } else {
+            payload.checkpoint.state = nested;
+        }
+        // Serialization succeeds, but both endpoints must be able to decode
+        // the exact serialized bytes before the gate retains a proposal.
+        let encoded = CheckpointBatch::encode(&payload, &Limits::default())?;
+        assert_eq!(
+            encoded
+                .decode(&Limits::default())
+                .err()
+                .map(|error| error.code),
+            Some(ErrorCode::CheckpointConflict)
+        );
+        assert_eq!(
+            gate.propose(payload).err().map(|error| error.code),
+            Some(ErrorCode::CheckpointConflict)
+        );
+        assert!(gate.pending().is_none());
+        assert_eq!(gate.head(), &DurableHead::default());
+        assert!(!gate.can_dispatch());
+        let mut harness = DurableHarness::new(grant());
+        let batch = gate.propose(proposal(gate.head(), "valid"))?.clone();
+        assert!(gate.acknowledge(&harness.commit(&batch)?)?.is_some());
+        assert!(gate.can_dispatch());
+    }
+    Ok(())
+}
+
+#[test]
+fn gate_rejects_foreign_ownership_without_retaining_a_batch() -> TestResult {
+    for (field, code) in [
+        ("session", ErrorCode::UnauthorizedScope),
+        ("instance", ErrorCode::UnauthorizedScope),
+        ("epoch", ErrorCode::StaleEpoch),
+    ] {
+        let mut gate = CommitGate::new(grant(), DurableHead::default(), Limits::default())?;
+        let mut payload = proposal(gate.head(), "foreign");
+        match field {
+            "session" => payload.identity.session_id = "another_session".into(),
+            "instance" => payload.identity.core_instance_id = "another_core".into(),
+            _ => payload.identity.execution_epoch += 1,
+        }
+        assert_eq!(
+            gate.propose(payload).err().map(|error| error.code),
+            Some(code)
+        );
+        assert!(gate.pending().is_none());
+        assert_eq!(gate.head(), &DurableHead::default());
+        assert!(!gate.can_dispatch());
+        gate.propose(proposal(gate.head(), "valid"))?;
+        assert!(gate.pending().is_some());
+    }
+    Ok(())
+}
+
+#[test]
+fn append_admission_returns_verified_payload_for_new_and_retained_batches() -> TestResult {
+    let mut harness = DurableHarness::new(grant());
+    let mut payload = proposal(&harness.head, "batch_1");
+    payload.tool_start_fences.push(ToolStartFence {
+        invocation_id: "call_1".into(),
+        attempt_id: "attempt_1".into(),
+    });
+    payload.checkpoint.state = json!({"retained": "snapshot", "nested": [1, null, true]});
+    let batch = CheckpointBatch::encode(&payload, &harness.limits)?;
+    let (ack, verified) = batch.validate_append_with_payload(
+        &harness.grant,
+        &harness.head,
+        &harness.limits,
+        &harness.artifacts,
+        None,
+    )?;
+    assert_eq!(verified, payload);
+    assert_eq!(harness.head, DurableHead::default());
+    assert!(harness.tool_start_fences.is_empty());
+    assert_eq!(harness.commit(&batch)?, ack);
+    assert!(
+        harness
+            .tool_start_fences
+            .contains(&payload.tool_start_fences[0])
+    );
+    let second = CheckpointBatch::encode(&proposal(&harness.head, "batch_2"), &harness.limits)?;
+    let second_ack = harness.commit(&second)?;
+    let replay = batch.validate_append_with_payload(
+        &harness.grant,
+        &harness.head,
+        &harness.limits,
+        &harness.artifacts,
+        Some(&ack),
+    )?;
+    assert_eq!(replay, (ack.clone(), payload));
+    assert_eq!(harness.head, second_ack.head());
+
+    // A retained ACK never makes changed bytes trustworthy.
+    let mut corrupted = batch;
+    corrupted.payload_bytes = STANDARD.encode(b"{}");
+    assert_eq!(
+        corrupted
+            .validate_append_with_payload(
+                &harness.grant,
+                &harness.head,
+                &harness.limits,
+                &harness.artifacts,
+                Some(&ack),
+            )
+            .err()
+            .map(|error| error.code),
+        Some(ErrorCode::CheckpointConflict)
+    );
+    Ok(())
+}
+
+#[test]
 fn failed_commit_preserves_tentative_batch_and_durable_head() -> TestResult {
     let mut gate = CommitGate::new(grant(), DurableHead::default(), Limits::default())?;
     let mut harness = DurableHarness::new(grant());

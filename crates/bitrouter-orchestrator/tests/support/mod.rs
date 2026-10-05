@@ -42,17 +42,17 @@ impl DurableHarness {
     }
 
     pub fn commit(&mut self, batch: &CheckpointBatch) -> Result<CheckpointAck, CoreError> {
-        for reference in &batch.decode(&self.limits)?.checkpoint.artifact_refs {
-            self.require_artifact(reference, &mut BTreeSet::new())?;
-        }
         let retained = self.acknowledgements.get(&batch.identity.batch_id);
-        let ack = batch.validate_append(
+        let (ack, payload) = batch.validate_append_with_payload(
             &self.grant,
             &self.head,
             &self.limits,
             &self.artifacts,
             retained,
         )?;
+        for reference in &payload.checkpoint.artifact_refs {
+            self.require_artifact(reference, &mut BTreeSet::new())?;
+        }
         if let Some(previous) = self
             .batches
             .iter()
@@ -75,8 +75,7 @@ impl DurableHarness {
             ));
         }
         if self.head != ack.head() {
-            self.tool_start_fences
-                .extend(batch.decode(&self.limits)?.tool_start_fences);
+            self.tool_start_fences.extend(payload.tool_start_fences);
             self.batches.push(batch.clone());
             self.acknowledgements
                 .insert(batch.identity.batch_id.clone(), ack.clone());
