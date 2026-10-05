@@ -90,6 +90,12 @@ provider executor futures throughout the run; `agent.cancel` and
 `interrupt_agent` affect only the target subtree. While a cancellation is
 pending, it fences new dispatch without aborting accepted provider work.
 A definitively rejected request releases its provisional barrier.
+Persist cancellation `tool_start_fences` in the same transaction as the
+checkpoint, serialized against actual local tool starts; do not wait for a
+later `tool.cancel` message to revoke a pending approval. Root failure includes
+the affected descendants, and restoration reasserts retained cancellation
+fences. A fence neither undoes started work nor resolves an unknown outcome;
+report actual results under their original identities.
 Core still waits for SDK settlement and workspace tool cleanup before a
 terminal cancellation. A complete model result already returned to the SDK
 retains its usage evidence but cannot start new effects for an interrupted

@@ -1,5 +1,8 @@
 //! Committed cancellation stops only the affected live provider futures.
 
+#[path = "cancellation/start_fences.rs"]
+mod start_fences;
+
 use super::*;
 use bitrouter_orchestrator::core::session::AgentStatus;
 use std::collections::BTreeMap;

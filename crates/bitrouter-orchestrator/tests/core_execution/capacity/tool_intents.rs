@@ -5,7 +5,7 @@ use bitrouter_orchestrator::core::accounting::work::{CostWorkKind, CostWorkState
 use bitrouter_orchestrator::core::checkpoint::ToolStartFence;
 use bitrouter_sdk::language_model::types::ToolResultOutput;
 
-fn failed_capacity(state: &SessionSnapshot) -> TestResult {
+pub(super) fn failed_capacity(state: &SessionSnapshot) -> TestResult {
     let run = state.run.as_ref().ok_or("run")?;
     assert_eq!(
         run.resource_constraint,
@@ -21,7 +21,7 @@ fn failed_capacity(state: &SessionSnapshot) -> TestResult {
     Ok(())
 }
 
-async fn resolve_fault(
+pub(super) async fn resolve_fault(
     session: &CoreSession,
     harness: &Harness,
     port: &reconnect::FaultPort,
@@ -80,7 +80,7 @@ async fn resolve_fault(
     Ok(())
 }
 
-async fn occupy_root_and_spawn(
+pub(super) async fn occupy_root_and_spawn(
     session: &CoreSession,
     harness: &Harness,
     root: &str,

@@ -25,7 +25,7 @@ use super::activity::Activity;
 use super::allocation::{ContextAllocation, ContextSource};
 use super::checkpoint::{
     BatchIdentity, Checkpoint, CheckpointAck, CheckpointBatch, CheckpointPayload, CommitGate,
-    DurableEvent, DurableHead, sha256,
+    DurableEvent, DurableHead, ToolStartFence, sha256,
 };
 use super::collaboration::{self, Action, Applied, Assignment, Call, Mail, RuntimeWait};
 use super::protocol::{
@@ -3382,6 +3382,13 @@ impl CoreSession {
                 .filter(|record| record.received_state_revision == head.state_revision + 1)
                 .flat_map(|record| record.tool_start_fences.iter().cloned())
                 .chain(budget::start_fences(next, kind))
+                .chain(cancellation_start_fences(
+                    &live.state,
+                    next,
+                    kind == "session.restored",
+                ))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .collect(),
             events: responses::transition_events(
                 &live.state,
@@ -3563,6 +3570,44 @@ impl CoreSession {
         })?;
         rejection.map_or(Ok(()), Err)
     }
+}
+
+// Cancellation must revoke pending approvals in the same durable append as
+// its intent, before asynchronous tool.cancel delivery. Compare turn identities
+// rather than event names so runtime/model interrupts and root failure agree.
+// Restore reasserts fences for retained cancellation, including legacy heads.
+fn cancellation_start_fences(
+    before: &SessionSnapshot,
+    after: &SessionSnapshot,
+    restoring: bool,
+) -> Vec<ToolStartFence> {
+    after
+        .agents
+        .iter()
+        .filter_map(|(agent_id, agent)| {
+            let turn = agent.turn.as_ref()?;
+            let already_cancelled = before
+                .agents
+                .get(agent_id)
+                .and_then(|agent| agent.turn.as_ref())
+                .is_some_and(|prior| {
+                    prior.run_id == turn.run_id
+                        && prior.agent_turn_id == turn.agent_turn_id
+                        && prior.cancellation_requested
+                });
+            (turn.cancellation_requested && (restoring || !already_cancelled)).then_some(turn)
+        })
+        .flat_map(|turn| &turn.invocations)
+        .filter(|call| {
+            call.result
+                .as_ref()
+                .is_none_or(|result| result.status == ToolOutcome::EffectUnknown)
+        })
+        .map(|call| ToolStartFence {
+            invocation_id: call.dispatch.invocation_id.clone(),
+            attempt_id: call.dispatch.attempt_id.clone(),
+        })
+        .collect()
 }
 
 struct StepControl {

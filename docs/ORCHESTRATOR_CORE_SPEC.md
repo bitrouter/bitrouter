@@ -314,6 +314,12 @@ conflicting append, missing artifact or epoch mismatch is rejected.
 Checkpoint payloads also carry `tool_start_fences`, a list of exact
 `invocation_id` / `attempt_id` pairs scoped by the batch's session. On steering
 receipt, core includes every unresolved workspace invocation of the target turn.
+The proposal recording a run cancellation or subtree interruption includes the
+unfinished invocations of every newly cancelled turn, including unknown effects.
+Root failure applies the same barrier to its descendants. Restoration reasserts
+fences for retained cancellation before its acknowledgement; it does not infer
+an outcome for uncertain work. These are the same committed-cancel guarantees
+required in section 7, with no new wire fields or limit increases.
 The harness atomically persists these tombstones with the append and head,
 serialized against its local execution-start admission. Receiving `tool.execute`
 or creating a pending approval is not a start: the start boundary is durable local

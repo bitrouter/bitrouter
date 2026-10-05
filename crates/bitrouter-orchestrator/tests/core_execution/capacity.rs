@@ -8,6 +8,9 @@ mod tree_limits;
 #[path = "capacity/tool_intents.rs"]
 mod tool_intents;
 
+#[path = "capacity/later_prompt.rs"]
+mod later_prompt;
+
 struct StopDuringArchiveRead {
     harness: Arc<Harness>,
     command: ToolExecute,

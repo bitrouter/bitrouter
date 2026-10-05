@@ -50,8 +50,10 @@ intents and later model prompts already pass through `prepare_checkpoint`,
 low-quota rejection without tool execution. These are not unimplemented
 admission APIs. New tool-batch overflow after a committed model outcome now has
 failure/terminal ACK-loss and existing-tool cleanup evidence, described below.
-Accepted tool results before a later prompt overflows still need focused
-durable-failure, ACK-loss and cleanup evidence.
+Accepted tool results now have focused next-model-attempt capacity failure,
+ACK-loss and cleanup evidence. These cases commit the prepared history and
+model plan before rejecting the attempt; they do not establish every earlier
+context or prompt-construction admission boundary.
 
 The process fixture covers checkpoint boundaries with quiescent handoff and
 in-flight incomplete provider HTTP bodies with explicitly scripted trusted
@@ -3710,3 +3712,83 @@ documentation follow-up found no remaining actionable P1/P2. This increment
 changes a Rust admission helper and removes redundant fixture decoding; it
 does not change wire fields, limits, clocks or persistence ownership. New-head
 CI and the remaining C4–C6/A01–A23 acceptance work remain separate gates.
+
+
+## Cancellation start fences and later model admission
+
+The later-model capacity control exposed an unstarted-tool race in ordinary
+cancellation. Run/subtree cancellation and root failure recorded cancellation
+intent but omitted tool-start fences from the same checkpoint. A delayed
+approval could therefore start after the cancellation append but before the
+asynchronous `tool.cancel` message. Steering and resource failures already had
+this durable barrier.
+
+Checkpoint preparation now adds fences for newly cancelled turns, comparing
+both run and turn identity rather than individual event names. This covers run
+cancellation, runtime/model subtree interruption and descendants cancelled by
+root failure. Restoration reasserts fences for retained cancellation, including
+historical unfenced cancellation checkpoints. Unresolved `EffectUnknown`
+results remain included without being changed or consumed. Steering, resource
+and cancellation fences are deduplicated before encoding. Existing cleanup
+projection already reserves every unfinished invocation's fence; no limit,
+wire field or persistence ownership changes.
+
+Eight fault scenarios lose the run, runtime-interrupt, model-interrupt or
+root-failure ACK before/after persistence. They inspect durable harness fences
+before any cancel delivery, exercise start-before-cancel and cancel-before-start,
+retain real started-work obligations, and verify child/grandchild scope with
+unaffected parent/sibling admission. Stale cancellation creates no fences;
+reconnect adopts or replays the exact batch once. Two legacy recovery cases
+reassert fences for pending approvals or an unknown committed result. The
+unknown case stays `RecoveryRequired`; direct replacement of its result is
+rejected, and a second authenticated restore confirms the actual outcome while
+retaining the original uncertainty. Recovery timing is deterministic trusted
+fixture input, not a production remote-clock measurement.
+
+The later-model matrix accepts three serialized maximum-size text replies into
+history. The fourth step commits its prepared history and plan, then fails
+attempt admission without entering the provider executor. Failure and terminal
+ACK loss before/after persistence are covered for a root and for a child while
+its parent owns a Running and a WaitingApproval tool. Earlier operation receipts,
+call/result pairing, provider receipts, usage and cost identities survive.
+The SDK settles the rejected request once; that callback is distinct from a
+provider attempt and is not repeated on replay. Full-size serialized old-tool
+Stopped/result payloads remain admissible through cleanup and release; their
+referenced bodies are five-byte fixtures. Positive controls preserve the same
+history and other limits, increase checkpoint/wire capacity, and verify the
+provider receives the retained replies.
+
+These five new tests cover twenty scenarios. They do not replace physical
+storage reservation, broader recovery/transport fault conformance, measured
+remote Running handoff, real-provider accounting or production-harness
+acceptance. Prior head `090decfe` passed all jobs of CI 37322792865, including
+Linux, macOS and Windows. Final validation and independent review of this
+increment are recorded below when complete.
+
+
+Final source/test/documentation review found no remaining actionable P1/P2.
+The fixture now records starts before returning successful tool results,
+including the model-driven cancellation actor. Strict clippy and formatting
+passed. The final focused six-test group passed in 12.046 seconds (22.962
+seconds including compilation), including the five new tests and the existing
+live-provider interruption regression. Nextest marked the sufficient-capacity
+control as leaky in this run; its original report remains retained, and the
+full-suite result and isolated recheck are recorded below when complete.
+
+
+Final Rust 1.99.0 workspace/all-feature nextest passed 4173 tests with 22 skipped
+in 336.224 seconds (407.839 seconds including compilation, four test threads).
+There were no failed, timed-out or leaky tests in that full run. All five new
+tests passed under the full load; the three large-tree cases took 85.025,
+77.648 and 79.237 seconds. The sufficient-capacity control also passed its
+isolated workspace-feature rerun in 2.048 seconds (2.659 seconds including
+build checks), without a leak report. The earlier focused-run leak report
+remains recorded; these reruns do not establish its cause.
+
+Strict workspace/all-target/all-feature clippy passed in 6.547 seconds,
+strict rustdoc in 21.504 seconds, and workspace doctests passed five tests with
+one ignored. Rust 1.93.0 workspace/all-feature check passed in 22.001 seconds;
+formatting, diff and tracked-ignore checks passed. Independent source/test/
+documentation review found no remaining actionable P1/P2. New-head CI,
+remaining cross-transport/recovery pressure cases and full C4–C6/A01–A23
+acceptance still require their own evidence.
