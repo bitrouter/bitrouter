@@ -4,6 +4,9 @@ use bitrouter_orchestrator::core::protocol::{
 };
 use bitrouter_orchestrator::core::session::AgentStatus;
 
+#[path = "recovery/definite_confirmation.rs"]
+mod definite_confirmation;
+
 pub(super) fn capabilities(owner: &str) -> Capabilities {
     Capabilities {
         version: 1,

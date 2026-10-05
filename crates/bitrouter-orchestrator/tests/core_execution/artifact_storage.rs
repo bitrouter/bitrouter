@@ -3,6 +3,8 @@ use bitrouter_orchestrator::core::protocol::{ToolObservation, ToolStatus};
 
 #[path = "artifact_storage/repeated_restore.rs"]
 mod repeated_restore;
+#[path = "artifact_storage/storage_faults.rs"]
+mod storage_faults;
 #[path = "artifact_storage/unknown_order.rs"]
 mod unknown_order;
 

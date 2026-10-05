@@ -64,6 +64,10 @@ A live result or continuation may be retained, but execution stays in
 retained by the harness can be supplied during restoration even when its core
 checkpoint or ACK was lost. Keep the original uncertain evidence and operation
 identities; response replay does not authorize repeating the workspace effect.
+After recovery was blocked by missing or stopped evidence, include the confirmed
+result explicitly in the authenticated restore request even if its live receipt
+is already durable. Repeating that identical definite outcome confirms it;
+unknown results and other unresolved tools still block dependent execution.
 
 Artifact quota must cover current bodies, outstanding tool-evidence allowances
 and archive growth, including coexistence of acknowledged and replacement
@@ -75,6 +79,13 @@ this reservation; lowering an existing invocation's reply contract cannot.
 Absent allowances remain legacy state. Additional distinct artifact bodies,
 repeated archive observations and extra handoffs require fresh capacity. These
 logical checks do not reserve physical staging or historical-checkpoint storage.
+If archive staging or checkpoint append fails, retain the session handle and
+reconcile its exact grant/head. Reconnect can restage the same immutable bytes;
+partial staging is not a recoverable object. Preserve the old archive and all
+dependencies until the replacement checkpoint is durable and retention permits
+reclamation. When the original session handle survives, reconcile its pending
+batch before replacing it. Actual owner/process loss still uses revocation,
+confirmed quiescence and a new grant to restore durable state.
 
 An `effect_unknown` result and an `effect_unknown` status report have separate
 first-message reservations. Either may arrive first; preserve and submit both

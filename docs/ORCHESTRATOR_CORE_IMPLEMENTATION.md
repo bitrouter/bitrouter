@@ -62,9 +62,13 @@ calls, but does not establish production activity measurement. Repeated full
 Running observations now reach logical archive-quota refusal and still allow
 first essential stopped/unknown observations and full uncertain/definite
 outcomes. Result-before-observation ordering also has artifact/checkpoint
-pressure and ACK-loss evidence. Queue/steer/cancel combinations, other recovery
-growth boundaries and storage-full staging/commit faults remain independent
-core conformance work. This does not prove unlimited future handoff growth.
+pressure and ACK-loss evidence. Five deterministic storage-boundary fault cases
+now cover absent/partial/complete archive staging and checkpoint failure before
+or after append, preserving byte identity and cleanup. Queue/steer/cancel
+combinations, other recovery growth boundaries and production storage-full
+behavior remain independent conformance work. The injected staging limits and
+atomic failures do not establish physical leases, OS ENOSPC behavior or
+unlimited future handoff growth.
 
 Production storage reservations, historical checkpoint retention/reclamation,
 workspace read/write/shell barriers, actual provider cost reconciliation and
@@ -3858,3 +3862,75 @@ are preserved; historical snapshots already lacking required cleanup capacity
 can still be refused by conservative restoration admission. Parent head
 `8c880345` passed every job of CI 37341576194, including Linux, macOS and Windows.
 New-head CI and complete C4–C6/A01–A23 acceptance remain separate gates.
+
+
+## Archive storage faults and explicit definite-result confirmation
+
+Five deterministic fault scenarios exercise archive staging with zero bytes
+available, staging limited to its first 8192-byte chunk, completion without a
+successful send return, atomic checkpoint rejection after validation but before
+append, and an append whose ACK is lost. They use core-generated multi-chunk
+archives containing accepted recovery history and references to maximum-body
+stopped evidence. The checkpoint/store retain cancellation fences. Pre-append
+failures leave the durable head unchanged; a lost append ACK leaves only the
+local head behind the advanced durable head. Dependent execution remains blocked.
+Partial staging cannot be read
+as an artifact; complete roots and all dependencies are verified before append.
+
+Same-owner recovery resends identical archive references and chunk bytes.
+Before-append faults directly compare all retransmitted checkpoint bytes; an
+already appended batch is adopted once. The original root remains available,
+accepted operation/model/cost records and exact activity/tool histories survive,
+and no model or workspace tool is reexecuted. Existing cancellation tombstones
+are preserved; this fixture does not independently exercise insertion of new
+fences during a failed append. Full definite results, explicit subsequent
+restoration, cancellation and release complete cleanup.
+
+This path exposed a recovery trap: a live definite result received after
+missing or stopped evidence could be durably retained, yet repeating that same
+result in an authenticated restore never cleared `RecoveryRequired`. The
+confirmation predicate only recognized historical `EffectUnknown` observations;
+neither a first-result nor a changed-result branch applied to an identical
+retained outcome. The predicate now treats every validated explicitly supplied
+definite result as confirmation. Identity, conflict, payload and artifact
+checks precede it; aggregate unresolved-tool checks still dominate. The live
+receipt path and empty restore behavior are unchanged.
+
+Four focused cases cover missing/stopped evidence with ordinary execution or
+cancellation. Live results and an empty restore remain blocked; explicit
+identical confirmation completes the run or its cancellation without rerunning
+the tool. Two sibling cases keep missing/unknown outcomes blocked even beside a
+confirmed result, preserve prior uncertainty and finish only after full definite
+reconciliation. The isolated red regression and archive-cleanup failure logs
+retain proof of the original trap.
+
+Four new tests cover eleven scenarios. Their handoff timing is deterministic
+trusted fixture input; staging capacity and atomic failures are injected at the
+harness boundary. They do not prove OS ENOSPC, physical storage leases,
+historical-root reclamation, measured remote Running handoff or production
+harness acceptance. Full C4–C6/A01–A23 acceptance remains open. Final validation
+and independent review are recorded below when complete.
+
+
+Final Rust 1.99.0 workspace/all-feature nextest passed 4180 tests with 22 skipped
+in 333.480 seconds (334.037 seconds including build checks, four test threads).
+No failed, timed-out or leaky tests were reported. The four new tests passed
+under full load; the large-tree cases took 83.690, 75.823 and 78.158 seconds.
+The related archive/recovery/reconnect group passed 50 tests in 20.363 seconds
+(21.074 seconds including build checks), including the existing real-CLI
+process-crash matrix. The four new tests passed their focused run in 3.085
+seconds. Retained red logs show explicit identical confirmation failing before
+the repair, both in isolated missing-evidence recovery and archived stopped
+cleanup; earlier storage-test assertion corrections were not production bugs.
+
+Strict workspace/all-target/all-feature clippy passed in 30.954 seconds,
+strict rustdoc in 20.783 seconds, workspace doctests passed five tests with one
+ignored, and Rust 1.93.0 workspace/all-feature check passed in 21.686 seconds.
+Formatting, diff and tracked-ignore checks passed. Independent source/test
+review found no remaining actionable P1/P2; documentation now distinguishes
+archive references from checkpoint fences, durable from local heads after ACK
+loss, and surviving-owner reconciliation from process-loss takeover. Parent
+head `517997ae` passed every job of CI 37345155456, including Linux, macOS and
+Windows. Final independent source/test/documentation/log and PR-draft audit
+found no remaining actionable P1/P2. New-head CI and full C4–C6/A01–A23
+acceptance remain separate requirements.

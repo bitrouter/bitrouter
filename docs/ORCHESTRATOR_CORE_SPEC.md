@@ -378,6 +378,16 @@ total length. Only a complete verified durable artifact may be referenced by a
 committed checkpoint. Retries are idempotent; incomplete staging is never a
 recoverable artifact. The local port obeys the same availability rules.
 
+Staging failure or loss of its completion signal does not authorize dropping a
+retained pending checkpoint or generating new execution identities. When the
+original core session handle survives, retain it for exact head reconciliation.
+Same-owner reconnect can stage
+the same immutable archive again and retransmit the original pending batch;
+an already durable batch is adopted by its exact head. Existing committed
+roots and their dependencies remain available throughout replacement staging.
+Actual owner/process loss follows the takeover rules below: revoke the old
+authority, establish quiescence and restore under a new grant from durable state.
+
 The local `HarnessPort::read_artifact(reference, offset, max_bytes)` returns a
 bounded range of a complete immutable object. It is a required port method.
 Before returning bytes or acknowledging a checkpoint referencing an archive
@@ -472,6 +482,10 @@ Recovery rules:
 - An execution intent without a confirmed outcome is reconciled at the harness.
   Unknown shell/write effects block dependent work; a synthetic error does not
   establish that the operation never happened.
+  Explicit authenticated restoration can confirm an identical retained live
+  definite result after missing or stopped evidence introduced uncertainty,
+  without requiring a historical `effect_unknown` observation. An unknown
+  result or another unresolved invocation still blocks dependent work.
 - A model attempt without committed complete output is interrupted/uncertain.
   No partial tool calls are used. A later retry is a new attempt with previous
   unknown spend retained, not a replay of a known successful execution.

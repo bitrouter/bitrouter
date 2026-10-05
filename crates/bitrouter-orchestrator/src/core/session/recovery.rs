@@ -696,10 +696,11 @@ fn reconcile_tools(
                                 ToolOutcome::NotExecuted | ToolOutcome::Denied
                             ));
                 }
-                // A later live result remains blocked after effect_unknown.
-                // Explicit authenticated restoration confirms that outcome.
-                reconciled |= result.status != ToolOutcome::EffectUnknown
-                    && tool_status::observed(call, ToolStatus::EffectUnknown);
+                // A live result cannot clear earlier recovery uncertainty,
+                // including missing/stopped evidence without an EffectUnknown
+                // observation. This explicit authenticated report confirms even
+                // an identical retained outcome; unresolved siblings still block.
+                reconciled |= result.status != ToolOutcome::EffectUnknown;
                 call.result = Some(result.clone());
             }
             if let Some(result) = &call.result {
