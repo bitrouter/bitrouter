@@ -115,3 +115,48 @@ reopen regression retains inventories/results, upgrades a format-2 envelope on
 append, and proves cold loading does not reconnect after a skill file changes.
 Scripted provider output and stopped-source prefix tests are local contract
 proof; they do not establish credentialed-provider or abrupt-owner recovery proof.
+
+## Source and validation, 2026-10-05
+
+Implementation source: `321ccaad5fe69f7adb39e0230a11f6e1851ff84d`, based on
+PR #945 head `fb243ee5e18dde10aaec3cfccf96f6b6a7e34bc0`. PR #956 is not a
+dependency. Validation ran locally on macOS arm64 with Rust 1.97.0,
+`CARGO_INCREMENTAL=0`, `CARGO_PROFILE_DEV_DEBUG=0` and
+`CARGO_PROFILE_TEST_DEBUG=0`.
+
+| Check | Result |
+| --- | --- |
+| `cargo nextest run --all-features` | 3,733 passed, 22 skipped; no reported leaks; run `4c607e51-8ae7-4a97-9ae8-948e0604f1ac` |
+| `cargo test --all-features --doc` | 5 passed, 1 ignored |
+| `cargo clippy --all-features --all-targets -- -D warnings` | Passed |
+| `RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps` | Passed |
+| `cargo fmt -- --check` and `git diff --check` | Passed |
+| Three plugin JSON manifests; changed Markdown relative links/fences | Passed; shippable `SKILL.md` remains 199 lines |
+
+The native regressions verify inventory commit before model sampling, denied and
+read-only calls, native collisions and invalid pagination, observed in-flight
+cancellation, tool-list invalidation and inventory commit failure. Real stdio
+runs in the workspace; both its parent and a spawned descendant are gone before
+Turn completion. Cancelling an observed stalled initialization joins the process
+before the database owner is marked stopped. A stopped-source checkpoint prefix
+reuses the completed MCP result and rejects changed connection bindings. The
+SQLite regression upgrades an existing format-2 envelope on append, reopens the
+stored inventory/results after changing the skill body and observes no new MCP
+requests. MCP check also exercises legacy initialization and configured modern
+server discovery using the same client.
+
+During implementation, initialization cancellation initially lacked a joinable
+cleanup owner; a later redundant-kill error also incorrectly blocked a cancelled
+Turn. The final owner retains the child across future cancellation and proves
+scope exit after waiting. Both cancellation and descendant-exit regressions pass.
+Clippy found a function after the test module and an unnecessary cloned slice;
+both were corrected before the final run. The macOS linker still emits its
+existing large unwind-section warning, and Cargo reports a future-compatibility
+notice for `proc-macro-error2`; neither prevented the recorded checks.
+
+Run logs were retained locally under `/tmp/pr945-321ccaad-{nextest,doctest,rustdoc}.log`
+and `/tmp/pr945-harness-clippy-complete.log`; these are reproduction provenance,
+not committed artifact downloads. Hosted CI, Windows/Linux process behavior,
+credentialed MCP/provider usage and abrupt-owner recovery are separate gates.
+Skills activation/material delivery, Core context/value selection and inbound
+ACP remain subsequent work.

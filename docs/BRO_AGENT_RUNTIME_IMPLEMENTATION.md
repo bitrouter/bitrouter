@@ -1,14 +1,20 @@
 # BRO runtime acceptance and evidence
 
-Updated: 2026-10-04. Contract: [standalone runtime](BRO_AGENT_RUNTIME_SPEC.md).
-This is the entry point for source-specific evidence. Results below are retained
-from existing runs; the documentation/archive cleanup does not rerun Rust checks,
-provider calls or hosted CI and does not extend their source/platform scope.
+Updated: 2026-10-05. Contract: [standalone runtime](BRO_AGENT_RUNTIME_SPEC.md).
+This is the entry point for source-specific evidence. Each linked record identifies
+its source and validation boundaries; earlier provider/platform evidence is not
+reattributed to later changes.
 
 ## Latest recorded integration
 
-[Conversation UI acceptance](BRO_CONVERSATION_UI_IMPLEMENTATION.md) is the
-single detailed validation record for source `485728f9`, including main `d8b66a9e`
+[Native Harness resources](BRO_HARNESS_RESOURCES.md#source-and-validation-2026-10-05)
+is the latest local validation record for source `321ccaad`, based on PR #945's
+`fb243ee5`. It covers production MCP execution, runtime-owned skills discovery,
+format-2 reading/atomic format-3 append and the final workspace checks. Core
+selection, skills activation and inbound ACP remain subsequent work.
+
+[Conversation UI acceptance](BRO_CONVERSATION_UI_IMPLEMENTATION.md) retains the
+earlier detailed validation record for source `485728f9`, including main `d8b66a9e`
 and the six-tool integration. Documentation-only ledger head is `65555b12`.
 It contains the final macOS/Rust 1.97.0 workspace results, commands, process/PTY
 coverage and earlier leak/preflight/suspend fixture failures.
@@ -22,6 +28,7 @@ and reruns remain in the linked record, not converted to successful first attemp
 
 | Contract | Executable evidence |
 | --- | --- |
+| MCP inventory, permissions, process cleanup and resource-bound continuation | `service/tests/harness.rs`, `apps/bitrouter/tests/native_harness_resources.rs`, `apps/bitrouter/tests/harness_mcp_check.rs` |
 | Legal context, model responses, ordered tools, budgets and commit barriers | `agent.rs` tests; `service.rs` tests |
 | FIFO, targeted cancellation, steering and approval/grant binding | `service/thread_tests.rs`, `service/steering_tests.rs` |
 | Owner fencing, shared workspace cleanup and process loss | `service/ownership_tests.rs`, `service/workspace.rs` tests, `service/process_recovery_tests.rs` |
