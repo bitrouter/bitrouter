@@ -64,9 +64,12 @@ first essential stopped/unknown observations and full uncertain/definite
 outcomes. Result-before-observation ordering also has artifact/checkpoint
 pressure and ACK-loss evidence. Five deterministic storage-boundary fault cases
 now cover absent/partial/complete archive staging and checkpoint failure before
-or after append, preserving byte identity and cleanup. Queue/steer/cancel
-combinations, other recovery growth boundaries and production storage-full
-behavior remain independent conformance work. The injected staging limits and
+or after append, preserving byte identity and cleanup. Four remote
+queue/steer/cancel sequences now cover repeated same-owner reconnect
+with pre-append loss, post-append ACK loss and alternating loss modes; the
+control-path evidence is detailed below. Broader pressure combinations, other
+recovery growth boundaries and production storage-full behavior remain
+independent conformance work. The injected staging limits and
 atomic failures do not establish physical leases, OS ENOSPC behavior or
 unlimited future handoff growth.
 
@@ -3934,3 +3937,54 @@ head `517997ae` passed every job of CI 37345155456, including Linux, macOS and
 Windows. Final independent source/test/documentation/log and PR-draft audit
 found no remaining actionable P1/P2. New-head CI and full C4–C6/A01–A23
 acceptance remain separate requirements.
+
+
+## Remote queue, steering and cancellation across lost ACKs
+
+A new independent HTTP/WebSocket client test drives four sequences through the
+shipped managed API. Each sequence loses the ACK at six operations: two queued
+inputs, cancellation of the second queued run, targeted steering of the active
+turn, cancellation of that turn, and explicit queue resume. The sequences use
+all pre-append losses, all post-append losses, and both alternating orders.
+The original owner remains alive; every reconnect retains its grant and the
+harness's actual durable head.
+
+For all 24 boundaries the exact proposed batch occurs once in the retained
+journal. Exact command replay preserves the original expected revision and
+returns the same receipt; `operation.get` returns it too. Reusing the operation
+ID with a different expected revision fails with `OperationConflict` and leaves
+the receipt intact. Provider request counts remain at one while each proposal
+awaits ACK and after its old socket closes. Buffered execute/cancel frames are
+observed during close, so the final delivery count includes the close drain.
+
+The queued inputs retain FIFO order and reserve identities without allocating
+cost work. Cancelling one leaves the other paused; pending steering does not
+reach model history after cancellation. Resume is rejected while the delivered
+tool is unresolved. After a definite not-executed result, the original run
+becomes cancelled, and explicit resume activates the remaining queued run with
+its original run/turn identity. It completes with one additional model request.
+Both immutable enqueue receipts survive activation and cancellation, and the
+original HTTP exchange remains replayable after control operations.
+
+This client retains checkpoint fences before ACK and checks their presence. It
+has no real workspace tool runner or approval implementation. The test proves
+observed delivery, journal and scheduling behavior, not a production start
+barrier, process takeover, remote Running clock handoff or a slow-consumer
+pressure combination. Those acceptance requirements remain open. No production
+behavior or wire contract changed in this increment.
+
+Final Rust 1.99.0 workspace/all-feature nextest: **4181 passed, 22 skipped**,
+337.172 seconds with four test threads (337.720 seconds including build checks).
+No failed, timed-out or leaky tests. The new sequence test passed under full
+load in 4.957 seconds; the three large-tree cases passed in 84.339 / 75.271 /
+81.591 seconds. The managed API group passed all 27 tests in 23.821 seconds
+(29.091 seconds including build checks).
+
+Strict workspace/all-target/all-feature clippy (2.083 seconds), strict rustdoc
+(7.392 seconds), doctests (five passed, one ignored), Rust 1.93.0 workspace
+all-feature check, formatting, diff and tracked-ignore checks passed. Independent
+source/test/document review found no remaining actionable P1/P2 after correcting
+the close-drain observation gap and narrowing the approval claim. PR review
+preserves the full acceptance scope and distinguishes archive contents from
+checkpoint/store authority. New-head CI and final whole-goal acceptance remain
+separate requirements.

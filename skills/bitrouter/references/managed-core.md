@@ -52,6 +52,16 @@ the session or accepted operation identity. Managed HTTP admission remains
 closed until binding completes. `session.head` is read-only and requires the
 actual current durable head; it does not cancel an active provider request.
 
+For uncertain `input.enqueue`, `input.steer`, `run.cancel` or `queue.resume`,
+retain the original command, including `expected_state_revision`. Reconcile the
+actual persisted head, then query `operation.get` or retry that exact command.
+Changing its expected revision under the same operation ID is a conflict, even
+when the new revision equals the current head. An enqueue receipt reserves the
+run/turn IDs and remains immutable after activation or cancellation. Cancelling
+a queued run pauses the remaining queue; resume only after active execution and
+effects have settled. A steering receipt records acceptance, not application to
+model context; cancellation may settle it without applying its text.
+
 On core process replacement, retain the harness journal and ownership grants
 independently of the lost process. Validate its exact durable head, obtain the
 new core instance from capabilities and restore with a strictly higher epoch.

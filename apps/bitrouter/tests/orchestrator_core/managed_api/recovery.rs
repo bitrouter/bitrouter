@@ -12,6 +12,9 @@ const GUARD: Duration = Duration::from_secs(60);
 #[path = "recovery/process.rs"]
 mod process;
 
+#[path = "recovery/control.rs"]
+mod control;
+
 struct Peer {
     socket: Socket,
     grant: OwnershipGrant,
