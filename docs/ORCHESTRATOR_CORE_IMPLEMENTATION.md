@@ -24,10 +24,10 @@ mock-provider demonstration does not establish production integration.
 | C1 | Root execution, shared prepared model pipeline, acknowledged step/output/tool/result barriers | Implemented and independently reviewed; validation below |
 | C2 | Bounded concurrent child scheduling, durable collaboration, fair waits and cancellation | Implemented and independently reviewed; validation below |
 | C3 | Context manifests and joint deterministic routing, hard feasibility and actual execution receipts | Implemented for the declared in-process paths, with independent reviews and the bounded exit evidence below; complete cross-stage acceptance remains open |
-| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | In progress: snapshot restoration, live reconnect, late provider evidence, root queue, steering, live observations, active-time cleanup, ownership release, cumulative activity handoff, frozen tool payload/body bounds, cleanup projection, recovery archives, logical artifact admission, durable capacity failure, canonical output admission, prospective receipt/delivery contributions and first recovery-observation archive reserves implemented; complete physical-storage/repeated-recovery cleanup guarantees and the explicit fault evidence below remain |
-| C5 | Managed Responses and authenticated harness channel over the same core operations | In progress: durable response exchanges, atomic result continuation, virtual-key authentication, bounded registry, incremental HTTP/SSE projection and separate bounded WebSocket control lane connected to the service host; independent clients cover binding/release ACK loss, released-epoch restoration and read-only head queries during provider work; remote running-tool clock handoff, broader recovery/pressure conformance and acceptance remain |
+| C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Core snapshot/process recovery, live reconnect, queue/steer/cancel, uncertain-effect blocking, activity handoff, capacity failure and logical cleanup reservations have executable evidence. Remote Running-tool handoff and production execution/storage guarantees remain; see acceptance exits R1, R3 and R4 |
+| C5 | Managed Responses and authenticated harness channel over the same core operations | Managed exchanges, atomic continuation, authentication, bounded registry/output and a separate control lane are connected to the host and exercised by independent clients. Remote Running-tool handoff and the production managed-harness entry point remain; see R1 and R2 |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
-| Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Draft PR #956 submitted; stage reviews and validation recorded below; full acceptance audit, final independent review and final-head CI remain required |
+| Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Draft PR #956 submitted; stage reviews and source/test acceptance audit recorded. Production acceptance evidence, final whole-change review and final-head CI remain required |
 
 Each stage receives an independent review. Findings and fixes are recorded with
 the stage's actual validation commands. The final independent review checks the
@@ -41,53 +41,39 @@ remote/in-process parity, real concurrency, durable output and effect barriers,
 crash/ACK-loss recovery, caller isolation, provider accounting, and actual
 production-harness integration. No completed subset narrows the original scope.
 
-### Open acceptance work after the cross-transport increment
+### Remaining acceptance work after the source audit
 
-The source audit distinguishes existing admission from missing proof. New tool
-intents and later model prompts already pass through `prepare_checkpoint`,
-`capacity::check` and `artifact_storage::check` before acceptance/dispatch.
-`artifact_storage::recovery_archive_reservation_precedes_tool_dispatch` covers
-low-quota rejection without tool execution. These are not unimplemented
-admission APIs. New tool-batch overflow after a committed model outcome now has
-failure/terminal ACK-loss and existing-tool cleanup evidence, described below.
-Accepted tool results now have focused next-model-attempt capacity failure,
-ACK-loss and cleanup evidence. Those cases commit the prepared history and
-model plan before rejecting the attempt. A separate expanded-prompt matrix now
-rejects earlier, at input-count intent or model-plan admission, preserving
-accepted history and existing-tool cleanup across failure ACK loss. This does
-not establish every context reconstruction or prompt-construction boundary.
+The [A01–A23 evidence ledger](ORCHESTRATOR_CORE_ACCEPTANCE.md) maps every row
+to source and named tests at `23008f8d`. It separates existing behavior from
+missing implementation and production evidence, with five finite exit groups:
 
-The process fixture covers checkpoint boundaries with quiescent handoff and
-in-flight incomplete provider HTTP bodies with explicitly scripted trusted
-activity input. The latter retains uncertain spend without applying partial
-calls, but does not establish production activity measurement. Repeated full
-Running observations now reach logical archive-quota refusal and still allow
-first essential stopped/unknown observations and full uncertain/definite
-outcomes. Result-before-observation ordering also has artifact/checkpoint
-pressure and ACK-loss evidence. Five deterministic storage-boundary fault cases
-now cover absent/partial/complete archive staging and checkpoint failure before
-or after append, preserving byte identity and cleanup. Four remote
-queue/steer/cancel sequences now cover repeated same-owner reconnect
-with pre-append loss, post-append ACK loss and alternating loss modes; the
-control-path evidence is detailed below. Broader pressure combinations, other
-recovery growth boundaries and production storage-full behavior remain
-independent conformance work. The injected staging limits and
-atomic failures do not establish physical leases, OS ENOSPC behavior or
-unlimited future handoff growth.
+1. **R1:** implement a measured remote Running-tool restoration bridge with
+   trustworthy activity coverage, clock mapping and lifecycle draining.
+2. **R2:** connect the chosen production managed-harness entry point to one core
+   scheduler. The legacy `ThreadService` remains a separate execution loop;
+   native SDK parity tests do not prove this adapter exists.
+3. **R3:** verify the production harness's atomic persistence, start fences,
+   approvals, workspace barriers and effect reconciliation.
+4. **R4:** verify production storage admission, retained dependency/history
+   handling and supported legacy cleanup under storage refusal.
+5. **R5:** complete the real task/provider and measured host-pressure run,
+   followed by integrated acceptance, final independent review and final-head CI.
 
-Production storage reservations, historical checkpoint retention/reclamation,
-workspace read/write/shell barriers, actual provider cost reconciliation and
-physical memory measurements need evidence from the relevant implementation.
-Core-owned buffer accounting does not constrain arbitrary allocations made
-inside a custom executor or callback before it returns.
+This ledger supersedes open-ended planning phrases in earlier stage records;
+their bounded results and limitations remain valid. Admission, reconstruction,
+repeated recovery, ACK loss and slow-consumer tests already provide substantial
+core evidence. Additional combinations are justified by an identified missing
+invariant or failure, not by the existence of untested permutations. Physical
+storage guarantees need a concrete host implementation, but the specification
+does not mandate an API named physical lease, unlimited historical retention,
+or core control over every allocation inside arbitrary callbacks. R4/R5 still
+require storage and host-memory evidence for the supported configuration.
 
-Remote Running-tool restoration remains explicitly unsupported. Independent
-monotonic clocks and uncertain one-way transport delay cannot turn message
-arrival or RTT into an exact activity stop time. A usable bridge requires a
-trusted measurement domain, complete activity coverage through replacement
-entry and a lifecycle drain; unknown coverage must still reject restoration.
-Quiescent restoration and in-process measured handoff do not establish that
-remote capability. These gaps do not narrow A01–A23 or replace A23 with mocks.
+Remote Running-tool restoration remains explicitly unsupported until R1.
+Message arrival, RTT or summed attempt durations cannot replace the spec's
+activity measurement. The process fixture uses scripted handoff input; it does
+not establish production measurement. A23 and C6 remain open. This audit changes
+neither the protocol nor the frozen acceptance scope.
 
 ## Validation environment
 

@@ -15,6 +15,8 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   multi-agent API, recovery protocol, stages and acceptance criteria.
 - [`ORCHESTRATOR_CORE_IMPLEMENTATION.md`](ORCHESTRATOR_CORE_IMPLEMENTATION.md) —
   Stage plan, independent review findings, validation evidence and remaining gates.
+- [`ORCHESTRATOR_CORE_ACCEPTANCE.md`](ORCHESTRATOR_CORE_ACCEPTANCE.md) —
+  A01–A23 source/test evidence and remaining core/harness integration exit criteria.
 - [`GUARDRAILS_EXTENSION.md`](GUARDRAILS_EXTENSION.md) — Independent input checker
   setup, migration boundaries, distribution and process-level validation.
 - [`GUARDRAILS_EXTENSION_ACCEPTANCE.md`](GUARDRAILS_EXTENSION_ACCEPTANCE.md) —
