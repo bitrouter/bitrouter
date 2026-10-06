@@ -16,10 +16,9 @@ use crate::store::{
 use crate::thread::{
     PermissionProfile, RecoveryBlocker, ThreadHistoryRequest, ThreadObservation, ThreadStatus,
 };
-use crate::turn::{
-    ApprovalAnswer, CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus,
-    VerificationStatus,
-};
+#[cfg(unix)]
+use crate::turn::VerificationStatus;
+use crate::turn::{ApprovalAnswer, CancelTurnRequest, SteeringRequest, SteeringStatus, TurnStatus};
 
 fn recovery_request(
     view: &crate::thread::ThreadView,

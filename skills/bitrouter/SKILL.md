@@ -16,6 +16,8 @@ metadata:
 
 # BitRouter
 BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4. Native CLI tasks use bounded read workers and database execution records; see `references/cli.md` for permissions and restart limitations.
+
+Native BRO execution commits task/model/tool facts to the database; `references/cli.md` covers capabilities and restart limitations.
 Custom durable harness clients use the negotiated managed-core HTTP/WebSocket profile; see `references/managed-core.md` for binding, ACKs, results and current limits.
 
 ## Activate in one pass
@@ -29,8 +31,7 @@ bro providers list     # ID  MODELS  ACTIVE  API_BASE
 ```
 
 These emit JSON by default (`--human` is readable). Branch on the result:
-missing command → §2; no active providers → §3; stopped daemon → `start`; both
-ready → §5.
+missing command → §2; no active providers → §3; stopped daemon → `start`; both ready → §5.
 
 ### 2. Install
 ```bash
@@ -46,7 +47,6 @@ Verify with `bro --version`; on failure read `references/diagnose.md`.
 A human runs `bro` to complete onboarding using searchable Up/Down lists of registry
 providers (including BitRouter Cloud), ACP harnesses and actions. Credentials alone do not mark setup complete.
 For scripted setup:
-
 ```bash
 bro init --yes --use-detected --harness codex --after exit
 ```
@@ -70,7 +70,6 @@ bro providers login bitrouter      # hosted; same sign-in as `cloud login`
 ```
 
 Auth is catalog-derived; `references/providers.md` lists each login method.
-
 **b. Hosted BitRouter for everything else.** Signing in adds a managed
 `bitrouter` provider to this daemon; it is not a second deployment.
 

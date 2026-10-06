@@ -5,7 +5,9 @@ use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::read::{directory_name, read_page, sort_directory_entries};
+use super::read::read_page;
+#[cfg(unix)]
+use super::read::{directory_name, sort_directory_entries};
 use super::*;
 use crate::agent::{RunEvent, ToolMode};
 use crate::store::EffectStatus;

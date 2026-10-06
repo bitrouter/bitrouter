@@ -7,9 +7,10 @@ mock-provider demonstration does not establish production integration.
 ## Baseline and integration
 
 - The specification was frozen against main `d93ed73`.
-- Existing native BRO work is in PR #945; the six-tool and durable-record work
-  is stacked in PR #951 (integrated through `9981d7a2`; original core base
-  `a58f40ca`). Its execution loop predates the core/harness
+- Existing native BRO work is in PR #945. PR #951's six-tool and durable-record
+  work has merged into #945; the core branch now integrates #945 at `6298d781`
+  and targets `codex/bitrouter-orchestrator`. Earlier integration used `9981d7a2`
+  (original core base `a58f40ca`). The native execution loop predates the core/harness
   split. Reuse its tools and storage through a harness adapter, with a single
   managed scheduler owning each session. Keep transparent external ACP separate.
 - All changes remain on an isolated implementation branch. Do not change the
@@ -27,7 +28,7 @@ mock-provider demonstration does not establish production integration.
 | C4 | Crash restoration, epoch/head reconciliation, queue/steer/cancel and uncertain effects | Core snapshot/process recovery, live reconnect, queue/steer/cancel, uncertain-effect blocking, activity handoff, capacity failure and logical cleanup reservations have executable evidence. Remote Running-tool handoff and production execution/storage guarantees remain; see acceptance exits R1, R3 and R4 |
 | C5 | Managed Responses and authenticated harness channel over the same core operations | Managed exchanges, atomic continuation, authentication, bounded registry/output and a separate control lane are connected to the host and exercised by independent clients. Remote Running-tool handoff and the production managed-harness entry point remain; see R1 and R2 |
 | C6 | Production harness, independent client, real-provider and pressure conformance | Pending |
-| Delivery | Independent stage reviews, complete acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | Draft PR #956 submitted; stage reviews and source/test acceptance audit recorded. Production acceptance evidence, final whole-change review and final-head CI remain required |
+| Delivery | Independent stage reviews, acceptance audit, all-feature tests/doctests/clippy/fmt, PR and CI | PR #956 ready for review; core now integrates the latest native harness base. Stage and delivery reviews are recorded. Production conformance remains follow-up work; check results refer to their actual revision. |
 
 Each stage receives an independent review. Findings and fixes are recorded with
 the stage's actual validation commands. The final independent review checks the
