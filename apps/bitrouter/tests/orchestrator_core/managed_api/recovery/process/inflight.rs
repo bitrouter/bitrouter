@@ -148,7 +148,7 @@ async fn inflight_crash(complete_json: bool) -> Result<()> {
     peer.send(peer.command("bind", "session.bind", serde_json::to_value(bind)?))
         .await?;
     peer.ready().await?;
-    let response = reqwest::Client::builder()
+    let response = fixture_http_client()
         .timeout(GUARD)
         .build()?
         .post(format!("{}/v1/responses", original.base))

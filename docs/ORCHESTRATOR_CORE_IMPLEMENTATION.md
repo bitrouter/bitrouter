@@ -4023,3 +4023,28 @@ review found no actionable P1/P2; it requested the now-present non-vacuous
 successful transform-record assertion and the precise model-plan commit and
 positive-control limit descriptions. New-head CI and full C4–C6/A01–A23
 acceptance remain separate requirements.
+
+
+## Stack rebase and test transport review
+
+Core history is rebased onto native PR #945 at `6298d781`, which includes
+merged PR #951. The old merge-only integration edits are retained in an
+explicit commit; the resulting tree was byte-identical to `3f45ff7f` before
+the following test fixes. Independent review verified ancestry and tree equality.
+
+CI 37463923016 passed Windows and Linux but macOS timed out after three seconds
+in `stdio_turn_binds_workspace_and_joins_process_before_settlement`. The shared
+service-test wait guard now allows ten seconds on every platform, accommodating
+the existing five-second MCP cleanup budget plus process startup and settlement.
+The terminal-state, durable-record and child-process liveness assertions remain.
+Product timeouts and process cleanup behavior are unchanged.
+
+The seven `rust/cleartext-transmission` findings (alerts 193–199) point to
+managed API fixture URL construction. These URLs contain only literal loopback
+addresses and ephemeral ports. Authentication keys are generated for isolated
+fixture databases; correlation keys are confined to fixture temporary homes and
+are not transmitted in URLs. Independent source review classified these as
+test-fixture false positives. All managed fixture HTTP clients now disable
+ambient proxies and automatic redirects, keeping their requests at the intended
+listeners. No security rule or production transport validation is suppressed.
+Final validation and GitHub check results are reported on PR #956.

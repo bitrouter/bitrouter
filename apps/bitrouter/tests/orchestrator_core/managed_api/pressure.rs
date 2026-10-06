@@ -98,7 +98,8 @@ async fn oversized_ingress_and_zero_output_capacity_do_not_accept_work() -> Resu
         ..Limits::default()
     })?;
     assert_eq!(post(&fixture, &fixture.key, &request).await?.status(), 413);
-    let missing_beta = reqwest::Client::new()
+    let missing_beta = fixture_http_client()
+        .build()?
         .post(format!("{}/v1/responses", fixture.base))
         .bearer_auth(&fixture.key)
         .json(&create("missing-header"))

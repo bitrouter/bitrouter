@@ -67,7 +67,8 @@ async fn revoked_or_expired_keys_cannot_accept_http_or_existing_channel_work() -
         key.update(&fixture.db).await?;
         let denied = post(&fixture, &fixture.key, &create("denied")).await?;
         assert_eq!(denied.status(), 401);
-        let caps = reqwest::Client::new()
+        let caps = fixture_http_client()
+            .build()?
             .get(format!("{}/v1/orchestrator/capabilities", fixture.base))
             .bearer_auth(&fixture.key)
             .send()

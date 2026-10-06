@@ -46,6 +46,14 @@ impl Drop for Fixture {
     }
 }
 
+// These clients send ephemeral fixture credentials only to loopback listeners.
+// Ignore ambient proxies and reject redirects so requests stay at those listeners.
+fn fixture_http_client() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+}
+
 async fn fixture() -> Result<Fixture> {
     fixture_with_output(None).await
 }
@@ -327,7 +335,8 @@ fn create(operation: &str) -> Value {
 }
 
 async fn post(fixture: &Fixture, key: &str, body: &Value) -> Result<reqwest::Response> {
-    Ok(reqwest::Client::new()
+    Ok(fixture_http_client()
+        .build()?
         .post(format!("{}/v1/responses", fixture.base))
         .bearer_auth(key)
         .header("bitrouter-beta", "orchestrator_core=v1")
@@ -339,7 +348,7 @@ async fn post(fixture: &Fixture, key: &str, body: &Value) -> Result<reqwest::Res
 #[tokio::test]
 async fn remote_api_binds_auth_and_normalizes_channel_http_results() -> Result<()> {
     let fixture = fixture().await?;
-    let client = reqwest::Client::new();
+    let client = fixture_http_client().build()?;
     assert_eq!(
         client
             .get(format!("{}/v1/orchestrator/capabilities", fixture.base))
@@ -570,7 +579,7 @@ async fn abandoned_sse_consumer_keeps_execution_and_replays_attributed_frames() 
 async fn unmanaged_inference_stays_available_and_unknown_extensions_fail_before_execution()
 -> Result<()> {
     let fixture = fixture().await?;
-    let client = reqwest::Client::new();
+    let client = fixture_http_client().build()?;
     let ordinary = client
         .post(format!("{}/v1/responses", fixture.base))
         .json(&json!({"model":"fixture-model","input":"ordinary"}))

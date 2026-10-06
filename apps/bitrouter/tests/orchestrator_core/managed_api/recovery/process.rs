@@ -140,7 +140,7 @@ models:
             .kill_on_drop(true)
             .spawn()?;
         let base = format!("http://{address}");
-        let client = reqwest::Client::builder()
+        let client = fixture_http_client()
             .timeout(Duration::from_secs(1))
             .build()?;
         let capability = tokio::time::timeout(GUARD, async {
@@ -211,7 +211,7 @@ impl Host {
 }
 
 async fn raw_post(host: &Host, key: &str, body: &Value) -> Result<reqwest::Response> {
-    Ok(reqwest::Client::builder()
+    Ok(fixture_http_client()
         .timeout(GUARD)
         .build()?
         .post(format!("{}/v1/responses", host.base))
