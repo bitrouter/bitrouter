@@ -5,6 +5,22 @@ Implementation follows the
 batches from the final AI contract. The initial source baseline is PR #953 head
 `8e267e720795b1b770bd1a72c758fda8f909f612`.
 
+Current delivery on 2026-10-06: [Draft/WIP PR #962](https://github.com/bitrouter/bitrouter/pull/962)
+targets `main`. The review branch includes main through `31cf68ed`, with the
+AI documentation and main's daemon-upgrade index entries both retained.
+Post-sync local validation passed: 3,730 workspace tests, 22 skipped; independent
+doctests 6 passed/1 ignored; strict Clippy including tests, formatting, strict
+Rustdoc, distribution checks, five isolated AI feature test builds/dependency
+trees, SDK default/config-file builds and pinned public API guards. SDK public
+dependencies remain 16 with no telemetry types. The test run uses two threads
+and the established application-only debug-info override.
+
+The batch sections below are historical capture records; their local/uncommitted
+status statements describe those captures. The implementation snapshot is now
+committed and pushed for WIP review. Hosted CI is tracked on the PR separately.
+Real-provider/OAuth/Keychain validation, external consumer migration and remaining
+spec acceptance are still unfinished; the PR is not a release or merge request.
+
 ## Batch 1: model semantic ownership and history corrections
 
 Implemented and locally validated on 2026-10-05.
