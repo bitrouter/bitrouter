@@ -1,13 +1,17 @@
 # Guardrails extension: implementation and acceptance
 
-> Current scope: compiled-only SDK extensions (ROUTER_EXTENSION_SPEC v0.7).
+> Release update (2026-10-05): #923 merged, and the implementation shipped in
+> v1.0.0-alpha.33. The dated evidence below records the earlier local checks.
+
+> Scope of the dated checks: compiled-only SDK extensions
+> (ROUTER_EXTENSION_SPEC v0.7).
 > All HTTP/service/probe results below are historical evidence for superseded
-> implementations. They do not validate the current change. Current verification
-> is recorded in the latest sections below; remote CI/release is separate.
+> implementations. Current implementation evidence is recorded in the latest
+> sections below; publication is recorded in the release update above.
 
 
-Date: 2026-09-17. Scope: local 6A–6C changes in this worktree. This is not a
-claim that the branch is merged, hosted CI has passed, or artifacts are published.
+Date: 2026-09-17. Scope: local 6A–6C changes in that worktree. At the time,
+this record did not establish a merge, hosted CI result, or published artifact.
 
 ## Delivered scope
 

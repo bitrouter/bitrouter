@@ -136,6 +136,20 @@ pub async fn serve_with_extensions(
     source: &crate::paths::ConfigSource,
     register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
 ) -> Result<()> {
+    serve_with_options(source, false, register).await
+}
+
+/// Run the bundled CLI host. Only a child launched by `bro start` may be
+/// replaced automatically by `bro update`.
+pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool) -> Result<()> {
+    serve_with_options(source, managed_child, |_| Ok(())).await
+}
+
+async fn serve_with_options(
+    source: &crate::paths::ConfigSource,
+    cli_owned: bool,
+    register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
+) -> Result<()> {
     if let Some(located) = crate::daemon_locator::locate_source(source).await? {
         anyhow::bail!(
             "bitrouter is already running (pid {}); stop it before launching this executable again",
@@ -272,6 +286,8 @@ pub async fn serve_with_extensions(
         let ready_listen = listen.clone();
 
         let http_app = app.clone();
+        let handoff_gate = crate::daemon_handoff::HandoffGate::default();
+        let http_handoff_gate = handoff_gate.clone();
         // The ingress SERVER span is created from the exporter's own tracer — the
         // SDK installs no global `TracerProvider`, so there is nothing to reach
         // for implicitly. With OTel disabled there is no ingress span at all,
@@ -287,9 +303,15 @@ pub async fn serve_with_extensions(
             let (remote_shutdown_tx, remote_shutdown_rx) = tokio::sync::oneshot::channel();
             // Open an OTel SERVER span per inbound request and publish it on the
             // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
-            let otel_wrapper = move |router: axum::Router| match &otel_router_wrapper {
-                Some(wrapper) => wrapper(router),
-                None => router,
+            let otel_wrapper = move |router: axum::Router| {
+                let router = match &otel_router_wrapper {
+                    Some(wrapper) => wrapper(router),
+                    None => router,
+                };
+                router.layer(axum::middleware::from_fn_with_state(
+                    http_handoff_gate.clone(),
+                    crate::daemon_handoff::http_admission,
+                ))
             };
             let inference_shutdown = async move {
                 let _ = inference_shutdown_rx.await;
@@ -381,7 +403,11 @@ pub async fn serve_with_extensions(
                 inventory: Some(assembled.evolution.inventory()),
                 evolution: Some(assembled.evolution.clone()),
             },
-            Some(administration),
+            daemon::LocalControlOptions {
+                administration: Some(administration),
+                gate: handoff_gate.clone(),
+                cli_owned,
+            },
         );
         let control = async move {
             let mut control = Box::pin(control);
@@ -449,6 +475,7 @@ pub async fn serve_with_extensions(
         // on Windows there is no equivalent, so the HUP future stays pending and
         // reload is reached exclusively through `bro reload`.
         let hup_reloader = reloader.clone();
+        let hup_gate = handoff_gate.clone();
         let hup = async move {
             #[cfg(unix)]
             {
@@ -461,6 +488,10 @@ pub async fn serve_with_extensions(
                     if hup.recv().await.is_none() {
                         return Ok(());
                     }
+                    let Some(_admission) = hup_gate.admit() else {
+                        tracing::info!("SIGHUP reload skipped during daemon handoff");
+                        continue;
+                    };
                     match hup_reloader.reload().await {
                         Ok(()) => tracing::info!("SIGHUP — reload succeeded"),
                         Err(e) => tracing::warn!(error = %e, "SIGHUP reload failed"),
@@ -471,7 +502,7 @@ pub async fn serve_with_extensions(
             {
                 // No SIGHUP on this platform — keep the reloader handle alive and
                 // park forever so the `select!` arm below never fires.
-                let _keep = &hup_reloader;
+                let _keep = (&hup_reloader, &hup_gate);
                 std::future::pending::<()>().await;
                 Ok::<(), anyhow::Error>(())
             }
@@ -518,7 +549,8 @@ pub async fn serve_with_extensions(
         let evolution_stop = tokio_util::sync::CancellationToken::new();
         let evolution_worker = app.language_model().cloned().map(|pipeline| {
             let worker =
-                crate::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone());
+                crate::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone())
+                    .with_handoff_gate(handoff_gate.clone());
             let stop = evolution_stop.clone();
             tokio::spawn(async move { worker.run(pipeline, stop).await })
         });

@@ -58,6 +58,7 @@ pub struct WorkerStatus {
 #[derive(Clone)]
 pub struct EvolutionScheduler {
     runtime: EvolutionRuntime,
+    handoff_gate: Option<crate::daemon_handoff::HandoffGate>,
 }
 
 async fn feedback_epoch(
@@ -78,7 +79,15 @@ async fn feedback_epoch(
 
 impl EvolutionScheduler {
     pub fn new(runtime: EvolutionRuntime) -> Self {
-        Self { runtime }
+        Self {
+            runtime,
+            handoff_gate: None,
+        }
+    }
+
+    pub fn with_handoff_gate(mut self, gate: crate::daemon_handoff::HandoffGate) -> Self {
+        self.handoff_gate = Some(gate);
+        self
     }
 
     fn status(&self, update: impl FnOnce(&mut WorkerStatus)) {
@@ -108,6 +117,13 @@ impl EvolutionScheduler {
         let mut last_errors = BTreeMap::new();
         loop {
             tokio::select! { _ = shutdown.cancelled() => break, _ = clock.tick() => {} }
+            let _admission = match &self.handoff_gate {
+                Some(gate) => match gate.admit() {
+                    Some(admission) => Some(admission),
+                    None => continue,
+                },
+                None => None,
+            };
             let result = tokio::select! {
                 _ = shutdown.cancelled() => break,
                 result = self.tick(&pipeline) => result,
