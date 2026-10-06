@@ -1,0 +1,515 @@
+//! Selected-model HTTP invocation independent of routing, catalogs and servers.
+//!
+//! Calls use one explicit target and an optional registered auth mechanism.
+//! Stateful auth can rebuild once after 401; no account or provider fallback is
+//! performed. Irreversible refresh belongs to the mechanism's owned transaction.
+
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
+
+use futures::StreamExt;
+use futures_core::Stream;
+use tokio_util::sync::CancellationToken;
+
+use crate::auth::{AuthAppliers, AuthOperation, normalize_auth_extension_error};
+use crate::diagnostics::DiagnosticRedactor;
+use crate::error::{ModelError, Result};
+use crate::protocol::{OutboundAdapter, OutboundDispatch, SseEvent};
+use crate::target::ModelTarget;
+use crate::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
+
+/// An owned stream of canonical model parts and terminal failures.
+/// Dropping it drops the upstream response; cancellation stops pending I/O.
+pub type ModelStream = Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>;
+
+/// Upstream HTTP client timeout configuration. v0 #394: the upstream client had
+/// no timeouts, so a slow provider could hang a request forever.
+///
+/// `connect` / `read` / `pool_idle` / `tcp_keepalive` are set on the reqwest
+/// client at build time. `read` is a **per-read** (idle) timeout — it resets
+/// after every chunk, so it fires when an upstream sends no bytes for that long
+/// *including mid-stream*, which is the effective stream-idle guard.
+///
+/// `total` is the optional overall wall-clock cap for the whole request/stream,
+/// applied per-request via [`reqwest::RequestBuilder::timeout`]. It is `None` by
+/// default: an overall cap would kill legitimately long agentic/reasoning
+/// streams, so it is opt-in per deployment or per provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpTimeouts {
+    /// TCP connect timeout.
+    pub connect: Duration,
+    /// Per-read (idle) timeout — resets after each chunk; fires mid-stream when
+    /// the upstream goes silent for this long.
+    pub read: Duration,
+    /// How long an idle pooled connection is kept.
+    pub pool_idle: Duration,
+    /// TCP keepalive probe interval.
+    pub tcp_keepalive: Duration,
+    /// Optional overall wall-clock cap for the entire request/stream. `None` ⇒
+    /// no cap (default). Opt-in; keep it generous for reasoning providers.
+    pub total: Option<Duration>,
+}
+
+impl Default for HttpTimeouts {
+    fn default() -> Self {
+        Self {
+            connect: Duration::from_secs(10),
+            read: Duration::from_secs(120),
+            pool_idle: Duration::from_secs(90),
+            tcp_keepalive: Duration::from_secs(60),
+            total: None,
+        }
+    }
+}
+
+/// One reusable HTTP client and protocol registry for explicitly selected calls.
+///
+/// This client selects no accounts, reads no ambient credentials, performs no
+/// discovery/login. Registered mechanisms may refresh the same selected account
+/// and retry once on 401. Provider HTTP statuses and
+/// retry hints remain domain facts for the caller's policy.
+///
+/// ```no_run
+/// use bitrouter_ai::client::{HttpTimeouts, ModelClient};
+/// use bitrouter_ai::target::ModelTarget;
+/// use bitrouter_ai::types::{ApiProtocol, AuthScheme, Prompt};
+/// use tokio_util::sync::CancellationToken;
+///
+/// # async fn selected_call(prompt: &Prompt, credential: String) -> bitrouter_ai::error::Result<()> {
+/// let target = ModelTarget {
+///     provider_name: "selected-provider".into(),
+///     service_id: "selected-native-model".into(),
+///     api_protocol: ApiProtocol::Responses,
+///     api_base: "https://api.openai.com/v1".into(),
+///     api_key: credential,
+///     credential_priority: Default::default(),
+///     account_label: None,
+///     auth_scheme: AuthScheme::Bearer,
+///     compatibility: Default::default(),
+/// };
+/// let client = ModelClient::new(HttpTimeouts::default())?;
+/// let cancellation = CancellationToken::new();
+/// let result = client.generate(&target, prompt, &cancellation).await?;
+/// # let _ = result;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone)]
+pub struct ModelClient {
+    client: reqwest::Client,
+    timeouts: HttpTimeouts,
+    dispatch: Arc<OutboundDispatch>,
+    auth_appliers: AuthAppliers,
+}
+
+impl ModelClient {
+    /// Build a client with the four built-in protocols.
+    pub fn new(timeouts: HttpTimeouts) -> Result<Self> {
+        Self::with_dispatch(timeouts, Arc::new(OutboundDispatch::builtin()))
+    }
+
+    /// Build a client with an explicitly supplied protocol registry.
+    pub fn with_dispatch(timeouts: HttpTimeouts, dispatch: Arc<OutboundDispatch>) -> Result<Self> {
+        let client = reqwest::Client::builder()
+            .connect_timeout(timeouts.connect)
+            .read_timeout(timeouts.read)
+            .pool_idle_timeout(timeouts.pool_idle)
+            .tcp_keepalive(timeouts.tcp_keepalive)
+            .build()
+            .map_err(|error| ModelError::Configuration {
+                message: format!("building HTTP client: {error}"),
+            })?;
+        Ok(Self {
+            client,
+            timeouts,
+            dispatch,
+            auth_appliers: AuthAppliers::new(),
+        })
+    }
+
+    /// Register explicit authentication mechanisms; no credentials are loaded here.
+    pub fn with_auth_appliers(mut self, auth_appliers: AuthAppliers) -> Self {
+        self.auth_appliers = auth_appliers;
+        self
+    }
+
+    /// Render a fresh target-specific request without changing source history.
+    /// The caller can apply provider body shaping before building/authenticating.
+    pub fn render_request(
+        &self,
+        target: &ModelTarget,
+        prompt: &Prompt,
+        stream: bool,
+    ) -> Result<serde_json::Value> {
+        self.render_request_with_report(target, prompt, stream)
+            .map(|(body, _)| body)
+    }
+
+    /// Prepare a fresh selected-target body and its bounded conversion assessment.
+    /// This performs no authentication or I/O and is not a complete fidelity proof.
+    pub fn render_request_with_report(
+        &self,
+        target: &ModelTarget,
+        prompt: &Prompt,
+        stream: bool,
+    ) -> Result<(serde_json::Value, crate::conversion::ConversionReport)> {
+        let (adapter, _) = self.dispatch.lookup(&target.api_protocol).ok_or_else(|| {
+            ModelError::Configuration {
+                message: format!(
+                    "no outbound dispatch registered for protocol '{}' (target provider '{}')",
+                    target.api_protocol, target.provider_name
+                ),
+            }
+        })?;
+        let report = adapter.admission(prompt);
+        report.require_admitted()?;
+        let mut projection = prompt.clone();
+        projection.model = target.service_id.clone();
+        projection.stream = stream;
+        let body = adapter.render_request_for_target(&projection, target)?;
+        Ok((body, report))
+    }
+
+    /// Build one JSON POST with the selected overall request deadline.
+    /// Authentication/header policy can be applied to the final request by the caller.
+    pub fn build_request(&self, url: &str, body: &serde_json::Value) -> Result<reqwest::Request> {
+        let mut builder = self.client.post(url).json(body);
+        if let Some(total) = self.timeouts.total {
+            builder = builder.timeout(total);
+        }
+        builder.build().map_err(|error| ModelError::Configuration {
+            message: format!("building request: {error}"),
+        })
+    }
+
+    /// Send an already authenticated request without retrying or classifying HTTP status.
+    pub async fn send(
+        &self,
+        request: reqwest::Request,
+        cancellation: &CancellationToken,
+    ) -> Result<reqwest::Response> {
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(ModelError::Cancelled),
+            response = self.client.execute(request) => response.map_err(|error| io_error("sending model request", error)),
+        }
+    }
+
+    /// Read a response body, retaining read/total timeout and caller cancellation.
+    pub async fn read_body(
+        response: reqwest::Response,
+        cancellation: &CancellationToken,
+    ) -> Result<String> {
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(ModelError::Cancelled),
+            text = response.text() => text.map_err(|error| io_error("reading upstream body", error)),
+        }
+    }
+
+    /// Decode a successful body and enforce the Responses terminal/id contract.
+    pub fn parse_response(
+        adapter: &dyn OutboundAdapter,
+        protocol: &ApiProtocol,
+        text: &str,
+    ) -> Result<GenerateResult> {
+        let json: serde_json::Value =
+            serde_json::from_str(text).map_err(|error| ModelError::Decode {
+                message: format!("upstream returned non-JSON body: {error}"),
+            })?;
+        if *protocol == ApiProtocol::Responses {
+            validate_responses_terminal(&json)?;
+        }
+        adapter.parse_response(json).map_err(response_error)
+    }
+
+    /// Decode a successful HTTP stream. Clean EOF requires a model terminal part.
+    /// Parts already emitted, including usage, are retained before a late error.
+    pub fn decode_stream(
+        adapter: Arc<dyn OutboundAdapter>,
+        response: reqwest::Response,
+        cancellation: CancellationToken,
+    ) -> ModelStream {
+        let mut decoder = adapter.stream_decoder();
+        let stream = async_stream::stream! {
+            use eventsource_stream::Eventsource;
+            let mut events = response.bytes_stream().eventsource();
+            let mut terminal = false;
+            loop {
+                let event = tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => {
+                        yield Err(ModelError::Cancelled);
+                        return;
+                    }
+                    event = events.next() => event,
+                };
+                let Some(event) = event else { break; };
+                match event {
+                    Ok(event) => {
+                        let event = SseEvent {
+                            event: if event.event.is_empty() { None } else { Some(event.event) },
+                            data: event.data,
+                        };
+                        match decoder.decode(&event).map_err(response_error) {
+                            Ok(parts) => for part in parts {
+                                terminal |= part.is_terminal();
+                                yield Ok(part);
+                            },
+                            Err(error) => { yield Err(error); return; }
+                        }
+                    }
+                    Err(eventsource_stream::EventStreamError::Transport(error)) => {
+                        yield Err(io_error("upstream stream error", error));
+                        return;
+                    }
+                    Err(error) => {
+                        yield Err(ModelError::Decode { message: format!("upstream stream error: {error}") });
+                        return;
+                    }
+                }
+            }
+            match decoder.finish().map_err(response_error) {
+                Ok(parts) => for part in parts {
+                    terminal |= part.is_terminal();
+                    yield Ok(part);
+                },
+                Err(error) => { yield Err(error); return; }
+            }
+            if !terminal {
+                yield Err(ModelError::InvalidResponse { message: "upstream stream ended without a model terminal part".into() });
+            }
+        };
+        Box::pin(stream)
+    }
+
+    /// Call one explicit target without catalog/config/account resolution.
+    /// Token cancellation ends pending I/O; custom authentication must finish
+    /// first. Dropping this call future can drop custom authentication.
+    pub async fn generate(
+        &self,
+        target: &ModelTarget,
+        prompt: &Prompt,
+        cancellation: &CancellationToken,
+    ) -> Result<GenerateResult> {
+        if crate::providers::codex::requires_streaming(target) {
+            return crate::stream::collect::collect_generate(
+                self.stream(target, prompt, cancellation).await?,
+            )
+            .await;
+        }
+        let (response, redactor) = self
+            .send_selected(target, prompt, false, cancellation)
+            .await?;
+        let result = async {
+            let status = response.status();
+            let retry_after =
+                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
+            let text = Self::read_body(response, cancellation).await?;
+            if !status.is_success() {
+                return Err(ModelError::HttpResponse {
+                    status: status.as_u16(),
+                    body: text,
+                    retry_after,
+                });
+            }
+            let (adapter, _) = self.dispatch.lookup(&target.api_protocol).ok_or_else(|| {
+                ModelError::Configuration {
+                    message: "selected protocol disappeared".into(),
+                }
+            })?;
+            Self::parse_response(adapter.as_ref(), &target.api_protocol, &text)
+        }
+        .await;
+        result.map_err(|error| redactor.scrub_error(error))
+    }
+
+    /// Start one explicit streaming target. Dropping the returned stream stops reads.
+    /// Token cancellation ends pending I/O; custom authentication must finish
+    /// first. Dropping this call future can drop custom authentication.
+    pub async fn stream(
+        &self,
+        target: &ModelTarget,
+        prompt: &Prompt,
+        cancellation: &CancellationToken,
+    ) -> Result<ModelStream> {
+        let (response, redactor) = self
+            .send_selected(target, prompt, true, cancellation)
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let retry_after =
+                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
+            let body = Self::read_body(response, cancellation)
+                .await
+                .map_err(|error| redactor.scrub_error(error))?;
+            return Err(redactor.scrub_error(ModelError::HttpResponse {
+                status: status.as_u16(),
+                body,
+                retry_after,
+            }));
+        }
+        let (adapter, _) = self.dispatch.lookup(&target.api_protocol).ok_or_else(|| {
+            ModelError::Configuration {
+                message: "selected protocol disappeared".into(),
+            }
+        })?;
+        Ok(Box::pin(
+            Self::decode_stream(Arc::clone(adapter), response, cancellation.clone())
+                .map(move |part| part.map_err(|error| redactor.scrub_error(error))),
+        ))
+    }
+
+    async fn send_selected(
+        &self,
+        target: &ModelTarget,
+        prompt: &Prompt,
+        stream: bool,
+        cancellation: &CancellationToken,
+    ) -> Result<(reqwest::Response, DiagnosticRedactor)> {
+        let mut redactor = DiagnosticRedactor::default();
+        redactor.add_replacement(target.api_key.clone(), "[redacted credential]".into());
+        let mut refreshed = false;
+        loop {
+            let request = self
+                .authenticated_request(target, prompt, stream, cancellation, &mut redactor)
+                .await
+                .map_err(|error| redactor.scrub_error(error))?;
+            let rejected = request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .cloned();
+            let response = self
+                .send(request, cancellation)
+                .await
+                .map_err(|error| redactor.scrub_error(error))?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED && !refreshed {
+                if cancellation.is_cancelled() {
+                    return Err(ModelError::Cancelled);
+                }
+                if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
+                    let retry = applier
+                        .refresh_after_unauthorized(target, rejected.as_ref())
+                        .await
+                        .map_err(|error| {
+                            normalize_auth_extension_error(error, AuthOperation::Refresh)
+                        })?;
+                    if retry {
+                        refreshed = true;
+                        continue;
+                    }
+                }
+            }
+            return Ok((response, redactor));
+        }
+    }
+
+    async fn authenticated_request(
+        &self,
+        target: &ModelTarget,
+        prompt: &Prompt,
+        stream: bool,
+        cancellation: &CancellationToken,
+        redactor: &mut DiagnosticRedactor,
+    ) -> Result<reqwest::Request> {
+        if cancellation.is_cancelled() {
+            return Err(ModelError::Cancelled);
+        }
+        let applier = self.auth_appliers.lookup(&target.provider_name);
+        if applier.is_none()
+            && target.api_key.is_empty()
+            && !matches!(target.api_protocol, ApiProtocol::Custom(_))
+        {
+            return Err(ModelError::invalid_credential(
+                "missing effective model credential; supply a selected credential explicitly",
+            ));
+        }
+        let mut body = self.render_request(target, prompt, stream)?;
+        if let Some(applier) = applier {
+            applier
+                .prepare_body(&mut body, target)
+                .await
+                .map_err(|error| {
+                    normalize_auth_extension_error(error, AuthOperation::BodyPreparation)
+                })?;
+        }
+        let (_, transport) = self
+            .dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| ModelError::configuration("selected protocol disappeared"))?;
+        let request = self.build_request(&transport.endpoint_url(target, stream), &body)?;
+        let request = if let Some(applier) = applier {
+            applier
+                .apply_with_authority(request, target)
+                .await
+                .map_err(|error| {
+                    normalize_auth_extension_error(error, AuthOperation::RequestAuthentication)
+                })?
+                .into_request()
+        } else {
+            transport.authorise(request, target).await?
+        };
+        if cancellation.is_cancelled() {
+            return Err(ModelError::Cancelled);
+        }
+        redactor.capture_request_credentials(&request, &target.api_key);
+        Ok(request)
+    }
+}
+
+fn io_error(context: &str, error: reqwest::Error) -> ModelError {
+    if error.is_timeout() {
+        ModelError::Timeout
+    } else {
+        ModelError::Transport {
+            message: format!("{context}: {error}"),
+        }
+    }
+}
+
+fn response_error(error: ModelError) -> ModelError {
+    match error {
+        error @ (ModelError::Provider { .. }
+        | ModelError::PolicyViolation { .. }
+        | ModelError::InvalidResponse { .. }) => error,
+        error => ModelError::InvalidResponse {
+            message: error.to_string(),
+        },
+    }
+}
+
+fn validate_responses_terminal(json: &serde_json::Value) -> Result<()> {
+    let status = json.get("status").and_then(serde_json::Value::as_str);
+    if !matches!(status, Some("completed" | "incomplete")) {
+        return Err(ModelError::InvalidResponse {
+            message: format!(
+                "Responses response has non-success terminal status '{}'",
+                status.unwrap_or("<missing>")
+            ),
+        });
+    }
+    if json
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err(ModelError::InvalidResponse {
+            message: "Responses response missing non-empty 'id'".into(),
+        });
+    }
+    Ok(())
+}
+
+/// Parse provider Retry-After as delay-seconds or an HTTP date, without retrying.
+pub fn parse_retry_after(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
+    let value = value?.to_str().ok()?.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds);
+    }
+    let deadline = httpdate::parse_http_date(value).ok()?;
+    match deadline.duration_since(std::time::SystemTime::now()) {
+        Ok(delay) => Some(delay.as_secs() + u64::from(delay.subsec_nanos() > 0)),
+        Err(_) => Some(0),
+    }
+}

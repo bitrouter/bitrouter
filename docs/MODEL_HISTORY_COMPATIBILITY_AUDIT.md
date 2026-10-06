@@ -1,6 +1,6 @@
 # Model history compatibility audit
 
-This document inventories the current SDK rules that affect conversation
+This document inventories the baseline SDK rules that affect conversation
 history when requests and responses pass through the four model protocols.
 It supports the proposed `bitrouter-ai` extraction. It describes existing
 behavior, including information loss and synthesized content; it does not
@@ -12,12 +12,36 @@ occur during inbound parsing, before a canonical `Prompt` exists. Others
 occur when rendering an upstream request or a client response. Those stages
 must be distinguished during extraction.
 
+The implementation now lives under `crates/bitrouter-ai`. The baseline tables
+below remain historical findings. Batches 1, 13 and 14 in the
+[implementation progress](BITROUTER_AI_REFACTOR_PROGRESS.md) corrected tool-result
+cardinality, Responses input/result order and completed Responses reasoning
+output retention. Batch 14 also retains Responses reasoning on ingress and adds
+content-free diagnostics/preflight for native reasoning and structured outputs.
+Batch 15 rejects initial four-wire ingress omissions with structured reports before
+returning a partial Prompt, including unknown blocks/items and unsigned Messages thinking.
+Batch 16 adds initial structural projection refusal for history/declaration omissions,
+provider execution/MCP identity loss, tool-result media/file IDs, approvals and
+cross-wire native continuity tokens. Batch 17 additionally refuses omitted explicit
+strict flags, structured-output metadata, filenames and error/denial status, and
+unclassified Gemini tool-schema cleanup. A bounded nullable/single-type rewrite
+remains admitted. Batch 18 preserves text-only array boundaries and refuses initial
+argument substitution, result-wrapper, ordering and nested-attribute losses. JSON
+encoding into native string slots retains its value; the original typed source remains
+authoritative. Batch 19 records those JSON/schema equivalent effects and exposes
+eligible-candidate observations separately from exclusions and provider attempts.
+These changes do not rewrite the baseline tables below as current
+behavior. Authority proofs, remaining attributes/schema/boundary losses and native
+stream fields remain unresolved.
+
 ## Scope and agreed registry boundary
 
 ACP runtime and harness metadata will leave the model/provider registry. This
 is an agreed direction, not an implemented removal. This audit does not change
 `registry/agents`, `registry/runtimes`, their generated artifacts, or ACP
-execution. The replacement home of the harness catalog remains undecided.
+execution. The follow-up [spec](BITROUTER_AI_REFACTOR_SPEC.md) keeps the catalog
+data-driven under the application/ACP integration; exact source and artifact
+locations remain to be reviewed.
 The ACP official-registry client in `apps/bitrouter/src/agent_registry.rs` is
 a separate discovery path and is not implicitly removed by this decision.
 
@@ -160,7 +184,11 @@ The desired contract needs a separate decision and focused assertion.
    groups text/media before standalone items. These are implementation findings,
    not approved future behavior.
 
-For a behavior-preserving extraction, keep the stages and existing regression
-assertions visible. Decide separately whether to add provenance, structured
-conversion diagnostics, strict versus permissive conversion, or transcript-wide
-repair. Those are proposed follow-up decisions, not features introduced here.
+Keep the stages and existing regression assertions visible during extraction.
+The follow-up [spec](BITROUTER_AI_REFACTOR_SPEC.md) selects source-preserving
+target projections, structured conversion diagnostics and default exclusion of
+task-semantic or unclassified losses. It keeps transcript repair separate.
+These are design requirements; this audit remains an inventory of the earlier
+source baseline. The [implementation progress](BITROUTER_AI_REFACTOR_PROGRESS.md)
+records later corrections, including the two cardinality/order cases, separately
+from the admission and diagnostics requirements.

@@ -21,7 +21,8 @@ use crate::config::Config;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::routing::{ModelInfo, RoutingPrefs, RoutingTable, SortOrder};
 use crate::language_model::stream::{UsagePricing, UsagePricingBracket, UsagePricingTier};
-use crate::language_model::types::{ApiProtocol, RoutingTarget};
+use crate::language_model::types::RoutingTarget;
+use bitrouter_ai::types::ApiProtocol;
 
 fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
     let base = UsagePricingBracket {
@@ -141,7 +142,7 @@ impl ConfigRoutingTable {
     /// against the new config first. Used by the daemon's reload path
     /// when there's no source file to re-read from (zero-config mode):
     /// the caller produces a fresh `Config` from
-    /// `bitrouter_providers::zero_config` and hands it here. Holds the
+    /// the application's `providers::apply::zero_config` and hands it here. Holds the
     /// same `reload_lock` as the `RoutingTable::reload` impl so the two
     /// paths serialise against each other.
     pub async fn replace_config(&self, fresh: Config) -> Result<()> {
@@ -789,7 +790,7 @@ fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
 mod tests {
     use super::*;
     use crate::config::parse;
-    use crate::language_model::types::Capability;
+    use bitrouter_ai::types::Capability;
 
     fn table(yaml: &str) -> ConfigRoutingTable {
         ConfigRoutingTable::from_config(parse(yaml).unwrap())
@@ -1985,7 +1986,7 @@ providers:
             .unwrap();
         assert_eq!(
             chain[0].chat_token_limit_field,
-            Some(crate::language_model::types::ChatTokenLimitField::MaxCompletionTokens)
+            Some(bitrouter_ai::types::ChatTokenLimitField::MaxCompletionTokens)
         );
         assert_eq!(chain[0].chat_supports_store, Some(false));
         assert_eq!(chain[0].chat_supports_stream_options, Some(false));

@@ -13,9 +13,9 @@ use async_trait::async_trait;
 
 use crate::language_model::Pipeline;
 use crate::language_model::server_tools::toolset::ToolContext;
-use crate::language_model::types::{
-    Content, GenerationParams, Message, PipelineRequest, Prompt, ProviderMetadata, ResponseFormat,
-    Role, Tool, Usage,
+use crate::language_model::types::PipelineRequest;
+use bitrouter_ai::types::{
+    Content, GenerationParams, Message, Prompt, ProviderMetadata, ResponseFormat, Role, Tool, Usage,
 };
 
 /// One nested completion.
@@ -117,7 +117,7 @@ impl NestedRunner for PipelineNestedRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language_model::types::ResponseFormat;
+    use bitrouter_ai::types::ResponseFormat;
 
     fn assert_send_sync<T: Send + Sync>() {}
 

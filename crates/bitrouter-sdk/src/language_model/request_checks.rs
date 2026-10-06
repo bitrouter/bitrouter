@@ -13,9 +13,7 @@ use crate::extension::request_check::{
     ContentFragment, ContentFragmentKind, ContentRole, Decision, Input, RequestCheckCoverage,
     RequestCheckCoverageScope, RequestCheckCoverageStatus,
 };
-use crate::language_model::types::{
-    Content, Prompt, Role, ToolResultContentPart, ToolResultOutput,
-};
+use bitrouter_ai::types::{Content, Prompt, Role, ToolResultContentPart, ToolResultOutput};
 
 /// Maximum number of ordered request checks attached to one named router.
 pub const MAX_REQUEST_CHECKS_PER_ROUTER: usize = 16;
@@ -345,7 +343,7 @@ fn count_excluded_media(prompt: &Prompt) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language_model::types::{
+    use bitrouter_ai::types::{
         DataContent, GenerationParams, Message, ProviderMetadata, ToolResultContentPart,
         ToolResultOutput,
     };

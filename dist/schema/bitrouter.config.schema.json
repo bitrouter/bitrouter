@@ -191,7 +191,7 @@
       "type": "string"
     },
     "Capability": {
-      "description": "An optional inference feature a request may require and a provider may\nadvertise. Capabilities are API-agnostic: the same capability maps to a\ndifferent wire parameter in each protocol (structured outputs is Chat\nCompletions' `response_format`, Messages' `output_config.format`, Generate\nContent's `responseSchema`, Responses' `text.format`). The serde\nrepresentation (e.g. `structured_outputs`) is the stable token used to match\na request's needs against a provider's advertised capabilities.\n\nA capability-aware [`RoutingTable`](crate::language_model::routing::RoutingTable)\ncan read the set a request requires ([`Prompt::required_capabilities`]) and\nrestrict the chain to providers advertising all of them.",
+      "description": "An optional inference feature a request may require and a provider may\nadvertise. Capabilities are API-agnostic: the same capability maps to a\ndifferent wire parameter in each protocol (structured outputs is Chat\nCompletions' `response_format`, Messages' `output_config.format`, Generate\nContent's `responseSchema`, Responses' `text.format`). The serde\nrepresentation (e.g. `structured_outputs`) is the stable token used to match\na request's needs against a provider's advertised capabilities.\n\nA capability-aware `RoutingTable`\ncan read the set a request requires ([`Prompt::required_capabilities`]) and\nrestrict the chain to providers advertising all of them.",
       "oneOf": [
         {
           "const": "structured_outputs",

@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use bitrouter_sdk::language_model::{NormalizedUsage, Usage, UsageNormalizationError};
+use bitrouter_ai::types::{NormalizedUsage, Usage, UsageNormalizationError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -565,7 +565,7 @@ fn hash_rate(hasher: &mut Sha256, rate: Option<f64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_sdk::language_model::UsageOrigin;
+    use bitrouter_ai::types::UsageOrigin;
 
     #[test]
     fn default_pricing_reads_as_unconfigured() {

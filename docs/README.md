@@ -5,12 +5,16 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
-- [`BITROUTER_AI_REFACTOR_SPEC.md`](BITROUTER_AI_REFACTOR_SPEC.md) — **proposed
-  for team review.** Model integration crate boundary, registry ownership,
-  ACP metadata removal, history compatibility and phased SDK migration.
+- [`BITROUTER_AI_REFACTOR_SPEC.md`](BITROUTER_AI_REFACTOR_SPEC.md) — **design
+  baseline; phased implementation started.** Recorded Core native integration, conversion admission,
+  catalog/auth boundaries, data-driven ACP relocation and alpha API migration;
+  implementation contracts, acceptance criteria and remaining review items.
 - [`MODEL_HISTORY_COMPATIBILITY_AUDIT.md`](MODEL_HISTORY_COMPATIBILITY_AUDIT.md) —
-  Current model-history replay, conversion, omission and synthesis rules;
+  Baseline model-history replay, conversion, omission and synthesis rules;
   evidence and boundaries for the proposed `bitrouter-ai` extraction.
+- [`BITROUTER_AI_REFACTOR_PROGRESS.md`](BITROUTER_AI_REFACTOR_PROGRESS.md) —
+  Implemented extraction batches, breaking import migration, validation evidence
+  and remaining work against the AI spec.
 - [`GUARDRAILS_EXTENSION.md`](GUARDRAILS_EXTENSION.md) — Independent input checker
   setup, migration boundaries, distribution and process-level validation.
 - [`GUARDRAILS_EXTENSION_ACCEPTANCE.md`](GUARDRAILS_EXTENSION_ACCEPTANCE.md) —

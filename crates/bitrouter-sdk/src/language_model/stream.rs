@@ -1,7 +1,8 @@
 //! Streaming primitives for the `language_model` protocol: `StreamInterest`,
-//! `StreamAction` / `StreamOutcome`, the `SseFrame` type, `SseKeepaliveStream`,
+//! `StreamAction` / `StreamOutcome`, AI `SseFrame` framing, `SseKeepaliveStream`,
 //! and the `StreamProcessor` that drives the StreamHook stage.
 
+use bitrouter_ai::stream::SseFrame;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -14,7 +15,7 @@ use tokio::time::{Instant, Sleep};
 use crate::error::{BitrouterError, Result};
 use crate::language_model::context::StreamContext;
 use crate::language_model::hooks::{ObserveHook, StreamHook};
-use crate::language_model::types::{StreamPart, Usage};
+use bitrouter_ai::types::{StreamPart, Usage};
 
 /// Stable identifier for the SDK's character-count fallback estimator.
 pub const STREAM_USAGE_ESTIMATOR_VERSION: &str = "bitrouter-sdk/stream-char-div-ceil-4-v1";
@@ -146,34 +147,6 @@ pub enum StreamOutcome {
     Aborted(BitrouterError),
     /// Upstream errored mid-stream.
     UpstreamError(BitrouterError),
-}
-
-/// An outbound Server-Sent-Events frame.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SseFrame {
-    /// A data event, optionally named.
-    Event {
-        /// The `event:` field, if any.
-        event: Option<String>,
-        /// The `data:` payload (already serialized).
-        data: String,
-    },
-    /// An SSE comment (`:text`). Used for keepalives — every supported protocol
-    /// ignores comments.
-    Comment(String),
-}
-
-impl SseFrame {
-    /// Render the frame to its on-wire byte form.
-    pub fn to_wire(&self) -> String {
-        match self {
-            SseFrame::Event { event, data } => match event {
-                Some(name) => format!("event: {name}\ndata: {data}\n\n"),
-                None => format!("data: {data}\n\n"),
-            },
-            SseFrame::Comment(text) => format!(":{text}\n\n"),
-        }
-    }
 }
 
 pin_project! {
@@ -403,7 +376,7 @@ impl UsageAccumulator {
                     None => self.every_snapshot_priced = false,
                 }
             }
-            StreamPart::TextDelta { text } | StreamPart::ReasoningDelta { text } => {
+            StreamPart::TextDelta { text } | StreamPart::ReasoningDelta { text, .. } => {
                 self.delta_chars = self.delta_chars.saturating_add(text.chars().count() as u64);
             }
             _ => {}
@@ -583,7 +556,7 @@ impl StreamProcessor {
                 Some(Usage {
                     prompt_tokens,
                     completion_tokens,
-                    origin: crate::language_model::types::UsageOrigin::Estimated,
+                    origin: bitrouter_ai::types::UsageOrigin::Estimated,
                     ..Default::default()
                 })
             } else {
@@ -649,10 +622,9 @@ mod tests {
     use crate::caller::CallerContext;
     use crate::language_model::context::PipelineContext;
     use crate::language_model::timing::FirstTokenKind;
-    use crate::language_model::types::FinishReason;
-    use crate::language_model::types::{
-        ApiProtocol, GenerationParams, Message, PipelineRequest, Prompt, Role,
-    };
+    use crate::language_model::types::PipelineRequest;
+    use bitrouter_ai::types::FinishReason;
+    use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
     use futures::StreamExt;
 
     fn timed_stream_context() -> StreamContext {
@@ -680,7 +652,7 @@ mod tests {
         Usage {
             prompt_tokens,
             completion_tokens,
-            origin: crate::language_model::types::UsageOrigin::ProviderReported,
+            origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
             ..Usage::default()
         }
     }
@@ -781,6 +753,7 @@ mod tests {
         processor
             .process_part(StreamPart::ReasoningDelta {
                 text: "think".into(),
+                source_kind: None,
             })
             .await
             .unwrap();
@@ -883,10 +856,14 @@ mod tests {
         for marker in [
             StreamPart::TextStart { id: "0".into() },
             StreamPart::TextEnd { id: "0".into() },
-            StreamPart::ReasoningStart { id: "1".into() },
+            StreamPart::ReasoningStart {
+                id: "1".into(),
+                source_protocol: None,
+            },
             StreamPart::ReasoningEnd {
                 id: "1".into(),
                 signature: None,
+                native: None,
             },
         ] {
             assert!(
@@ -906,10 +883,14 @@ mod tests {
         for marker in [
             StreamPart::TextStart { id: "0".into() },
             StreamPart::TextEnd { id: "0".into() },
-            StreamPart::ReasoningStart { id: "1".into() },
+            StreamPart::ReasoningStart {
+                id: "1".into(),
+                source_protocol: None,
+            },
             StreamPart::ReasoningEnd {
                 id: "1".into(),
                 signature: None,
+                native: None,
             },
         ] {
             acc.observe(&marker);
@@ -934,30 +915,6 @@ mod tests {
         }
         // 8 chars / 4 chars-per-token = 2 tokens, same as if the markers were absent.
         assert_eq!(acc.estimated_output_tokens(), 2);
-    }
-
-    #[test]
-    fn sse_frame_wire_format() {
-        assert_eq!(
-            SseFrame::Event {
-                event: None,
-                data: "{}".to_string()
-            }
-            .to_wire(),
-            "data: {}\n\n"
-        );
-        assert_eq!(
-            SseFrame::Event {
-                event: Some("message".to_string()),
-                data: "x".to_string()
-            }
-            .to_wire(),
-            "event: message\ndata: x\n\n"
-        );
-        assert_eq!(
-            SseFrame::Comment("keepalive".to_string()).to_wire(),
-            ":keepalive\n\n"
-        );
     }
 
     #[tokio::test(start_paused = true)]

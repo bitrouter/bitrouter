@@ -27,8 +27,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
+use bitrouter_ai::types::{Content, Prompt, ReasoningEffort, Role, Tool};
 use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyModelTarget, PolicyTableConfig};
-use bitrouter_sdk::language_model::types::{Content, Prompt, ReasoningEffort, Role, Tool};
 use bitrouter_sdk::{HeaderMap, PromptTransform};
 
 use crate::continuation::ContinuationAdjustment;
@@ -742,7 +742,7 @@ impl PolicyTableRouter {
             changed |= prompt.params.reasoning_effort != Some(effort);
             prompt.params.reasoning_effort = Some(effort);
             prompt.params.reasoning_effort_source =
-                bitrouter_sdk::language_model::types::ReasoningEffortSource::Policy;
+                bitrouter_ai::types::ReasoningEffortSource::Policy;
         }
         changed
     }
@@ -1192,14 +1192,15 @@ mod tests {
     use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
     use crate::workflow_state::ir::{AgentRole, HarnessId, ProtocolKind};
     use crate::workflow_state::online::OnlineWorkflowState;
+    use bitrouter_ai::types::UsageOrigin;
+    use bitrouter_ai::types::{
+        GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput,
+    };
     use bitrouter_sdk::HeaderMap;
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::config::PolicyKeyStrategy;
     use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::types::{
-        GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput,
-    };
-    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder, UsageOrigin};
+    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
@@ -3318,8 +3319,8 @@ mod tests {
     // fingerprinting proxy would.
 
     fn fingerprint_of(body: serde_json::Value) -> String {
-        use bitrouter_sdk::language_model::inbound_adapter_for;
-        use bitrouter_sdk::language_model::types::ApiProtocol;
+        use bitrouter_ai::protocol::inbound_adapter_for;
+        use bitrouter_ai::types::ApiProtocol;
         let adapter =
             inbound_adapter_for(&ApiProtocol::ChatCompletions).expect("chat completions adapter");
         let prompt = adapter.parse_request(body).expect("parse request");

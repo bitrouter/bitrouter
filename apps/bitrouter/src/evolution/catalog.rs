@@ -3,10 +3,11 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
+use bitrouter_ai::types::ApiProtocol;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{AccountStrategy, Config, ConfigRoutingTable};
 use bitrouter_sdk::language_model::{
-    ApiProtocol, PipelineContext, PipelineRequest, RoutingTable, RoutingTarget,
+    PipelineContext, PipelineRequest, RoutingTable, RoutingTarget,
 };
 use serde_json::{Value, json};
 

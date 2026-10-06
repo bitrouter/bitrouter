@@ -3,12 +3,11 @@ mod execution_guards;
 mod judge_costs;
 mod resource_coverage;
 mod revisions;
+use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
 use bitrouter_sdk::acp::capture::{CaptureDirection, CaptureEvent, CaptureKind, CapturePort};
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::Config;
-use bitrouter_sdk::language_model::{
-    ApiProtocol, GenerationParams, Message, PipelineRequest, Prompt, Role,
-};
+use bitrouter_sdk::language_model::PipelineRequest;
 use serde_json::{Value, json};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,

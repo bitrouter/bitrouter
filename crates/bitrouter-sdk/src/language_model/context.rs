@@ -11,11 +11,6 @@ use std::time::Instant;
 
 use crate::caller::CallerContext;
 use crate::event::{EventBus, PipelineEvent};
-use crate::language_model::auth::ContinuationAuthority;
-use crate::language_model::protocol::responses::{
-    AssistantTurnCommitment, CausalPrefixPlan, StreamingAssistantTurnCommitment,
-    assistant_turn_commitment, extend_causal_prefix,
-};
 use crate::language_model::routing::RouterRequestIdentity;
 use crate::language_model::settlement::RequiredFinalizationContext;
 use crate::language_model::settlement::SettlementContext;
@@ -24,10 +19,17 @@ use crate::language_model::timing::{
     FirstTokenKind, FirstTokenTiming, duration_millis, elapsed_millis,
 };
 use crate::language_model::types::{
-    ApiProtocol, ChatStreamOptions, Content, ExecutionResult, FinishReason, PipelineRequest,
-    PipelineResponse, Prompt, RoutingTarget, StreamPart, Usage,
+    ExecutionResult, PipelineRequest, PipelineResponse, RoutingTarget,
 };
 use crate::plugin::PluginId;
+use bitrouter_ai::auth::ContinuationAuthority;
+use bitrouter_ai::protocol::responses::{
+    AssistantTurnCommitment, CausalPrefixPlan, StreamingAssistantTurnCommitment,
+    assistant_turn_commitment, extend_causal_prefix,
+};
+use bitrouter_ai::types::{
+    ApiProtocol, ChatStreamOptions, Content, FinishReason, Prompt, StreamPart, Usage,
+};
 
 static NEXT_DELIVERY_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -484,10 +486,7 @@ impl PipelineContext {
     }
 
     /// Apply a policy-owned reasoning effort to the canonical request.
-    pub fn set_policy_reasoning_effort(
-        &mut self,
-        effort: crate::language_model::types::ReasoningEffort,
-    ) {
+    pub fn set_policy_reasoning_effort(&mut self, effort: bitrouter_ai::types::ReasoningEffort) {
         self.set_policy_reasoning_effort_override(Some(effort));
     }
 
@@ -499,11 +498,11 @@ impl PipelineContext {
     /// evidence and wire translation.
     pub fn set_policy_reasoning_effort_override(
         &mut self,
-        effort: Option<crate::language_model::types::ReasoningEffort>,
+        effort: Option<bitrouter_ai::types::ReasoningEffort>,
     ) {
         self.prompt.params.reasoning_effort = effort;
         self.prompt.params.reasoning_effort_source =
-            crate::language_model::types::ReasoningEffortSource::Policy;
+            bitrouter_ai::types::ReasoningEffortSource::Policy;
     }
 
     /// Apply preset prompt-body overrides. `system_prompt`, when
@@ -826,7 +825,7 @@ impl PipelineContext {
             .execution_result
             .as_ref()
             .map(|execution| execution.result.clone())
-            .unwrap_or(crate::language_model::types::GenerateResult {
+            .unwrap_or(bitrouter_ai::types::GenerateResult {
                 content: Vec::new(),
                 usage: None,
                 finish_reason: None,
@@ -843,7 +842,7 @@ impl PipelineContext {
     /// Render the final non-streaming HTTP response.
     pub fn into_response(self) -> PipelineResponse {
         let result = self.execution_result.map(|e| e.result).unwrap_or(
-            crate::language_model::types::GenerateResult {
+            bitrouter_ai::types::GenerateResult {
                 content: Vec::new(),
                 usage: None,
                 finish_reason: None,
@@ -985,7 +984,7 @@ impl StreamContext {
                 }
                 self.terminal_assistant_turn_commitment = response_output_commitment
                     .as_ref()
-                    .map(crate::language_model::types::ResponseOutputCommitment::as_str)
+                    .map(bitrouter_ai::types::ResponseOutputCommitment::as_str)
                     .and_then(AssistantTurnCommitment::parse);
                 self.finish_reason = Some(match status.as_str() {
                     "completed" => FinishReason::Stop,
@@ -1050,10 +1049,11 @@ mod tests {
     // The canonical path, not `crate::config`'s re-export of it: that module is
     // `config_file`-gated, and importing through it made the whole lib-test
     // target fail to build under the crate's default features.
+    use crate::language_model::PipelineRequest;
     use crate::language_model::routing::PromptOverrides;
     use crate::language_model::stream::{StreamOutcome, StreamProcessor};
-    use crate::language_model::types::{ReasoningEffort, ReasoningEffortSource, StreamPart};
-    use crate::language_model::{Message, PipelineRequest, Role};
+    use bitrouter_ai::types::{Message, Role};
+    use bitrouter_ai::types::{ReasoningEffort, ReasoningEffortSource, StreamPart};
 
     fn ctx_from_prompt(prompt: Prompt) -> PipelineContext {
         let req = PipelineRequest {
@@ -1303,7 +1303,7 @@ mod tests {
                 content: vec![Content::ToolResult {
                     call_id: "call_1".into(),
                     tool_name: Some(tool_name.into()),
-                    output: crate::language_model::types::ToolResultOutput::Text {
+                    output: bitrouter_ai::types::ToolResultOutput::Text {
                         value: output.into(),
                     },
                     dynamic: false,
@@ -1342,10 +1342,7 @@ mod tests {
             .expect("disconnect with a non-empty prompt must still bill input tokens");
         assert_eq!(usage.prompt_tokens, expected_prompt);
         assert_eq!(usage.completion_tokens, 0);
-        assert_eq!(
-            usage.origin,
-            crate::language_model::types::UsageOrigin::Estimated
-        );
+        assert_eq!(usage.origin, bitrouter_ai::types::UsageOrigin::Estimated);
     }
 
     #[tokio::test]
@@ -1396,10 +1393,7 @@ mod tests {
             .expect("completed stream without upstream usage should fall back to estimates");
         assert_eq!(usage.prompt_tokens, 2);
         assert_eq!(usage.completion_tokens, 2);
-        assert_eq!(
-            usage.origin,
-            crate::language_model::types::UsageOrigin::Estimated
-        );
+        assert_eq!(usage.origin, bitrouter_ai::types::UsageOrigin::Estimated);
     }
 
     #[test]
@@ -1414,13 +1408,13 @@ mod tests {
             provider_id: "anthropic".into(),
             model_id: "claude".into(),
             account_label: None,
-            result: crate::language_model::types::GenerateResult {
+            result: bitrouter_ai::types::GenerateResult {
                 content: Vec::new(),
                 usage: Some(Usage {
                     prompt_tokens: 12,
                     completion_tokens: 4,
                     cache_read_tokens: 5,
-                    origin: crate::language_model::types::UsageOrigin::ProviderReported,
+                    origin: bitrouter_ai::types::UsageOrigin::ProviderReported,
                     raw: Some(Box::new(raw.clone())),
                     ..Default::default()
                 }),
@@ -1437,7 +1431,7 @@ mod tests {
         let settlement = ctx.settlement_context();
         assert_eq!(
             settlement.usage_origin,
-            crate::language_model::types::UsageOrigin::ProviderReported
+            bitrouter_ai::types::UsageOrigin::ProviderReported
         );
         assert_eq!(settlement.raw_usage.as_ref(), Some(&raw));
     }
@@ -1450,7 +1444,7 @@ mod tests {
                 provider_id: "provider".into(),
                 model_id: "model".into(),
                 account_label: None,
-                result: crate::language_model::types::GenerateResult {
+                result: bitrouter_ai::types::GenerateResult {
                     content: Vec::new(),
                     usage: None,
                     finish_reason: None,
@@ -1509,7 +1503,7 @@ mod tests {
                     provider_metadata: Default::default(),
                 }])
                 .map(|commitment| {
-                    crate::language_model::types::ResponseOutputCommitment::new(
+                    bitrouter_ai::types::ResponseOutputCommitment::new(
                         commitment.as_str().to_owned(),
                     )
                 })

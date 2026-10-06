@@ -8,7 +8,7 @@ use reqwest::Url;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode, Version};
 
-use bitrouter_providers::hosted::account::manager::CredentialManager;
+use crate::cloud::account::manager::CredentialManager;
 
 /// A raw HTTP request to a relative BitRouter Cloud endpoint.
 pub struct ApiRequest {
@@ -206,6 +206,7 @@ impl CloudApiClient {
 
     async fn current_bearer(&self) -> Result<String> {
         self.manager
+            .session()
             .resolve_bearer(None, Some(self.base_url.as_str()))
             .await
             .map(|credential| credential.secret().to_owned())
@@ -243,7 +244,7 @@ fn redacted_endpoint(endpoint: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use bitrouter_providers::hosted::account::credentials::StoredCredential;
+    use bitrouter_ai::providers::hosted::credentials::StoredCredential;
     use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -394,7 +395,7 @@ mod tests {
         ));
         manager
             .save(StoredCredential::from(
-                bitrouter_providers::hosted::account::credentials::Credentials {
+                bitrouter_ai::providers::hosted::credentials::Credentials {
                     access_token: "near-expiry-access".to_owned(),
                     refresh_token: Some("refresh-token".to_owned()),
                     expires_at: chrono::Utc::now() + chrono::Duration::seconds(10),

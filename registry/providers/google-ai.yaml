@@ -3,7 +3,7 @@
 # (no per-token pricing), activated by importing the official `agy` CLI session —
 # distinct from the metered `google` (Gemini API) provider.
 #
-# The `google-ai` handler is implemented in bitrouter_providers::antigravity: it
+# The `google-ai` handler is implemented in bitrouter_ai::providers::antigravity: it
 # imports the `agy` OS-keyring session (`bro providers login google-ai`),
 # refreshes via the confidential `agy` OAuth client (secret read from the local
 # `agy` binary — never vendored), and speaks the `antigravity` custom protocol,

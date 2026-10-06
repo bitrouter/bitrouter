@@ -14,13 +14,15 @@ use bitrouter::eval::types::{
 use bitrouter::policy_compile::{CompileInput, LegacyAdequacySnapshot, compile_candidate};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
 use bitrouter::workflow_state::response_observer::PredictiveResponseObserver;
+use bitrouter_ai::types::AuthScheme;
+use bitrouter_ai::types::{
+    ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Prompt, UsageOrigin,
+};
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::event::EventBus;
-use bitrouter_sdk::language_model::types::AuthScheme;
 use bitrouter_sdk::language_model::{
-    ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, GenerationParams,
-    HopOutcome, ObserveHook, PipelineContext, PipelineRequest, Prompt, RoutingTarget,
-    SettlementContext, SettlementRecorder, UsageOrigin,
+    ExecutionResult, HopOutcome, ObserveHook, PipelineContext, PipelineRequest, RoutingTarget,
+    SettlementContext, SettlementRecorder,
 };
 
 fn base_lock() -> PolicyLock {

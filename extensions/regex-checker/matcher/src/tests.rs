@@ -2,11 +2,13 @@
 
 use std::sync::Arc;
 
+use bitrouter_ai::types::{
+    ApiProtocol, FinishReason, GenerationParams, Message, Prompt, Role, StreamPart, Usage,
+};
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::{
-    ApiProtocol, FinishReason, GenerationParams, Message, MockExecutor, MockResponse,
-    PipelineBuilder, PipelineContext, PipelineRequest, PreRequestHook, Prompt, Role, RoutingTarget,
-    StaticRoutingTable, StreamPart, Usage,
+    MockExecutor, MockResponse, PipelineBuilder, PipelineContext, PipelineRequest, PreRequestHook,
+    RoutingTarget, StaticRoutingTable,
 };
 use futures::StreamExt;
 

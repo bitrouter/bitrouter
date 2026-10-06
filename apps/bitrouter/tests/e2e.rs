@@ -17,11 +17,12 @@ use axum_test::TestServer;
 use bitrouter::metering::entities::requests;
 use bitrouter::workflow_state::ir::ProtocolKind;
 use bitrouter::workflow_state::online::OnlineWorkflowState;
+use bitrouter_ai::types::{Content, ProviderMetadata};
+use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
 use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config;
-use bitrouter_sdk::language_model::types::{Content, ProviderMetadata};
-use bitrouter_sdk::language_model::{GenerationParams, Message, PipelineRequest, Prompt, Role};
+use bitrouter_sdk::language_model::PipelineRequest;
 use bitrouter_sdk::server::{AppState, build_router};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
@@ -428,7 +429,7 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() {
         .content
         .iter()
         .filter_map(|c| match c {
-            bitrouter_sdk::language_model::Content::Text { text, .. } => Some(text.as_str()),
+            bitrouter_ai::types::Content::Text { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect();
@@ -576,7 +577,7 @@ async fn workflow_state_policy_routes_by_ir_key() {
             content: vec![Content::ToolResult {
                 call_id: "call_read_file".to_string(),
                 tool_name: None,
-                output: bitrouter_sdk::language_model::types::ToolResultOutput::Text {
+                output: bitrouter_ai::types::ToolResultOutput::Text {
                     value: "source contents".to_string(),
                 },
                 dynamic: false,
@@ -692,7 +693,7 @@ async fn workflow_state_policy_routes_same_model_at_distinct_efforts_end_to_end(
             content: vec![Content::ToolResult {
                 call_id: "call_read_file".to_string(),
                 tool_name: None,
-                output: bitrouter_sdk::language_model::types::ToolResultOutput::Text {
+                output: bitrouter_ai::types::ToolResultOutput::Text {
                     value: "source contents".to_string(),
                 },
                 dynamic: false,
@@ -1294,7 +1295,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
         async fn execute(
             &self,
             _target: &bitrouter_sdk::language_model::RoutingTarget,
-            _prompt: &bitrouter_sdk::language_model::Prompt,
+            _prompt: &bitrouter_ai::types::Prompt,
             _ctx: &bitrouter_sdk::language_model::PipelineContext,
         ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
             Err(bitrouter_sdk::BitrouterError::internal(
@@ -1304,7 +1305,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
         async fn execute_stream(
             &self,
             _target: &bitrouter_sdk::language_model::RoutingTarget,
-            _prompt: &bitrouter_sdk::language_model::Prompt,
+            _prompt: &bitrouter_ai::types::Prompt,
             _ctx: &bitrouter_sdk::language_model::PipelineContext,
         ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
             Err(bitrouter_sdk::BitrouterError::internal(
@@ -1747,11 +1748,9 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
 #[tokio::test]
 async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
     use async_trait::async_trait;
+    use bitrouter_ai::types::{ApiProtocol, AuthScheme, FinishReason, GenerateResult, Usage};
     use bitrouter_sdk::App;
-    use bitrouter_sdk::language_model::types::{
-        ApiProtocol, AuthScheme, ExecutionResult, FinishReason, GenerateResult, RoutingTarget,
-        Usage,
-    };
+    use bitrouter_sdk::language_model::types::{ExecutionResult, RoutingTarget};
     use http::Request;
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -1762,7 +1761,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
         async fn execute(
             &self,
             target: &RoutingTarget,
-            _prompt: &bitrouter_sdk::language_model::Prompt,
+            _prompt: &bitrouter_ai::types::Prompt,
             _ctx: &bitrouter_sdk::language_model::PipelineContext,
         ) -> bitrouter_sdk::Result<ExecutionResult> {
             Ok(ExecutionResult {
@@ -1796,7 +1795,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
         async fn execute_stream(
             &self,
             _target: &RoutingTarget,
-            _prompt: &bitrouter_sdk::language_model::Prompt,
+            _prompt: &bitrouter_ai::types::Prompt,
             _ctx: &bitrouter_sdk::language_model::PipelineContext,
         ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
             Err(bitrouter_sdk::BitrouterError::internal("unused"))
@@ -1866,10 +1865,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
     let json: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(
         json["id"],
-        bitrouter_sdk::language_model::protocol::responses::encode_gateway_continuation_id(
-            "bench-req-001"
-        )
-        .unwrap()
+        bitrouter_ai::protocol::responses::encode_gateway_continuation_id("bench-req-001").unwrap()
     );
 }
 
@@ -1953,7 +1949,7 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
         async fn execute(
             &self,
             _target: &bitrouter_sdk::language_model::RoutingTarget,
-            _prompt: &bitrouter_sdk::language_model::Prompt,
+            _prompt: &bitrouter_ai::types::Prompt,
             _ctx: &bitrouter_sdk::language_model::PipelineContext,
         ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
             Err(bitrouter_sdk::BitrouterError::internal("unused"))
@@ -1961,7 +1957,7 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
         async fn execute_stream(
             &self,
             _target: &bitrouter_sdk::language_model::RoutingTarget,
-            _prompt: &bitrouter_sdk::language_model::Prompt,
+            _prompt: &bitrouter_ai::types::Prompt,
             _ctx: &bitrouter_sdk::language_model::PipelineContext,
         ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
             Err(bitrouter_sdk::BitrouterError::internal("unused"))
@@ -2096,8 +2092,9 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
 //   Google:           generationConfig.responseSchema  (paired with
 //                     responseMimeType == "application/json")
 //
-// `name` / `strict` are dropped on the outbound to Anthropic and Google
-// because those native APIs don't carry them.
+// OpenAI name/strict metadata is refused before upstream HTTP on Messages/
+// Generate Content. Those inbound formats require a name, so these four edges
+// are refused. Messages/Generate Content supply the schema-only positive cells.
 //
 // Capability-gate coverage (a `Custom` outbound adapter without
 // `supports_response_format()` produces a 400) lives at the SDK level in
@@ -2472,8 +2469,7 @@ fn assert_native_schema(outbound: Outbound, body: &Value) {
                 "anthropic outbound must carry the schema under \
                  output_config.format.schema; body: {body}",
             );
-            // Messages' GA shape doesn't carry name/strict — the renderer
-            // must drop them, not forward them as unknown fields.
+            // Admitted common-subset requests have no name/strict to omit.
             assert!(
                 body["output_config"]["format"].get("name").is_none(),
                 "anthropic outbound must NOT carry `name` (not in GA shape); body: {body}",
@@ -2541,8 +2537,8 @@ async fn run_effort_cell(inbound: Inbound, outbound: Outbound) {
 }
 
 /// Drive one matrix cell end-to-end.
-async fn run_cell(inbound: Inbound, outbound: Outbound) {
-    let repository_cwd = std::env::current_dir().expect("repository cwd");
+async fn run_cell(inbound: Inbound, outbound: Outbound) -> anyhow::Result<()> {
+    let repository_cwd = std::env::current_dir()?;
     let identity_artifacts = [".installation.lock", "installation.id", "continuation.key"];
     for artifact in identity_artifacts {
         assert!(
@@ -2559,9 +2555,42 @@ async fn run_cell(inbound: Inbound, outbound: Outbound) {
         Inbound::Responses => inbound_responses(model),
         Inbound::GenerateContent => inbound_google(),
     };
-    post_inbound(&server, inbound, model, &body).await;
-    let upstream_body = captured_outbound(&upstream, outbound).await;
-    assert_native_schema(outbound, &upstream_body);
+    if matches!(inbound, Inbound::ChatCompletions | Inbound::Responses)
+        && matches!(outbound, Outbound::Messages | Outbound::GenerateContent)
+    {
+        for streamed in [false, true] {
+            let mut incompatible = body.clone();
+            incompatible["stream"] = streamed.into();
+            let response = match inbound {
+                Inbound::ChatCompletions => {
+                    server
+                        .post("/v1/chat/completions")
+                        .json(&incompatible)
+                        .await
+                }
+                Inbound::Responses => server.post("/v1/responses").json(&incompatible).await,
+                _ => return Err(anyhow::anyhow!("unexpected incompatible schema source")),
+            };
+            response.assert_status_bad_request();
+            response.assert_json(&json!({"error":{
+                "message":"model conversion incompatible",
+                "type":"invalid_request_error",
+                "code":"model_conversion_incompatible"
+            }}));
+            let requests = upstream
+                .received_requests()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("missing upstream inventory"))?;
+            assert!(
+                requests.is_empty(),
+                "incompatible schema must be refused before HTTP"
+            );
+        }
+    } else {
+        post_inbound(&server, inbound, model, &body).await;
+        let upstream_body = captured_outbound(&upstream, outbound).await;
+        assert_native_schema(outbound, &upstream_body);
+    }
 
     for artifact in identity_artifacts {
         assert!(
@@ -2580,88 +2609,89 @@ async fn run_cell(inbound: Inbound, outbound: Outbound) {
             );
         }
     }
+    Ok(())
 }
 
 // ----- 4×4 matrix -----
 
 #[tokio::test]
-async fn e2e_response_format_chat_completions_in_to_chat_completions_out() {
-    run_cell(Inbound::ChatCompletions, Outbound::ChatCompletions).await;
+async fn e2e_response_format_chat_completions_in_to_chat_completions_out() -> anyhow::Result<()> {
+    run_cell(Inbound::ChatCompletions, Outbound::ChatCompletions).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_chat_completions_in_to_messages_out() {
-    run_cell(Inbound::ChatCompletions, Outbound::Messages).await;
+async fn e2e_response_format_chat_completions_in_to_messages_out() -> anyhow::Result<()> {
+    run_cell(Inbound::ChatCompletions, Outbound::Messages).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_chat_completions_in_to_responses_out() {
-    run_cell(Inbound::ChatCompletions, Outbound::Responses).await;
+async fn e2e_response_format_chat_completions_in_to_responses_out() -> anyhow::Result<()> {
+    run_cell(Inbound::ChatCompletions, Outbound::Responses).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_chat_completions_in_to_generate_content_out() {
-    run_cell(Inbound::ChatCompletions, Outbound::GenerateContent).await;
+async fn e2e_response_format_chat_completions_in_to_generate_content_out() -> anyhow::Result<()> {
+    run_cell(Inbound::ChatCompletions, Outbound::GenerateContent).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_messages_in_to_chat_completions_out() {
-    run_cell(Inbound::Messages, Outbound::ChatCompletions).await;
+async fn e2e_response_format_messages_in_to_chat_completions_out() -> anyhow::Result<()> {
+    run_cell(Inbound::Messages, Outbound::ChatCompletions).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_messages_in_to_messages_out() {
-    run_cell(Inbound::Messages, Outbound::Messages).await;
+async fn e2e_response_format_messages_in_to_messages_out() -> anyhow::Result<()> {
+    run_cell(Inbound::Messages, Outbound::Messages).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_messages_in_to_responses_out() {
-    run_cell(Inbound::Messages, Outbound::Responses).await;
+async fn e2e_response_format_messages_in_to_responses_out() -> anyhow::Result<()> {
+    run_cell(Inbound::Messages, Outbound::Responses).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_messages_in_to_generate_content_out() {
-    run_cell(Inbound::Messages, Outbound::GenerateContent).await;
+async fn e2e_response_format_messages_in_to_generate_content_out() -> anyhow::Result<()> {
+    run_cell(Inbound::Messages, Outbound::GenerateContent).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_responses_in_to_chat_completions_out() {
-    run_cell(Inbound::Responses, Outbound::ChatCompletions).await;
+async fn e2e_response_format_responses_in_to_chat_completions_out() -> anyhow::Result<()> {
+    run_cell(Inbound::Responses, Outbound::ChatCompletions).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_responses_in_to_messages_out() {
-    run_cell(Inbound::Responses, Outbound::Messages).await;
+async fn e2e_response_format_responses_in_to_messages_out() -> anyhow::Result<()> {
+    run_cell(Inbound::Responses, Outbound::Messages).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_responses_in_to_responses_out() {
-    run_cell(Inbound::Responses, Outbound::Responses).await;
+async fn e2e_response_format_responses_in_to_responses_out() -> anyhow::Result<()> {
+    run_cell(Inbound::Responses, Outbound::Responses).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_responses_in_to_generate_content_out() {
-    run_cell(Inbound::Responses, Outbound::GenerateContent).await;
+async fn e2e_response_format_responses_in_to_generate_content_out() -> anyhow::Result<()> {
+    run_cell(Inbound::Responses, Outbound::GenerateContent).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_generate_content_in_to_chat_completions_out() {
-    run_cell(Inbound::GenerateContent, Outbound::ChatCompletions).await;
+async fn e2e_response_format_generate_content_in_to_chat_completions_out() -> anyhow::Result<()> {
+    run_cell(Inbound::GenerateContent, Outbound::ChatCompletions).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_generate_content_in_to_messages_out() {
-    run_cell(Inbound::GenerateContent, Outbound::Messages).await;
+async fn e2e_response_format_generate_content_in_to_messages_out() -> anyhow::Result<()> {
+    run_cell(Inbound::GenerateContent, Outbound::Messages).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_generate_content_in_to_responses_out() {
-    run_cell(Inbound::GenerateContent, Outbound::Responses).await;
+async fn e2e_response_format_generate_content_in_to_responses_out() -> anyhow::Result<()> {
+    run_cell(Inbound::GenerateContent, Outbound::Responses).await
 }
 
 #[tokio::test]
-async fn e2e_response_format_generate_content_in_to_generate_content_out() {
-    run_cell(Inbound::GenerateContent, Outbound::GenerateContent).await;
+async fn e2e_response_format_generate_content_in_to_generate_content_out() -> anyhow::Result<()> {
+    run_cell(Inbound::GenerateContent, Outbound::GenerateContent).await
 }
 
 #[tokio::test]

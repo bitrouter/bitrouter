@@ -56,10 +56,11 @@ use opentelemetry_semantic_conventions::SCHEMA_URL;
 use opentelemetry_semantic_conventions::attribute::{SERVICE_NAME, SERVICE_VERSION};
 use serde::{Deserialize, Serialize};
 
-use bitrouter_sdk::language_model::protocol::responses::encode_gateway_continuation_id;
+use bitrouter_ai::protocol::responses::encode_gateway_continuation_id;
+use bitrouter_ai::types::{ApiProtocol, Content, Prompt, StreamPart};
 use bitrouter_sdk::language_model::{
-    ApiProtocol, Content, ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, Prompt,
-    RequestOutcome, RoutingTarget, StreamContext, StreamHopOutcome, StreamInterest, StreamPart,
+    ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, RequestOutcome,
+    RoutingTarget, StreamContext, StreamHopOutcome, StreamInterest,
 };
 
 use crate::otel::cardinality::CardinalityLimiter;
@@ -771,7 +772,7 @@ impl ObserveHook for OtelExporter {
                         buf.push_str(text);
                     }
                 }
-                StreamPart::ReasoningDelta { text }
+                StreamPart::ReasoningDelta { text, .. }
                     if self.config.content_capture == ContentCaptureMode::Full =>
                 {
                     // Reasoning is assembled separately so it renders as its own
@@ -1032,6 +1033,7 @@ impl ObserveHook for OtelExporter {
                         blocks.push(Content::Reasoning {
                             text: streamed_reasoning.clone(),
                             provider_metadata: Default::default(),
+                            native: None,
                         });
                     }
                     if !streamed_output.is_empty() {
@@ -1235,8 +1237,8 @@ fn set_hop_client_attrs(span: &opentelemetry::trace::SpanRef<'_>, result: &Execu
     }
 }
 
-fn finish_reason_to_str(reason: &bitrouter_sdk::language_model::FinishReason) -> String {
-    use bitrouter_sdk::language_model::FinishReason::*;
+fn finish_reason_to_str(reason: &bitrouter_ai::types::FinishReason) -> String {
+    use bitrouter_ai::types::FinishReason::*;
     match reason {
         Stop => "stop".to_string(),
         Length => "length".to_string(),
@@ -1273,15 +1275,17 @@ mod hop_tests {
     use opentelemetry_sdk::error::OTelSdkResult;
     use opentelemetry_sdk::trace::{Span as SdkSpan, SpanData, SpanProcessor};
 
+    use bitrouter_ai::protocol::responses::ResponsesAdapter;
+    use bitrouter_ai::protocol::{OutboundAdapter, SseEvent};
+    use bitrouter_ai::types::{
+        ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
+        Role, Usage,
+    };
     use bitrouter_sdk::caller::CallerContext;
     use bitrouter_sdk::error::BitrouterError;
-    use bitrouter_sdk::language_model::protocol::responses::ResponsesAdapter;
-    use bitrouter_sdk::language_model::protocol::{OutboundAdapter, SseEvent};
     use bitrouter_sdk::language_model::{
-        ApiProtocol, Content, DenyReason, FinishReason, GenerateResult, GenerationParams,
-        HookDecision, Message, MockExecutor, MockResponse, PipelineBuilder, PipelineRequest,
-        PreRequestHook, Prompt, Role, SettlementContext, SettlementRecorder, StaticRoutingTable,
-        Usage,
+        DenyReason, HookDecision, MockExecutor, MockResponse, PipelineBuilder, PipelineRequest,
+        PreRequestHook, SettlementContext, SettlementRecorder, StaticRoutingTable,
     };
 
     struct RejectingPreRequestHook;
@@ -1691,20 +1695,19 @@ mod hop_tests {
     }
 
     #[tokio::test]
-    async fn responses_mismatch_native_ids_never_enter_failed_stream_spans() {
+    async fn responses_mismatch_native_ids_never_enter_failed_stream_spans()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
         const CREATED_SENTINEL: &str = "native-created-otel-private-sentinel";
         const TERMINAL_SENTINEL: &str = "native-terminal-otel-private-sentinel";
         let mut decoder = ResponsesAdapter.stream_decoder();
-        decoder
-            .decode(&SseEvent {
-                event: Some("response.created".into()),
-                data: serde_json::json!({
-                    "type": "response.created",
-                    "response": {"id": CREATED_SENTINEL, "status": "in_progress"}
-                })
-                .to_string(),
+        decoder.decode(&SseEvent {
+            event: Some("response.created".into()),
+            data: serde_json::json!({
+                "type": "response.created",
+                "response": {"id": CREATED_SENTINEL, "status": "in_progress"}
             })
-            .expect("created event decodes");
+            .to_string(),
+        })?;
         let error = decoder
             .decode(&SseEvent {
                 event: Some("response.completed".into()),
@@ -1718,7 +1721,9 @@ mod hop_tests {
                 })
                 .to_string(),
             })
-            .expect_err("mismatched terminal id must fail");
+            .err()
+            .ok_or_else(|| std::io::Error::other("mismatched terminal id must fail"))?;
+        let error = bitrouter_sdk::BitrouterError::from(error);
 
         let (exporter, captured) = make_test_exporter();
         let ctx = PipelineContext::new(fresh_request());
@@ -1734,11 +1739,15 @@ mod hop_tests {
             .await;
         assert!(exporter.provider.force_flush().is_ok());
 
-        let spans = captured.lock().unwrap().clone();
+        let spans = captured
+            .lock()
+            .map_err(|error| std::io::Error::other(error.to_string()))?
+            .clone();
         let exported = format!("{spans:#?}");
         assert!(exported.contains("Responses terminal id"));
         assert!(!exported.contains(CREATED_SENTINEL));
         assert!(!exported.contains(TERMINAL_SENTINEL));
+        Ok(())
     }
 
     #[tokio::test]
@@ -1837,6 +1846,7 @@ mod hop_tests {
                 &sctx,
                 &StreamPart::ReasoningDelta {
                     text: "let me think".into(),
+                    source_kind: None,
                 },
             )
             .await;
@@ -3071,6 +3081,7 @@ mod hop_tests {
                     },
                     StreamPart::ReasoningDelta {
                         text: "thinking".into(),
+                        source_kind: None,
                     },
                     StreamPart::TextDelta {
                         text: "hello".into(),

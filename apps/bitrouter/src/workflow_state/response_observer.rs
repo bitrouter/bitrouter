@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
+use bitrouter_ai::types::{Content, StreamPart, Tool};
 use bitrouter_sdk::language_model::{
-    Content, HopOutcome, ObserveHook, Phase, PipelineContext, RequestOutcome, RoutingTarget,
-    StreamContext, StreamInterest, StreamPart, Tool,
+    HopOutcome, ObserveHook, Phase, PipelineContext, RequestOutcome, RoutingTarget, StreamContext,
+    StreamInterest,
 };
 use sha2::{Digest, Sha256};
 
@@ -1054,12 +1055,14 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::{Arc, PoisonError};
 
+    use bitrouter_ai::types::AuthScheme;
+    use bitrouter_ai::types::{
+        ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, StreamPart, Tool,
+    };
     use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::types::AuthScheme;
     use bitrouter_sdk::language_model::{
-        ApiProtocol, Content, ExecutionResult, FinishReason, GenerateResult, GenerationParams,
-        HopOutcome, ObserveHook, Phase, PipelineContext, PipelineRequest, RequestOutcome,
-        RoutingTarget, StreamPart, StreamProcessor, Tool,
+        ExecutionResult, HopOutcome, ObserveHook, Phase, PipelineContext, PipelineRequest,
+        RequestOutcome, RoutingTarget, StreamProcessor,
     };
 
     use super::{ObservedActionClass, PredictiveResponseObserver};
@@ -1076,6 +1079,7 @@ mod tests {
                 vec![Content::Reasoning {
                     text: "consider the tradeoffs".into(),
                     provider_metadata: BTreeMap::new(),
+                    native: None,
                 }],
                 Vec::new(),
                 ObservedActionClass::ReasonOrPlan,
@@ -2180,7 +2184,7 @@ mod tests {
 
     fn pipeline_context(
         request_id: &str,
-        prompt: bitrouter_sdk::language_model::Prompt,
+        prompt: bitrouter_ai::types::Prompt,
         invocation: &EvalInvocation,
     ) -> PipelineContext {
         pipeline_context_for(request_id, CallerContext::local(), prompt, invocation)
@@ -2189,7 +2193,7 @@ mod tests {
     fn pipeline_context_for(
         request_id: &str,
         caller: CallerContext,
-        prompt: bitrouter_sdk::language_model::Prompt,
+        prompt: bitrouter_ai::types::Prompt,
         invocation: &EvalInvocation,
     ) -> PipelineContext {
         let mut context = PipelineContext::new(PipelineRequest {
@@ -2206,8 +2210,8 @@ mod tests {
         context
     }
 
-    fn prompt(tools: Vec<Tool>) -> bitrouter_sdk::language_model::Prompt {
-        bitrouter_sdk::language_model::Prompt {
+    fn prompt(tools: Vec<Tool>) -> bitrouter_ai::types::Prompt {
+        bitrouter_ai::types::Prompt {
             model: "model".into(),
             system: None,
             system_provider_metadata: BTreeMap::new(),

@@ -10,7 +10,7 @@
 //! The app owns the types, port, and implementation beside the policy table,
 //! routing table, and pricing registry.
 
-use bitrouter_sdk::language_model::types::ReasoningEffort;
+use bitrouter_ai::types::ReasoningEffort;
 
 use super::ToolError;
 
@@ -264,12 +264,10 @@ pub trait RouteQuery: Send + Sync {
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use bitrouter_ai::types::{GenerationParams, Message, Prompt, ProviderMetadata, Role};
 use bitrouter_sdk::HeaderMap;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
-use bitrouter_sdk::language_model::types::{
-    GenerationParams, Message, Prompt, ProviderMetadata, Role,
-};
 use bitrouter_sdk::language_model::{RoutingPrefs, RoutingTable};
 
 use crate::daemon::{DaemonCommand, DaemonResponse, RouteHop};
@@ -279,7 +277,7 @@ use crate::policy_table_router::{PolicyDecision, PolicyTableRouter};
 
 #[derive(Default)]
 struct RouteMetadata {
-    effective_effort: Option<bitrouter_sdk::language_model::types::ReasoningEffort>,
+    effective_effort: Option<bitrouter_ai::types::ReasoningEffort>,
     router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
     router_source: Option<crate::actions::models::RouterSource>,
     bound_policy: Option<String>,

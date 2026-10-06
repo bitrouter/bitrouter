@@ -6,11 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
 
+use bitrouter::cloud::account::credentials::CredentialsStore;
+use bitrouter::cloud::account::manager::CredentialManager;
 use bitrouter::cloud::auth::login_api_key;
-use bitrouter_providers::hosted::account::credentials::{
-    CredentialKind, Credentials, CredentialsStore, StoredCredential,
-};
-use bitrouter_providers::hosted::account::manager::CredentialManager;
+use bitrouter_ai::providers::hosted::credentials::{CredentialKind, Credentials, StoredCredential};
 use chrono::{Duration, Utc};
 use tempfile::TempDir;
 use wiremock::matchers::{body_string, header, method, path};

@@ -25,11 +25,10 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::{BitrouterError, Result};
-use crate::language_model::HttpTimeouts;
 use crate::language_model::routing::SortOrder;
-use crate::language_model::types::{
-    ApiProtocol, ModelCompatibility, OutboundHeaderRule, ProtocolList,
-};
+use crate::language_model::types::OutboundHeaderRule;
+use bitrouter_ai::client::HttpTimeouts;
+use bitrouter_ai::types::{ApiProtocol, ModelCompatibility, ProtocolList};
 
 pub mod checker;
 pub mod pattern;
@@ -425,7 +424,7 @@ impl PolicyRuntimeMode {
 
 /// Default base URL for the public registry distribution artifacts — the raw
 /// files on bitrouter OSS `main` under `dist/registry/`. The
-/// `bitrouter-providers` fetch layer reads it through [`RegistryConfig`].
+/// application catalog integration reads it through [`RegistryConfig`].
 pub const DEFAULT_REGISTRY_URL: &str =
     "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry";
 
@@ -477,7 +476,7 @@ pub enum PolicyModelTarget {
         /// Canonical or provider-qualified model id.
         model: String,
         /// Exact effort value owned by this policy target.
-        effort: crate::language_model::types::ReasoningEffort,
+        effort: bitrouter_ai::types::ReasoningEffort,
     },
 }
 
@@ -490,7 +489,7 @@ impl PolicyModelTarget {
     }
 
     /// Policy-owned reasoning effort, when explicitly configured.
-    pub fn effort(&self) -> Option<crate::language_model::types::ReasoningEffort> {
+    pub fn effort(&self) -> Option<bitrouter_ai::types::ReasoningEffort> {
         match self {
             Self::Model(_) => None,
             Self::ModelEffort { effort, .. } => Some(*effort),
@@ -1396,7 +1395,7 @@ impl ProviderConfig {
     pub fn model_supports_capability(
         &self,
         model_id: &str,
-        capability: crate::language_model::types::Capability,
+        capability: bitrouter_ai::types::Capability,
     ) -> bool {
         self.model_config(model_id)
             .is_some_and(|model| model.capabilities.contains(&capability))
@@ -1503,11 +1502,11 @@ pub struct ProviderModel {
     /// legacy unknown entries; policy code that grants a capability-specific
     /// exception requires a positive declaration.
     #[serde(default)]
-    pub capabilities: Vec<crate::language_model::types::Capability>,
+    pub capabilities: Vec<bitrouter_ai::types::Capability>,
     /// Positively verified qualitative effort levels for this exact route.
     /// Absence means unknown, not unsupported.
     #[serde(default)]
-    pub reasoning_effort: Option<crate::language_model::types::ReasoningEffortConfig>,
+    pub reasoning_effort: Option<bitrouter_ai::types::ReasoningEffortConfig>,
     /// Provider/model request-shape quirks that do not change model semantics.
     #[serde(default)]
     pub compatibility: ModelCompatibility,
@@ -1756,7 +1755,7 @@ fn overrides() -> &'static std::sync::RwLock<std::collections::HashMap<String, S
 
 /// Replace the in-memory override map atomically. Subsequent
 /// [`env_lookup`] / [`substitute_env`] calls — and
-/// `bitrouter_providers::zero_config`, which resolves through
+/// the application's `providers::apply::zero_config`, which resolves through
 /// `env_lookup` — see the new values. Empty map clears all overrides.
 pub fn set_env_overrides(values: std::collections::HashMap<String, String>) {
     let mut w = overrides().write().expect("env override lock poisoned");
@@ -1811,7 +1810,7 @@ where
             if let Some(reasoning_effort) = &model.reasoning_effort {
                 if !model
                     .capabilities
-                    .contains(&crate::language_model::types::Capability::Reasoning)
+                    .contains(&bitrouter_ai::types::Capability::Reasoning)
                 {
                     return Err(BitrouterError::bad_request(format!(
                         "provider '{id}' model '{}' reasoning_effort requires the reasoning capability",

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result, bail};
-use bitrouter_sdk::language_model::types::ReasoningEffortConfig;
+use bitrouter_ai::types::ReasoningEffortConfig;
 use chrono::{Days, NaiveDate, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -3901,7 +3901,7 @@ enum ApiProtocol {
     Google,
     Responses,
     /// Google Antigravity Code Assist — a custom, externally-registered runtime
-    /// protocol (`bitrouter_providers::antigravity`). No models.dev source.
+    /// protocol (`bitrouter_ai::providers::antigravity::protocol`). No models.dev source.
     Antigravity,
 }
 

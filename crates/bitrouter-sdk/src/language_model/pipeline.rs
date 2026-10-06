@@ -34,9 +34,9 @@ use crate::language_model::settlement::{
 };
 use crate::language_model::stream::{StreamOutcome, StreamProcessor};
 use crate::language_model::types::{
-    ExecutionResult, PipelineRequest, PipelineResponse, Prompt, ReasoningEffortSource,
-    RoutingTarget, StreamPart,
+    ExecutionResult, PipelineRequest, PipelineResponse, RoutingTarget,
 };
+use bitrouter_ai::types::{Prompt, ReasoningEffortSource, StreamPart};
 
 /// The default SSE keepalive interval.
 pub const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(30);
@@ -577,7 +577,7 @@ impl Pipeline {
             Ok((result, provider_terminal_exposed)) => {
                 let native_responses_terminal_invalid = provider_terminal_exposed
                     && ctx.successful_target().is_some_and(|target| {
-                        target.api_protocol == crate::language_model::ApiProtocol::Responses
+                        target.api_protocol == bitrouter_ai::types::ApiProtocol::Responses
                     })
                     && (result
                         .result
@@ -587,8 +587,8 @@ impl Pipeline {
                         || !matches!(
                             result.result.finish_reason.as_ref(),
                             Some(
-                                crate::language_model::FinishReason::Stop
-                                    | crate::language_model::FinishReason::Length
+                                bitrouter_ai::types::FinishReason::Stop
+                                    | bitrouter_ai::types::FinishReason::Length
                             )
                         ));
                 if native_responses_terminal_invalid {
@@ -606,7 +606,7 @@ impl Pipeline {
                 }
                 let native_response_completed = provider_terminal_exposed
                     && ctx.successful_target().is_some_and(|target| {
-                        target.api_protocol == crate::language_model::ApiProtocol::Responses
+                        target.api_protocol == bitrouter_ai::types::ApiProtocol::Responses
                     })
                     && result
                         .result
@@ -616,8 +616,8 @@ impl Pipeline {
                     && matches!(
                         result.result.finish_reason.as_ref(),
                         Some(
-                            crate::language_model::FinishReason::Stop
-                                | crate::language_model::FinishReason::Length
+                            bitrouter_ai::types::FinishReason::Stop
+                                | bitrouter_ai::types::FinishReason::Length
                         )
                     );
                 ctx.set_nonstream_native_response_completed(native_response_completed);
@@ -767,7 +767,7 @@ impl Pipeline {
             provider_id: upstream.target.provider_name.clone(),
             model_id: upstream.target.service_id.clone(),
             account_label: upstream.target.account_label.clone(),
-            result: crate::language_model::types::GenerateResult {
+            result: bitrouter_ai::types::GenerateResult {
                 content: Vec::new(),
                 usage: None,
                 finish_reason: None,
@@ -1239,8 +1239,15 @@ impl Pipeline {
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
         let mut errors = Vec::new();
-        for (attempt_index, target) in chain.iter().enumerate() {
-            self.wait_before_fallback(attempt_index).await;
+        let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
+        for target in chain {
+            if !self
+                .admit_candidate(target, prompt, false, ctx, &mut excluded)
+                .await?
+            {
+                continue;
+            }
+            self.wait_before_fallback(errors.len()).await;
             self.observe_hop_start(ctx, target).await;
             let outcome = self.executor.execute(target, prompt, ctx).await;
             match &outcome {
@@ -1276,6 +1283,9 @@ impl Pipeline {
                 },
             }
         }
+        if errors.is_empty() && !excluded.issues.is_empty() {
+            return Err(BitrouterError::Incompatible { report: excluded });
+        }
         Err(aggregate_fallback_errors(errors))
     }
 
@@ -1285,8 +1295,15 @@ impl Pipeline {
         ctx: &PipelineContext,
     ) -> Result<StreamingExecution> {
         let mut errors = Vec::new();
-        for (attempt_index, target) in chain.iter().enumerate() {
-            self.wait_before_fallback(attempt_index).await;
+        let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
+        for target in chain {
+            if !self
+                .admit_candidate(target, ctx.prompt(), true, ctx, &mut excluded)
+                .await?
+            {
+                continue;
+            }
+            self.wait_before_fallback(errors.len()).await;
             let provider_started_at = Instant::now();
             self.observe_hop_start(ctx, target).await;
             let outcome = self
@@ -1337,7 +1354,60 @@ impl Pipeline {
                 },
             }
         }
+        if errors.is_empty() && !excluded.issues.is_empty() {
+            return Err(BitrouterError::Incompatible { report: excluded });
+        }
         Err(aggregate_fallback_errors(errors))
+    }
+
+    /// Share the executor's conversion contract without invoking failure policy
+    /// or hop observers for a candidate that cannot represent this source.
+    async fn admit_candidate(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        stream: bool,
+        ctx: &PipelineContext,
+        excluded: &mut bitrouter_ai::conversion::ConversionReport,
+    ) -> Result<bool> {
+        let assessment = self
+            .executor
+            .preflight(target, prompt, stream)
+            .and_then(|report| {
+                report.require_admitted()?;
+                Ok(report)
+            });
+        match assessment {
+            Ok(report) => {
+                if !report.admitted.is_empty() {
+                    for hook in &self.observe_hooks {
+                        let fut = std::panic::AssertUnwindSafe(
+                            hook.on_conversion_admitted(ctx, target, &report),
+                        );
+                        if fut.catch_unwind().await.is_err() {
+                            tracing::warn!(
+                                "ObserveHook::on_conversion_admitted panicked; swallowed"
+                            );
+                        }
+                    }
+                }
+                Ok(true)
+            }
+            Err(BitrouterError::Incompatible { report }) if !report.is_output_failure() => {
+                for hook in &self.observe_hooks {
+                    let fut = std::panic::AssertUnwindSafe(
+                        hook.on_conversion_excluded(ctx, target, &report),
+                    );
+                    if fut.catch_unwind().await.is_err() {
+                        tracing::warn!("ObserveHook::on_conversion_excluded panicked; swallowed");
+                    }
+                }
+                excluded.issues.extend(report.issues);
+                excluded.admitted.extend(report.admitted);
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn wait_before_fallback(&self, attempt_index: usize) {
@@ -1604,9 +1674,10 @@ fn aggregate_fallback_errors(errors: Vec<BitrouterError>) -> BitrouterError {
 #[cfg(test)]
 mod policy_effort_target_tests {
     use super::filter_reasoning_effort_targets;
-    use crate::language_model::types::{
+    use crate::language_model::types::RoutingTarget;
+    use bitrouter_ai::types::{
         ApiProtocol, GenerationParams, Prompt, ReasoningEffort, ReasoningEffortConfig,
-        ReasoningEffortSource, RoutingTarget,
+        ReasoningEffortSource,
     };
 
     fn prompt() -> Prompt {

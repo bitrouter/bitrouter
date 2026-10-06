@@ -1,10 +1,10 @@
 use super::*;
+use bitrouter_ai::types::ToolChoice;
 use bitrouter_sdk::app::App;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable, ProviderConfig};
 use bitrouter_sdk::language_model::context::PipelineContext;
 use bitrouter_sdk::language_model::executor::MockExecutor;
 use bitrouter_sdk::language_model::hooks::{HookDecision, PreRequestHook};
-use bitrouter_sdk::language_model::types::ToolChoice;
 use sea_orm::{DatabaseConnection, EntityTrait, Set};
 
 use crate::acp_trajectory::{RecordingScope, SessionIdentity};

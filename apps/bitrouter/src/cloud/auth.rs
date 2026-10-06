@@ -6,15 +6,12 @@
 use anyhow::{Context, Result};
 use std::sync::Arc;
 
-use bitrouter_providers::hosted::account::credentials::{
-    CredentialKind, Credentials, StoredCredential,
-};
-use bitrouter_providers::hosted::account::flow;
-use bitrouter_providers::hosted::account::manager::CredentialManager;
-use bitrouter_providers::hosted::account::metadata::{self, AsMetadata};
-use bitrouter_providers::hosted::account::settings::{
-    Settings, require_secure_url, resolve, resolve_from_env,
-};
+use bitrouter_ai::providers::hosted::credentials::{CredentialKind, Credentials, StoredCredential};
+
+use crate::cloud::account::manager::CredentialManager;
+use crate::cloud::account::settings::{Settings, require_secure_url, resolve, resolve_from_env};
+use bitrouter_ai::providers::hosted::flow;
+use bitrouter_ai::providers::hosted::metadata::{self, AsMetadata};
 
 /// User-supplied flag values for `bro cloud login` / `logout`.
 /// The CLI passes them straight through.
@@ -81,7 +78,12 @@ pub async fn login(
     let metadata = metadata::fetch(&client, &settings.authorization_server)
         .await
         .with_context(|| format!("fetching AS metadata for {}", settings.authorization_server))?;
-    let token_set = flow::run_device_flow(&client, &metadata, &settings, |device| {
+    let params = flow::LoginParams {
+        authorization_server: settings.authorization_server.clone(),
+        client_id: settings.client_id.clone(),
+        scope: settings.scope.clone(),
+    };
+    let token_set = flow::run_device_flow(&client, &metadata, &params, |device| {
         // RFC 8628 §3.2 — when the AS returns `verification_uri_complete`
         // (the URL with `user_code` already embedded as a query
         // parameter), the approval page auto-fills the code, so the
@@ -105,7 +107,7 @@ pub async fn login(
         );
     })
     .await?;
-    let credentials = flow::credentials_from_token_set(token_set, &settings);
+    let credentials = flow::credentials_from_token_set(token_set, &params);
     let stored = StoredCredential::from(credentials.clone());
     manager
         .save(stored.clone())
