@@ -176,7 +176,7 @@ are all in the protocol. What lacks them is BitRouter's
 `method_not_found` to everything outside `initialize` / `session/new` /
 `session/prompt` / `session/cancel`
 ([`down.rs:319`](../crates/bitrouter-sdk/src/acp/down.rs:319)), and
-[`translate.rs`](../crates/bitrouter-sdk/src/acp/translate.rs), whose `_ =>
+[`translate.rs`](../crates/bitrouter-orchestrator/src/acp/translate.rs), whose `_ =>
 None` arm drops `Plan` and every variant above.
 
 ## 5. Decision 2 — the work is in `down.rs`, not the TUI
@@ -424,7 +424,7 @@ source. There are **three** streams, not one:
 
 | Stream | Destination today | Collides? |
 |---|---|---|
-| Agent child stderr | inherited ([`up.rs:283`](../crates/bitrouter-sdk/src/acp/up.rs:283)) | **yes** |
+| Agent child stderr | inherited ([`up.rs:283`](../crates/bitrouter-orchestrator/src/acp/up.rs:283)) | **yes** |
 | BitRouter's own tracing | stderr, for *every* command ([`main.rs:2489`](../apps/bitrouter/src/main.rs:2489)) | **yes** |
 | TUI rendering | stdout | — |
 
@@ -564,7 +564,7 @@ formalizes a property that already holds and buys nothing.
   change.
 - v2's only relevant gift is a smaller **client** role (`fs/*` and `terminal/*`
   deleted) — and `up.rs` already declines both, *"ACP v2 removes that client
-  surface"* ([`up.rs:764`](../crates/bitrouter-sdk/src/acp/up.rs:764)).
+  surface"* ([`up.rs:764`](../crates/bitrouter-orchestrator/src/acp/up.rs:764)).
 
 **`providers/*` does not require v2.** It appears in both `v1/agent.rs` and
 `v2/agent.rs`, gated only on `unstable_llm_providers`.
@@ -598,7 +598,7 @@ look broken in ways that read as its own bug.
 
 1. **Two stderr writers will corrupt the viewport, not one** (§8.2). The agent
    child's stderr is inherited —
-   [`up.rs:283`](../crates/bitrouter-sdk/src/acp/up.rs:283)
+   [`up.rs:283`](../crates/bitrouter-orchestrator/src/acp/up.rs:283)
    (`.stderr(Stdio::inherit())`), stated at :300 — *and* BitRouter's own
    tracing goes to stderr for every command
    ([`main.rs:2489`](../apps/bitrouter/src/main.rs:2489)). Capture the child's
@@ -613,7 +613,7 @@ look broken in ways that read as its own bug.
    the line (§2), and it is a natural enforcement of it. Recorded so the
    constraint is chosen rather than discovered.
 4. **`AcpTransport` is a single-variant enum (`Stdio` only)** —
-   [`transport.rs:22`](../crates/bitrouter-sdk/src/acp/transport.rs:22). Any
+   [`agent.rs:22`](../crates/bitrouter-sdk/src/config/agent.rs:22). Any
    "embeddable over a socket" claim has no transport today, and ACP lists
    Streamable HTTP as a draft proposal. Out of scope for v1; do not promise it.
 

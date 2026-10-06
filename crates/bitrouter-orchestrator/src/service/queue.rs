@@ -50,7 +50,10 @@ impl ThreadService {
                     "runtime is shutting down",
                 ));
             }
-            if thread.snapshot.status == ThreadStatus::RecoveryRequired {
+            if matches!(
+                thread.snapshot.status,
+                ThreadStatus::RecoveryRequired | ThreadStatus::Closing
+            ) {
                 return Err(ServiceError::new(
                     ErrorCode::RecoveryRequired,
                     "Thread controls require recovery",
@@ -129,6 +132,7 @@ impl ThreadService {
         thread.queued.retain(|entry| entry.turn_id != turn_id);
         self.append_locked(&mut state, turn_id, payload)?;
         Ok(TurnReceipt {
+            user_item_id: entry.user_item_id,
             thread_id: target.thread_id.clone(),
             turn_id: turn_id.into(),
             queue_order: entry.order,

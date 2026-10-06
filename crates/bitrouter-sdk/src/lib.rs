@@ -10,17 +10,19 @@
 //!
 //! ## What's in the SDK
 //!
-//! - **Three independent protocol pipelines** — one per wire family:
+//! - **Two independent protocol pipelines**:
 //!   - [`language_model`] — the main pipeline. Handles LLM completions with the
 //!     full hook set (pre-request → route → execute → settle, plus an
 //!     interleaved stream stage and read-only observation).
 //!   - [`mcp`] — Model Context Protocol routing (pure routing, no settlement).
-//!   - [`acp`] — Agent Client Protocol routing (pure routing, no settlement).
 //!
 //!   The pipelines are deliberately **not** generic over a shared hook trait:
 //!   each one has its own hooks so a stage in `language_model` can't be
 //!   accidentally registered on `mcp`. Cross-cutting reuse goes through the
 //!   crate-root library code below, never a shared trait.
+//!
+//!   The ACP controller, client and agent-process transport are owned by
+//!   `bitrouter-orchestrator` in `crates/bitrouter-orchestrator/src/acp/`.
 //!
 //! - **Shared crate-root infrastructure** that every protocol uses:
 //!   - [`app`] — [`App`] / [`AppBuilder`] and legacy custom-host [`Plugin`] assembly.
@@ -185,7 +187,6 @@ pub mod config;
 pub mod server;
 
 // ===== per-protocol modules =====
-pub mod acp;
 pub mod language_model;
 pub mod mcp;
 

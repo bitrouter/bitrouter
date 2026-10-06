@@ -16,7 +16,8 @@ use agent_client_protocol::{
 };
 // The only conductor use in the workspace. It reaches `axum` non-optionally
 // through `agent-client-protocol-trace-viewer`, which is why `acp` links an
-// HTTP server — see the `acp` feature's comment in `Cargo.toml`.
+// HTTP server. The conductor is an optional orchestrator dependency, outside
+// the SDK's tree.
 use agent_client_protocol_conductor::{ConductorImpl, ProxiesAndAgent};
 use async_trait::async_trait;
 

@@ -283,7 +283,7 @@ models:
     );
     config.agents.insert(
         agent.into(),
-        bitrouter_sdk::acp::transport::AcpAgentConfig {
+        bitrouter_sdk::config::agent::AcpAgentConfig {
             name: agent.into(),
             transport: AcpTransport::Stdio {
                 command: wrapper.display().to_string(),

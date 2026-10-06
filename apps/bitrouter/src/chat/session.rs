@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 
 use agent_client_protocol::schema::v1::SessionUpdate;
-use bitrouter_sdk::acp::client::AcpClient;
+use bitrouter_orchestrator::acp::client::AcpClient;
 
 use crate::chat::effects::Wire;
 

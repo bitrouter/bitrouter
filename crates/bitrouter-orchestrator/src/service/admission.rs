@@ -182,10 +182,12 @@ impl ThreadService {
         self.scan_receipt(&entry.thread_id, |record| match record {
             ExecutionRecord::TurnQueued {
                 turn_id: id,
+                user_item_id,
                 queue_order,
                 ..
             } if &id == turn_id => {
                 receipt = Some(TurnReceipt {
+                    user_item_id,
                     thread_id: entry.thread_id.clone(),
                     turn_id: id,
                     queue_order,
@@ -222,7 +224,7 @@ impl ThreadService {
         request: TurnRequest,
     ) -> Result<TurnReceipt, ServiceError> {
         self.load_thread(target, caller).await?;
-        self.admit_turn(target, caller, request, true).await
+        self.admit_turn(target, caller, request, true, false).await
     }
 
     pub async fn enqueue_turn(
@@ -232,7 +234,19 @@ impl ThreadService {
         request: TurnRequest,
     ) -> Result<TurnReceipt, ServiceError> {
         self.load_thread(target, caller).await?;
-        self.admit_turn(target, caller, request, false).await
+        self.admit_turn(target, caller, request, false, false).await
+    }
+
+    /// An explicit fresh foreground prompt may clear a safely settled empty
+    /// pause. It cannot bypass retained queued work or recovery blockers.
+    pub async fn start_foreground_turn(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+        request: TurnRequest,
+    ) -> Result<TurnReceipt, ServiceError> {
+        self.load_thread(target, caller).await?;
+        self.admit_turn(target, caller, request, true, true).await
     }
 
     pub(super) async fn admit_turn(
@@ -241,6 +255,7 @@ impl ThreadService {
         caller: &CallerContext,
         request: TurnRequest,
         start: bool,
+        resume_empty: bool,
     ) -> Result<TurnReceipt, ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
         let admission = self.inner.admission.lock().await;
@@ -265,7 +280,16 @@ impl ThreadService {
         }
         let gate = self.thread_gate(&target.thread_id)?;
         let guard = gate.lock().await;
-        let (queued, config, workspace, verification, context_version, previous_messages, profile) = {
+        let (
+            queued,
+            config,
+            workspace,
+            verification,
+            context_version,
+            previous_messages,
+            profile,
+            clear_pause,
+        ) = {
             let state = self.lock_state();
             let thread = state
                 .threads
@@ -288,8 +312,16 @@ impl ThreadService {
                     "Thread cannot admit input until recovery or shutdown completes",
                 ));
             }
+            let clear_pause = resume_empty
+                && thread.snapshot.status == ThreadStatus::Paused
+                && thread.queued.is_empty()
+                && thread.snapshot.active_turn_id.is_none()
+                && !state
+                    .running_turns
+                    .values()
+                    .any(|id| id == &target.thread_id);
             if start
-                && (thread.snapshot.status != ThreadStatus::Idle
+                && ((thread.snapshot.status != ThreadStatus::Idle && !clear_pause)
                     || !thread.queued.is_empty()
                     || thread.snapshot.active_turn_id.is_some())
             {
@@ -339,6 +371,7 @@ impl ThreadService {
                 thread.snapshot.context_version,
                 thread.messages.clone(),
                 thread.snapshot.permission_profile,
+                clear_pause,
             )
         };
         let agent = if start {
@@ -384,7 +417,11 @@ impl ThreadService {
             thread_id: target.thread_id.clone(),
             turn_id: Some(queued.turn_id.clone()),
         };
-        let mut facts = vec![
+        let mut facts = Vec::new();
+        if clear_pause {
+            facts.push(ExecutionRecord::QueueResumed);
+        }
+        facts.extend([
             ExecutionRecord::TurnQueued {
                 turn_id: queued.turn_id.clone(),
                 user_item_id: queued.user_item_id.clone(),
@@ -392,7 +429,7 @@ impl ThreadService {
                 queue_order: queued.order,
             },
             ExecutionRecord::AcceptedKey { entry: key.clone() },
-        ];
+        ]);
         if start {
             facts.push(ExecutionRecord::TurnActivated {
                 turn_id: queued.turn_id.clone(),
@@ -415,6 +452,7 @@ impl ThreadService {
         }
         let cancel = CancellationToken::new();
         let receipt = TurnReceipt {
+            user_item_id: queued.user_item_id.clone(),
             thread_id: target.thread_id.clone(),
             turn_id: queued.turn_id.clone(),
             queue_order: queued.order,
@@ -432,6 +470,7 @@ impl ThreadService {
                 .ok_or_else(unknown_thread)?;
             thread.next_order = queued.order;
             if start {
+                thread.snapshot.pause_reason = None;
                 thread.snapshot.status = ThreadStatus::Busy;
                 thread.snapshot.active_turn_id = Some(queued.turn_id.clone());
                 thread.snapshot.context_version = context_version.saturating_add(1);

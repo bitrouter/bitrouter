@@ -62,10 +62,10 @@ MCP tools during continuation. Committed results are reused, not executed again.
 Reconstructing or completing an already settled outcome does not reconnect or
 replace its original inventory, even when files/configuration have since changed.
 
-New roots and appended roots use runtime format **4**. Formats **2/3** remain
+New roots and appended roots use runtime format **5**. Formats **2/3/4** remain
 readable; a new append upgrades the root envelope in the same version-fenced
 transaction, without rewriting its history or identities. An older binary refuses
-format 4 before decoding new instruction facts. Formats 0/1 and future versions remain
+format 5 before decoding new instruction/resource/close facts. Formats 0/1 and future versions remain
 unsupported. There is no schema migration or automatic lost-owner retirement.
 Local protocol remains v15: inventories use optional fields in existing snapshot
 and context-advanced messages; no new public message variant is introduced.
@@ -236,5 +236,6 @@ Run logs were retained locally under `/tmp/pr945-321ccaad-{nextest,doctest,rustd
 and `/tmp/pr945-harness-clippy-complete.log`; these are reproduction provenance,
 not committed artifact downloads. Hosted CI, Windows/Linux process behavior,
 credentialed MCP/provider usage and abrupt-owner recovery are separate gates.
-Skills activation/material delivery, Core context/value selection and inbound
-ACP remain subsequent work.
+Skills activation/material delivery, Core context/value selection and native
+multi-agent scheduling remain subsequent work. Native ACP uses this Harness
+unchanged; see [the native ACP contract](BRO_NATIVE_ACP_SERVER_SPEC.md).

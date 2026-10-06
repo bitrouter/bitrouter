@@ -31,7 +31,7 @@ use crate::supervisor::{
     SessionEventKind, SessionGrant, SessionMutation, SessionResponse, SessionScope,
     StartRunRequest, TurnState,
 };
-use bitrouter_sdk::acp::translate::SessionUpdateKind;
+use bitrouter_orchestrator::acp::translate::SessionUpdateKind;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -1501,7 +1501,7 @@ fn map_update(
         }
         _ => {}
     }
-    match bitrouter_sdk::acp::translate::translate(update.clone()) {
+    match bitrouter_orchestrator::acp::translate::translate(update.clone()) {
         Some(SessionUpdateKind::MessageChunk { text, .. }) => (AgentHistoryKind::Assistant, text),
         Some(SessionUpdateKind::ThoughtChunk { text, .. }) => (AgentHistoryKind::Thought, text),
         Some(SessionUpdateKind::ToolCall {

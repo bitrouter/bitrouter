@@ -979,6 +979,7 @@ mod tests {
                             Some(&command.command_id),
                             ReplyResult::Receipt {
                                 receipt: TurnReceipt {
+                                    user_item_id: String::new(),
                                     thread_id,
                                     turn_id: "original-turn".into(),
                                     queue_order: 1,

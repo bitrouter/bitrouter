@@ -46,13 +46,16 @@ supply additional overrides. Contract scope and acceptance scope are separate.
 | Final Conversation/main fixture acceptance | [BRO_CONVERSATION_UI_IMPLEMENTATION.md](BRO_CONVERSATION_UI_IMPLEMENTATION.md) |
 | Raw exports, summaries and archive integrity | [Evidence README](evidence/bro-base-tools/README.md) |
 | Future core/harness separation, outside standalone acceptance | [BRO_AGENT_RUNTIME_HANDOFF.md](BRO_AGENT_RUNTIME_HANDOFF.md) |
+| Native ACP v1/draft v2 ingress, approval reattachment and durable cancel/close semantics; implemented locally | [BRO_NATIVE_ACP_SERVER_SPEC.md](BRO_NATIVE_ACP_SERVER_SPEC.md) |
+| Native ACP implementation evidence and remaining gates | [BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md](BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md) |
 
 Old [native server](BRO_NATIVE_AGENT_SERVER_SPEC.md),
 [shared-session](BRO_SHARED_SESSION_SERVER_SPEC.md) and
 [Thread/Turn migration](BRO_THREAD_TURN_UNIFICATION_SPEC.md) pages are short
 historical pointers to immutable Git snapshots. Their implementation ledgers
-are indexed from current runtime acceptance. Explicit ACP sessions retain the
-separate ACP contracts below.
+are indexed from current runtime acceptance. External agent ACP sessions retain
+the separate controller contracts below; the native ACP ingress uses the same runtime. Its [acceptance record](BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md)
+distinguishes local fixtures from IDE/platform/provider gates.
 
 ## Other development contracts
 

@@ -129,8 +129,9 @@ subagents, bulk work, and models the plan lacks.
 **The restart handoff — say it every time.** Existing harness processes need a
 restart; tell the user to run `bro claude` to route the new session.
 
-For an ACP client, use `bro acp serve claude` or `bro acp serve codex`.
-Harness-native IDs and history stay harness-owned; see `references/sessions.md`.
+For a native BRO ACP client, use `bro acp serve --model openai/gpt-5` (v1 or draft v2).
+EOF detaches; cancel pauses inputs; close keeps history. For external harnesses, use `bro acp serve claude` or `bro acp serve codex`.
+Their IDs/history stay harness-owned; see `references/sessions.md`.
 
 ### 6. Verify
 ```bash

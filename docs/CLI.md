@@ -944,14 +944,38 @@ agent permissions.
 
 ### `bro acp`
 
-```
-bro acp serve <agent> [-c <path>]
+```bash
+bro acp serve [--model MODEL] [--read-only] [--turn-timeout SECS] [--no-start] [-c PATH]
+bro acp serve <agent> [routing flags] [--turn-timeout SECS] [-c PATH]
 ```
 
-Exposes an ACP-compatible adapter over protocol-pure stdio until the ACP client
-disconnects; one controller connection can carry multiple
-harness-native sessions. Hidden `acp prompt` and `spawn` spellings remain only
-for migration. BitRouter keeps no session records.
+Bare `acp serve` exposes native BRO ACP v1 or draft v2 over protocol-pure stdio.
+It selects `--model` or `chat.model` and joins the local daemon's existing
+ThreadService; EOF detaches without cancelling accepted work. `--read-only`
+uses native read tools only. `--turn-timeout` sets the native execution deadline
+(1–86400 seconds). `--no-start` requires an existing daemon. `--direct` and
+`--base-url` require an explicit external agent.
+
+Native `sessionId` is the durable Thread ID. v1 prompt returns at settled
+completion; v2 returns its user Item `messageId` at acceptance and reports state
+later. Same-daemon reconnect redelivers the same native approval request; native
+restart recovery cannot reuse the old approval sender. `session/cancel` cancels
+active work while preserving a paused accepted queue. Load/resume reattaches;
+`_bitrouter/session/resume_queue` explicitly resumes retained inputs. A new
+foreground prompt can clear a safely settled empty pause. `session/close` cancels
+all accepted inputs, waits for cleanup and retains history, then requires reopen.
+Use `_meta.bitrouter.idempotencyKey` for retryable durable operations. See
+[the native ACP contract](BRO_NATIVE_ACP_SERVER_SPEC.md) and its
+[acceptance record](BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md).
+
+MCP requests must exactly match host-configured bindings; native resources,
+skills and AGENTS.md use the existing Harness. Client file/terminal callbacks,
+arbitrary MCP programs, images/audio, remote ACP and a mutable model picker are
+not supported in this release.
+
+Explicit `<agent>` retains the external controller path: one connection can
+carry multiple harness-native sessions, with IDs/history owned by the harness.
+Hidden `acp prompt` and `spawn` spellings remain for migration.
 
 ### `bro code` — coding conversation
 
@@ -1883,7 +1907,7 @@ Refuses to overwrite an existing file. Names follow the Agent Skills grammar:
 ## Local ACP recordings
 
 Opt in with `acp_recording.enabled: true` in the selected config. This records
-observable ACP content from `code`, `run`, and `acp serve` in the local database,
+observable ACP content from external `code <agent>`, `run`, and `acp serve <agent>` in the local database,
 independently of `trajectory.enabled`. It does not invoke an evaluator.
 
 ```bash

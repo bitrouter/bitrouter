@@ -351,15 +351,19 @@ pub(super) struct HeldModel {
 
 impl HeldModel {
     pub(super) fn new() -> Self {
+        Self::with_turns(vec![
+            turn(vec![tool_call(
+                "stale",
+                "write",
+                serde_json::json!({"path":"stale.txt", "content":"must not execute"}),
+            )]),
+            final_turn(),
+        ])
+    }
+
+    pub(super) fn with_turns(turns: Vec<GenerateResult>) -> Self {
         Self {
-            inner: MockExecutor::new(vec![
-                mock_stream(turn(vec![tool_call(
-                    "stale",
-                    "write",
-                    serde_json::json!({"path":"stale.txt", "content":"must not execute"}),
-                )])),
-                mock_stream(final_turn()),
-            ]),
+            inner: MockExecutor::new(turns.into_iter().map(mock_stream).collect()),
             calls: AtomicUsize::new(0),
             entered: tokio::sync::Notify::new(),
             release: tokio::sync::Semaphore::new(0),

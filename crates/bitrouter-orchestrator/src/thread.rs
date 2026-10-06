@@ -54,6 +54,13 @@ pub struct ThreadSnapshot {
     pub waiting_for_capacity: bool,
 }
 
+/// A completed close result. Replays must not retire newer attachments or work.
+#[derive(Debug, Clone)]
+pub struct ThreadCloseReceipt {
+    pub snapshot: ThreadSnapshot,
+    pub replayed: bool,
+}
+
 /// A cold directory projection. Listing does not load context or subscribe.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadDirectoryEntry {

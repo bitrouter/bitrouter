@@ -868,6 +868,7 @@ mod tests {
                         anyhow::ensure!(thread_id == "thread" && prompt == "follow up");
                         ReplyResult::Receipt {
                             receipt: bitrouter_orchestrator::turn::TurnReceipt {
+                                user_item_id: String::new(),
                                 thread_id,
                                 turn_id: "queued".into(),
                                 queue_order: 2,
@@ -1024,6 +1025,7 @@ mod tests {
                         anyhow::ensure!(original.as_ref() == Some(&idempotency_key));
                         ReplyResult::Receipt {
                             receipt: bitrouter_orchestrator::turn::TurnReceipt {
+                                user_item_id: String::new(),
                                 thread_id,
                                 turn_id: "original-turn".into(),
                                 queue_order: 1,

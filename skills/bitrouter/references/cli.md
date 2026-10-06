@@ -127,7 +127,7 @@ Startup claims one database owner and completes bounded cold discovery before
 admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
 Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
 records per Thread. Capabilities expose aggregate progress, not root identities
-or prompts. New/updated roots use runtime format 4; formats 2/3 remain readable without history rewriting. Migration adds metadata with
+or prompts. New/updated roots use runtime format 5; formats 2/3/4 remain readable without history rewriting. Migration adds metadata with
 **default 0** for old roots; unsupported formats fail before payload decoding
 or execution, with `recovery_required` / `unsupported_runtime_format`.
 They are not converted or marked safe.
@@ -180,7 +180,7 @@ checks, launches, and ACP sessions remain local. Remote policy defaults to
 
 | Command | Effect |
 |---|---|
-| `bro serve [--config PATH]` | Run the inference HTTP server + local control socket **in the foreground**. Optional `control.enabled: true` also starts the authenticated typed HTTP control listener at `control.listen` (default `127.0.0.1:4358`). `control.credentials` may name `{id, token_env, scopes}` credentials using `control:read` and `control:reload`; absent/empty credentials preserve `BITROUTER_CONTROL_TOKEN` as read-only. Explicit credentials exclude that legacy token. Tokens are at least 32 bytes, browser origins are checked, the listener stays loopback-only for a private tunnel/TLS reverse proxy, and inference `server.skip_auth` does not affect it. It does not expose MCP or ACP sessions. |
+| `bro serve [--config PATH]` | Run the inference HTTP server + local control socket **in the foreground**. Optional `control.enabled: true` also starts the authenticated typed HTTP control listener at `control.listen` (default `127.0.0.1:4358`). `control.credentials` may name `{id, token_env, scopes}` credentials using `control:read` and `control:reload`; absent/empty credentials preserve `BITROUTER_CONTROL_TOKEN` as read-only. Explicit credentials exclude that legacy token. Tokens are at least 32 bytes, browser origins are checked, the listener stays loopback-only for a private tunnel/TLS reverse proxy, and inference `server.skip_auth` does not affect it. This optional HTTP control listener exposes neither an MCP origin nor remote ACP sessions; native ACP uses its separate OS-local stream. |
 | `bro start [--config PATH] [--log PATH]` | Spawn `serve` as a detached background process. Stdout/stderr go to `~/.bitrouter/bitrouter.log` unless `--log` overrides. Refuses to start over a live daemon. |
 | `bro stop [--config PATH] [--socket PATH]` | Graceful shutdown via the control socket. |
 | `bro restart [--config PATH] [--log PATH] [--socket PATH]` | Explicit restart: for file SQLite, preflight migrations on a snapshot and retain a recovery backup, then request graceful stop and start. Warns that active agent runs may be interrupted. Does not force-kill a process that fails to exit. |
@@ -326,14 +326,15 @@ virtual key's owning user. Snapshot roots commit both subject and result content
 
 ## ACP sessions
 
-Two ACP execution modes share one controller and differ only in who drives it. `acp serve` exposes the connection-level controller over **stdio** for an ACP client. `run` drives one prompt **in-process** and presents it as NDJSON/text/quiet output. Session ownership is harness-native in both. Hidden `spawn` and `acp prompt` spellings remain for migration. Both **attempt to route the harness's model traffic through the daemon when the headless adapter supports redirection** — add `--direct` / `--base-url` / `--model` / `--no-start`.
+Explicit external ACP execution modes share one controller and differ only in who drives it. `acp serve <agent>` exposes the connection-level controller over **stdio** for an ACP client. `run` drives one prompt **in-process** and presents it as NDJSON/text/quiet output. Session ownership is harness-native in both. Hidden `spawn` and `acp prompt` spellings remain for migration. Both **attempt to route the harness's model traffic through the daemon when the headless adapter supports redirection** — add `--direct` / `--base-url` / `--model` / `--no-start`.
 
 | Command | Effect |
 |---|---|
 | `bro run <agent> [prompt\|-] [--prompt-file PATH] [--load ID\|--resume ID] [--cwd PATH] [--turn-timeout SECS] [--approve-all\|--approve-reads\|--deny-all] [--permission-policy JSON\|@PATH] [--result-schema JSON\|@PATH] [--background [--allow-shared-directory]] [--format ndjson\|text\|quiet] [routing flags]` | Foreground is the canonical one-shot headless entry and streams versioned NDJSON. `--background` instead returns only after the resident local supervisor owns an attachable run ID; it conflicts with hidden `--no-wait`. Load/resume remain capability-gated explicit native-session selections. |
+| `bro acp serve [--model MODEL] [--read-only] [--turn-timeout SECS] [--no-start] [--config PATH]` | Native BRO ACP v1/draft v2 over stdio, backed by the daemon-owned ThreadService. Model falls back to `chat.model`. EOF detaches; cancel pauses retained inputs; close cancels active and queued work and preserves history. Load/resume never resumes the queue. See `references/sessions.md` for approval recovery and `_bitrouter/session/resume_queue`. |
 | `bro acp serve <agent> [--turn-timeout SECS] [routing flags] [--config PATH]` | Expose an ACP-compatible adapter over protocol-pure **stdio** until this ACP client disconnects. The client initializes first, may open multiple harness-native sessions, and owns prompt deadlines. Session IDs, history, and storage remain harness-owned. |
 
-**Controller lifecycle**: ACP client `initialize` capabilities and `_meta` reach the harness exactly. Each `session/new` is forwarded and returns that harness response's opaque `sessionId`; repeated calls may create different sessions. Advertised `session/list|load|resume|fork|close|delete`, prompts, cancellations, callbacks, updates, errors, `_meta`, and extension payloads pass through. BitRouter neither mints a client-facing session alias nor keeps a session catalog.
+**External controller lifecycle**: ACP client `initialize` capabilities and `_meta` reach the harness exactly. Each `session/new` is forwarded and returns that harness response's opaque `sessionId`; repeated calls may create different sessions. Advertised `session/list|load|resume|fork|close|delete`, prompts, cancellations, callbacks, updates, errors, `_meta`, and extension payloads pass through. BitRouter neither mints a client-facing session alias nor keeps a session catalog.
 
 **Endpoint setup**: Claude uses pinned `@agentclientprotocol/claude-agent-acp@0.75.1`; Codex uses pinned `@agentclientprotocol/codex-acp@1.10.0`. Controller-to-harness `providers/*` configures the model endpoint and is removed from client-facing capabilities. Claude's fallback is `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / newline-separated `ANTHROPIC_CUSTOM_HEADERS`; Codex's is `CODEX_CONFIG` plus `MODEL_PROVIDER`, with no ACP-mode `-c` arguments.
 
@@ -357,7 +358,7 @@ synthesized, and unmetered traffic (`--direct`, explicit `--base-url`, own-auth
 harnesses, sessions with no priced requests) is forwarded exactly as sent —
 never `$0.00`, never a daemon-wide figure.
 
-**Observability and turns**: `acp serve` forwards the harness's session/cancel and session/update wire unchanged, except that a locally bound controller decorates the harness's own `usage_update` with session-attributed `cost` (see **Session cost**); it never synthesizes per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. The normal API/virtual key is the only authentication boundary; authorization, cookies, and credentials remain excluded. `run` drives the same controller in-process, so it gets identical forwarding; its OTel turn spans are re-derived from the prompt round-trip and correlate on the **harness-native** session id. `--turn-timeout` and cooperative cancellation are the client's there, and in `code <agent>`: every command now drives the same controller through the same client, and no local `record_id` or controller-owned FIFO queue exists. Code may keep an explicit process-local next-turn queue.
+**External observability and turns**: `acp serve <agent>` forwards the harness's session/cancel and session/update wire unchanged, except that a locally bound controller decorates the harness's own `usage_update` with session-attributed `cost` (see **Session cost**); it never synthesizes per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. The normal API/virtual key is the only authentication boundary; authorization, cookies, and credentials remain excluded. `run` drives the same controller in-process, so it gets identical forwarding; its OTel turn spans are re-derived from the prompt round-trip and correlate on the **harness-native** session id. `--turn-timeout` and cooperative cancellation are the client's there, and in `code <agent>`: every command now drives the same controller through the same client, and no local `record_id` or controller-owned FIFO queue exists. Code may keep an explicit process-local next-turn queue.
 
 **NDJSON format**: every event carries `"version":1`, a monotonically increasing `"seq"`, and a `"type"`. The first success event is `session`; streamed events include `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, `usage`, and `permission`; exactly one terminal `result` or `error` follows. The old `--format json` value remains an alias for `ndjson` during migration.
 
@@ -583,7 +584,7 @@ the appropriate facets of the same harness entry.
 | `bro launch <agent> [options] -- <agent args...>` | Launch a coding-agent CLI's native interface through BitRouter without editing its user config. `bro claude`, `bro claude-code`, and `bro codex` are first-class shortcuts. The hidden `launch --agent` spelling remains compatible. When supported, the launcher injects the daemon's `bitrouter_tools` aggregate gateway so configured upstream MCP servers reach the harness. |
 The former `spawn` command is hidden for compatibility: `spawn -p` maps to `run`, `spawn --serve` to `acp serve`, and `spawn --check` to `agents check`.
 
-**Routing (attempted by default)** for `run` and `acp serve`:
+**Routing (attempted by default)** for `run` and `acp serve <agent>`:
 - `--direct` — do **not** route through the daemon; the harness uses its own provider auth.
 - `--model <id>` — pin the harness's model (its model env var, or `-c model=` for codex).
 - `--base-url <URL>` — override the gateway URL (else derived from `server.listen`).
@@ -652,7 +653,7 @@ Turns, including an empty snapshot. A new Thread discovers again. After server
 restart, authorized continuation refreshes instructions only at a settled model
 boundary and records replacements/removals explicitly; known effects are never
 replayed. Completing an already settled outcome and cold browsing reread no
-instruction files. Runtime format 4 persists snapshots; formats 2/3 remain readable.
+instruction files. Runtime format 5 persists snapshots and private ACP bindings/close results; formats 2/3/4 remain readable.
 
 The daemon supplies its configured `mcp_servers` to native coding Turns. MCP tools
 use the existing approval, exclusive execution and durable result barriers;

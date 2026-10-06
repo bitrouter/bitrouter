@@ -50,14 +50,16 @@ pass"; it is retired part by part, each with a named successor.
 | `settlement` seam | Deleted — no consumer |
 | `turn::TurnController` | Deleted. The FIFO is not load-bearing (see invariant I9); `--turn-timeout` and cancel-with-grace move to the shared client (I8) |
 | `permissions::PermissionRegistry` | Deleted. Reattach replay is outside the controller model (§9 of the P2 contract) |
-| `translate` | **Kept in `bitrouter-sdk::acp`.** Pure over `schema::v1`, and it is the published wire contract of `acp prompt`'s NDJSON output |
+| `translate` | **Kept in the shared ACP stack, now `bitrouter_orchestrator::acp`.** Pure over `schema::v1`, and it is the published wire contract of `acp prompt`'s NDJSON output |
 | `down.rs` `serve` / `serve_with` / `ServeExtensions` | Deleted — no callers since #849. `ProviderSurface` is deleted with the picker migration (§5) |
 
 The ACP hook traits (`acp::PreRequestHook` / `RouteHook` / `ExecutionHook`) are
 `pub` in a published crate. Their removal is semver-breaking and lands as
-`refactor(sdk)!` with a changelog entry. `AcpTransport`, `AcpTarget`,
-`AcpAgentConfig`, and `RoutingTable` are **retained** — config and `agents.rs`
-use them.
+`refactor(sdk)!` with a changelog entry. The subsequent SDK ACP extraction
+removed the `acp` module and feature entirely. `AcpTransport`, `AcpAgentConfig`
+and `AcpConfigError` now live in `bitrouter_sdk::config::agent`: configuration
+data stays beside `Config` without a dependency on the ACP SDK. `AcpTarget`
+and the ACP `RoutingTable` were retired with the old pipeline.
 
 ---
 
@@ -71,7 +73,7 @@ does not mention `prompt` at all. Three commands each growing their own ACP
 one place the answer lives.
 
 **There is exactly one BitRouter ACP client.** It lives in
-`bitrouter-sdk::acp` behind the `acp` feature, because it needs the
+`crates/bitrouter-orchestrator/src/acp/` behind the orchestrator's `acp` feature, because it needs the
 `agent-client-protocol` runtime that `bitrouter-tui` deliberately does not have.
 It is built by generalizing `up::UpstreamConnection` over a transport rather
 than written fresh: that type already exposes broadcast raw updates, a

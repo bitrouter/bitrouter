@@ -59,7 +59,7 @@ fn alias_preserves_help_and_structured_stdout() -> Result<()> {
         ),
         (
             &["acp", "serve", "--help"][..],
-            "bitrouter acp serve <AGENT> [OPTIONS]",
+            "bitrouter acp serve [AGENT] [OPTIONS]",
         ),
     ] {
         let output = run(&alias, args, home.path())?;

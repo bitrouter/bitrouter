@@ -270,6 +270,8 @@ impl TurnSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnReceipt {
+    #[serde(default)]
+    pub user_item_id: String,
     pub thread_id: String,
     pub turn_id: String,
     pub queue_order: u64,

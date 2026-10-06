@@ -15,8 +15,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol"
-version = "2.0.0"
-source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99331d39fe360e2a7f746995347eb83808f757519da1bf1053723a7b0798e900"
 dependencies = [
  "agent-client-protocol-derive",
  "agent-client-protocol-schema",
@@ -27,7 +28,6 @@ dependencies = [
  "futures-concurrency",
  "rustc-hash",
  "rustix 1.1.4",
- "schemars 1.2.1",
  "serde",
  "serde_json",
  "shell-words",
@@ -38,8 +38,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-conductor"
-version = "2.0.0"
-source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d81ff4c0468d54ebbf4bc0f5cd95f6684721c131864e20f08e3de2ce52707e5"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-trace-viewer",
@@ -53,16 +54,17 @@ dependencies = [
  "serde_json",
  "strip-ansi-escapes",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
 [[package]]
 name = "agent-client-protocol-derive"
-version = "2.0.0"
-source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf234d3b565662eff624e4e99903abc8c4290583cc907e6f7180e11e622c611b"
 dependencies = [
  "quote",
  "syn 3.0.3",
@@ -70,9 +72,9 @@ dependencies = [
 
 [[package]]
 name = "agent-client-protocol-schema"
-version = "1.7.0"
+version = "1.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca98360c7bb8cc97d7acd49e2a8a851c3f7bee6b2f0535036d8ab86b5fcd223d"
+checksum = "7c3ffd489b0e2f96a134d7966c2f43d874d91299e951b66093b91b54b00b7f8f"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -81,13 +83,13 @@ dependencies = [
  "serde_json",
  "serde_with",
  "strum 0.28.0",
- "tracing",
 ]
 
 [[package]]
 name = "agent-client-protocol-trace-viewer"
-version = "2.0.0"
-source = "git+https://github.com/agentclientprotocol/rust-sdk.git?rev=c63610fc38a642f7a73ba2719f403f17d771c345#c63610fc38a642f7a73ba2719f403f17d771c345"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdee0dd5e638f959ae2f845427a019b43acfa562ae5c2fb313ad917624dd4666"
 dependencies = [
  "anyhow",
  "axum",
@@ -730,6 +732,10 @@ dependencies = [
 name = "bitrouter-orchestrator"
 version = "1.0.0-alpha.33"
 dependencies = [
+ "agent-client-protocol",
+ "agent-client-protocol-conductor",
+ "agent-client-protocol-schema",
+ "anyhow",
  "async-trait",
  "bitrouter-sdk",
  "futures",
@@ -748,7 +754,9 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tokio-util",
+ "tracing",
  "uuid",
  "wiremock",
 ]
@@ -781,10 +789,6 @@ dependencies = [
 name = "bitrouter-sdk"
 version = "1.0.0-alpha.33"
 dependencies = [
- "agent-client-protocol",
- "agent-client-protocol-conductor",
- "agent-client-protocol-schema",
- "anyhow",
  "async-stream",
  "async-trait",
  "axum",
@@ -798,7 +802,6 @@ dependencies = [
  "pin-project-lite",
  "reqwest",
  "rmcp",
- "rustix 1.1.4",
  "schemars 1.2.1",
  "serde",
  "serde-saphyr",
@@ -807,7 +810,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
  "tokio-util",
  "tower",
  "tracing",
@@ -5694,16 +5696,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tracing-serde"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
-dependencies = [
- "serde",
- "tracing-core",
-]
-
-[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5713,15 +5705,12 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
- "serde",
- "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
- "tracing-serde",
 ]
 
 [[package]]
