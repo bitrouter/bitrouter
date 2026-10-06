@@ -94,8 +94,8 @@ research spec is stale; the numbers below are the ones to use, and
 | Headless presentation | `acp_cli.rs:104` `enum PromptFormat { Json, Text, Quiet }`; `:2325` `enum Presenter` — `Json` writes one NDJSON line per update (no function named `emit_update` exists) |
 | Routing flags | `acp_cli.rs:83` `struct RoutingOptions { direct, base_url, model, no_start }` |
 | The daemon's lease commands | `apps/bitrouter/src/daemon.rs:61`–`:99` `DaemonCommand::{AcpControllerCleanup, AcpRouteList, AcpRouteSet, AcpSessionSpend, AcpRouteReset}`, each keyed by `(api_principal, controller_instance_id, session_id)`; handler for `AcpRouteSet` at `:644`. **There is no variant that lists controllers or sessions** |
-| The SDK client's route surface | `crates/bitrouter-sdk/src/acp/client.rs:364` `enum RouteMethod { List, Set, Reset }`; `:393` `RouteControlCapability`, `:400` `from_init`, `:430` `allows`; `:460` `enum RouteError { Unavailable, InvalidRoute, Other }`; `:721` `route_list`, `:734` `route_set`, `:743` `route_reset` |
-| Agent commands on the wire | `crates/bitrouter-sdk/src/acp/translate.rs:59` `struct AgentCommand { name, description }` (drops ACP's `input`); `:223` `SessionUpdate::AvailableCommandsUpdate` → `SessionUpdateKind::AvailableCommands` |
+| The shared ACP client's route surface | `crates/bitrouter-orchestrator/src/acp/client.rs:364` `enum RouteMethod { List, Set, Reset }`; `:393` `RouteControlCapability`, `:400` `from_init`, `:430` `allows`; `:460` `enum RouteError { Unavailable, InvalidRoute, Other }`; `:721` `route_list`, `:734` `route_set`, `:743` `route_reset` |
+| Agent commands on the wire | `crates/bitrouter-orchestrator/src/acp/translate.rs:59` `struct AgentCommand { name, description }` (drops ACP's `input`); `:223` `SessionUpdate::AvailableCommandsUpdate` → `SessionUpdateKind::AvailableCommands` |
 | The journal's copy | `crates/bitrouter-tui/src/journal.rs:179` `self.commands = update.available_commands` |
 | The TUI's command renderer | `crates/bitrouter-tui/src/render/session.rs:69` `pub fn commands(&[AvailableCommand]) -> Vec<Line<'static>>`; empty case `:72` `"this agent advertises no commands"` |
 | The view's notice API | `crates/bitrouter-tui/src/view.rs:106` `notice(text)`, `:111` `notice_lines(Vec<Line<'static>>)` (replaces, does not append), `:120` `clear_notice` |
@@ -397,7 +397,7 @@ and the existing HTTP guard becomes table-driven by reading it
 
 `route_set` and `route_reset` carry `output_schema: None` permanently: each has
 one surface, so there is no second shape to hold it to, and the wire response
-(`String` / `()`) is the SDK client's, not a report. The module doc's sentence
+(`String` / `()`) is the shared ACP client's, not a report. The module doc's sentence
 *"the backlog is empty today, so every row below carries a real schema"* must
 be rewritten in phase 0 to say which rows have no schema and why.
 
@@ -635,7 +635,7 @@ Both arguments are in scope there today. `run` and `chat_plain` each gain a
 /// `apps/bitrouter/src/actions/session.rs` beside `SessionPorts`.
 pub fn offered_commands(client: &AcpClient) -> Vec<bitrouter_tui::machine::Command> {
     use bitrouter_mcp::actions::{Requires, ACTIONS};
-    use bitrouter_sdk::acp::client::RouteMethod;
+    use bitrouter_orchestrator::acp::client::RouteMethod;
     let capability = client.route_control();
     ACTIONS
         .iter()
@@ -1274,7 +1274,7 @@ D14's and D15's recommendations as the default ([§8](#8-open-decisions--what-ea
 | `apps/bitrouter/src/output/reports/commands.rs` (new) | `impl CliReport for CommandsReport` — three headed groups, shadowed rows marked, `received: false` rendered distinctly from an empty agent list |
 | `apps/bitrouter/src/main.rs` | `AcpCmd::Commands { agent, routing: RoutingOptions, wait_ms: u64 /* default 2000 */, source: Option<CommandSource> }`; `every_actions_row_resolves_to_a_cli_leaf` walks `acp commands` with no change |
 | `apps/bitrouter/src/acp_cli.rs` | the runner: `acp prompt`'s launch preamble, `initialize`, `session/new`, then collect `AvailableCommandsUpdate` from `client.subscribe_raw_updates()` for `wait_ms` (the last update wins; `received = any arrived`), build `commands_report(offered_commands(&client), prompt_commands, &agent_list, received)`, emit, tear down. No prompt is sent |
-| `crates/bitrouter-sdk/src/acp/translate.rs:59` | `AgentCommand` gains `hint: Option<String>` from `input`, so `--format json` consumers see it |
+| `crates/bitrouter-orchestrator/src/acp/translate.rs:59` | `AgentCommand` gains `hint: Option<String>` from `input`, so `--format json` consumers see it |
 | `crates/bitrouter-tui/src/journal.rs:179` | `commands_received: bool`, set on the first `AvailableCommandsUpdate`, exposed beside `commands()` |
 | `apps/bitrouter/src/chat/session.rs` | the `Notice::Commands` arm builds `commands_report(&state.commands, &[], journal.commands(), journal.commands_received())` and renders it through `render_to_vec` |
 | `crates/bitrouter-tui/src/render/session.rs` | `commands(..)` deleted |
@@ -1520,5 +1520,5 @@ established in the tree at that commit — not that it is wrong elsewhere.
 | "`claude/mcp-drop-complete` exists only as a local branch pointing at `43ae57d8`" | now `origin/claude/mcp-drop-complete` at `07a2096d`, PR #875 (open), containing the removal on top of #869 and #870 |
 | "`both_surfaces_produce_the_same_report`" (no path given) | `apps/bitrouter/src/actions/route.rs:361` |
 | `apps/bitrouter/src/actions/{status,models,route}.rs` | ✓, plus `skills.rs` |
-| `Controller::route_control(..)` | `crates/bitrouter-sdk/src/acp/controller.rs:370` (`Arc<dyn RouteControl>`; `acp_cli.rs` names it `AcpRouteControl`) |
+| `Controller::route_control(..)` | `crates/bitrouter-orchestrator/src/acp/controller.rs:370` (`Arc<dyn RouteControl>`; `acp_cli.rs` names it `AcpRouteControl`) |
 | `OBSERVABILITY_TUI_SPEC.md` §14, `ACP_TUI_SPEC.md` §8.3, `CHAT_MACHINE_SPEC.md` §1.1 | ✓ (`:753`, `:454`, `:60`) |

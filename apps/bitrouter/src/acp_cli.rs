@@ -58,8 +58,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
+use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::invocation;
 use futures::{FutureExt, StreamExt};
 use serde::Serialize;
@@ -67,12 +67,12 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
 use agent_client_protocol::schema::v1::{Cost, LlmProtocol, SessionUpdate};
-use bitrouter_sdk::acp::client::{AcpClient, ClientOptions, PendingPermission};
-use bitrouter_sdk::acp::controller::{
+use bitrouter_orchestrator::acp::client::{AcpClient, ClientOptions, PendingPermission};
+use bitrouter_orchestrator::acp::controller::{
     RouteControl as AcpRouteControl, RouteControlError, RouteControlState,
     SessionCost as AcpSessionCost,
 };
-use bitrouter_sdk::acp::translate::{SessionUpdateKind, translate};
+use bitrouter_orchestrator::acp::translate::{SessionUpdateKind, translate};
 use bitrouter_tui::permission::{Decision, Mode, Policy, Prompt as PermissionPrompt};
 
 use crate::chat::effects::Wire;
@@ -127,8 +127,8 @@ pub fn resolve_agent_id(config: &Config, requested: &str) -> Result<String> {
 
 #[cfg(test)]
 mod agent_resolution_tests {
-    use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
     use bitrouter_sdk::config::Config;
+    use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
 
     use super::resolve_agent_id;
 
@@ -174,8 +174,8 @@ mod session_host_tests {
         RoutingOptions, SessionHost, SessionSelection, SpawnContext, is_lifecycle_cancelled,
         launch_options,
     };
-    use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
     use bitrouter_sdk::config::Config;
+    use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
 
     const STUB: &str = r#"
 while read line; do
@@ -814,9 +814,9 @@ impl CapabilitySnapshot {
                 .map(|method| method.id().0.to_string())
                 .collect(),
             terminal_auth,
-            route_list: route.allows(bitrouter_sdk::acp::client::RouteMethod::List),
-            route_set: route.allows(bitrouter_sdk::acp::client::RouteMethod::Set),
-            route_reset: route.allows(bitrouter_sdk::acp::client::RouteMethod::Reset),
+            route_list: route.allows(bitrouter_orchestrator::acp::client::RouteMethod::List),
+            route_set: route.allows(bitrouter_orchestrator::acp::client::RouteMethod::Set),
+            route_reset: route.allows(bitrouter_orchestrator::acp::client::RouteMethod::Reset),
         }
     }
 
@@ -1486,9 +1486,9 @@ fn controller_identity(
     command: &str,
     args: &[String],
     endpoint: Option<&crate::harness::HarnessEndpointPlan>,
-) -> bitrouter_sdk::acp::controller::ControllerIdentity {
+) -> bitrouter_orchestrator::acp::controller::ControllerIdentity {
     if let Some(endpoint) = endpoint {
-        return bitrouter_sdk::acp::controller::ControllerIdentity::new(
+        return bitrouter_orchestrator::acp::controller::ControllerIdentity::new(
             endpoint.harness_id,
             endpoint.adapter_package,
             endpoint.adapter_version,
@@ -1498,11 +1498,11 @@ fn controller_identity(
         && let Some((package, version)) = harness.maintained_adapter_identity()
         && harness.uses_maintained_adapter(command, args)
     {
-        return bitrouter_sdk::acp::controller::ControllerIdentity::new(
+        return bitrouter_orchestrator::acp::controller::ControllerIdentity::new(
             harness.id, package, version,
         );
     }
-    bitrouter_sdk::acp::controller::ControllerIdentity::new(
+    bitrouter_orchestrator::acp::controller::ControllerIdentity::new(
         agent_id,
         "configured-acp-adapter",
         "configured",
@@ -1511,12 +1511,12 @@ fn controller_identity(
 
 fn controller_endpoint(
     endpoint: &crate::harness::HarnessEndpointPlan,
-) -> bitrouter_sdk::acp::controller::ProviderEndpointPlan {
+) -> bitrouter_orchestrator::acp::controller::ProviderEndpointPlan {
     let protocol = match endpoint.protocol {
         crate::harness::HarnessProtocol::Anthropic => LlmProtocol::Anthropic,
         crate::harness::HarnessProtocol::OpenAi => LlmProtocol::OpenAi,
     };
-    bitrouter_sdk::acp::controller::ProviderEndpointPlan {
+    bitrouter_orchestrator::acp::controller::ProviderEndpointPlan {
         provider_id: endpoint.provider_id.to_string(),
         protocol,
         base_url: endpoint.base_url.clone(),
@@ -1865,11 +1865,14 @@ pub(crate) struct SessionHandle {
     pub(crate) via: Option<String>,
     pub(crate) launch_id: Option<String>,
     pub(crate) capabilities: CapabilitySnapshot,
-    pub(crate) initial_settings: bitrouter_sdk::acp::client::SessionInitialSettings,
+    pub(crate) initial_settings: bitrouter_orchestrator::acp::client::SessionInitialSettings,
     cwd: PathBuf,
     mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
     pub(crate) updates: std::pin::Pin<
-        Box<dyn futures::Stream<Item = bitrouter_sdk::acp::client::SequencedSessionUpdate> + Send>,
+        Box<
+            dyn futures::Stream<Item = bitrouter_orchestrator::acp::client::SequencedSessionUpdate>
+                + Send,
+        >,
     >,
     pub(crate) permissions:
         std::pin::Pin<Box<dyn futures::Stream<Item = PendingPermission> + Send>>,
@@ -1921,7 +1924,10 @@ impl SessionHandle {
     pub(crate) fn take_sequenced_updates(
         &mut self,
     ) -> std::pin::Pin<
-        Box<dyn futures::Stream<Item = bitrouter_sdk::acp::client::SequencedSessionUpdate> + Send>,
+        Box<
+            dyn futures::Stream<Item = bitrouter_orchestrator::acp::client::SequencedSessionUpdate>
+                + Send,
+        >,
     > {
         std::mem::replace(&mut self.updates, Box::pin(futures::stream::empty()))
     }
@@ -2243,7 +2249,8 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
         .with_context(|| format!("ACP agent '{agent_id}' is not configured"))?;
     let AcpTransport::Stdio { command, args, env } = &agent.transport;
     let identity = controller_identity(agent_id, command, args, host.routed.endpoint_plan.as_ref());
-    let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
+    let mut controller_config =
+        bitrouter_orchestrator::acp::controller::ControllerConfig::new(identity);
     if let Some(endpoint) = host.routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
     }
@@ -2253,11 +2260,14 @@ pub async fn serve(ctx: SpawnContext<'_>) -> Result<()> {
              the ACP client controls prompt deadlines"
         );
     }
-    let process =
-        bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
-            .strip_inherited_env(host.options.strip_inherited_env);
+    let process = bitrouter_orchestrator::acp::up::AgentProcess::new(
+        command.clone(),
+        args.clone(),
+        env.clone(),
+    )
+    .strip_inherited_env(host.options.strip_inherited_env);
     let mut controller =
-        bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
+        bitrouter_orchestrator::acp::controller::Controller::new(process, controller_config);
     if let Some(binding) = &host.binding {
         controller = controller
             .route_control(binding.route_control())
@@ -2415,7 +2425,7 @@ async fn chat_piped(
             // A harness that is merely unauthenticated is not a broken one, and
             // relaying its JSON-RPC error would leave the reader to guess which
             // of the two it is. The protocol already said which; say it.
-            let unauthenticated = bitrouter_sdk::acp::client::is_auth_required(&error);
+            let unauthenticated = bitrouter_orchestrator::acp::client::is_auth_required(&error);
             let context = if unauthenticated {
                 unauthenticated_message(agent_id, session.client.auth_methods())
             } else {
@@ -2634,7 +2644,7 @@ async fn open_session(
     selection: &SessionSelection,
     cwd: PathBuf,
     mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
-) -> Result<bitrouter_sdk::acp::client::SessionIds> {
+) -> Result<bitrouter_orchestrator::acp::client::SessionIds> {
     match selection {
         SessionSelection::New => client.new_session(cwd, mcp_servers).await,
         SessionSelection::Load(session_id) => {
@@ -2755,9 +2765,12 @@ impl ControlledCleanup {
         // The connection is down; the child may not be. `kill_on_drop` reaches
         // the wrapper (`npx`) and not the `node` it spawned, so the group kill
         // has to be confirmed rather than assumed.
-        if tokio::time::timeout(bitrouter_sdk::acp::up::REAP_CONFIRM, self.reaped.clone())
-            .await
-            .is_err()
+        if tokio::time::timeout(
+            bitrouter_orchestrator::acp::up::REAP_CONFIRM,
+            self.reaped.clone(),
+        )
+        .await
+        .is_err()
         {
             tracing::warn!("harness child not confirmed reaped; a grandchild may have survived");
             clean = false;
@@ -2792,7 +2805,7 @@ async fn open_capture(
     config: &Config,
     agent_id: &str,
     binding: Option<&LocalControllerBinding>,
-) -> Result<Option<Arc<dyn bitrouter_sdk::acp::capture::CapturePort>>> {
+) -> Result<Option<Arc<dyn bitrouter_orchestrator::acp::capture::CapturePort>>> {
     if !config.acp_recording.enabled {
         return Ok(None);
     }
@@ -2880,16 +2893,20 @@ async fn launch_controlled_with_cancel(
     let AcpTransport::Stdio { command, args, env } = &agent.transport;
 
     let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
-    let mut controller_config = bitrouter_sdk::acp::controller::ControllerConfig::new(identity);
+    let mut controller_config =
+        bitrouter_orchestrator::acp::controller::ControllerConfig::new(identity);
     if let Some(endpoint) = routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
     }
-    let mut process =
-        bitrouter_sdk::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
-            .strip_inherited_env(options.strip_inherited_env);
+    let mut process = bitrouter_orchestrator::acp::up::AgentProcess::new(
+        command.clone(),
+        args.clone(),
+        env.clone(),
+    )
+    .strip_inherited_env(options.strip_inherited_env);
     let reaped = process.reaped().shared();
     let mut controller =
-        bitrouter_sdk::acp::controller::Controller::new(process, controller_config);
+        bitrouter_orchestrator::acp::controller::Controller::new(process, controller_config);
     if let Some(binding) = &binding {
         controller = controller
             .route_control(binding.route_control())
@@ -3475,7 +3492,7 @@ pub async fn commands(
     // commands immediately is not raced.
     let mut updates = session.client.subscribe_raw_updates();
     if let Err(error) = session.client.new_session(cwd, mcp_servers).await {
-        let context = if bitrouter_sdk::acp::client::is_auth_required(&error) {
+        let context = if bitrouter_orchestrator::acp::client::is_auth_required(&error) {
             unauthenticated_message(agent_id, session.client.auth_methods())
         } else {
             "opening the harness session".to_string()
@@ -3566,7 +3583,7 @@ fn spawn_tool_spans(
     mut updates: std::pin::Pin<Box<dyn futures::Stream<Item = SessionUpdateKind> + Send>>,
 ) {
     tokio::spawn(async move {
-        use bitrouter_sdk::acp::translate::ToolStatus;
+        use bitrouter_orchestrator::acp::translate::ToolStatus;
         while let Some(update) = updates.next().await {
             match update {
                 SessionUpdateKind::ToolCall {
@@ -3747,7 +3764,7 @@ pub struct RequestCompleted {
     pub latency_ms: u64,
     /// Context-window occupancy as of the latest `UsageUpdate`, when the agent
     /// has reported one.
-    pub context: Option<bitrouter_sdk::acp::telemetry::ContextUsage>,
+    pub context: Option<bitrouter_orchestrator::acp::telemetry::ContextUsage>,
 }
 
 /// Build [`LaunchOptions`] from the CLI flags shared by `serve` and `prompt`:
@@ -3837,7 +3854,7 @@ mod controller_tests {
     use std::time::Duration;
 
     use agent_client_protocol::schema::v1::Cost;
-    use bitrouter_sdk::acp::controller::SessionCost;
+    use bitrouter_orchestrator::acp::controller::SessionCost;
 
     use super::{CachedSessionCost, attributed_cost, controller_identity};
 
@@ -3941,11 +3958,11 @@ mod controller_tests {
     fn the_cost_marker_is_spelled_the_same_on_both_sides() {
         assert_eq!(
             bitrouter_tui::cost::COST_PROVENANCE_META_KEY,
-            bitrouter_sdk::acp::controller::COST_PROVENANCE_META_KEY
+            bitrouter_orchestrator::acp::controller::COST_PROVENANCE_META_KEY
         );
         assert_eq!(
             bitrouter_tui::cost::COST_PROVENANCE_ROUTER,
-            bitrouter_sdk::acp::controller::COST_PROVENANCE_ROUTER
+            bitrouter_orchestrator::acp::controller::COST_PROVENANCE_ROUTER
         );
     }
 

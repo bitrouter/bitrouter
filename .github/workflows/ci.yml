@@ -273,7 +273,22 @@ jobs:
             echo '::error::default bro links the guardrails implementation'; exit 1
           fi
       - run: cargo check -p bitrouter-sdk --no-default-features --features server
-      - run: cargo check -p bitrouter-sdk --no-default-features --features acp
+      - run: cargo check -p bitrouter-orchestrator --no-default-features
+      - run: cargo check -p bitrouter-orchestrator --no-default-features --features acp
+      - name: the native orchestrator does not load the ACP runtime by default
+        shell: bash
+        run: |
+          cargo tree --locked -p bitrouter-orchestrator --no-default-features -e normal,build --prefix none > orchestrator-tree.txt
+          if grep -Eq '^agent-client-protocol[^ ]* v' orchestrator-tree.txt; then
+            echo '::error::ACP runtime dependencies reached the native orchestrator default tree'; exit 1
+          fi
+      - name: the ACP runtime stays outside the SDK
+        shell: bash
+        run: |
+          cargo tree --locked -p bitrouter-sdk --all-features -e normal,build --prefix none > sdk-tree.txt
+          if grep -Eq '^agent-client-protocol[^ ]* v' sdk-tree.txt; then
+            echo '::error::ACP runtime dependencies reached bitrouter-sdk'; exit 1
+          fi
       - run: cargo check -p bitrouter-telemetry --no-default-features --features otel-http
       - run: cargo check -p bitrouter-telemetry --no-default-features --features otel-grpc
       - run: cargo check -p bitrouter-telemetry --no-default-features --features otel,server

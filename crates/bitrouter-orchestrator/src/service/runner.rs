@@ -25,6 +25,7 @@ impl Drop for TurnWorker {
             .lock_state()
             .running_turns
             .remove(&self.turn_id);
+        self.service.inner.runtime_changed.notify_waiters();
     }
 }
 
@@ -72,7 +73,23 @@ impl ThreadService {
             cancel.cancel();
             return;
         }
-        let agent = agent.with_resources(self.inner.resources.clone());
+        let resources = {
+            let state = self.lock_state();
+            let servers = state
+                .turns
+                .get(&turn_id)
+                .and_then(|turn| state.threads.get(&turn.thread_id))
+                .and_then(|thread| thread.servers.clone());
+            match servers {
+                Some(servers) => {
+                    let mut config = self.inner.resources.as_ref().clone();
+                    config.servers = servers;
+                    Arc::new(config)
+                }
+                None => self.inner.resources.clone(),
+            }
+        };
+        let agent = agent.with_resources(resources);
         let mut prompt = prompt;
         loop {
             let restored_verification = prompt.restored_verification.take();

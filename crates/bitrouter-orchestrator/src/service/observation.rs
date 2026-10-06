@@ -388,6 +388,7 @@ pub(crate) fn project(
             queue_order,
         } => ThreadChange::TurnQueued {
             receipt: TurnReceipt {
+                user_item_id: user_item_id.clone(),
                 thread_id: thread_id.into(),
                 turn_id: turn_id.clone(),
                 queue_order: *queue_order,

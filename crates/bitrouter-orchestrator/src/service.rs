@@ -16,6 +16,7 @@ use crate::thread::PermissionProfile;
 
 mod admission;
 mod approval;
+mod close;
 mod commit;
 pub mod observation;
 mod ownership;
@@ -275,6 +276,7 @@ impl ThreadService {
                 recovery_readers: tokio::sync::Semaphore::new(limits.recovery_readers),
                 limits,
                 workers: TaskTracker::new(),
+                runtime_changed: tokio::sync::Notify::new(),
                 store,
                 admission: tokio::sync::Mutex::new(()),
                 state: Mutex::new(State {

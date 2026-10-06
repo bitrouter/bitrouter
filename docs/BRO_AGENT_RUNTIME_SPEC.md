@@ -1,8 +1,9 @@
 # BRO standalone runtime contract
 
-Updated: 2026-10-04. Source baseline:
+Updated: 2026-10-06. Standalone source baseline:
 [`65555b12`](https://github.com/bitrouter/bitrouter/commit/65555b126e8d14982b2a7c977b618d545cd8f5b7),
-PR #945. This document describes the implemented standalone Thread/Turn runtime
+PR #945; native ACP additions are local and recorded in
+[BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md](BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md). This document describes the implemented standalone Thread/Turn runtime
 and its safety requirements. It incorporates the Thread/Turn unification;
 readers do not need to apply amendments from historical specifications.
 
@@ -27,7 +28,7 @@ commit. Full product acceptance is distinct from local runtime acceptance.
 Scope includes the native model/tool loop, durable continuous conversations,
 bounded concurrency, FIFO/steering, approvals, observation and proved-safe
 checkpoint recovery. Native multi-agent scheduling, adaptive model/context
-selection, inbound native ACP, core integration, OS sandboxing and operator
+selection, core integration, OS sandboxing and operator
 resolution of lost owners or unknown effects remain separate work.
 
 ## Ownership and identities
@@ -279,12 +280,26 @@ If all candidates are ineligible, return overloaded rather than steal a worker o
 observer. Cold public queries do not load SDK context. Reload reserves reader/hot
 capacity and cannot create a second gate for a Thread still referenced elsewhere.
 
-Runtime root format is 4. Formats 2/3 remain readable; a new append upgrades its
+Runtime root format is 5. Formats 2/3/4 remain readable; a new append upgrades its
 envelope atomically without rewriting history. Migration 000026 labels existing development roots 0;
 unsupported roots fail before execution, without legacy conversion or deleting
 facts/owner/markers. Format rejection cannot become stopped-owner proof. Developer
 database cleanup is a separate authorized operation and must preserve unrelated
 metering/configuration data and unresolved execution evidence.
+
+## Native ACP control
+
+`acp/native` adapts v1/draft v2 to this same service. Its app stdio bridge is local
+and detaches on EOF. `start_foreground_turn` atomically clears only a settled
+empty pause; retained queue/recovery cannot be bypassed. `close_thread` fences
+one Thread, records every unstarted cancellation and active cancel intent in
+one transaction, releases global admission before joining native workers, and
+commits completion only after confirmed cleanup. Close receipts replay the
+stored result without cancelling or waiting for newer work. An interrupted or
+failed close is recovery-bound. Format 5 adds private immutable Thread resources
+and close intent/completion; public history excludes credentials. See
+[the ACP contract](BRO_NATIVE_ACP_SERVER_SPEC.md) for adapter ordering and
+[acceptance](BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md) for current evidence.
 
 ## Client and transport boundary
 

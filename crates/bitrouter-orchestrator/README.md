@@ -1,7 +1,41 @@
 # BitRouter Orchestrator source guide
 
-This crate implements the native BRO coding-agent runtime. The application owns
-transport and database assembly; the SDK owns model routing and provider execution.
+This crate implements the native BRO coding-agent runtime and the external-agent
+ACP stack. The application owns host transport and database assembly; the SDK
+owns model routing and provider execution.
+
+## External agents over ACP
+
+Enable the optional `acp` feature to use `bitrouter_orchestrator::acp`. Native
+runtime consumers can leave it disabled to avoid the ACP conductor and its
+trace viewer. `apps/bitrouter` enables it for existing ACP commands and sessions.
+
+| Module | Responsibility |
+| --- | --- |
+| `acp/controller.rs` | Manager-facing ACP server, lifecycle forwarding, route controls and attributed cost |
+| `acp/client.rs` | Shared client for a child agent or an in-process controller, updates, permissions and cancellation |
+| `acp/up.rs` | Agent-process transport, initialize-only health checks and confirmed process cleanup |
+| `acp/capture.rs` | Capture port and protocol events; the app supplies durable storage |
+| `acp/translate.rs`, `acp/telemetry.rs` | Typed session updates, NDJSON contract and context usage |
+
+The app injects route/cost services and retains CLI/UI adapters. This extraction
+does not attach external ACP sessions to native `ThreadService` execution. Agent configuration data remains in
+`bitrouter_sdk::config::agent` beside the shared `Config`, without ACP runtime
+dependencies.
+
+## Native ACP ingress
+
+`acp/native/` implements negotiated ACP v1 and draft v2 over one existing
+`ThreadService`: stable native IDs, bounded history/live projection, permission
+reattachment and durable cancel/close controls. The app supplies an authenticated
+local caller, host-authorized immutable resources and an OS-local stdio bridge.
+EOF affects observation only. The core owns single-Thread closure and records
+cancelled queued Turns before joining active cleanup; completion retries do not
+cancel newer work. Runtime format 5 retains supported 2/3/4 reads.
+
+See [the native ACP contract](../../docs/BRO_NATIVE_ACP_SERVER_SPEC.md) and
+[local acceptance](../../docs/BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md). External
+client/controller paths remain v1; native v2 is pinned to the SDK's draft schema.
 
 ## Read the contracts first
 

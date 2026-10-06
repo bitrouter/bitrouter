@@ -2,6 +2,8 @@
 //!
 //! Assembly layer: turns a [`bitrouter_sdk::config::Config`] into a running
 //! [`bitrouter_sdk::App`], and carries the management-command logic.
+//! The external-agent ACP controller, client and process transport live in
+//! `bitrouter_orchestrator::acp`; this app assembles their product adapters.
 //!
 //! Foreground custom hosts register typed capabilities through
 //! [`bitrouter_sdk::extension::ExtensionApi`] and [`host::serve_with_extensions`],
@@ -52,6 +54,7 @@ pub mod host;
 mod local_cli;
 pub mod mcp_registry;
 pub mod metering;
+pub mod native_acp;
 pub mod native_code;
 pub mod onboarding;
 pub mod optimization;

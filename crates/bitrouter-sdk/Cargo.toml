@@ -49,29 +49,6 @@ tower = { workspace = true, optional = true }
 # `config_file` feature
 serde-saphyr = { workspace = true, optional = true }
 
-# `acp` feature — typed ACP schema payloads (PromptRequest / PromptResponse / …)
-agent-client-protocol-schema = { workspace = true, optional = true }
-# `acp` feature — the ACP SDK proper: the `Agent`/`Client` roles, connection
-# builders, and stdio transport the live thin proxy (`acp::up` / `acp::down`)
-# drives. Only the runtime needs it; the pure-routing pipeline does not.
-agent-client-protocol = { workspace = true, optional = true }
-# `acp` feature — the official connection-level conductor. It lazily builds the
-# agent/proxy chain from the manager's initialize request and forwards
-# unhandled ACP traffic bidirectionally, which is the controller kernel.
-#
-# It reaches `axum` non-optionally, through
-# `agent-client-protocol-trace-viewer`, so enabling `acp` links an HTTP server.
-# That is unwanted and is tracked upstream; see the `acp` feature's comment.
-agent-client-protocol-conductor = { workspace = true, optional = true }
-# `acp` feature — the proxy's stream/compat glue: `BroadcastStream` for the
-# fan-out planes and `tokio_util::compat` to hand the child's tokio pipes to
-# the futures-io based ACP SDK.
-tokio-stream = { workspace = true, features = ["sync"], optional = true }
-# `acp` feature — the ACP runtime's error type. The routing pipeline uses
-# `BitrouterError`; the session engine surfaces process/handshake failures,
-# which are contextual chains rather than gateway status codes.
-anyhow = { workspace = true, optional = true }
-
 # `mcp` feature — official Rust MCP SDK.
 # <https://github.com/modelcontextprotocol/rust-sdk>
 rmcp = { workspace = true, optional = true }
@@ -87,24 +64,6 @@ config_file = ["dep:serde-saphyr", "dep:hex", "tokio/fs"]
 # `mcp::Pipeline`, hook traits, and the `McpTransport` enum, so a consumer
 # can plug in a custom Executor without pulling rmcp.
 mcp = ["dep:rmcp", "tokio/process"]
-# The ACP thin proxy: `ConfigAcpRoutingTable` for the pure-routing pipeline
-# plus the live runtime (`acp::up`/`engine`/`down`) that drives one agent
-# child as one session. Without this feature the SDK still exposes the
-# `AcpTransport` enum, `AcpTarget`, and the `RoutingTable` trait, so a
-# consumer can wire ACP routing without pulling the ACP SDK in.
-acp = [
-    "dep:agent-client-protocol-schema",
-    "dep:agent-client-protocol",
-    "dep:agent-client-protocol-conductor",
-    "dep:tokio-stream",
-    "dep:anyhow",
-    "dep:rustix",
-    "tokio/process",
-    "tokio/io-util",
-    "tokio/rt-multi-thread",
-    "tokio-util/compat",
-]
-
 # Conformance helpers for renderers' test suites: `span_def_for`,
 # `value_type_matches` and `render_json`, which resolve an exported span to its
 # declaration, check an emitted value's type against the declared one, and
@@ -115,26 +74,6 @@ acp = [
 # `[dev-dependencies]`; `bitrouter-telemetry` is the one in this workspace.
 testing = []
 
-# NOTE: `acp` pulls `agent-client-protocol-conductor`, which reaches `axum`
-# non-optionally through `agent-client-protocol-trace-viewer`. So enabling
-# `acp` links an HTTP server, which a consumer wanting ACP routing should not
-# have to.
-#
-# An `acp-controller` split was built and then withdrawn. It failed the test
-# this workspace applies everywhere else — name the beneficiary: `apps/bitrouter`
-# is the only consumer of `acp`, and it wants the controller. The one real
-# victim was `helpers/dist-helper`, which enabled `acp` without ever using it;
-# trimming that is the fix that shipped. #848 also fused the two halves —
-# `acp::client` imports `controller`'s route-control types — so separating them
-# now means restructuring that module, for nobody. The real fix is upstream
-# making the trace viewer optional. Revisit when a consumer exists.
-
-[target.'cfg(unix)'.dependencies]
-# `acp` feature — safe `killpg(2)` for reaping an agent child's whole process
-# group when the ACP SDK's own child guard is not enough. `rustix` rather than
-# `libc` because this crate is `#![forbid(unsafe_code)]`.
-rustix = { workspace = true, features = ["process"], optional = true }
-
 [dev-dependencies]
 tokio = { workspace = true, features = [
     "sync",
@@ -144,7 +83,6 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "test-util",
 ] }
-# `acp` runtime tests launch stub agents in throwaway working directories.
 tempfile.workspace = true
 
 [package.metadata.docs.rs]

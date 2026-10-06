@@ -1628,8 +1628,8 @@ enum AcpCmd {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Expose an ACP-compatible agent adapter over stdio for an ACP client.
-    #[command(override_usage = "bro acp serve <AGENT> [OPTIONS]")]
+    /// Serve native BRO over ACP stdio, or proxy an explicit external agent.
+    #[command(override_usage = "bro acp serve [AGENT] [OPTIONS]")]
     Serve {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
         /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
@@ -1645,6 +1645,9 @@ enum AcpCmd {
             conflicts_with = "agent"
         )]
         agent_compat: Option<String>,
+        /// Native BRO: permit reads only, excluding shell, writes and MCP.
+        #[arg(long)]
+        read_only: bool,
         /// Per-turn deadline in seconds. On elapse the agent is asked to
         /// cancel cooperatively; a turn that still doesn't finish errors.
         #[arg(long, value_name = "SECS")]
@@ -1767,7 +1770,7 @@ fn command_for_invocation(invoked: &'static str) -> clap::Command {
         })
         .mut_subcommand("acp", |command| {
             command.mut_subcommand("serve", |command| {
-                command.override_usage(format!("{invoked} acp serve <AGENT> [OPTIONS]"))
+                command.override_usage(format!("{invoked} acp serve [AGENT] [OPTIONS]"))
             })
         })
 }
@@ -6221,18 +6224,28 @@ async fn acp_cmd(cmd: AcpCmd, output: &Output) -> Result<()> {
         AcpCmd::Serve {
             agent,
             agent_compat,
+            read_only,
             turn_timeout,
             routing,
             config,
         } => {
-            let agent = agent.or(agent_compat).ok_or_else(|| {
-                bitrouter_sdk::BitrouterError::bad_request(format!(
-                    "acp serve requires an agent, for example `{} acp serve claude`",
-                    bitrouter_sdk::invocation::name()
-                ))
-            })?;
+            let agent = agent.or(agent_compat);
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
             let cfg = bitrouter::paths::load_config(&source).await?;
+            let Some(agent) = agent else {
+                return bitrouter::native_acp::bridge(
+                    &source,
+                    &cfg,
+                    &routing,
+                    read_only,
+                    turn_timeout,
+                )
+                .await;
+            };
+            anyhow::ensure!(
+                !read_only,
+                "--read-only applies to native BRO; external agents retain their own permissions"
+            );
             let options = bitrouter::acp_cli::launch_options(turn_timeout);
             let ctx = bitrouter::acp_cli::SpawnContext {
                 source: &source,
@@ -6580,7 +6593,7 @@ mod tests {
             .map(clap::Command::render_long_help)
             .map(|help| help.to_string())
             .unwrap_or_default();
-        assert!(acp.contains("bro acp serve <AGENT>"));
+        assert!(acp.contains("bro acp serve [AGENT]"));
         assert!(!acp.contains("--json"));
         assert!(!acp.contains("--human"));
         assert!(!acp.contains("--context"));
@@ -6599,7 +6612,7 @@ mod tests {
             .map(clap::Command::render_long_help)
             .map(|help| help.to_string())
             .unwrap_or_default();
-        assert!(alias_acp.contains("bitrouter acp serve <AGENT>"));
+        assert!(alias_acp.contains("bitrouter acp serve [AGENT]"));
         let alias_launch = alias
             .find_subcommand_mut("launch")
             .map(clap::Command::render_long_help)

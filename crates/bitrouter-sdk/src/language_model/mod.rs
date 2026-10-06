@@ -56,7 +56,7 @@
 //!
 //! ## Protocol isolation
 //!
-//! The hook traits here are **not** shared with [`crate::mcp`] / [`crate::acp`]:
+//! The hook traits here are **not** shared with [`crate::mcp`]:
 //! an `mcp::RouteHook` cannot be registered on a `language_model::Pipeline`
 //! (compile-time error). Cross-cutting reuse goes through crate-root library
 //! code, never a shared trait.

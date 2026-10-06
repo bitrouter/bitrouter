@@ -77,7 +77,7 @@ Evidence locations:
   [wire lifecycle tests](../apps/bitrouter/src/chat/code_wire.rs),
   [session-host tests](../apps/bitrouter/src/acp_cli.rs), and the application
   dependency-boundary guard.
-- **ACP:** [SDK client protocol tests](../crates/bitrouter-sdk/src/acp/client.rs).
+- **ACP:** [Shared client protocol tests](../crates/bitrouter-orchestrator/src/acp/client.rs).
 - **PTY:** [real terminal journeys](../apps/bitrouter/tests/code_tui_pty.rs).
 - **Output:** [ACP/headless/pipe integration tests](../apps/bitrouter/tests/acp.rs).
 

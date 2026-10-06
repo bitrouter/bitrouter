@@ -38,16 +38,15 @@ bitrouter-guardrails = { path = "extensions/regex-checker/matcher", version = "1
 # only wants the observability contract off the OpenTelemetry stack entirely.
 bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-alpha.33", default-features = false }
 
-# Safe syscall wrappers. Used by the SDK's `acp` runtime for `killpg(2)`;
-# `libc` would need an `unsafe` block, and `bitrouter-sdk` forbids unsafe code.
+# Safe syscall wrappers. Used by the app's ACP runtime for `killpg(2)` and
+# native runtime process control without requiring unsafe blocks.
 rustix = { version = "1", default-features = false }
 process-wrap = { version = "10", default-features = false }
 
-# ACP SDK crates. Development pins one reviewed Git revision, whose manifests
-# consume schema 1.7.0. The compatible major-version requirement is retained
-# because Cargo strips `git` when packaging and must resolve published crates.
-agent-client-protocol = { version = "2", git = "https://github.com/agentclientprotocol/rust-sdk.git", rev = "c63610fc38a642f7a73ba2719f403f17d771c345", features = ["unstable_session_fork"] }
-agent-client-protocol-conductor = { version = "2", git = "https://github.com/agentclientprotocol/rust-sdk.git", rev = "c63610fc38a642f7a73ba2719f403f17d771c345" }
+# Published ACP release pair. Native ingress registers both stable v1 and draft
+# v2; the external-agent controller continues to speak v1.
+agent-client-protocol = { version = "=3.0.0", features = ["process", "stdio", "unstable_session_fork", "unstable_protocol_v2"] }
+agent-client-protocol-conductor = "=3.0.0"
 # Shared by `bro status --watch` (in the app) and `bitrouter-tui` (the
 # ACP session renderer), so the version lives here rather than in either.
 ratatui = { version = "0.29", features = [
@@ -72,13 +71,12 @@ unicode-width = "0.2"
 # Cursor movement and deletion in the composer must operate on user-perceived
 # characters rather than UTF-8 bytes or scalar values.
 unicode-segmentation = "1.13"
-# `unstable_llm_providers` gives the draft `providers/*` schema types used only
-# for controller-to-harness endpoint setup. `unstable_session_fork` lets tests
-# exercise the advertised lifecycle method. We deliberately do not enable
-# `unstable_protocol_v2`: this controller retains stable ACP v1 wire semantics.
-agent-client-protocol-schema = { version = "=1.7.0", features = [
+# Controller endpoint setup and lifecycle fixtures retain their extensions.
+# Wire v2 is separately enabled for the native agent implementation.
+agent-client-protocol-schema = { version = "=1.10.2", features = [
     "unstable_llm_providers",
     "unstable_session_fork",
+    "unstable_protocol_v2",
 ] }
 
 # shared third-party
@@ -185,14 +183,6 @@ rmcp = { version = "3.3", default-features = false, features = [
     "transport-streamable-http-client-reqwest",
     "transport-child-process",
 ] }
-
-# ACP (sdk `acp` feature): v1 implements ACP as a pure JSON-RPC router over
-# newline-delimited stdio per the spec — the official Rust SDK
-# (<https://github.com/agentclientprotocol/rust-sdk>) is shaped around
-# typed `connect_with(|cx| …)` session callbacks that don't fit a
-# request-response `Executor` trait, so we don't pull it in. The spec is the
-# source of truth: <https://agentclientprotocol.com/protocol/schema> +
-# <https://agentclientprotocol.com/protocol/transports>.
 
 # database — sea-orm is the only database dependency in the workspace.
 # bitrouter depends on this high-level ORM abstraction, never on a concrete

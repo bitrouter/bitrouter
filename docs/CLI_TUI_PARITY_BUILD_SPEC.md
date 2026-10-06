@@ -510,7 +510,7 @@ file table, [§5](CLI_TUI_PARITY_IMPL_SPEC.md#5-rendering)'s closing paragraph.
    `received = any arrived`), build
    `commands_report(offered_commands(&client), &[], &agent_list, received)`,
    emit, tear down. **No prompt is sent.**
-4. `crates/bitrouter-sdk/src/acp/translate.rs:59`: `AgentCommand` gains
+4. `crates/bitrouter-orchestrator/src/acp/translate.rs:59`: `AgentCommand` gains
    `hint: Option<String>` from `input` — for the `--format json` consumer, not
    for the report.
 5. `crates/bitrouter-tui/src/journal.rs:179`: `commands_received: bool`, set on

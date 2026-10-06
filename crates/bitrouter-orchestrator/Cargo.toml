@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-orchestrator"
-description = "BRO native coding agent engine"
+description = "BRO native coding runtime and external agent orchestration"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -28,6 +28,28 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "macros", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 uuid.workspace = true
+
+# External-agent ACP controller, client and process transport. Native runtime
+# consumers do not need the conductor's trace viewer and HTTP server.
+agent-client-protocol = { workspace = true, optional = true }
+agent-client-protocol-schema = { workspace = true, optional = true }
+agent-client-protocol-conductor = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+tokio-stream = { workspace = true, features = ["sync"], optional = true }
+tracing = { workspace = true, optional = true }
+
+[features]
+default = []
+acp = [
+    "dep:agent-client-protocol",
+    "dep:agent-client-protocol-schema",
+    "dep:agent-client-protocol-conductor",
+    "dep:anyhow",
+    "dep:tokio-stream",
+    "dep:tracing",
+    "tokio/rt-multi-thread",
+    "tokio-util/compat",
+]
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process"] }

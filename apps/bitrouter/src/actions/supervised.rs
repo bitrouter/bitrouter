@@ -19,7 +19,7 @@ use crate::supervisor::{
 use agent_client_protocol::schema::v1::{
     ListSessionsResponse, SessionConfigOptionValue, SetSessionConfigOptionResponse,
 };
-use bitrouter_sdk::acp::client::SessionInitialSettings;
+use bitrouter_orchestrator::acp::client::SessionInitialSettings;
 use tokio_util::sync::CancellationToken;
 
 /// Resolve the selected configuration's live endpoint, starting its daemon

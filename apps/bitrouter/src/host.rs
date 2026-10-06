@@ -272,6 +272,7 @@ async fn serve_with_options(
         let control_listener = daemon::bind_control_socket(&socket_path).await?;
         let task_socket = crate::agent_local::socket_path(&socket_path);
         let task_listener = daemon::transport::bind(&task_socket).await?;
+        let acp_listener = daemon::transport::bind(&crate::native_acp::socket_path(&socket_path)).await?;
         let task_service = bitrouter_orchestrator::service::ThreadService::with_store(
             app.clone(),
             &cfg.agent_api.workspaces,
@@ -280,6 +281,15 @@ async fn serve_with_options(
         .map_err(anyhow::Error::msg)?
         .with_resources(native_harness_config(&cfg, home))
         .map_err(anyhow::Error::msg)?;
+        let native_acp = bitrouter_orchestrator::acp::native::NativeAcpServer::new(
+            task_service.clone(), bitrouter_sdk::caller::CallerContext::local(),
+            bitrouter_orchestrator::acp::native::NativeSessionConfig {
+                agent: bitrouter_orchestrator::agent::AgentConfig::fixed(cfg.chat.model.clone().unwrap_or_default(), None),
+                permission_profile: bitrouter_orchestrator::thread::PermissionProfile::Ask,
+                servers: native_harness_config(&cfg, home).servers,
+                register_local_workspaces: true,
+            },
+        );
         anyhow::ensure!(
             !cfg.agent_api.enabled
                 || cfg.control.credentials.iter().all(|credential| credential.token_env != cfg.agent_api.token_env),
@@ -388,8 +398,10 @@ async fn serve_with_options(
                     tracing::warn!(%error, "native execution ownership is blocked; recovery inspection remains available");
                 }
                 let runtime = task_service.clone();
+                let acp_cleanup = native_acp.clone();
                 let runtime_shutdown = task_shutdown_for_server.clone();
-                let cleanup = async move { runtime_shutdown.cancelled().await; runtime.shutdown().await; };
+                let cleanup = async move { runtime_shutdown.cancelled().await; runtime.shutdown().await; acp_cleanup.shutdown().await; };
+                let acp = crate::native_acp::serve(acp_listener, native_acp, task_shutdown_for_server.clone());
                 let local = crate::agent_local::serve(
                     task_listener,
                     task_service,
@@ -408,7 +420,7 @@ async fn serve_with_options(
                     }
                 };
                 let serving = async {
-                    let result = tokio::try_join!(local, http).map(|_| ());
+                    let result = tokio::try_join!(local, http, acp).map(|_| ());
                     task_shutdown_for_cleanup.cancel();
                     result
                 };

@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use bitrouter_sdk::acp::client::{AcpClient, PendingPermission};
+use bitrouter_orchestrator::acp::client::{AcpClient, PendingPermission};
 use bitrouter_tui::machine::Effect;
 use bitrouter_tui::permission::{Decision, Policy, Prompt};
 

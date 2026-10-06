@@ -16,8 +16,8 @@
 
 use std::collections::HashMap;
 
-use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
 use bitrouter_sdk::config::Config;
+use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
 
 // ===== process working directory =====
 //

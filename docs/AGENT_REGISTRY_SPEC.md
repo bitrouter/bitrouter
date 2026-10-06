@@ -93,7 +93,7 @@ Three problems, one cause.
    structurally identical and could be one declarative form.
 3. **"ACP-compatible" is asserted, never verified.** `bro agents check`
    sends `initialize` and stops
-   ([`up.rs:329`](../crates/bitrouter-sdk/src/acp/up.rs)). Nothing checks that a
+   ([`up.rs:329`](../crates/bitrouter-orchestrator/src/acp/up.rs)). Nothing checks that a
    session can be created, that updates stream, that permissions round-trip, or
    — most importantly — that the agent's LLM traffic actually arrives at the
    gateway when the declared routing is applied. Without that last check,
@@ -534,7 +534,7 @@ E2B and Daytona break both directions, and each break is real work.
 **Transport.** The harness runs on someone else's VM, so ACP stdio must be
 tunnelled through a local broker that holds the sandbox session and proxies
 stdin/stdout. That is the second `AcpTransport` variant that
-[`transport.rs`](../crates/bitrouter-sdk/src/acp/transport.rs) anticipates when
+[`agent.rs`](../crates/bitrouter-sdk/src/config/agent.rs) anticipates when
 it says v1.0 ships stdio only. It is **per-vendor** — E2B and Daytona have
 different session APIs — so remote runtimes need a compiled adapter the way
 providers need a protocol adapter. The YAML carries only `api_base`, the auth

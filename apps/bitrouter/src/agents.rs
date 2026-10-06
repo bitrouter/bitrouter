@@ -79,8 +79,8 @@ pub fn list(config: &Config) -> Vec<ListRow> {
     ids.into_values().collect()
 }
 
-fn describe_invocation(cfg: &bitrouter_sdk::acp::transport::AcpAgentConfig) -> String {
-    use bitrouter_sdk::acp::transport::AcpTransport;
+fn describe_invocation(cfg: &bitrouter_sdk::config::agent::AcpAgentConfig) -> String {
+    use bitrouter_sdk::config::agent::AcpTransport;
     let full = match &cfg.transport {
         AcpTransport::Stdio { command, args, .. } => {
             if args.is_empty() {
@@ -103,14 +103,14 @@ fn describe_invocation(cfg: &bitrouter_sdk::acp::transport::AcpAgentConfig) -> S
 /// `bro agents check` — spawn each *configured* agent, send an
 /// `initialize` request, and report whether the round-trip succeeded.
 pub async fn check(config: &Config) -> Vec<CheckRow> {
-    use bitrouter_sdk::acp::transport::AcpTransport;
+    use bitrouter_sdk::config::agent::AcpTransport;
     let mut out = Vec::with_capacity(config.agents.len());
     let mut sorted: Vec<_> = config.agents.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     for (id, cfg) in sorted {
         let outcome = match &cfg.transport {
             AcpTransport::Stdio { command, args, env } => {
-                bitrouter_sdk::acp::up::health_check(command, args, env).await
+                bitrouter_orchestrator::acp::up::health_check(command, args, env).await
             }
         };
         out.push(CheckRow {
@@ -361,7 +361,7 @@ fn parses_as_non_string(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_sdk::acp::transport::{AcpAgentConfig, AcpTransport};
+    use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
     use std::collections::HashMap;
 
     fn agent(name: &str, cmd: &str) -> AcpAgentConfig {

@@ -68,6 +68,7 @@ pub(super) struct Inner {
     pub(super) instance_id: String,
     pub(super) limits: RuntimeLimits,
     pub(super) workers: TaskTracker,
+    pub(super) runtime_changed: tokio::sync::Notify,
     pub(super) state: Mutex<State>,
     pub(super) store: Arc<dyn ExecutionStore>,
     pub(super) admission: tokio::sync::Mutex<()>,
@@ -84,6 +85,7 @@ pub(super) struct QueuedTurn {
 }
 
 pub(super) struct ThreadRecord {
+    pub(super) servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
     pub(super) presentation: super::observation::Presentation,
     pub(super) snapshot: ThreadSnapshot,
     pub(super) caller: CallerContext,
@@ -118,6 +120,9 @@ impl ThreadRecord {
             .map_or(usize::MAX, |value| value.len().saturating_mul(2))
             .saturating_add(
                 serde_json::to_vec(&self.instructions).map_or(usize::MAX, |value| value.len()),
+            )
+            .saturating_add(
+                serde_json::to_vec(&self.servers).map_or(usize::MAX, |value| value.len()),
             )
             .saturating_add(
                 self.queued

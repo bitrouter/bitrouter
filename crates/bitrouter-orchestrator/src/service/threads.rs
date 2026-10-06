@@ -148,6 +148,35 @@ impl ThreadService {
         server_instance_id: &str,
         request: ThreadRequest,
     ) -> Result<ThreadSnapshot, ServiceError> {
+        self.create_thread_with_servers(server_instance_id, request, None)
+            .await
+    }
+
+    /// Bind immutable MCP descriptors selected by a trusted execution host.
+    /// Public transports must authorize descriptors before invoking this method.
+    pub async fn create_thread_with_servers(
+        &self,
+        server_instance_id: &str,
+        request: ThreadRequest,
+        servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
+    ) -> Result<ThreadSnapshot, ServiceError> {
+        if let Some(servers) = &servers {
+            if servers.len() > 32
+                || serde_json::to_vec(servers)
+                    .map_err(|e| e.to_string())?
+                    .len()
+                    > self.inner.limits.request_bytes
+            {
+                return Err("Thread MCP bindings exceed runtime bounds".into());
+            }
+            let mut names = std::collections::HashSet::new();
+            for server in servers {
+                server.validate().map_err(|e| e.to_string())?;
+                if !names.insert(&server.name) {
+                    return Err("duplicate Thread MCP server name".into());
+                }
+            }
+        }
         self.ensure_instance(Some(server_instance_id))?;
         let admission = self.inner.admission.lock().await;
         let scope = key_scope(
@@ -156,12 +185,17 @@ impl ThreadService {
             "create_thread",
             &request.idempotency_key,
         )?;
-        let hash = fingerprint(&(
+        let mut hash = fingerprint(&(
             &request.workspace,
             &request.config,
             request.permission_profile,
             &request.verification_command,
         ))?;
+        if servers.is_some() {
+            let mut bindings = serde_json::to_value(&servers).map_err(|error| error.to_string())?;
+            bindings.sort_all_objects();
+            hash = fingerprint(&(&hash, &bindings))?;
+        }
         if let Some(entry) = self
             .accepted_key(&scope, &request.idempotency_key, &hash)
             .await?
@@ -252,7 +286,7 @@ impl ThreadService {
             thread_id: thread_id.clone(),
             turn_id: None,
         };
-        let facts = [
+        let mut facts = vec![
             ExecutionRecord::ThreadCreated {
                 caller: request.caller.clone(),
                 snapshot: snapshot.clone(),
@@ -261,6 +295,11 @@ impl ThreadService {
             },
             ExecutionRecord::AcceptedKey { entry: key.clone() },
         ];
+        if let Some(servers) = &servers {
+            facts.push(ExecutionRecord::ThreadResources {
+                servers: servers.clone(),
+            });
+        }
         let (facts, event) = self.thread_transaction(&thread_id, 0, &facts)?;
         let version = match self.commit_fenced(&thread_id, 0, &facts).await {
             Ok(version) => version,
@@ -290,6 +329,7 @@ impl ThreadService {
         self.lock_state().threads.insert(
             thread_id,
             ThreadRecord {
+                servers,
                 presentation,
                 snapshot: snapshot.clone(),
                 caller: request.caller,
@@ -323,6 +363,36 @@ impl ThreadService {
         thread.authorize(caller)?;
         self.check_thread_grant(&state, thread)?;
         Ok(thread.snapshot.clone())
+    }
+
+    /// Reopening may validate but cannot replace an immutable resource binding.
+    pub fn check_thread_servers(
+        &self,
+        target: &ThreadTarget,
+        caller: &CallerContext,
+        servers: &[bitrouter_sdk::mcp::transport::McpServerConfig],
+    ) -> Result<(), ServiceError> {
+        self.ensure_instance(Some(&target.server_instance_id))?;
+        let state = self.lock_state();
+        let thread = state
+            .threads
+            .get(&target.thread_id)
+            .ok_or_else(unknown_thread)?;
+        thread.authorize(caller)?;
+        self.check_thread_grant(&state, thread)?;
+        let bound = thread
+            .servers
+            .as_deref()
+            .unwrap_or(&self.inner.resources.servers);
+        if serde_json::to_value(bound).map_err(|e| e.to_string())?
+            != serde_json::to_value(servers).map_err(|e| e.to_string())?
+        {
+            return Err(ServiceError::new(
+                ErrorCode::Conflict,
+                "session MCP bindings cannot change on reopen",
+            ));
+        }
+        Ok(())
     }
 
     pub fn read_turn(
@@ -681,7 +751,10 @@ impl ThreadService {
                 "runtime is shutting down",
             ));
         }
-        if thread.snapshot.status == ThreadStatus::RecoveryRequired {
+        if matches!(
+            thread.snapshot.status,
+            ThreadStatus::RecoveryRequired | ThreadStatus::Closing
+        ) {
             return Err(ServiceError::new(
                 ErrorCode::RecoveryRequired,
                 "uncertain Turn requires recovery",

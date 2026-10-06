@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Native BRO ACP v1 and draft v2 via bare `bro acp serve --model MODEL`, backed
+  by the daemon's existing ThreadService. Unexpected disconnect preserves work
+  and pending approval; cancel retains a paused queue, while close durably
+  cancels every accepted input and waits for native cleanup. Runtime format 5
+  preserves 2/3/4 reads. Explicit external-agent proxy commands retain their path.
+
+### Changed
+
+- Upgrade ACP schema to 1.10.2 with the matching SDK and Conductor 3.0.0,
+  retaining stable v1 and draft v2 support.
+
+- **Breaking (SDK):** Move the ACP controller, client, capture, telemetry,
+  translation and process transport to `bitrouter_orchestrator::acp` behind
+  its `acp` feature.
+  Remove the SDK's `acp` module and feature. Agent configuration types now live
+  in `bitrouter_sdk::config::agent`; existing `agents:` YAML, ACP wire behavior
+  and CLI commands are unchanged.
+
 ## [1.0.0-alpha.33](https://github.com/bitrouter/bitrouter/compare/v1.0.0-alpha.32...v1.0.0-alpha.33)
 
 

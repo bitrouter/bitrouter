@@ -1022,6 +1022,7 @@ mod tests {
                 timestamp_ms: 42,
                 changes: vec![ThreadChange::TurnQueued {
                     receipt: TurnReceipt {
+                        user_item_id: String::new(),
                         thread_id: "thread".into(),
                         turn_id: format!("turn-{seq}"),
                         queue_order: seq,
