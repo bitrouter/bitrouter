@@ -442,6 +442,12 @@ impl ThreadService {
         }
         for record in records {
             match record {
+                ExecutionRecord::InstructionContext { snapshot, .. } => {
+                    if let Some(thread) = state.threads.get_mut(thread_id) {
+                        thread.instructions = Some(snapshot.as_ref().clone());
+                        thread.instructions_epoch = Some(self.inner.instance_id.clone());
+                    }
+                }
                 ExecutionRecord::HarnessInventory { inventory, .. } => {
                     if let Some(task) = state.turns.get_mut(turn_id) {
                         task.snapshot.resources = Some(inventory.as_ref().clone());

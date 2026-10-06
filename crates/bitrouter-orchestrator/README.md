@@ -34,6 +34,15 @@ from `service`, `thread` or `store`.
 7. `service/commit.rs` commits settlement and the public projection through the same
    Thread authority; `service/queue.rs` advances accepted FIFO work.
 
+`harness/instructions.rs` loads global and project-root-to-working-directory
+instructions on the first active execution of a live Thread. Each directory
+selects `AGENTS.override.md`, `AGENTS.md`, or a configured fallback filename.
+The body enters durable user context; `context.rs` adds the scope and precedence
+policy to system instructions. The model reads deeper directory rules itself.
+Thread snapshots survive Turns; a new server session refreshes them at a safe
+model boundary with an explicit replacement or removal message. MCP inventories
+retain their independent frozen-binding check. Cold browsing reads no instruction files.
+
 `service/state.rs` holds live Thread/Turn records and shared resources. Splitting
 methods into files does not create additional state owners, runners or commit
 protocols. Each Thread retains one version and commit lock. Methods named `*_serialized` expect their callers to acquire the commit gate

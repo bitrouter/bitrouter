@@ -57,6 +57,12 @@ pub struct SettlementOutcome {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub enum ExecutionRecord {
+    InstructionContext {
+        context_version: u64,
+        snapshot: Box<crate::harness::instructions::InstructionSnapshot>,
+        message: Option<Message>,
+        prepend: bool,
+    },
     HarnessInventory {
         context_version: u64,
         inventory: Box<crate::harness::HarnessInventory>,
@@ -196,10 +202,10 @@ pub enum EffectStatus {
     Unknown,
 }
 
-pub const RUNTIME_FORMAT_VERSION: u32 = 3;
+pub const RUNTIME_FORMAT_VERSION: u32 = 4;
 
 pub fn validate_runtime_format(version: u32) -> Result<(), String> {
-    if version != 2 && version != RUNTIME_FORMAT_VERSION {
+    if !matches!(version, 2 | 3 | RUNTIME_FORMAT_VERSION) {
         return Err(format!("unsupported_runtime_format: {version}"));
     }
     Ok(())

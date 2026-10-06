@@ -1,5 +1,5 @@
-//! Workspace-scoped MCP and skills resources for the native durable runtime.
-//! Resource discovery never grants permission or changes model instructions.
+//! Workspace-scoped project instructions, MCP and skills for the native runtime.
+//! AGENTS.md augments model instructions; resource discovery never grants permission.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::ToolMode;
 use crate::store::EffectStatus;
 
+pub mod instructions;
 pub mod mcp;
 pub mod skills;
 
@@ -42,6 +43,7 @@ pub struct HarnessConfig {
     pub servers: Vec<McpServerConfig>,
     pub protocol: ProtocolVersion,
     pub skill_roots: Vec<PathBuf>,
+    pub instructions: instructions::InstructionConfig,
 }
 
 impl Default for HarnessConfig {
@@ -50,6 +52,7 @@ impl Default for HarnessConfig {
             servers: Vec::new(),
             protocol: ProtocolVersion::LATEST,
             skill_roots: Vec::new(),
+            instructions: instructions::InstructionConfig::default(),
         }
     }
 }

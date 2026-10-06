@@ -296,6 +296,8 @@ impl ThreadService {
                 config,
                 verification_command: request.verification_command,
                 messages: Vec::new(),
+                instructions: None,
+                instructions_epoch: None,
                 queued: VecDeque::new(),
                 next_order: 0,
                 commit_lock: Arc::new(tokio::sync::Mutex::new(())),

@@ -1,6 +1,7 @@
 //! Service behavior suites share fixtures without importing other test suites.
 
 mod harness;
+mod instructions;
 mod lifecycle;
 mod observation;
 mod ownership;

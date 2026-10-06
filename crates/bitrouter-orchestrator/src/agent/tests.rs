@@ -334,7 +334,12 @@ async fn ordered_read_edit_shell_then_final_answer() -> Result<(), Box<dyn std::
         512 * 1024,
     )
     .map_err(std::io::Error::other)?;
-    assert_eq!(rebuilt.system.as_deref(), Some("fixture instructions"));
+    assert!(
+        rebuilt
+            .system
+            .as_deref()
+            .is_some_and(|system| system.starts_with("fixture instructions"))
+    );
     assert_eq!(rebuilt.messages, report.messages);
     Ok(())
 }

@@ -21,6 +21,7 @@ fn config(server: &wiremock::MockServer) -> HarnessConfig {
         servers: vec![fixture::configuration(server)],
         protocol: ProtocolVersion::LATEST,
         skill_roots: Vec::new(),
+        instructions: Default::default(),
     }
 }
 
@@ -316,6 +317,7 @@ fn stdio_config() -> HarnessConfig {
         )],
         protocol: ProtocolVersion::LATEST,
         skill_roots: Vec::new(),
+        instructions: Default::default(),
     }
 }
 
@@ -460,10 +462,13 @@ async fn cancelled_handshake_joins_process_before_stopped_owner()
 }
 
 #[tokio::test]
-async fn checkpoint_continuation_reuses_results_and_refuses_changed_resource_binding()
+async fn checkpoint_continuation_reuses_results_and_refuses_changed_resources()
 -> Result<(), Box<dyn std::error::Error>> {
-    for changed in [false, true] {
+    for change in ["none", "binding", "instructions", "removed", "added"] {
         let workspace = TempDir::new()?;
+        if change != "added" {
+            std::fs::write(workspace.path().join("AGENTS.md"), "ORIGINAL_PROJECT_RULES")?;
+        }
         let upstream = fixture::server(false).await;
         let source_store = Arc::new(MemoryExecutionStore::default());
         let source = ThreadService::with_store(
@@ -526,13 +531,22 @@ async fn checkpoint_continuation_reuses_results_and_refuses_changed_resource_bin
             .commit_owned(&owner, &accepted.thread_id, 0, &saved.records[..cutoff])
             .await?;
         memory.stop_owner(&owner).await?;
+        if change == "instructions" || change == "added" {
+            std::fs::write(workspace.path().join("AGENTS.md"), "UPDATED_PROJECT_RULES")?;
+        } else if change == "removed" {
+            std::fs::remove_file(workspace.path().join("AGENTS.md"))?;
+        }
         let replacement = fixture::server(false).await;
         let destination = ThreadService::with_store(
             app(vec![final_turn()])?,
             &[workspace.path().into()],
             memory.clone(),
         )?
-        .with_resources(config(if changed { &replacement } else { &upstream }))?;
+        .with_resources(config(if change == "binding" {
+            &replacement
+        } else {
+            &upstream
+        }))?;
         let target = crate::thread::ThreadTarget {
             thread_id: accepted.thread_id.clone(),
             server_instance_id: destination.inner.instance_id.clone(),
@@ -552,6 +566,7 @@ async fn checkpoint_continuation_reuses_results_and_refuses_changed_resource_bin
                 },
             )
             .await?;
+        let changed = change == "binding";
         let expected = if changed {
             TurnStatus::Failed
         } else {
@@ -570,8 +585,24 @@ async fn checkpoint_continuation_reuses_results_and_refuses_changed_resource_bin
         assert_eq!(calls(&replacement).await?, 0);
         let prompts = prompts(memory.as_ref(), &accepted.thread_id, &accepted.turn_id).await?;
         assert_eq!(prompts.len(), if changed { 1 } else { 2 });
+        assert!(prompts.iter().all(|prompt| {
+            prompt.system.as_deref().is_some_and(|system| {
+                !system.contains("ORIGINAL_PROJECT_RULES")
+                    && !system.contains("UPDATED_PROJECT_RULES")
+            })
+        }));
         if !changed {
-            assert!(serde_json::to_string(&prompts[1].messages)?.contains("retained"));
+            let context = serde_json::to_string(&prompts[1].messages)?;
+            assert!(context.contains("retained"));
+            assert_eq!(
+                context.contains("UPDATED_PROJECT_RULES"),
+                matches!(change, "instructions" | "added")
+            );
+            if change == "instructions" {
+                assert!(context.contains("replace all previously provided startup"));
+            } else if change == "removed" {
+                assert!(context.contains("no longer apply"));
+            }
         }
         destination.shutdown().await;
     }

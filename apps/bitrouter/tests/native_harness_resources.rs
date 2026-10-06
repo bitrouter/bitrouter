@@ -75,6 +75,7 @@ async fn sqlite_reopen_retains_resource_inventory_and_known_result_without_conne
     let directory = tempfile::tempdir()?;
     let workspace = directory.path().join("workspace");
     std::fs::create_dir(&workspace)?;
+    std::fs::write(workspace.join("AGENTS.md"), "SQLITE_STARTUP_INSTRUCTIONS")?;
     let skill = workspace.join(".codex/skills/demo");
     std::fs::create_dir_all(&skill)?;
     std::fs::write(
@@ -86,6 +87,7 @@ async fn sqlite_reopen_retains_resource_inventory_and_known_result_without_conne
         servers: vec![fixture::configuration(&upstream)],
         protocol: ProtocolVersion::LATEST,
         skill_roots: Vec::new(),
+        instructions: Default::default(),
     };
     let url = format!("sqlite://{}/runtime.db", directory.path().display());
     let db = bitrouter::db::connect(&url).await?;
@@ -206,14 +208,20 @@ async fn sqlite_reopen_retains_resource_inventory_and_known_result_without_conne
     let inventory = completed.resources.ok_or("inventory")?;
     service.shutdown().await;
     let journal = store.load(&created.thread_id).await?.ok_or("journal")?;
-    assert_eq!(journal.format_version, 3);
+    assert_eq!(journal.format_version, 4);
     assert!(serde_json::to_string(&journal.records)?.contains("sqlite-evidence"));
+    assert!(journal.records.iter().any(|record| matches!(
+        record, ExecutionRecord::TurnRecord { fact, .. }
+            if matches!(fact.as_ref(), ExecutionRecord::InstructionContext { snapshot, .. }
+                if snapshot.body == "SQLITE_STARTUP_INSTRUCTIONS")
+    )));
     assert!(journal.records.iter().any(|record| matches!(record,ExecutionRecord::TurnRecord { fact,.. } if matches!(fact.as_ref(),ExecutionRecord::HarnessInventory {..}))));
     drop(service);
     drop(store);
     db.close().await?;
     let before = upstream.received_requests().await.ok_or("requests")?.len();
     // Opening committed history uses its original inventory even after disk changes.
+    std::fs::remove_file(workspace.join("AGENTS.md"))?;
     std::fs::write(
         skill.join("SKILL.md"),
         "---\nname: demo\ndescription: Changed metadata\n---\nCHANGED_BODY",

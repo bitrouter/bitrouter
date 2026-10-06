@@ -2,7 +2,7 @@
   "name": "bitrouter",
   "displayName": "BitRouter",
   "version": "0.1.0",
-  "description": "Route model calls and browse durable BRO conversations in native scrollback. Run Thread/Turn conversations with FIFO input, steering, six native tools (read, glob, grep, write, edit, shell), bounded read workers, configured MCP client tools, skills discovery and durable execution records on a background server. Bundles the BitRouter setup and operations skill, including ACP harnesses, request checks, and custom-host setup.",
+  "description": "Route model calls and browse durable BRO conversations in native scrollback. Run Thread/Turn conversations with FIFO input, steering, Codex-style AGENTS.md startup context and nested rules, six native tools (read, glob, grep, write, edit, shell), bounded read workers, configured MCP client tools, skills discovery and durable execution records on a background server. Bundles the BitRouter setup and operations skill, including ACP harnesses, request checks, and custom-host setup.",
   "author": { "name": "BitRouterAI" },
   "homepage": "https://bitrouter.ai",
   "repository": "https://github.com/bitrouter/bitrouter",

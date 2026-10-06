@@ -14,7 +14,10 @@ pub(crate) fn build(
     validate_history(messages)?;
     let prompt = Prompt {
         model: model.to_string(),
-        system: Some(instructions.to_string()),
+        system: Some(format!(
+            "{instructions}\n\n{}",
+            crate::harness::instructions::POLICY
+        )),
         system_provider_metadata: Default::default(),
         messages: messages.to_vec(),
         tools,

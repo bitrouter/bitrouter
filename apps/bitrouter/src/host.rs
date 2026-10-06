@@ -278,7 +278,7 @@ async fn serve_with_options(
             Arc::new(crate::agent_store::DatabaseExecutionStore::new(assembled.db.clone())),
         )
         .map_err(anyhow::Error::msg)?
-        .with_resources(native_harness_config(&cfg))
+        .with_resources(native_harness_config(&cfg, home))
         .map_err(anyhow::Error::msg)?;
         anyhow::ensure!(
             !cfg.agent_api.enabled
@@ -892,6 +892,7 @@ fn other_provider_env_var_hints() -> Vec<String> {
 /// Static daemon-owned resources; opening or browsing a Thread never connects.
 fn native_harness_config(
     cfg: &bitrouter_sdk::config::Config,
+    home: &std::path::Path,
 ) -> bitrouter_orchestrator::harness::HarnessConfig {
     let mut servers: Vec<_> = cfg
         .mcp_servers
@@ -903,9 +904,9 @@ fn native_harness_config(
         })
         .collect();
     servers.sort_by(|a, b| a.name.cmp(&b.name));
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+    let user_home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map(std::path::PathBuf::from);
-    let mut skill_roots = home.map_or_else(Vec::new, |home| {
+    let mut skill_roots = user_home.map_or_else(Vec::new, |home| {
         vec![
             home.join(".agents/skills"),
             home.join(".codex/skills"),
@@ -919,6 +920,10 @@ fn native_harness_config(
         servers,
         protocol: bitrouter_sdk::mcp::upstream_protocol_version(cfg.mcp.upstream_protocol),
         skill_roots,
+        instructions: bitrouter_orchestrator::harness::instructions::InstructionConfig {
+            global_root: Some(home.to_path_buf()),
+            ..Default::default()
+        },
     }
 }
 

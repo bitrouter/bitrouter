@@ -127,7 +127,7 @@ Startup claims one database owner and completes bounded cold discovery before
 admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
 Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
 records per Thread. Capabilities expose aggregate progress, not root identities
-or prompts. New/updated roots use runtime format 3; format 2 remains readable without history rewriting. Migration adds metadata with
+or prompts. New/updated roots use runtime format 4; formats 2/3 remain readable without history rewriting. Migration adds metadata with
 **default 0** for old roots; unsupported formats fail before payload decoding
 or execution, with `recovery_required` / `unsupported_runtime_format`.
 They are not converted or marked safe.
@@ -628,7 +628,31 @@ for native invocations. Checker declarations and router bindings require restart
 Settled token/cost history remains under `bro requests`, but does not prove that
 a particular native check ran.
 
-## Native MCP and skills wiring
+## Native project instructions, MCP and skills wiring
+
+Native Threads load startup instructions as durable **user context**, including
+read-only Threads. The daemon's BitRouter home (normally `~/.bitrouter`) supplies
+global `AGENTS.override.md`, or the first nonempty `AGENTS.md`. Project discovery
+loads the Git root through the selected workspace/working directory, choosing
+one file per directory: `AGENTS.override.md`, `AGENTS.md`, then host-configured
+fallback names. No Git root means only the working directory is checked.
+Local authenticated workspace registration authorizes ancestor instruction reads
+up to the nearest Git root without expanding native tool permissions. Remote
+hosts must grant the ancestor discovery range; otherwise it stops at the grant.
+The project chain has a shared 32 KiB default budget (host configurable up to
+64 KiB); global content is bounded separately at 64 KiB. Excess content is
+truncated with a persisted warning; invalid UTF-8 uses replacement characters.
+Directories are skipped; symlinks must resolve within their instruction root.
+The complete prompt counts toward the model-context bound and grants no tools.
+
+System instructions define directory scope and deeper-rule precedence and ask
+the model to check deeper directories with `read`. Descendants are not scanned
+or injected automatically. A live Thread retains its startup snapshot across
+Turns, including an empty snapshot. A new Thread discovers again. After server
+restart, authorized continuation refreshes instructions only at a settled model
+boundary and records replacements/removals explicitly; known effects are never
+replayed. Completing an already settled outcome and cold browsing reread no
+instruction files. Runtime format 4 persists snapshots; formats 2/3 remain readable.
 
 The daemon supplies its configured `mcp_servers` to native coding Turns. MCP tools
 use the existing approval, exclusive execution and durable result barriers;

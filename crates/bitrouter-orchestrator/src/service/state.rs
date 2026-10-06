@@ -55,6 +55,7 @@ pub(super) struct State {
     pub(super) turns: HashMap<String, TurnRecord>,
     pub(super) active_workspaces: HashMap<PathBuf, String>,
     pub(super) allowed_workspaces: Vec<PathBuf>,
+    pub(super) instruction_roots: HashMap<PathBuf, PathBuf>,
     pub(super) closing: bool,
 }
 
@@ -89,6 +90,8 @@ pub(super) struct ThreadRecord {
     pub(super) config: AgentConfig,
     pub(super) verification_command: Option<String>,
     pub(super) messages: Vec<Message>,
+    pub(super) instructions: Option<crate::harness::instructions::InstructionSnapshot>,
+    pub(super) instructions_epoch: Option<String>,
     pub(super) queued: VecDeque<QueuedTurn>,
     pub(super) next_order: u64,
     pub(super) commit_lock: Arc<tokio::sync::Mutex<()>>,
@@ -113,6 +116,9 @@ impl ThreadRecord {
     pub(super) fn bytes(&self) -> usize {
         serde_json::to_vec(&self.messages)
             .map_or(usize::MAX, |value| value.len().saturating_mul(2))
+            .saturating_add(
+                serde_json::to_vec(&self.instructions).map_or(usize::MAX, |value| value.len()),
+            )
             .saturating_add(
                 self.queued
                     .iter()

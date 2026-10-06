@@ -39,6 +39,7 @@ supply additional overrides. Contract scope and acceptance scope are separate.
 | --- | --- |
 | Runtime identities, scheduling, context, durable commits, recovery and transport | [BRO_AGENT_RUNTIME_SPEC.md](BRO_AGENT_RUNTIME_SPEC.md) |
 | Six tool interfaces, filesystem bounds and interpreter rules | [BRO_BASE_TOOLS_SPEC.md](BRO_BASE_TOOLS_SPEC.md) |
+| AGENTS.md scopes and snapshots, native MCP and skills discovery | [BRO_HARNESS_RESOURCES.md](BRO_HARNESS_RESOURCES.md) |
 | Native Conversation and durable Thread navigation | [BRO_CONVERSATION_UI_SPEC.md](BRO_CONVERSATION_UI_SPEC.md) |
 | Source-specific validation and historical checkpoints | [BRO_AGENT_RUNTIME_IMPLEMENTATION.md](BRO_AGENT_RUNTIME_IMPLEMENTATION.md) |
 | Tool provider/platform experiments and reproduction | [BRO_BASE_TOOLS_ACCEPTANCE.md](BRO_BASE_TOOLS_ACCEPTANCE.md) |

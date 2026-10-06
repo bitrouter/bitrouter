@@ -1,5 +1,5 @@
 use std::collections::{HashSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -165,6 +165,9 @@ pub struct Agent {
     tools: WorkspaceTools,
     resource_config: Arc<crate::harness::HarnessConfig>,
     resources: Option<Arc<crate::harness::HarnessResources>>,
+    instruction_snapshot: Option<crate::harness::instructions::InstructionSnapshot>,
+    refresh_instructions: bool,
+    instruction_root: PathBuf,
     config: AgentConfig,
     workers: Arc<Semaphore>,
     parallel_tools: usize,
@@ -199,6 +202,36 @@ pub(crate) struct ApprovalRequest {
 }
 
 impl Agent {
+    pub(crate) fn with_instructions(
+        mut self,
+        snapshot: Option<crate::harness::instructions::InstructionSnapshot>,
+        refresh: bool,
+        root: PathBuf,
+    ) -> Self {
+        self.instruction_snapshot = snapshot;
+        self.refresh_instructions = refresh;
+        self.instruction_root = root;
+        self
+    }
+
+    async fn startup_instructions(
+        &self,
+    ) -> Result<crate::harness::instructions::InstructionSnapshot, String> {
+        if !self.refresh_instructions
+            && let Some(snapshot) = &self.instruction_snapshot
+        {
+            return Ok(snapshot.clone());
+        }
+        let cwd = self.tools.root().to_path_buf();
+        let root = self.instruction_root.clone();
+        let config = self.resource_config.instructions.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::harness::instructions::InstructionSnapshot::load(&cwd, &root, &config)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+
     pub(crate) fn with_resources(mut self, config: Arc<crate::harness::HarnessConfig>) -> Self {
         self.resource_config = config;
         self
@@ -273,12 +306,16 @@ impl Agent {
         }
         let tools =
             WorkspaceTools::new(workspace, config.tool_mode).map_err(|error| error.to_string())?;
+        let instruction_root = tools.root().to_path_buf();
         Ok(Self {
             app,
             caller,
             tools,
             resource_config: Arc::new(crate::harness::HarnessConfig::default()),
             resources: None,
+            instruction_snapshot: None,
+            refresh_instructions: true,
+            instruction_root,
             config,
             workers: Arc::new(Semaphore::new(16)),
             parallel_tools: 4,
@@ -364,6 +401,19 @@ impl Agent {
             control,
         } = channels;
         let mut prepared = self.clone();
+        if !self
+            .resource_config
+            .instructions
+            .project_doc_fallback_filenames
+            .is_empty()
+        {
+            prepared.config.instructions.push_str(&format!(
+                "\n\nConfigured instruction fallback filenames: {:?}",
+                self.resource_config
+                    .instructions
+                    .project_doc_fallback_filenames
+            ));
+        }
         let mut report = if let Some(mut checkpoint) = input.checkpoint {
             checkpoint.final_answer = None;
             checkpoint.status = RunStatus::Failed;
@@ -399,21 +449,26 @@ impl Agent {
             report
         };
         let started = Instant::now();
+        let mut instruction_record = None;
         let initial_bound = self.bound_status(&report, started, &cancel);
         let preparation = if let Some((_, detail)) = &initial_bound {
             Err(crate::harness::ResourceError::from(detail.clone()))
         } else {
-            crate::harness::HarnessResources::discover(
-                self.tools.root(),
-                &self.resource_config,
-                self.config.tool_mode,
-                &cancel,
-                self.config.max_duration,
-            )
-            .await
+            match self.startup_instructions().await {
+                Err(error) => Err(crate::harness::ResourceError::from(error)),
+                Ok(snapshot) => crate::harness::HarnessResources::discover(
+                    self.tools.root(),
+                    &self.resource_config,
+                    self.config.tool_mode,
+                    &cancel,
+                    self.config.max_duration.saturating_sub(started.elapsed()),
+                )
+                .await
+                .map(|resources| (resources, snapshot)),
+            }
         };
         let preparation = match preparation {
-            Ok(resources) => {
+            Ok((resources, snapshot)) => {
                 let error = if report
                     .resources
                     .as_ref()
@@ -427,7 +482,7 @@ impl Agent {
                     && report.steps > 0
                     && !resources.inventory.tools.is_empty()
                 {
-                    Some("legacy continuation has no frozen MCP inventory".to_string())
+                    Some("legacy continuation has no frozen harness inventory".to_string())
                 } else if resources
                     .inventory
                     .tools
@@ -444,6 +499,17 @@ impl Agent {
                     report.unknown_effect |= report.cleanup_unconfirmed;
                     Err(error)
                 } else {
+                    if self.refresh_instructions || self.instruction_snapshot.is_none() {
+                        let message = snapshot.message(self.instruction_snapshot.as_ref());
+                        instruction_record = Some(ExecutionRecord::InstructionContext {
+                            context_version: report
+                                .context_version
+                                .saturating_add(u64::from(message.is_some())),
+                            snapshot: Box::new(snapshot),
+                            message,
+                            prepend: self.instruction_snapshot.is_none(),
+                        });
+                    }
                     report.resources = Some(resources.inventory.clone());
                     prepared.resources = Some(Arc::new(resources));
                     Ok(())
@@ -476,17 +542,38 @@ impl Agent {
                 if let Err(outcome) = result {
                     break outcome;
                 }
-                if let Some(inventory) = &report.resources
-                    && let Err(error) = commit_execution(
-                        &commits,
-                        vec![ExecutionRecord::HarnessInventory {
-                            context_version: report.context_version,
-                            inventory: Box::new(inventory.clone()),
-                        }],
-                    )
-                    .await
-                {
+                let instruction = instruction_record.take();
+                let mut records = Vec::new();
+                if let Some(record) = &instruction {
+                    records.push(record.clone());
+                }
+                if let Some(inventory) = &report.resources {
+                    records.push(ExecutionRecord::HarnessInventory {
+                        context_version: match &instruction {
+                            Some(ExecutionRecord::InstructionContext {
+                                context_version, ..
+                            }) => *context_version,
+                            _ => report.context_version,
+                        },
+                        inventory: Box::new(inventory.clone()),
+                    });
+                }
+                if let Err(error) = commit_execution(&commits, records).await {
                     break (RunStatus::Failed, error);
+                }
+                if let Some(ExecutionRecord::InstructionContext {
+                    context_version,
+                    message,
+                    prepend,
+                    ..
+                }) = instruction
+                {
+                    crate::harness::instructions::apply_message(
+                        &mut report.messages,
+                        message,
+                        prepend,
+                    );
+                    report.context_version = context_version;
                 }
             }
             report.active_duration_ms = prior_duration.saturating_add(
@@ -520,7 +607,7 @@ impl Agent {
             let prompt = match context::build(
                 &self.config.model,
                 self.config.effort,
-                &self.config.instructions,
+                &self_.config.instructions,
                 &report.messages,
                 self_.declarations(),
                 self.config.max_context_bytes,

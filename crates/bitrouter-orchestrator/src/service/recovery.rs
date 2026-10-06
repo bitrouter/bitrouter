@@ -69,6 +69,8 @@ struct Rebuild {
     caller: CallerContext,
     view: ThreadView,
     messages: Vec<Message>,
+    instructions: Option<crate::harness::instructions::InstructionSnapshot>,
+    instructions_epoch: Option<String>,
     queued: VecDeque<state::QueuedTurn>,
     next_order: u64,
     active: Option<Active>,
@@ -979,6 +981,8 @@ impl Rebuild {
             source_owner: None,
             view,
             messages: Vec::new(),
+            instructions: None,
+            instructions_epoch: None,
             queued: VecDeque::new(),
             next_order: 0,
             active: None,
@@ -1191,6 +1195,26 @@ impl Rebuild {
                 }
             }
             ExecutionRecord::TurnRecord { turn_id, fact } => {
+                if let ExecutionRecord::InstructionContext {
+                    snapshot,
+                    message,
+                    prepend,
+                    ..
+                } = fact.as_ref()
+                {
+                    snapshot.validate().map_err(storage)?;
+                    let expected = snapshot.message(self.instructions.as_ref());
+                    if snapshot.cwd != self.view.thread.workspace
+                        || *prepend != self.instructions.is_none()
+                        || serde_json::to_vec(message).map_err(|error| error.to_string())?
+                            != serde_json::to_vec(&expected).map_err(|error| error.to_string())?
+                    {
+                        self.invalid("startup instruction context has the wrong source or message");
+                    } else {
+                        self.instructions = Some(snapshot.as_ref().clone());
+                        self.instructions_epoch = Some(self.source_epoch.clone());
+                    }
+                }
                 if let ExecutionRecord::WorkspaceReleasePrepared {
                     workspace,
                     execution_id,
@@ -1444,6 +1468,8 @@ impl Rebuild {
             config: self.view.config,
             verification_command: self.view.verification_command,
             messages: self.messages,
+            instructions: self.instructions,
+            instructions_epoch: self.instructions_epoch,
             queued: self.queued,
             next_order: self.next_order,
             commit_lock: gate,
@@ -1476,6 +1502,29 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
 impl Active {
     fn consume(&mut self, fact: &ExecutionRecord) -> Result<(), String> {
         match fact {
+            ExecutionRecord::InstructionContext {
+                context_version,
+                message,
+                prepend,
+                ..
+            } => {
+                if !self.group.is_empty()
+                    || self.steps.values().any(|step| !step.complete)
+                    || Some(*context_version)
+                        != self.version.checked_add(u64::from(message.is_some()))
+                {
+                    return Err(
+                        "startup instructions changed outside a settled model boundary".into(),
+                    );
+                }
+                crate::harness::instructions::apply_message(
+                    &mut self.messages,
+                    message.clone(),
+                    *prepend,
+                );
+                self.version = *context_version;
+                self.checkpointed = false;
+            }
             ExecutionRecord::HarnessInventory { inventory, .. } => {
                 inventory.validate()?;
                 if self

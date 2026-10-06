@@ -186,6 +186,7 @@ impl ThreadService {
         for server in &config.servers {
             server.validate().map_err(|error| error.to_string())?;
         }
+        config.instructions.validate()?;
         let inner = Arc::get_mut(&mut self.inner)
             .ok_or("configure harness resources before sharing the runtime")?;
         inner.resources = Arc::new(config);
@@ -297,6 +298,7 @@ impl ThreadService {
                     turns: HashMap::new(),
                     active_workspaces: HashMap::new(),
                     allowed_workspaces,
+                    instruction_roots: HashMap::new(),
                     closing: false,
                 }),
             }),
@@ -378,6 +380,8 @@ impl ThreadService {
         if !workspace.is_dir() {
             return Err("workspace is not a directory".into());
         }
+        let instruction_root = crate::harness::instructions::project_root(&workspace, None)
+            .unwrap_or_else(|| workspace.clone());
         let mut state = self.lock_state();
         if state.closing {
             return Err(ServiceError::new(
@@ -398,6 +402,9 @@ impl ThreadService {
             );
             state.allowed_workspaces.push(workspace.clone());
         }
+        state
+            .instruction_roots
+            .insert(workspace.clone(), instruction_root);
         Ok(workspace)
     }
 

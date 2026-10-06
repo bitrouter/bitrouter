@@ -96,7 +96,38 @@ impl ThreadService {
                 .map_or(PermissionProfile::Ask, |record| record.permission_profile);
             let verification_limits = agent.verification_limits();
             let verification_tools = agent.workspace_tools();
-            let runner = agent.clone();
+            let runner = {
+                let state = self.lock_state();
+                let thread = state
+                    .turns
+                    .get(&turn_id)
+                    .and_then(|turn| state.threads.get(&turn.thread_id));
+                match thread {
+                    Some(thread) => {
+                        let workspace = &thread.snapshot.workspace;
+                        let root = state
+                            .instruction_roots
+                            .get(workspace)
+                            .cloned()
+                            .or_else(|| {
+                                state
+                                    .allowed_workspaces
+                                    .iter()
+                                    .filter(|root| workspace.starts_with(root))
+                                    .min_by_key(|root| root.components().count())
+                                    .cloned()
+                            })
+                            .unwrap_or_else(|| workspace.clone());
+                        agent.clone().with_instructions(
+                            thread.instructions.clone(),
+                            thread.instructions_epoch.as_deref()
+                                != Some(self.inner.instance_id.as_str()),
+                            root,
+                        )
+                    }
+                    None => agent.clone(),
+                }
+            };
             let mut run = tokio::spawn(async move {
                 runner
                     .run_context(

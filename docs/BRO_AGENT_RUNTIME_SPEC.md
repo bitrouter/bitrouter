@@ -131,6 +131,15 @@ not model-context authority. Preserve provider metadata and legal pairing;
 invalid/missing stable identities cannot be repaired by inventing replacements.
 Bound context and response content before accepting work or effects.
 
+Startup AGENTS.md content is a durable user-context snapshot owned by the Thread.
+System instructions supply directory scope, nested precedence and discovery policy;
+the model reads deeper instruction files through ordinary workspace tools.
+Live Threads retain startup snapshots across Turns and same-owner reloads. A new
+server refreshes them at a settled model boundary, explicitly replacing/removing
+prior instructions without replaying known effects. See
+[Harness instructions](BRO_HARNESS_RESOURCES.md#workspace-project-instructions)
+for discovery, read ceilings, budgets and frozen MCP inventory boundaries.
+
 Verification uses the same selected interpreter, grant, scheduler and workspace
 as the Turn's tools. Keep assistant answer, verification and stop reason separate.
 Statuses are passed/failed/denied/unavailable/not_requested; only passed establishes
@@ -270,7 +279,7 @@ If all candidates are ineligible, return overloaded rather than steal a worker o
 observer. Cold public queries do not load SDK context. Reload reserves reader/hot
 capacity and cannot create a second gate for a Thread still referenced elsewhere.
 
-Runtime root format is 3. Format 2 remains readable; a new append upgrades its
+Runtime root format is 4. Formats 2/3 remain readable; a new append upgrades its
 envelope atomically without rewriting history. Migration 000026 labels existing development roots 0;
 unsupported roots fail before execution, without legacy conversion or deleting
 facts/owner/markers. Format rejection cannot become stopped-owner proof. Developer

@@ -1,14 +1,18 @@
 # BRO runtime acceptance and evidence
 
-Updated: 2026-10-05. Contract: [standalone runtime](BRO_AGENT_RUNTIME_SPEC.md).
+Updated: 2026-10-06. Contract: [standalone runtime](BRO_AGENT_RUNTIME_SPEC.md).
 This is the entry point for source-specific evidence. Each linked record identifies
 its source and validation boundaries; earlier provider/platform evidence is not
 reattributed to later changes.
 
 ## Latest recorded integration
 
-[Native Harness resources](BRO_HARNESS_RESOURCES.md#source-and-validation-2026-10-05)
-is the latest local validation record for source `321ccaad`, based on PR #945's
+[AGENTS.md working tree validation](BRO_HARNESS_RESOURCES.md#agentsmd-working-tree-validation-2026-10-06)
+covers startup scope, durable user-context snapshots, nested reads and refresh
+without known-call replay. Validation ran locally in a working tree based on `b9527673`.
+
+[Native Harness resources](BRO_HARNESS_RESOURCES.md#mcp-and-skills-source-and-validation-2026-10-05)
+retains the earlier local validation record for source `321ccaad`, based on PR #945's
 `fb243ee5`. It covers production MCP execution, runtime-owned skills discovery,
 format-2 reading/atomic format-3 append and the final workspace checks. Core
 selection, skills activation and inbound ACP remain subsequent work.
@@ -28,13 +32,14 @@ and reruns remain in the linked record, not converted to successful first attemp
 
 | Contract | Executable evidence |
 | --- | --- |
+| AGENTS.md startup scope, user-context snapshots, nested reads and refresh without replay | `service/tests/instructions.rs`, `service/tests/harness.rs`, `apps/bitrouter/tests/native_harness_resources.rs` |
 | MCP inventory, permissions, process cleanup and resource-bound continuation | `service/tests/harness.rs`, `apps/bitrouter/tests/native_harness_resources.rs`, `apps/bitrouter/tests/harness_mcp_check.rs` |
 | Legal context, model responses, ordered tools, budgets and commit barriers | `agent.rs` tests; `service.rs` tests |
-| FIFO, targeted cancellation, steering and approval/grant binding | `service/thread_tests.rs`, `service/steering_tests.rs` |
-| Owner fencing, shared workspace cleanup and process loss | `service/ownership_tests.rs`, `service/workspace.rs` tests, `service/process_recovery_tests.rs` |
-| Safe reconstruction/continuation without completed-call replay | `service/recovery_tests.rs`, `service/startup_tests.rs` |
-| Durable public cutoffs, post-commit publication and slow observers | `service/observation_tests.rs` |
-| Format refusal, unload/reload, bounded cold queries and directory filtering | `service/unification_tests.rs` |
+| FIFO, targeted cancellation, steering and approval/grant binding | `service/tests/thread.rs`, `service/tests/steering.rs` |
+| Owner fencing, shared workspace cleanup and process loss | `service/tests/ownership.rs`, `service/workspace.rs` tests, `service/tests/process_recovery.rs` |
+| Safe reconstruction/continuation without completed-call replay | `service/tests/recovery.rs`, `service/tests/startup.rs` |
+| Durable public cutoffs, post-commit publication and slow observers | `service/tests/observation.rs` |
+| Format refusal, unload/reload, bounded cold queries and directory filtering | `service/tests/unification.rs` |
 | SQLite transaction/reopen/process-loss semantics | `apps/bitrouter/src/agent_store.rs` tests |
 | Local/HTTP daemon process and receipt retry behavior | `apps/bitrouter/tests/native_agent_process.rs`, `agent_local.rs` tests |
 | Native navigation, approvals, drafts, reconnect and terminal lifecycle | `apps/bitrouter/tests/native_agent_tui.rs`, `native_code.rs` tests |

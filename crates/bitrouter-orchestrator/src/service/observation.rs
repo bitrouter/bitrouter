@@ -425,6 +425,13 @@ pub(crate) fn project(
             turn_id: turn_id.clone(),
             lifecycle: lifecycle.clone(),
         },
+        ExecutionRecord::InstructionContext {
+            context_version, ..
+        } => ThreadChange::ContextAdvanced {
+            turn_id: turn,
+            context_version: *context_version,
+            resources: None,
+        },
         ExecutionRecord::HarnessInventory {
             inventory,
             context_version,

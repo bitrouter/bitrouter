@@ -109,7 +109,7 @@ it is `not_requested`. Bare `bro code` keeps one Thread: Enter starts/enqueues,
 Ctrl-Enter steers, Ctrl-R resumes a paused queue, empty-composer `y`/`n` approves,
 and Ctrl-D detaches. Reattach with `--thread-id`; `--task-id` is removed.
 `--read-only` permits `read`, `glob`, `grep`; coding adds `write`, unique-span `edit`, and `shell`.
-Coding also exposes configured MCP tools through the same approvals; read-only does not connect to MCP. Skills discovery publishes metadata without prompt injection. `read` also paginates directories. Shell/verification share the declared server interpreter; no launch-time retry. `code <agent>` / `run <agent>` remain ACP. Local protocol is v15; opt-in HTTP uses `/agent/v2`. Durable history/keys
+Native Threads load global and ancestor `AGENTS.md` into durable user context, using overrides and model-read nested rules; see [wiring](references/cli.md#native-project-instructions-mcp-and-skills-wiring). Coding also exposes configured MCP tools through the same approvals; read-only does not connect to MCP. Skills discovery publishes metadata without prompt injection. `read` also paginates directories. Shell/verification share the declared server interpreter; no launch-time retry. `code <agent>` / `run <agent>` remain ACP. Local protocol is v15; opt-in HTTP uses `/agent/v2`. Durable history/keys
 survive hot unload. Lost instances/unknown effects never trigger automatic resubmission.
 See `references/cli.md` for permissions, controls, retries and recovery.
 Resident BRO daemons defer automatic replacement; finish work and use explicit `bro restart` after binary updates.
