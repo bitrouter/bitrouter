@@ -3,6 +3,7 @@
 use bitrouter_ai::error::ModelError;
 use bitrouter_ai::protocol::inbound_adapter_for;
 use bitrouter_ai::stream::SseFrame;
+use bitrouter_ai::target::CredentialPriority;
 use bitrouter_ai::types::{ApiProtocol, ChatTokenLimitField};
 use bitrouter_sdk::error::BitrouterError;
 use bitrouter_sdk::language_model::hooks::FallbackDecision;
@@ -113,7 +114,7 @@ fn rate_limit_presentation_survives_all_sse_codecs() -> bitrouter_sdk::Result<()
 
 #[test]
 fn selected_model_target_uses_overrides_and_redacts_credentials() -> bitrouter_sdk::Result<()> {
-    let target = RoutingTarget {
+    let mut target = RoutingTarget {
         provider_name: "provider".into(),
         service_id: "native-model".into(),
         api_base: "https://original.invalid".into(),
@@ -134,6 +135,7 @@ fn selected_model_target_uses_overrides_and_redacts_credentials() -> bitrouter_s
         )?],
     };
     let selected = target.model_target();
+    assert_eq!(selected.credential_priority, CredentialPriority::Explicit);
     assert_eq!(selected.api_key, "override-secret");
     assert_eq!(selected.api_base, "https://override.invalid");
     assert_eq!(selected.service_id, "native-model");
@@ -151,6 +153,18 @@ fn selected_model_target_uses_overrides_and_redacts_credentials() -> bitrouter_s
     assert!(!diagnostic.contains("selected-account"));
     assert_eq!(target.effective_api_key(), "override-secret");
     assert_eq!(target.api_key, "original-secret");
+    target.api_key_override = None;
+    assert_eq!(
+        target.model_target().credential_priority,
+        CredentialPriority::Fallback
+    );
+    target.provider_name = "bitrouter".into();
+    assert_eq!(
+        target.model_target().explicit_credential(),
+        Some("original-secret")
+    );
+    target.api_key.clear();
+    assert_eq!(target.model_target().explicit_credential(), None);
     Ok(())
 }
 

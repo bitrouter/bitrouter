@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use futures::{Stream, StreamExt};
 
 use crate::error::ModelError;
-use crate::types::{Content, FinishReason, GenerateResult, StreamPart, set_provider_metadata};
+use crate::types::{
+    Content, FinishReason, GenerateResult, ReasoningTextKind, StreamPart, set_provider_metadata,
+};
 
 /// Consume through EOF so a late failure cannot become a successful result.
 /// Dropping this future drops its owned stream. Cancellation and HTTP deadlines
@@ -25,6 +27,7 @@ where
     let mut tool_indices = HashMap::<String, usize>::new();
     let mut text_block: Option<(String, usize)> = None;
     let mut reasoning_block: Option<(String, usize)> = None;
+    let mut reasoning_summaries = HashMap::<usize, String>::new();
     let mut usage = None;
     let mut finish_reason = None;
     let mut response_id = None;
@@ -45,12 +48,14 @@ where
                     provider_metadata: Default::default(),
                 });
             }
-            StreamPart::TextDelta { text } => append_text(
-                &mut content,
-                text_block.as_ref().map(|(_, index)| *index),
-                text,
-                false,
-            )?,
+            StreamPart::TextDelta { text } => {
+                append_text(
+                    &mut content,
+                    text_block.as_ref().map(|(_, index)| *index),
+                    text,
+                    false,
+                )?;
+            }
             StreamPart::TextEnd { id } => {
                 close_block(&mut text_block, &id)?;
             }
@@ -62,18 +67,35 @@ where
                     native: None,
                 });
             }
-            StreamPart::ReasoningDelta { text, .. } => append_text(
-                &mut content,
-                reasoning_block.as_ref().map(|(_, index)| *index),
-                text,
-                true,
-            )?,
+            StreamPart::ReasoningDelta { text, source_kind } => {
+                let index = append_text(
+                    &mut content,
+                    reasoning_block.as_ref().map(|(_, index)| *index),
+                    String::new(),
+                    true,
+                )?;
+                if source_kind == Some(ReasoningTextKind::Summary) {
+                    // Summary suffixes can arrive after reasoning-text deltas.
+                    // Accumulate each lane independently until the block closes.
+                    reasoning_summaries
+                        .entry(index)
+                        .or_default()
+                        .push_str(&text);
+                } else {
+                    append_text(&mut content, Some(index), text, true)?;
+                }
+            }
             StreamPart::ReasoningEnd {
                 id,
                 signature,
                 native,
             } => {
                 let index = close_block(&mut reasoning_block, &id)?;
+                if let Some(index) = index
+                    && let Some(summary) = reasoning_summaries.remove(&index)
+                {
+                    prepend_reasoning_summary(&mut content, index, summary)?;
+                }
                 if let Some(native) = native {
                     let Some(Content::Reasoning {
                         native: saved,
@@ -238,6 +260,9 @@ where
     if finish_reason.is_none() {
         return Err(invalid("model stream ended without a terminal part").into());
     }
+    for (index, summary) in reasoning_summaries {
+        prepend_reasoning_summary(&mut content, index, summary)?;
+    }
     Ok(GenerateResult {
         content,
         usage,
@@ -254,6 +279,19 @@ fn invalid(message: &str) -> ModelError {
     }
 }
 
+fn prepend_reasoning_summary(
+    content: &mut [Content],
+    index: usize,
+    mut summary: String,
+) -> Result<(), ModelError> {
+    let Some(Content::Reasoning { text, .. }) = content.get_mut(index) else {
+        return Err(invalid("reasoning summary has no matching content block"));
+    };
+    summary.push_str(text);
+    *text = summary;
+    Ok(())
+}
+
 fn close_block(block: &mut Option<(String, usize)>, id: &str) -> Result<Option<usize>, ModelError> {
     match block.take() {
         Some((opened, index)) if opened == id => Ok(Some(index)),
@@ -267,7 +305,8 @@ fn append_text(
     index: Option<usize>,
     text: String,
     reasoning: bool,
-) -> Result<(), ModelError> {
+) -> Result<usize, ModelError> {
+    let actual_index = index.unwrap_or_else(|| content.len().saturating_sub(1));
     let block = if let Some(index) = index {
         content.get_mut(index)
     } else {
@@ -277,20 +316,24 @@ fn append_text(
         Some(Content::Text { text: current, .. }) if !reasoning => current.push_str(&text),
         Some(Content::Reasoning { text: current, .. }) if reasoning => current.push_str(&text),
         _ if index.is_some() => return Err(invalid("stream delta has no matching content block")),
-        _ => content.push(if reasoning {
-            Content::Reasoning {
-                text,
-                provider_metadata: Default::default(),
-                native: None,
-            }
-        } else {
-            Content::Text {
-                text,
-                provider_metadata: Default::default(),
-            }
-        }),
+        _ => {
+            let index = content.len();
+            content.push(if reasoning {
+                Content::Reasoning {
+                    text,
+                    provider_metadata: Default::default(),
+                    native: None,
+                }
+            } else {
+                Content::Text {
+                    text,
+                    provider_metadata: Default::default(),
+                }
+            });
+            return Ok(index);
+        }
     }
-    Ok(())
+    Ok(actual_index)
 }
 
 #[cfg(test)]

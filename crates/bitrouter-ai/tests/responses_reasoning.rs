@@ -338,50 +338,61 @@ fn legacy_reasoning_payloads_still_deserialize_without_native_fields() -> TestRe
 async fn summary_and_reasoning_text_lanes_keep_missing_suffixes_and_native_close_identity()
 -> TestResult {
     let native = json!({"type":"reasoning","id":"rs-one","status":"completed","summary":[{"type":"summary_text","text":"summary"}],"content":[{"type":"reasoning_text","text":"native text"}],"encrypted_content":"opaque-secret"});
-    let parts = decode(vec![
-        json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs-one","summary":[]}}),
-        json!({"type":"response.reasoning_summary_text.delta","item_id":"rs-one","delta":"sum"}),
-        json!({"type":"response.output_item.done","output_index":0,"item":native}),
-        json!({"type":"response.completed","response":{"id":"resp-one","status":"completed","output":[native]}}),
-    ])?;
-    let result = collect_generate(stream::iter(
-        parts.clone().into_iter().map(Ok::<_, ModelError>),
-    ))
-    .await?;
-    assert!(
-        matches!(result.content.as_slice(),[Content::Reasoning {text,..}] if text=="summarynative text")
-    );
-    let mut encoder = ResponsesAdapter.stream_encoder("gateway-id", "fixture");
-    let mut frames = Vec::new();
-    for part in &parts {
-        frames.extend(encoder.encode(part)?);
-    }
-    let values = frame_values(frames)?;
-    let summary = values
-        .iter()
-        .filter(|value| value["type"] == "response.reasoning_summary_text.delta")
-        .filter_map(|value| value["delta"].as_str())
-        .collect::<String>();
-    let text = values
-        .iter()
-        .filter(|value| value["type"] == "response.reasoning_text.delta")
-        .filter_map(|value| value["delta"].as_str())
-        .collect::<String>();
-    assert_eq!(summary, "summary");
-    assert_eq!(text, "native text");
-    for value in values.iter().filter(|value| {
-        value["type"] == "response.output_item.added"
-            || value["type"] == "response.output_item.done"
-    }) {
-        assert_eq!(value["item"]["id"], "rs-one");
-    }
-    assert_eq!(
-        values
+    for text_first in [false, true] {
+        let summary_delta = json!({"type":"response.reasoning_summary_text.delta","item_id":"rs-one","delta":"sum"});
+        let text_delta =
+            json!({"type":"response.reasoning_text.delta","item_id":"rs-one","delta":"native"});
+        let deltas = if text_first {
+            [text_delta, summary_delta]
+        } else {
+            [summary_delta, text_delta]
+        };
+        let parts = decode(vec![
+            json!({"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs-one","summary":[]}}),
+            deltas[0].clone(),
+            deltas[1].clone(),
+            json!({"type":"response.output_item.done","output_index":0,"item":native}),
+            json!({"type":"response.completed","response":{"id":"resp-one","status":"completed","output":[native]}}),
+        ])?;
+        let result = collect_generate(stream::iter(
+            parts.clone().into_iter().map(Ok::<_, ModelError>),
+        ))
+        .await?;
+        assert!(
+            matches!(result.content.as_slice(),[Content::Reasoning {text,..}] if text=="summarynative text")
+        );
+        let mut encoder = ResponsesAdapter.stream_encoder("gateway-id", "fixture");
+        let mut frames = Vec::new();
+        for part in &parts {
+            frames.extend(encoder.encode(part)?);
+        }
+        let values = frame_values(frames)?;
+        let summary = values
             .iter()
-            .find(|value| value["type"] == "response.output_item.done")
-            .ok_or("missing close")?["item"],
-        native
-    );
+            .filter(|value| value["type"] == "response.reasoning_summary_text.delta")
+            .filter_map(|value| value["delta"].as_str())
+            .collect::<String>();
+        let text = values
+            .iter()
+            .filter(|value| value["type"] == "response.reasoning_text.delta")
+            .filter_map(|value| value["delta"].as_str())
+            .collect::<String>();
+        assert_eq!(summary, "summary");
+        assert_eq!(text, "native text");
+        for value in values.iter().filter(|value| {
+            value["type"] == "response.output_item.added"
+                || value["type"] == "response.output_item.done"
+        }) {
+            assert_eq!(value["item"]["id"], "rs-one");
+        }
+        assert_eq!(
+            values
+                .iter()
+                .find(|value| value["type"] == "response.output_item.done")
+                .ok_or("missing close")?["item"],
+            native
+        );
+    }
     Ok(())
 }
 

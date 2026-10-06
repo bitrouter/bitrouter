@@ -226,7 +226,11 @@ impl RoutingTarget {
             api_protocol: self.api_protocol.clone(),
             api_base: self.effective_api_base().to_owned(),
             api_key: self.effective_api_key().to_owned(),
-            credential_priority: if self.api_key_override.is_some() {
+            // Hosted inference uses configured keys before the saved Cloud login.
+            // Subscription providers retain their stored-account-first fallback policy.
+            credential_priority: if self.api_key_override.is_some()
+                || (self.provider_name == "bitrouter" && !self.api_key.is_empty())
+            {
                 bitrouter_ai::target::CredentialPriority::Explicit
             } else {
                 bitrouter_ai::target::CredentialPriority::Fallback

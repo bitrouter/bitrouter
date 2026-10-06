@@ -296,6 +296,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_inference_key_bypasses_saved_cloud_credentials() -> anyhow::Result<()> {
+        let server = MockServer::start().await;
+        for credential in [
+            Some(StoredCredential::api_key(
+                "brk_saved.secret".to_owned(),
+                server.uri(),
+            )),
+            Some(StoredCredential::from(Credentials {
+                access_token: "expired-access".to_owned(),
+                refresh_token: Some("saved-refresh".to_owned()),
+                expires_at: Utc::now() - Duration::hours(1),
+                refresh_token_expires_at: None,
+                token_type: "Bearer".to_owned(),
+                scope: "inference:invoke".to_owned(),
+                client_id: "bitrouter-cli".to_owned(),
+                authorization_server: server.uri(),
+                namespace_id: Some("saved-namespace".to_owned()),
+                subject: None,
+            })),
+            None,
+        ] {
+            let (_directory, path) = fresh_tmp_creds_path("configured-key")?;
+            let manager = Arc::new(CredentialManager::with_client(
+                path.clone(),
+                reqwest::Client::new(),
+            ));
+            if let Some(credential) = credential {
+                manager.save(credential).await?;
+            } else {
+                std::fs::write(&path, "corrupt credentials")?;
+            }
+            let saved = std::fs::read(&path)?;
+            let applier = BitrouterAuthApplier::new(manager.session().clone(), onboarding_hint());
+            let mut target = target_for_origin(&server.uri());
+            // Configured and environment keys arrive here without a per-request override.
+            target.api_key = "brk_configured.secret".to_owned();
+            let request = reqwest::Client::new().post(server.uri()).build()?;
+            let applied = applier.apply(request, &target.model_target()).await?;
+            assert_eq!(
+                applied.headers()[reqwest::header::AUTHORIZATION],
+                "Bearer brk_configured.secret"
+            );
+            assert_eq!(std::fs::read(&path)?, saved);
+        }
+        assert!(
+            server
+                .received_requests()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("wiremock did not record requests"))?
+                .is_empty(),
+            "configured inference keys must not trigger stored OAuth discovery or refresh"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn shared_manager_single_flights_refresh_for_model_management_and_telemetry()
     -> anyhow::Result<()> {
         let server = MockServer::start().await;
