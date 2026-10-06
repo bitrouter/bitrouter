@@ -41,7 +41,7 @@ enum Marker {
     },
 }
 
-pub(super) struct WorkspaceFence {
+pub(crate) struct WorkspaceFence {
     _lock: File,
     pub(super) marker: PathBuf,
     claim: std::sync::Mutex<WorkspaceClaim>,
@@ -49,7 +49,7 @@ pub(super) struct WorkspaceFence {
 }
 
 impl WorkspaceFence {
-    pub(super) fn acquire(
+    pub(crate) fn acquire(
         workspace: &Path,
         owner: &ExecutionOwner,
         execution_id: &str,
@@ -165,7 +165,7 @@ impl WorkspaceFence {
         }))
     }
 
-    pub(super) fn validate(&self) -> Result<(), ServiceError> {
+    pub(crate) fn validate(&self) -> Result<(), ServiceError> {
         let claim = self
             .claim
             .lock()
@@ -277,7 +277,7 @@ impl WorkspaceFence {
 
     /// Called only after joined execution and durable release preparation.
     /// Dropping a fence never manufactures this proof, including unwinding.
-    pub(super) fn finish(&self) -> Result<(), ServiceError> {
+    pub(crate) fn finish(&self) -> Result<(), ServiceError> {
         if !self.can_finish.load(std::sync::atomic::Ordering::Acquire) {
             return Err(ServiceError::new(
                 ErrorCode::RecoveryRequired,

@@ -18,7 +18,7 @@ metadata:
 BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4. Native CLI tasks use bounded read workers and database execution records; see `references/cli.md` for permissions and restart limitations.
 
 Native BRO execution commits task/model/tool facts to the database; `references/cli.md` covers capabilities and restart limitations.
-Custom durable harness clients use the negotiated managed-core HTTP/WebSocket profile; see `references/managed-core.md` for binding, ACKs, results and current limits.
+`bro task managed` connects native tools to the in-process managed core with released-session continuation. Custom durable harness clients use the negotiated managed-core HTTP/WebSocket profile; see `references/managed-core.md` for binding, ACKs, results and current limits.
 
 ## Activate in one pass
 Work top to bottom, probing before asking.

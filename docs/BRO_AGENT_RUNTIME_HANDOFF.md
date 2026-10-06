@@ -1,7 +1,7 @@
 # BRO core and harness migration boundary
 
-Updated: 2026-10-04. This document describes future separation, not the current
-standalone runtime contract or proof of core integration. Current behavior is
+Updated: 2026-10-07. The explicit native managed entry below implements a bounded
+core/harness integration. The existing standalone runtime contract is
 specified in [BRO_AGENT_RUNTIME_SPEC.md](BRO_AGENT_RUNTIME_SPEC.md); validation
 is indexed in [BRO_AGENT_RUNTIME_IMPLEMENTATION.md](BRO_AGENT_RUNTIME_IMPLEMENTATION.md).
 
@@ -67,6 +67,22 @@ They are historical context, not a current prerequisite or authorization.
 
 MCP connections and skills discovery are now owned by the standalone harness
 within this runtime; see [BRO harness resources](BRO_HARNESS_RESOURCES.md).
-Their native inventory/dispatch does not implement managed Core checkpoint/ACK
-exchange. A later Core adapter must translate these resources while preserving
-the existing permissions, immutable inventory and unknown-effect barriers.
+`bro task managed` now adapts those resources through `harness::managed`, with
+CoreSession as its sole model/sub-agent scheduler. `NativePort` commits exact
+checkpoint/ACK bytes, artifacts and tool-start fences through a database CAS;
+native execution retains the shared WorkspaceFence and persists starts/results.
+The CLI reuses the configured provider pipeline and database, but opens no HTTP
+listener. Legacy `task run` and `code` continue through ThreadService.
+
+The bounded continuation contract requires a durably released prior session and
+the same workspace/mode. Abrupt process loss, remote harness authentication,
+physical storage reservation and running-owner recovery remain separate gates.
+`apps/bitrouter/tests/managed_native.rs` exercises real SQLite migrations and
+workspace tools with scripted model replies; provider evidence must be reported
+separately. This entry does not convert legacy Thread records into core sessions.
+
+
+The native managed CLI publishes skill metadata and optional MCP instruction
+references, but does not automatically select these optional materials for model
+context. Library callers can select their IDs through `TaskInput.required_materials`;
+AGENTS.md is always required. Automatic skill selection remains follow-up work.

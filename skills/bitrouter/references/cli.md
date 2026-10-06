@@ -1,5 +1,22 @@
 # CLI reference
 
+## Native tasks through the managed core
+
+`bro task managed PROMPT --model PROVIDER/MODEL --workspace PATH --session NAME`
+connects native tools, AGENTS.md, skills and MCP resources to an in-process
+CoreSession. The core owns routing and sub-agent scheduling; the native harness
+owns workspace execution and durable checkpoint/ACK storage. It accepts
+`--config`, `--effort`, `--read-only`, `--check`, and `--max-output-tokens`
+(default 4096). Read-only mode conflicts with verification. Coding mode approves
+its own headless tools. Explicit remote contexts are rejected.
+
+Output is NDJSON (`managed_session`, then `terminal`), with nonzero exit for an
+unsuccessful task. Reuse `--session` after a clean release to continue durable
+context in the same workspace/mode. Abrupt process loss remains recovery-blocked;
+there is no automatic running-owner takeover. This entry opens no listener and
+has no Thread/Turn directory UI. See the managed-core skill reference for
+subscription output reservations and storage bounds.
+
 ## BRO native coding conversations
 
 ```console

@@ -1,8 +1,8 @@
 # Managed core harness integration
 
 The `bro serve` inference listener also exposes the negotiated managed-core
-profile. This is separate from native task/ACP execution: existing harnesses do
-not automatically become durable managed-core clients.
+profile. The explicit `bro task managed` command connects native workspace resources
+to an in-process core; `task run`, `code`, and ACP keep their existing protocols.
 
 1. Use an active `brvk_` virtual key on both HTTP and WebSocket requests. Managed
    endpoints require authentication even when ordinary inference uses
@@ -330,3 +330,60 @@ raised. The SDK still verifies the final wire request. The managed Codex profile
 supports separate instructions and ordinary function tools; controls that its
 subscription transport would discard are rejected. Subscription usage does not
 establish a per-token monetary charge.
+
+
+## Native managed tasks
+
+`bro task managed PROMPT --model PROVIDER/MODEL --workspace PATH --session NAME`
+uses CoreSession for routing and child-agent scheduling, and native BRO tools
+for workspace execution. It opens no listener. The configured database stores
+exact checkpoints, ACKs, artifacts, start fences and outcomes atomically through
+revision checks. Omit `--session` for a fresh UUID. Output is NDJSON with
+`managed_session` and `terminal`; this entry does not stream tokens.
+
+`--read-only` omits writes, shell and MCP connections. Coding mode approves its
+own headless requests. `--check COMMAND` requests shell verification and conflicts
+with read-only mode. `--effort`, `--config`, `--workspace` and required `--model`
+match `task run`. `--max-output-tokens` defaults to 4096 and must be positive.
+For an uncapped subscription route, set it to the known model output ceiling;
+smaller reservations fail before dispatch. Pin Codex explicitly with
+`--model openai-codex:openai/gpt-6.1-sol --max-output-tokens 128000`.
+The registry currently leaves runtime token limits unset, so declare the route
+ceiling explicitly in the config (using verified model metadata):
+
+```yaml
+providers:
+  openai-codex:
+    active: true
+    models:
+      - id: openai/gpt-6.1-sol
+        provider_model_id: gpt-6.1-sol
+        api_protocol: responses
+        token_limits:
+          max_output_tokens: 128000
+```
+
+Keep registry inheritance enabled for provider defaults. Credentials use the
+existing provider store, including `bro providers login openai-codex --import-existing`.
+
+AGENTS.md is required startup context. Skills and MCP instructions are frozen
+material references; native permissions and inventory are delivered as core
+signals. Core collaboration tools schedule child agents without a second native
+model loop. Workspace exclusion is shared with existing native tasks.
+
+A successful exit durably releases the session. Reusing its name in another
+process continues context with the same canonical workspace and tool mode.
+Unreleased sessions or workspace markers fail closed after abrupt process loss.
+Running-owner handoff and automatic effect reconciliation are not implemented;
+never delete authority records to force continuation. Full remote conformance
+and physical storage reservation remain separate acceptance.
+
+Native control input is bounded at 2 MiB, checkpoints at 64 MiB, checkpoint wire
+bytes at 96 MiB, tool output at 512 KiB, and artifacts at 32 MiB. Admission can
+reject work sooner when cleanup reservations cannot fit those bounds.
+
+
+The native managed CLI publishes skill metadata and optional MCP instruction
+references, but does not automatically select these optional materials for model
+context. Library callers can select their IDs through `TaskInput.required_materials`;
+AGENTS.md is always required. Automatic skill selection remains follow-up work.

@@ -166,7 +166,7 @@ jobs:
             # out of order; retry the isolated test process before failing CI.
             retries: "2"
             targets: >-
-              --test onboarding --test smithers_reward_loop
+              --test managed_native --test onboarding --test smithers_reward_loop
               --test terminus_2_workflow_state
               --test trajectory_progress_control
     runs-on: ubuntu-latest

@@ -18,6 +18,7 @@ use crate::agent::ToolMode;
 use crate::store::EffectStatus;
 
 pub mod instructions;
+pub mod managed;
 pub mod mcp;
 pub mod skills;
 
@@ -192,6 +193,10 @@ impl HarnessResources {
 
     pub(crate) async fn validate_catalog(&self) -> Result<(), String> {
         self.mcp.lock().await.validate_catalog()
+    }
+
+    pub(crate) async fn instruction_body(&self, id: &str) -> Option<String> {
+        self.mcp.lock().await.instruction_bodies.get(id).cloned()
     }
 
     pub(crate) fn contains(&self, name: &str) -> bool {
