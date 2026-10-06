@@ -9,6 +9,8 @@ struct Source {
     storage_allowed: bool,
     effort_bound: bool,
     terminal: Option<serde_json::Value>,
+    opened: std::collections::BTreeSet<u64>,
+    done: std::collections::BTreeMap<u64, serde_json::Value>,
     scrubber: Option<UpstreamErrorScrubber>,
 }
 
@@ -48,20 +50,63 @@ impl BridgeCapture {
         Ok(())
     }
 
-    fn terminal(&self, event: &SseEvent) {
+    fn terminal(&self, event: &SseEvent) -> Result<()> {
         let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&event.data) else {
-            return;
+            return Ok(());
         };
         let event_type = json
             .get("type")
             .and_then(serde_json::Value::as_str)
             .or(event.event.as_deref());
-        if matches!(
-            event_type,
-            Some("response.completed" | "response.incomplete")
-        ) {
-            self.source().terminal = json.get_mut("response").map(serde_json::Value::take);
+        let mut source = self.source();
+        match event_type {
+            Some("response.output_item.added") => {
+                if let Some(index) = json.get("output_index").and_then(serde_json::Value::as_u64) {
+                    source.opened.insert(index);
+                }
+            }
+            Some("response.output_item.done") => {
+                if let (Some(index), Some(item)) = (
+                    json.get("output_index").and_then(serde_json::Value::as_u64),
+                    json.get("item"),
+                ) {
+                    source.done.insert(index, item.clone());
+                }
+            }
+            Some("response.completed" | "response.incomplete") => {
+                if let Some(mut response) = json.get_mut("response").map(serde_json::Value::take) {
+                    // Codex's Responses-Lite stream sends complete items in .done
+                    // frames and an empty terminal output. Preserve those final
+                    // items, including calls and private reasoning, never deltas.
+                    // https://github.com/openai/codex/blob/main/codex-rs/codex-api/src/sse/responses.rs
+                    if response
+                        .get("output")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(Vec::is_empty)
+                        && (!source.opened.is_empty() || !source.done.is_empty())
+                    {
+                        let contiguous =
+                            source.done.keys().copied().eq(0..source.done.len() as u64);
+                        if !contiguous
+                            || source
+                                .opened
+                                .iter()
+                                .any(|index| !source.done.contains_key(index))
+                        {
+                            return Err(BitrouterError::UpstreamInvalidResponse {
+                                message: "Codex Lite terminal has unfinished output items".into(),
+                            });
+                        }
+                        response["output"] = serde_json::Value::Array(
+                            std::mem::take(&mut source.done).into_values().collect(),
+                        );
+                    }
+                    source.terminal = Some(response);
+                }
+            }
+            _ => {}
         }
+        Ok(())
     }
 
     pub(super) fn complete(
@@ -264,8 +309,10 @@ impl HttpExecutor {
                         };
                         match decoder.decode(&sse) {
                             Ok(parts) => {
-                                if let Some(capture) = &capture {
-                                    capture.terminal(&sse);
+                                if let Some(capture) = &capture
+                                    && let Err(error) = capture.terminal(&sse) {
+                                    yield Err(error_scrubber.scrub_error(error));
+                                    return;
                                 }
                                 for p in parts {
                                     yield Ok(p);
@@ -305,5 +352,55 @@ impl HttpExecutor {
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+#[cfg(test)]
+mod lite_tests {
+    use super::*;
+    use crate::language_model::protocol::OutboundAdapter;
+    use crate::language_model::protocol::responses::ResponsesAdapter;
+
+    fn event(value: serde_json::Value) -> SseEvent {
+        SseEvent {
+            event: None,
+            data: value.to_string(),
+        }
+    }
+
+    #[test]
+    fn codex_lite_terminal_retains_complete_calls_and_reasoning() -> Result<()> {
+        let capture = BridgeCapture::default();
+        let items = [
+            serde_json::json!({"type":"reasoning","id":"r1","summary":[],"encrypted_content":"fixture-only"}),
+            serde_json::json!({"type":"function_call","id":"f1","call_id":"c1","name":"read","arguments":"{\"path\":\"seed.txt\"}"}),
+        ];
+        for (index, item) in items.iter().enumerate() {
+            capture.terminal(&event(serde_json::json!({"type":"response.output_item.added","output_index":index,"item":item})))?;
+            capture.terminal(&event(serde_json::json!({"type":"response.output_item.done","output_index":index,"item":item})))?;
+        }
+        capture.terminal(&event(serde_json::json!({"type":"response.completed","response":{"id":"resp_lite","status":"completed","output":[]}})))?;
+        let terminal = capture
+            .source()
+            .terminal
+            .clone()
+            .ok_or_else(|| BitrouterError::internal("missing terminal"))?;
+        let result = ResponsesAdapter.parse_response(terminal)?;
+        assert!(
+            result
+                .content
+                .iter()
+                .any(|part| matches!(part, Content::Reasoning { .. }))
+        );
+        assert!(result.content.iter().any(|part| matches!(part, Content::ToolCall { name, arguments, .. } if name == "read" && arguments == "{\"path\":\"seed.txt\"}")));
+        Ok(())
+    }
+
+    #[test]
+    fn codex_lite_terminal_rejects_unfinished_items() -> Result<()> {
+        let capture = BridgeCapture::default();
+        capture.terminal(&event(serde_json::json!({"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"f1"}})))?;
+        assert!(capture.terminal(&event(serde_json::json!({"type":"response.completed","response":{"id":"resp_lite","status":"completed","output":[]}}))).is_err());
+        Ok(())
     }
 }

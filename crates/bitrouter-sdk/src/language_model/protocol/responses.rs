@@ -71,7 +71,14 @@ pub(crate) fn output_replayable(response: &serde_json::Value) -> bool {
                             validate_reasoning_history(&parse_reasoning_item(item)).is_ok()
                         }
                         Some("message") => {
-                            fields(item, &["type", "id", "role", "status", "content"])
+                            fields(item, &["type", "id", "role", "status", "content", "phase"])
+                                && item.get("phase").is_none_or(|phase| {
+                                    phase.is_null()
+                                        || matches!(
+                                            phase.as_str(),
+                                            Some("commentary" | "final_answer")
+                                        )
+                                })
                                 && item.get("role").and_then(serde_json::Value::as_str)
                                     == Some("assistant")
                                 && item
@@ -138,6 +145,36 @@ pub(crate) fn output_replayable(response: &serde_json::Value) -> bool {
                     }
                 })
         })
+}
+
+// Message phase separates commentary from a final answer in replayed Codex
+// history. Preserve it on each text block instead of requiring stored state.
+// https://github.com/openai/codex/blob/main/codex-rs/protocol/src/models.rs
+fn message_metadata(item: &serde_json::Value) -> ProviderMetadata {
+    let mut metadata = ProviderMetadata::new();
+    if let Some(phase) = item.get("phase").filter(|phase| !phase.is_null()) {
+        set_provider_metadata(
+            &mut metadata,
+            PROVIDER_ID_OPENAI,
+            "messagePhase",
+            phase.clone(),
+        );
+    }
+    metadata
+}
+
+fn phased_message(content: &Content) -> Option<serde_json::Value> {
+    let Content::Text {
+        text,
+        provider_metadata,
+    } = content
+    else {
+        return None;
+    };
+    let phase = provider_namespace(provider_metadata, PROVIDER_ID_OPENAI)?.get("messagePhase")?;
+    Some(
+        serde_json::json!({"type":"message", "role":"assistant", "phase":phase, "content":[{"type":"output_text","text":text}]}),
+    )
 }
 
 #[cfg(test)]
@@ -510,6 +547,10 @@ fn observe_content(turn: &mut TurnAccumulator, content: &Content) {
     let mut fields = Vec::with_capacity(8);
     let (tag, meaningful) = match content {
         Content::Text { text, .. } => {
+            if phased_message(content).is_some() {
+                turn.invalidate();
+                return;
+            }
             let Some(value) = field(text) else {
                 turn.invalidate();
                 return;
@@ -582,6 +623,9 @@ fn terminal_assistant_turn_commitment(
     for item in output {
         match item.get("type")?.as_str()? {
             "message" => {
+                if item.get("phase").is_some_and(|phase| !phase.is_null()) {
+                    return None;
+                }
                 if item.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
                     return None;
                 }
@@ -2102,7 +2146,17 @@ fn parse_input(value: &serde_json::Value) -> Result<Vec<Message>> {
                     Some("message") | None => {
                         if let Some(role) = item.get("role").and_then(|r| r.as_str()) {
                             let role = parse_role(role)?;
-                            let content = parse_responses_content(item.get("content"));
+                            let mut content = parse_responses_content(item.get("content"));
+                            if role == Role::Assistant {
+                                for part in &mut content {
+                                    if let Content::Text {
+                                        provider_metadata, ..
+                                    } = part
+                                    {
+                                        provider_metadata.extend(message_metadata(item));
+                                    }
+                                }
+                            }
                             messages.push(Message { role, content });
                         }
                     }
@@ -2653,7 +2707,7 @@ impl OutboundAdapter for ResponsesAdapter {
                             if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                                 content.push(Content::Text {
                                     text: text.to_string(),
-                                    provider_metadata: ProviderMetadata::new(),
+                                    provider_metadata: message_metadata(item),
                                 });
                             }
                             // An `output_text` part may carry web-search / file
@@ -3126,6 +3180,13 @@ fn render_message_items(m: &Message) -> Vec<serde_json::Value> {
     let mut items = Vec::new();
     let mut text_parts = Vec::new();
     for c in &m.content {
+        if m.role == Role::Assistant
+            && let Some(item) = phased_message(c)
+        {
+            flush_message_parts(&mut items, &mut text_parts, m.role);
+            items.push(item);
+            continue;
+        }
         if !matches!(
             c,
             Content::Text { .. } | Content::File { .. } | Content::Source { .. }
@@ -3430,9 +3491,9 @@ fn render_output_items(result: &GenerateResult) -> Vec<serde_json::Value> {
     let mut items = Vec::new();
     let mut start = 0;
     for (index, content) in result.content.iter().enumerate() {
-        if let Some(item) = reasoning_item(content) {
+        if let Some(item) = phased_message(content).or_else(|| reasoning_item(content).cloned()) {
             items.extend(render_output_content(&result.content[start..index]));
-            items.push(item.clone());
+            items.push(item);
             start = index + 1;
         }
     }

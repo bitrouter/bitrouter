@@ -114,3 +114,39 @@ fn responses_input_does_not_move_messages_across_tools_or_reasoning() -> Result<
     assert_eq!(rendered["input"][3]["content"][0]["text"], "last");
     Ok(())
 }
+
+#[test]
+fn codex_message_phase_survives_stateless_replay() -> Result<()> {
+    let adapter = ResponsesAdapter;
+    let output = json!([
+        {"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"checking"}]},
+        {"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]}
+    ]);
+    let body = json!({"id":"resp_phase","status":"completed","output":output});
+    assert!(output_replayable(&body));
+    assert!(terminal_assistant_turn_commitment(&body).is_none());
+    let result = adapter.parse_response(body)?;
+    assert!(assistant_turn_commitment(&result.content).is_none());
+    let mut prompt = adapter.parse_request(json!({"model":"served","input":"task"}))?;
+    prompt.messages.push(Message {
+        role: Role::Assistant,
+        content: result.content.clone(),
+    });
+    adapter
+        .validate_managed_prompt(&prompt)
+        .map_err(BitrouterError::bad_request)?;
+    assert!(super::super::managed::validate_prompt(&ApiProtocol::Messages, &prompt).is_err());
+    assert_eq!(
+        adapter.render_request(&prompt)?["input"]
+            .as_array()
+            .map(|items| &items[1..]),
+        output.as_array().map(Vec::as_slice)
+    );
+    assert_eq!(
+        adapter.render_response(&result, &prompt, "request")?["output"],
+        output
+    );
+    let inbound = adapter.parse_request(json!({"model":"served","input":output}))?;
+    assert_eq!(adapter.render_request(&inbound)?["input"], output);
+    Ok(())
+}

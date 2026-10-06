@@ -63,6 +63,11 @@ pub(super) fn validate_prompt(protocol: &ApiProtocol, prompt: &Prompt) -> Result
         }
     }
     for message in &prompt.messages {
+        if message.content.iter().any(|content| {
+            matches!(content, Content::Text { provider_metadata, .. } if provider_namespace(provider_metadata, "openai").is_some_and(|fields| fields.contains_key("messagePhase")))
+        }) && (*protocol != ApiProtocol::Responses || message.role != Role::Assistant) {
+            return Err("assistant_message_phase_would_be_dropped");
+        }
         if *protocol == ApiProtocol::GenerateContent && message.role == Role::System {
             return Err("message_system_role_would_be_changed");
         }
