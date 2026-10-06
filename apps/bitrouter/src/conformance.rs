@@ -354,8 +354,8 @@ pub async fn run(harness: &Harness, agent_id: &str, state_dir: &std::path::Path)
 }
 
 async fn run_inner(harness: &Harness, agent_id: &str, state_dir: &std::path::Path) -> Report {
-    use bitrouter_sdk::acp::client::{AcpClient, ClientOptions};
-    use bitrouter_sdk::acp::up::AgentProcess;
+    use bitrouter_orchestrator::acp::client::{AcpClient, ClientOptions};
+    use bitrouter_orchestrator::acp::up::AgentProcess;
 
     let mut tiers = Vec::new();
     let mut agent_version = None;
@@ -533,7 +533,7 @@ async fn run_inner(harness: &Harness, agent_id: &str, state_dir: &std::path::Pat
 /// Prompt the agent and judge what reached the gateway.
 async fn route_outcome(
     harness: &Harness,
-    client: &bitrouter_sdk::acp::client::AcpClient,
+    client: &bitrouter_orchestrator::acp::client::AcpClient,
     gateway: &StubGateway,
     state_dir: &std::path::Path,
 ) -> Outcome {

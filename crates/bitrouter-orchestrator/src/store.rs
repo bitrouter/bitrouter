@@ -123,6 +123,17 @@ pub enum ExecutionRecord {
         turn_id: String,
     },
     QueueResumed,
+    ThreadCloseRequested {
+        idempotency_key: String,
+    },
+    ThreadCloseCompleted {
+        idempotency_key: String,
+        snapshot: ThreadSnapshot,
+    },
+    /// Host-authorized private bindings, never projected into public history.
+    ThreadResources {
+        servers: Vec<bitrouter_sdk::mcp::transport::McpServerConfig>,
+    },
     ThreadRecovered {
         source_server_instance_id: String,
         source_cursor: u64,
@@ -224,10 +235,10 @@ pub enum EffectStatus {
     Unknown,
 }
 
-pub const RUNTIME_FORMAT_VERSION: u32 = 6;
+pub const RUNTIME_FORMAT_VERSION: u32 = 7;
 
 pub fn validate_runtime_format(version: u32) -> Result<(), String> {
-    if !matches!(version, 2 | 3 | 4 | 5 | RUNTIME_FORMAT_VERSION) {
+    if !matches!(version, 2 | 3 | 4 | 5 | 6 | RUNTIME_FORMAT_VERSION) {
         return Err(format!("unsupported_runtime_format: {version}"));
     }
     Ok(())

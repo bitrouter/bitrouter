@@ -89,7 +89,9 @@ source changes. Runtime checks are deterministic; real-provider tool checks use
 [the documented probe](BRO_BASE_TOOLS_ACCEPTANCE.md#reproduce) and consume usage.
 Archive verification is offline and documented in the evidence README.
 
-Core/harness integration, inbound native ACP, native multi-agent scheduling,
+Native ACP was outside the historical runs above; its current local evidence
+is in [the ACP acceptance record](BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md).
+Core/harness integration, native multi-agent scheduling,
 adaptive model/context choices, OS isolation, power-loss guarantees and operator
 resolution of lost owners/unknown effects remain separate. Unknown effects or
 accounting and abruptly lost owners stay blocked; this record grants no authority

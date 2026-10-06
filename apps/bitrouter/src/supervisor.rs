@@ -21,7 +21,7 @@ use agent_client_protocol::schema::v1::{
     SessionUpdate, ToolCallUpdate,
 };
 use anyhow::{Context, Result};
-use bitrouter_sdk::acp::client::SessionInitialSettings;
+use bitrouter_orchestrator::acp::client::SessionInitialSettings;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -658,7 +658,8 @@ struct Run {
     startup_finished: Notify,
     handle: Mutex<Option<SessionHandle>>,
     session_commands: Mutex<Option<mpsc::UnboundedSender<SessionActorCommand>>>,
-    pending_permissions: Mutex<HashMap<String, bitrouter_sdk::acp::client::PendingPermission>>,
+    pending_permissions:
+        Mutex<HashMap<String, bitrouter_orchestrator::acp::client::PendingPermission>>,
     permission_policy: PermissionPolicy,
     result_schema: Option<serde_json::Value>,
     turn_timeout: Option<Duration>,
@@ -691,8 +692,12 @@ struct ActionRecord {
     acknowledgement: ActionAcknowledgement,
 }
 
-type UpdateStream =
-    Pin<Box<dyn futures::Stream<Item = bitrouter_sdk::acp::client::SequencedSessionUpdate> + Send>>;
+type UpdateStream = Pin<
+    Box<
+        dyn futures::Stream<Item = bitrouter_orchestrator::acp::client::SequencedSessionUpdate>
+            + Send,
+    >,
+>;
 
 enum SessionActorCommand {
     Prompt(PromptActorInput),
@@ -703,7 +708,7 @@ enum SessionActorCommand {
 }
 
 struct PromptActorInput {
-    client: Box<bitrouter_sdk::acp::client::AcpClient>,
+    client: Box<bitrouter_orchestrator::acp::client::AcpClient>,
     session_id: String,
     text: String,
     generation: u64,
@@ -2014,7 +2019,7 @@ impl Run {
         }
     }
 
-    async fn client(&self) -> Result<bitrouter_sdk::acp::client::AcpClient> {
+    async fn client(&self) -> Result<bitrouter_orchestrator::acp::client::AcpClient> {
         self.handle
             .lock()
             .await
@@ -2023,7 +2028,9 @@ impl Run {
             .context("supervised controller is not live")
     }
 
-    async fn client_and_session(&self) -> Result<(bitrouter_sdk::acp::client::AcpClient, String)> {
+    async fn client_and_session(
+        &self,
+    ) -> Result<(bitrouter_orchestrator::acp::client::AcpClient, String)> {
         let handle = self.handle.lock().await;
         let handle = handle
             .as_ref()
@@ -2186,7 +2193,7 @@ impl Run {
                     }
                     deadline.as_mut().reset(
                         tokio::time::Instant::now()
-                            + bitrouter_sdk::acp::client::AcpClient::cancellation_grace(),
+                            + bitrouter_orchestrator::acp::client::AcpClient::cancellation_grace(),
                     );
                 }
             }
@@ -2215,7 +2222,7 @@ impl Run {
 
     async fn record_sequenced_update(
         &self,
-        entry: bitrouter_sdk::acp::client::SequencedSessionUpdate,
+        entry: bitrouter_orchestrator::acp::client::SequencedSessionUpdate,
         last_update_sequence: &mut u64,
     ) {
         *last_update_sequence = (*last_update_sequence).max(entry.sequence);
@@ -2227,7 +2234,10 @@ impl Run {
     fn spawn_permission_forwarder(
         self: &Arc<Self>,
         mut permissions: std::pin::Pin<
-            Box<dyn futures::Stream<Item = bitrouter_sdk::acp::client::PendingPermission> + Send>,
+            Box<
+                dyn futures::Stream<Item = bitrouter_orchestrator::acp::client::PendingPermission>
+                    + Send,
+            >,
         >,
     ) {
         let run = self.clone();
@@ -2259,9 +2269,10 @@ impl Run {
 
     async fn record_update(&self, update: SessionUpdate) {
         let mut state = self.state.lock().await;
-        if let Some(bitrouter_sdk::acp::translate::SessionUpdateKind::MessageChunk {
-            text, ..
-        }) = bitrouter_sdk::acp::translate::translate(update.clone())
+        if let Some(bitrouter_orchestrator::acp::translate::SessionUpdateKind::MessageChunk {
+            text,
+            ..
+        }) = bitrouter_orchestrator::acp::translate::translate(update.clone())
         {
             state.current_reply.push_str(&text);
         }
@@ -2307,7 +2318,10 @@ impl Run {
         state.append(event, false);
     }
 
-    async fn record_permission(&self, permission: bitrouter_sdk::acp::client::PendingPermission) {
+    async fn record_permission(
+        &self,
+        permission: bitrouter_orchestrator::acp::client::PendingPermission,
+    ) {
         let snapshot = PendingPermissionSnapshot {
             permission_id: permission.request_id.clone(),
             tool_call: permission.tool_call.clone(),
@@ -2640,7 +2654,10 @@ impl Run {
         client.cancel(&session_id).await?;
         let run = self.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(bitrouter_sdk::acp::client::AcpClient::cancellation_grace()).await;
+            tokio::time::sleep(
+                bitrouter_orchestrator::acp::client::AcpClient::cancellation_grace(),
+            )
+            .await;
             run.fail_if_current(
                 generation,
                 "cancelled turn did not settle before the controller grace deadline".to_string(),

@@ -1,6 +1,6 @@
 //! GenAI **agent** spans for the ACP substrate path (`bro acp …`).
 //!
-//! Not to be confused with [`bitrouter_sdk::acp`], which is the ACP pipeline itself.
+//! The ACP protocol runtime itself lives in `crates/bitrouter-orchestrator/src/acp/`.
 //! This module only *observes* that path: it lives here, rather than beside
 //! the pipeline, because `AcpSpanRecorder` stores a tracer obtained from
 //! `OtelExporter::tracer_clone()`, which stays `pub(crate)` (see

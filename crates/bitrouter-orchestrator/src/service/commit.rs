@@ -378,6 +378,7 @@ impl ThreadService {
             thread.presentation.live(&event);
         }
         self.prune(state);
+        self.inner.runtime_changed.notify_waiters();
         Ok(())
     }
 }
@@ -450,6 +451,7 @@ impl ThreadService {
                     task.snapshot.unknown_effect = true;
                     task.snapshot.detail = Some(error.clone());
                 }
+                self.inner.runtime_changed.notify_waiters();
                 Err(ServiceError::new(ErrorCode::StorageUnavailable, error))
             }
         }
@@ -594,7 +596,9 @@ impl ThreadService {
             snapshot.pause_reason = Some(detail.clone());
         } else {
             snapshot.active_turn_id = None;
-            snapshot.status = if *status == TurnStatus::Completed {
+            snapshot.status = if thread.snapshot.status == ThreadStatus::Closing {
+                ThreadStatus::Closing
+            } else if *status == TurnStatus::Completed {
                 ThreadStatus::Idle
             } else {
                 ThreadStatus::Paused
