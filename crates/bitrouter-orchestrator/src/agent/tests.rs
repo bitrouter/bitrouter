@@ -977,7 +977,7 @@ async fn active_duration_stops_and_joins_an_exclusive_command()
             call(
                 "slow",
                 "shell",
-                serde_json::json!({"command":"sleep 5; touch leaked"}),
+                serde_json::json!({"command":"touch started; sleep 30; touch leaked"}),
             ),
             call(
                 "later",
@@ -985,13 +985,16 @@ async fn active_duration_stops_and_joins_an_exclusive_command()
                 serde_json::json!({"path":"later", "content":"text"}),
             ),
         ])],
-        |config| config.max_duration = Duration::from_millis(100),
+        // Resource discovery and process startup count toward active time too.
+        // Leave enough room to reach the running-command boundary on CI.
+        |config| config.max_duration = Duration::from_secs(5),
     )?;
     let report = tokio::time::timeout(
-        Duration::from_secs(3),
+        Duration::from_secs(15),
         runner.run("check", CancellationToken::new(), None),
     )
     .await?;
+    assert!(workspace.path().join("started").exists());
     assert!(report.unknown_effect);
     assert_eq!(report.status, RunStatus::Failed);
     assert!(!workspace.path().join("leaked").exists());

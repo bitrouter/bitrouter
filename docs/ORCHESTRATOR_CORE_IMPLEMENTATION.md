@@ -4048,3 +4048,13 @@ test-fixture false positives. All managed fixture HTTP clients now disable
 ambient proxies and automatic redirects, keeping their requests at the intended
 listeners. No security rule or production transport validation is suppressed.
 Final validation and GitHub check results are reported on PR #956.
+
+
+The subsequent macOS run exposed another fixture timing race:
+`active_duration_stops_and_joins_an_exclusive_command` could exhaust its
+100-millisecond active budget during resource discovery, before launching the
+command whose cancellation it meant to test. That fixture now allows five
+seconds of active time, runs a thirty-second command and retains a fifteen-second
+outer guard. A start marker additionally proves the command ran; the original
+unknown-effect, terminal-state, no-late-write and call/result assertions remain.
+This changes only test timing, not product budgets or cancellation behavior.
