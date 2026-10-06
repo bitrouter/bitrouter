@@ -131,10 +131,12 @@ The **product** documentation that used to live here now lives in the
 `content/docs/` — it is authored, reviewed, and published there.
 
 - Edit product docs in `bitrouter-docs`, not here.
-- The `supported-models` / `supported-providers` tables are generated on the docs
-  site from this repo's committed `dist/registry/{models,providers}.json`
-  (`scripts/generate-registry-tables.mjs`), so keep the registry catalog current
-  here as usual — the tables follow automatically.
+- The docs site's `supported-models` table is generated from its committed
+  catalog snapshot. Refreshing it reads the public `/v1/models` catalog and
+  falls back to this repository's `dist/registry/models.json` only for
+  open-weight metadata. There is no generated `supported-providers` table;
+  provider discovery lives in the API reference. Keep this repository's
+  registry catalog current, then refresh the snapshot in `bitrouter-docs`.
 - On each release, an agent in `bitrouter-docs` drafts a docs update from the
   changelog for human review.
 
