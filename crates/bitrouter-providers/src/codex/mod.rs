@@ -307,6 +307,16 @@ fn refresh_to_bitrouter_error(e: AuthCodeError) -> BitrouterError {
 
 #[async_trait]
 impl AuthApplier for OpenAiCodexAuthApplier {
+    fn normalize_managed_body(
+        &self,
+        body: &mut serde_json::Value,
+        _target: &RoutingTarget,
+    ) -> Result<()> {
+        validate_managed_codex_body(body)?;
+        shape_codex_responses_body(body);
+        Ok(())
+    }
+
     fn output_token_limit_support(&self, _target: &RoutingTarget) -> Option<bool> {
         // The subscription request shaper below removes max_output_tokens.
         Some(false)
@@ -396,6 +406,78 @@ impl AuthApplier for OpenAiCodexAuthApplier {
         let label = self.label_for(target);
         self.refresh_token_after_unauthorized(label, bearer_access_token(rejected_authorization))
             .await
+    }
+}
+
+/// The managed profile supports ordinary function tools and already separated
+/// instructions. Refuse controls the subscription shaper cannot preserve before
+/// capturing its deterministic wire baseline. Output admission is checked
+/// independently against the configured model ceiling by the shared executor.
+/// Responses control schema: https://github.com/openai/codex/blob/main/codex-rs/codex-api/src/common.rs
+fn validate_managed_codex_body(body: &serde_json::Value) -> Result<()> {
+    use serde_json::Value;
+    let invalid = || {
+        BitrouterError::bad_request("Codex managed request contains unsupported input or controls")
+    };
+    let object = body.as_object().ok_or_else(invalid)?;
+    if [
+        "stream_options",
+        "client_metadata",
+        "metadata",
+        "thinking",
+        "context_management",
+        "output_config",
+    ]
+    .iter()
+    .any(|key| object.contains_key(*key))
+        || contains_cache_control(body)
+        || ["store", "parallel_tool_calls"].iter().any(|key| {
+            object
+                .get(*key)
+                .is_some_and(|value| value != &Value::Bool(false))
+        })
+        || object.get("reasoning").is_some_and(|value| {
+            !value.is_object()
+                || value
+                    .get("context")
+                    .is_some_and(|context| context != "all_turns")
+        })
+        || object
+            .get("instructions")
+            .is_some_and(|value| !value.is_string())
+        || object.get("include").is_some_and(|value| {
+            value
+                .as_array()
+                .is_none_or(|items| items.iter().any(|item| !item.is_string()))
+        })
+        || object
+            .get("input")
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().any(is_instruction_message))
+        || object.get("tools").is_some_and(|value| {
+            value.as_array().is_none_or(|tools| {
+                tools.iter().any(|tool| {
+                    tool.get("type").and_then(Value::as_str) != Some("function")
+                        || tool
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .is_none_or(str::is_empty)
+                })
+            })
+        })
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+fn contains_cache_control(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.contains_key("cache_control") || object.values().any(contains_cache_control)
+        }
+        serde_json::Value::Array(items) => items.iter().any(contains_cache_control),
+        _ => false,
     }
 }
 
@@ -663,6 +745,56 @@ fn collect_text(value: &serde_json::Value, out: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn managed_codex_normalization_preserves_history_tools_and_effort()
+    -> bitrouter_sdk::Result<()> {
+        use bitrouter_sdk::language_model::protocol::OutboundDispatch;
+        let applier = super::OpenAiCodexAuthApplier::new("unused-managed-admission-store")?;
+        let target = codex_target(None);
+        let mut body = serde_json::json!({
+            "model":"m", "instructions":"Required instructions", "store":false,
+            "input":[{"role":"user","content":[{"type":"input_text","text":"Inspect the workspace"}]}],
+            "tools":[{"type":"function","name":"read","parameters":{"type":"object"}}],
+            "reasoning":{"effort":"low"}, "max_output_tokens":128
+        });
+        let mut expected = body.clone();
+        super::AuthApplier::normalize_managed_body(&applier, &mut expected, &target)?;
+        super::AuthApplier::prepare_body(&applier, &mut body, &target).await?;
+        let dispatch = OutboundDispatch::builtin();
+        let (adapter, _) = dispatch
+            .lookup(&target.api_protocol)
+            .ok_or_else(|| bitrouter_sdk::BitrouterError::internal("missing Responses adapter"))?;
+        assert_eq!(
+            adapter.validate_managed_body(&expected, &body, &target),
+            Ok(())
+        );
+        assert_eq!(body["instructions"], "Required instructions");
+        assert_eq!(body["reasoning"]["effort"], "low");
+        assert_eq!(body["input"][0]["tools"][0]["name"], "read");
+        body["input"][1]["content"][0]["text"] = "changed".into();
+        assert!(
+            adapter
+                .validate_managed_body(&expected, &body, &target)
+                .is_err()
+        );
+        for extra in [
+            serde_json::json!({"parallel_tool_calls":true}),
+            serde_json::json!({"store":true}),
+            serde_json::json!({"thinking":{"type":"adaptive"}}),
+            serde_json::json!({"context_management":{}}),
+            serde_json::json!({"reasoning":{"context":"last_turn"}}),
+            serde_json::json!({"tools":[{"type":"custom"}]}),
+            serde_json::json!({"input":[{"role":"developer","content":"required"}]}),
+            serde_json::json!({"input":[{"role":"user","content":[{"type":"input_text","text":"required","cache_control":{}}]}]}),
+        ] {
+            let mut body = extra;
+            assert!(
+                super::AuthApplier::normalize_managed_body(&applier, &mut body, &target).is_err()
+            );
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn subscription_shaping_reports_unsupported_output_reservations()
     -> bitrouter_sdk::Result<()> {

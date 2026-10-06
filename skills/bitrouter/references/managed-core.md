@@ -321,3 +321,12 @@ at a time. Harnesses still provide the original checkpoint bytes and preserve
 all referenced archive dependencies; this is an internal buffer-lifetime change,
 with no new message or smaller legacy reply allowance. Ordinary checkpoint JSON
 keeps omitted optional fields intact during historical receipt validation.
+
+For subscription transports such as `openai-codex` that cannot accept a
+request-level output cap, set `max_output_tokens` to the configured model's
+positive maximum output allowance. Smaller reservations and unknown ceilings
+are rejected before dispatch; the default 4096 reservation is not automatically
+raised. The SDK still verifies the final wire request. The managed Codex profile
+supports separate instructions and ordinary function tools; controls that its
+subscription transport would discard are rejected. Subscription usage does not
+establish a per-token monetary charge.
