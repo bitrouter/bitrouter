@@ -722,7 +722,7 @@ fn apply_model_discovery_plan(
             }
             let raw = fs::read_to_string(&provider.path)
                 .with_context(|| format!("reading {}", provider.path.display()))?;
-            let updated = remove_model_items(&raw, "  ", &plan.removals);
+            let updated = remove_provider_model_items(&raw, &plan.removals)?;
             let parsed: ProviderFile = serde_saphyr::from_str(&updated)
                 .with_context(|| format!("validating updated {}", provider.path.display()))?;
             if parsed
@@ -746,6 +746,19 @@ fn remove_model_items(raw: &str, indent: &str, ids: &HashSet<String>) -> String 
     if ids.is_empty() {
         return raw.to_string();
     }
+    let ranges = removed_model_item_ranges(raw, indent, ids);
+    let mut updated = raw.to_string();
+    for (start, end) in ranges.into_iter().rev() {
+        updated.replace_range(start..end, "");
+    }
+    updated
+}
+
+fn removed_model_item_ranges(
+    raw: &str,
+    indent: &str,
+    ids: &HashSet<String>,
+) -> Vec<(usize, usize)> {
     let marker = format!("{indent}- id: ");
     let mut lines = Vec::new();
     let mut offset = 0;
@@ -781,11 +794,56 @@ fn remove_model_items(raw: &str, indent: &str, ids: &HashSet<String>) -> String 
         let end = lines.get(end_index).map_or(raw.len(), |(start, _)| *start);
         ranges.push((*start, end));
     }
-    let mut updated = raw.to_string();
-    for (start, end) in ranges.into_iter().rev() {
-        updated.replace_range(start..end, "");
+    ranges
+}
+
+fn remove_provider_model_items(raw: &str, ids: &HashSet<String>) -> Result<String> {
+    let removed = removed_model_item_ranges(raw, "  ", ids);
+    let mut updated = remove_model_items(raw, "  ", ids);
+    let anchor = Regex::new(r"^[ \t]*[^#\r\n]+:[ \t]*&([A-Za-z0-9_-]+)([^\r\n]*)$")?;
+
+    // YAML aliases must follow their anchor. Move a removed model's anchor to
+    // the first surviving alias, leaving later aliases and comments intact.
+    for (start, end) in removed {
+        let lines: Vec<&str> = raw[start..end].lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            let Some(captures) = anchor.captures(line) else {
+                continue;
+            };
+            let name = &captures[1];
+            let alias = Regex::new(&format!(
+                r"(?m)^([ \t]*[^\r\n#]+:[ \t]*)\*{}([ \t]*(?:#[^\r\n]*)?)$",
+                regex::escape(name)
+            ))?;
+            let Some(reference) = alias.captures(&updated) else {
+                continue;
+            };
+            let reference_line = reference.get(0).context("missing YAML alias line")?;
+            let key = reference.get(1).context("missing YAML alias key")?.as_str();
+            let trailing = reference
+                .get(2)
+                .context("missing YAML alias suffix")?
+                .as_str();
+            let source_indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+            let target_indent = key.len() - key.trim_start_matches([' ', '\t']).len();
+            let mut replacement = format!("{key}&{name}{}{trailing}", &captures[2]);
+            for child in lines.iter().skip(index + 1) {
+                let child_indent = child.len() - child.trim_start_matches([' ', '\t']).len();
+                if !child.trim().is_empty() && child_indent <= source_indent {
+                    break;
+                }
+                if child.trim().is_empty() {
+                    replacement.push('\n');
+                } else {
+                    replacement.push('\n');
+                    replacement.push_str(&" ".repeat(target_indent));
+                    replacement.push_str(&child[source_indent..]);
+                }
+            }
+            updated.replace_range(reference_line.range(), &replacement);
+        }
     }
-    updated
+    Ok(updated)
 }
 
 fn insert_canonical_deprecation_dates(raw: &str, schedules: &BTreeMap<String, String>) -> String {
@@ -5957,6 +6015,67 @@ api_base: https://api.{provider}.test/v1
             let raw = fs::read_to_string(root.join(format!("registry/providers/{provider}.yaml")))?;
             assert!(raw.contains("# Keep the surviving route comment."));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn removing_model_preserves_anchors_used_by_surviving_models() -> Result<()> {
+        let root = test_root("model-discovery-shared-anchors");
+        write(
+            &root,
+            "registry/models/acme.yaml",
+            r#"
+- id: acme/old-1
+  deprecation_date: 2026-09-05
+- id: acme/new-2
+- id: acme/new-3
+"#,
+        );
+        write(
+            &root,
+            "registry/providers/acme.yaml",
+            r#"
+name: acme
+api_protocol:
+  - "*": openai
+models:
+  - id: acme/old-1
+    provider_model_id: old
+    reasoning_effort: &shared_effort
+      levels: [low, high]
+      default: high
+    capabilities: &shared_capabilities [reasoning, tools]
+  - id: acme/new-2
+    provider_model_id: new-2
+    reasoning_effort: *shared_effort
+    capabilities: *shared_capabilities
+  - id: acme/new-3
+    provider_model_id: new-3
+    reasoning_effort: *shared_effort
+    capabilities: *shared_capabilities
+status: active
+billing: subscription
+api_base: https://api.acme.test/v1
+"#,
+        );
+        let loaded = load_registry(&root)?;
+        let plan = ModelDiscoveryPlan {
+            additions: Vec::new(),
+            schedules: BTreeMap::new(),
+            cancellations: HashSet::new(),
+            removals: HashSet::from(["acme/old-1".to_string()]),
+        };
+
+        apply_model_discovery_plan(&root, &loaded, &plan)?;
+
+        let raw = fs::read_to_string(root.join("registry/providers/acme.yaml"))?;
+        assert!(!raw.contains("acme/old-1"));
+        assert!(raw.contains("reasoning_effort: &shared_effort\n      levels: [low, high]"));
+        assert!(raw.contains("capabilities: &shared_capabilities [reasoning, tools]"));
+        assert_eq!(raw.matches("reasoning_effort: *shared_effort").count(), 1);
+        assert_eq!(raw.matches("capabilities: *shared_capabilities").count(), 1);
+        let updated = load_registry(&root)?;
+        assert_eq!(updated.providers[0].data.models.len(), 2);
         Ok(())
     }
 
