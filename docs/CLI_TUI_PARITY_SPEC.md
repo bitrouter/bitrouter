@@ -5,7 +5,8 @@
 > MCP transport and its action mapping. The retained CLI/TUI parity reasoning
 > now uses the app-owned action table.
 
-Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-09-05
+Status: **historical rationale; track 1 implemented in #880**
+· Author: Claude (with Spikel) · Date: 2026-09-05
 · Branch: `claude/cli-tui-parity-spec`
 · Measured at `43ae57d8` (`claude/actions-table-phase04`)
 · Peer-group research and the #866 amendment added 2026-09-05

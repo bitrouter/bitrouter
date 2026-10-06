@@ -19,8 +19,42 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
+    let mut handoff_hash = Sha256::new();
+    for file in [
+        "src/daemon.rs",
+        "src/daemon_handoff.rs",
+        "src/supervisor.rs",
+        "src/evolution/scheduler.rs",
+        "src/main.rs",
+        "src/upgrade.rs",
+        "src/upgrade_preflight.rs",
+    ] {
+        let path = manifest.join(file);
+        println!("cargo::rerun-if-changed={}", path.display());
+        handoff_hash.update(std::fs::read(path)?);
+    }
+    let migration_dir = manifest.join("src/db/migration");
+    println!("cargo::rerun-if-changed={}", migration_dir.display());
+    let mut migrations = std::fs::read_dir(migration_dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    migrations.sort();
+    for path in migrations {
+        if path.extension().is_some_and(|extension| extension == "rs") {
+            println!("cargo::rerun-if-changed={}", path.display());
+            handoff_hash.update(std::fs::read(path)?);
+        }
+    }
+    let handoff_build_id = handoff_hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    println!("cargo::rustc-env=BITROUTER_HANDOFF_BUILD_ID={handoff_build_id}");
     // The package-local snapshot is generated together with `dist/registry`.
     // Keeping the build input inside the crate is required by `cargo package`,
     // whose verification build cannot read files outside the packaged crate.

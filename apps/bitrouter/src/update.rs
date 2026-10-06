@@ -127,18 +127,15 @@ pub struct UpdateOptions {
 }
 
 /// The result of `run`: the report to emit through the [`Output`] driver, plus
-/// whether the dispatch layer must still restart a running daemon onto the new
-/// binary before emitting.
+/// whether the dispatch layer should ask the newly installed binary to run a
+/// safe handoff before emitting.
 ///
 /// [`Output`]: crate::output::Output
 #[derive(Debug)]
 pub struct RunOutcome {
     /// The single result value for `bro update`, rendered to stdout.
     pub report: UpdateReport,
-    /// A running daemon needs restarting to pick up the new binary. When true,
-    /// `report.daemon` is already set to `restarted` on the optimistic
-    /// assumption the restart succeeds (a failure surfaces as the error
-    /// envelope instead, replacing the whole result).
+    /// A running daemon needs a safe handoff to pick up the new binary.
     pub restart_needed: bool,
 }
 
@@ -247,17 +244,15 @@ pub async fn run(opts: UpdateOptions, socket: &Path) -> Result<RunOutcome> {
     };
     let new_version = result.new_version.to_string();
 
-    // 6. Daemon awareness. The dispatch layer performs the restart (when asked)
-    // before emitting; we label the report optimistically here.
+    // 6. The old process cannot safely preflight migrations compiled into the
+    // newly installed binary. The dispatch layer invokes that binary to
+    // attempt the handoff and sets the final daemon outcome before emitting.
     let daemon_running = daemon::endpoint_in_use(socket);
-    let (daemon, restart_needed) = match (daemon_running, opts.restart) {
-        (true, true) => (Some("restarted"), true),
-        (true, false) => (Some("restart_needed"), false),
-        (false, _) => (None, false),
-    };
+    let _legacy_restart_flag = opts.restart;
+    let daemon = daemon_running.then_some("handoff_pending");
     Ok(RunOutcome {
         report: UpdateReport::updated(current, new_version, daemon),
-        restart_needed,
+        restart_needed: daemon_running,
     })
 }
 

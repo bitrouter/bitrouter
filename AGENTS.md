@@ -45,14 +45,16 @@ English/Chinese lockstep, and `sourceHash` tracking live there now — not here.
 (`docs/CLI.md`), the workspace architecture guide (`docs/DEVELOPMENT.md`), and
 design specs (`docs/*_SPEC.md`, `docs/*_ACCEPTANCE.md`); see `docs/README.md`.
 
-1. **The docs site generates the model/provider tables** from this repo's
-   committed `dist/registry/{models,providers}.json`. When you add, remove, or
-   re-scope a model or provider under `registry/`, rebuild and commit the catalog
-   (`cargo run -p dist-helper -- registry build`, then commit `dist/registry`);
-   `cargo run -p dist-helper -- check` fails if it is stale. The docs site's
-   `supported-models` / `supported-providers` tables regenerate from it
-   automatically — do **not** try to hand-maintain those tables (they no longer
-   live in this repo).
+1. **The docs site generates its supported-models table** from its committed
+   catalog snapshot. Refreshing that snapshot reads the public `/v1/models`
+   catalog and uses this repo's committed `dist/registry/models.json` only as
+   a fallback for open-weight metadata. There is no generated
+   `supported-providers` table; provider discovery is documented in the API
+   reference. When you add, remove, or re-scope a registry entry, rebuild and
+   commit this repo's catalog (`cargo run -p dist-helper -- registry build`,
+   then commit `dist/registry`); `cargo run -p dist-helper -- check` fails if
+   it is stale. Refresh the docs catalog in `bitrouter-docs` rather than
+   hand-maintaining its generated table.
 2. Prose that hardcodes registry-derived facts — the discounted-vs-closed-source
    families (`gpt-*`, `claude-*`, `gemini-*`, `grok-*`), example model ids, the
    default discount — now lives in `bitrouter-docs`; update it there when the
