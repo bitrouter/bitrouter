@@ -32,6 +32,7 @@ use crate::language_model::types::{
 };
 
 pub mod checker;
+pub mod decision;
 pub mod pattern;
 pub mod presets;
 pub mod router;
@@ -89,6 +90,9 @@ pub struct Config {
     pub control: ControlConfig,
     /// Opt-in privileged BRO coding task API, separate from inference and control.
     pub agent_api: AgentApiConfig,
+    /// Typed decision backend for native context routing. Absent means the
+    /// conservative compiler runs without remote semantic judgments.
+    pub decision_model: Option<decision::DecisionModelConfig>,
     /// The interactive session's own configuration.
     pub chat: ChatConfig,
     /// Outbound / upstream HTTP settings (the client that calls providers).
@@ -157,6 +161,7 @@ impl Default for Config {
             server: ServerConfig::default(),
             control: ControlConfig::default(),
             agent_api: AgentApiConfig::default(),
+            decision_model: None,
             chat: ChatConfig::default(),
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
@@ -190,6 +195,9 @@ impl Config {
     /// before activation. Config-backed routing also runs it at first
     /// resolution so infallible table constructors cannot bypass validation.
     pub fn validate_router_config(&self) -> Result<()> {
+        if let Some(decision) = &self.decision_model {
+            decision.validate()?;
+        }
         router::validate_router_config(self)
     }
 

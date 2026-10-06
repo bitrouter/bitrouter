@@ -43,6 +43,7 @@ mod artifact_storage;
 mod auxiliary_output;
 mod budget;
 mod capacity;
+mod context_decisions;
 mod model_output;
 mod pairing;
 mod preparation_work;
@@ -66,6 +67,26 @@ mod wait_output;
 /// delivery before ACK. Report actual outcomes separately through `tool_result`.
 #[async_trait]
 pub trait HarnessPort: Send + Sync {
+    /// Local owner cancellation also interrupts a provider stream while Core
+    /// waits for its next scheduling boundary. Remote ports use Core's token.
+    async fn model_cancelled(&self) {
+        std::future::pending::<()>().await;
+    }
+    /// Native displays may observe provider fragments. They never replace the
+    /// committed complete model result and cannot authorize tool execution.
+    fn observe_model_stream(&self) -> bool {
+        false
+    }
+
+    async fn model_stream_part(
+        &self,
+        _agent_id: &str,
+        _step_id: &str,
+        _request_id: &str,
+        _part: &bitrouter_sdk::language_model::StreamPart,
+    ) {
+    }
+
     /// Recheck the host's current authorization after durable admission waits,
     /// before starting model/preparation work or authorizing tool delivery.
     /// Failure fences this session. Trusted in-process hosts may retain the
@@ -73,6 +94,12 @@ pub trait HarnessPort: Send + Sync {
     /// Do not call back into session mutation: its admission lock is held.
     /// Transports must also recheck after their own output/queue waits.
     async fn authorize_dispatch(&self) -> Result<(), CoreError> {
+        Ok(())
+    }
+
+    /// Local host resource admission after durable intent. A rejection stops
+    /// new model work while leaving outcome and cleanup commits authorized.
+    async fn admit_model_work(&self) -> Result<(), CoreError> {
         Ok(())
     }
 
@@ -374,6 +401,10 @@ pub struct SessionSnapshot {
     pub waits: BTreeMap<String, RuntimeWait>,
     pub signals: SignalState,
     pub allocations: BTreeMap<String, ContextAllocation>,
+    /// Versioned opt-in task views. Missing legacy state conveys no authority
+    /// to remove historical messages.
+    #[serde(default)]
+    pub context_store: super::context_router::ContextStore,
     /// Run-wide cost exposure retained even after agents retire or runs change.
     /// Missing legacy entries mean unknown coverage, never a zero-cost run.
     #[serde(default)]
@@ -569,6 +600,7 @@ impl CoreSession {
             run: None,
             operations: BTreeMap::new(),
             allocations: BTreeMap::new(),
+            context_store: Default::default(),
             cost_work: BTreeMap::new(),
             provider_evidence: BTreeMap::new(),
             root_queue: Default::default(),
@@ -632,6 +664,83 @@ impl CoreSession {
     }
     pub async fn head(&self) -> DurableHead {
         self.shared.live.lock().await.gate.head().clone()
+    }
+
+    /// Import native instructions and complete paired history at an idle or
+    /// fully settled work boundary. Existing evidence must survive; only user/instruction
+    /// messages may be added to a previously bound conversation.
+    pub(crate) async fn seed_native_context(
+        &self,
+        messages: Vec<Message>,
+        instructions: Vec<String>,
+        context_revision: u64,
+    ) -> Result<(), CoreError> {
+        crate::context::validate_history(&messages)
+            .map_err(|message| reject(ErrorCode::CheckpointConflict, &message))?;
+        self.transition("context.native_import", |state, _| {
+            if state.run.as_ref().is_some_and(|run| !run.status.terminal())
+                && state
+                    .agents
+                    .values()
+                    .filter_map(|agent| agent.turn.as_ref())
+                    .any(|turn| {
+                        turn.steps.iter().any(|step| !step.settled)
+                            || turn
+                                .invocations
+                                .iter()
+                                .any(|call| !call.consumed || call.result.is_none())
+                            || turn
+                                .core_calls
+                                .iter()
+                                .any(|call| !call.consumed || call.result.is_none())
+                    })
+            {
+                return Err(reject(
+                    ErrorCode::Busy,
+                    "native import requires a settled session",
+                ));
+            }
+            let root = state
+                .agents
+                .get_mut(&state.agent_id)
+                .ok_or_else(|| reject(ErrorCode::CheckpointConflict, "native root is absent"))?;
+            if !root.history.is_empty() {
+                let mut previous = root.history.iter().peekable();
+                for message in &messages {
+                    if previous
+                        .peek()
+                        .is_some_and(|expected| **expected == *message)
+                    {
+                        previous.next();
+                    } else if !matches!(message.role, Role::User | Role::System) {
+                        return Err(reject(
+                            ErrorCode::CheckpointConflict,
+                            "native import rewrites model or tool evidence",
+                        ));
+                    }
+                }
+                if previous.next().is_some() {
+                    return Err(reject(
+                        ErrorCode::CheckpointConflict,
+                        "native import removes existing evidence",
+                    ));
+                }
+            }
+            let changed = root.history != messages
+                || instructions
+                    .iter()
+                    .any(|instruction| !root.required_instructions.contains(instruction));
+            root.history = messages;
+            for instruction in instructions {
+                if !root.required_instructions.contains(&instruction) {
+                    root.required_instructions.push(instruction);
+                }
+            }
+            root.context_revision =
+                context_revision.max(root.context_revision.saturating_add(u64::from(changed)));
+            Ok(json!({"agent_id":state.agent_id}))
+        })
+        .await
     }
 
     pub async fn disconnect(&self) {
@@ -1436,7 +1545,9 @@ impl CoreSession {
                     let child = agent_mut(state, agent_id)?;
                     let turn = child.turn.as_ref().ok_or_else(|| reject(ErrorCode::Busy, "agent has no turn"))?;
                     let parent=turn.assigned_by.clone();
-                    let content = json!({"agent_id":agent_id,"agent_turn_id":turn.agent_turn_id,"status":turn.status,"answer":turn.final_answer,"reason":turn.terminal_reason,"provenance":"agent_conclusion"});
+                    let mut content = json!({"agent_id":agent_id,"agent_turn_id":turn.agent_turn_id,"status":turn.status,"answer":turn.final_answer,"reason":turn.terminal_reason,"provenance":"agent_conclusion"});
+                    let references = super::context_router::tasks::deliver(state, agent_id, &parent)?;
+                    if !references.is_empty() { content["evidence_refs"] = json!(references); }
                     collaboration::enqueue_mail(state, agent_id, &parent, "agent_result", content).map_err(|error| if error.code==ErrorCode::LimitExceeded {reject(ErrorCode::Busy,"child result awaits mailbox capacity")} else {error})?;
                     agent_turn(state, agent_id)?.notified = true;
                     Ok(json!({"parent_id":parent}))
@@ -2553,6 +2664,19 @@ impl CoreSession {
             provider_cancellation: self.shared.live.lock().await.disconnected.child_token(),
             model_selection: match turn.input.routing.model {
                 super::protocol::ModelMode::Fixed => NativeModelSelection::Fixed,
+                super::protocol::ModelMode::Policy
+                    if context_decisions::enabled(&state)
+                        && turn.input.routing.context == super::protocol::ContextMode::Auto
+                        && self.shared.app.decision_model().is_some_and(|runtime| {
+                            runtime
+                                .policy
+                                .generation_models
+                                .iter()
+                                .any(|model| model.model == turn.input.model)
+                        }) =>
+                {
+                    NativeModelSelection::Fixed
+                }
                 super::protocol::ModelMode::Policy => NativeModelSelection::Policy,
             },
         });
@@ -2564,16 +2688,27 @@ impl CoreSession {
             live.model_controls.push(Arc::downgrade(&control));
         }
         drop(preparing);
-        let response = self
-            .shared
-            .app
-            .execute_native_controlled_with_headers(
-                prompt,
-                self.shared.caller.clone(),
-                self.shared.request_headers.clone(),
-                control.clone(),
-            )
-            .await;
+        let mut context_replan = false;
+        let response = match self
+            .compile_context(agent_id, &step_id, prompt, &control)
+            .await
+        {
+            Ok(prompt) => {
+                self.shared
+                    .app
+                    .execute_native_controlled_with_headers(
+                        prompt,
+                        self.shared.caller.clone(),
+                        self.shared.request_headers.clone(),
+                        control.clone(),
+                    )
+                    .await
+            }
+            Err(error) => {
+                context_replan = error.code == ErrorCode::StaleRevision;
+                Err(sdk_error(error))
+            }
+        };
         // Settlement has completed (or the source remains unavailable). Amount
         // observations cannot erase the already committed unknown work costs.
         if let Err(error) = self.refresh_costs(&id("cost_refresh"), &turn.run_id).await {
@@ -2590,6 +2725,26 @@ impl CoreSession {
         let step_id = control.step_id.lock().await.clone();
         let _input = self.shared.inputs.lock().await;
         if self.supersede_steered_step(agent_id, &step_id).await? {
+            return Ok(());
+        }
+        if context_replan {
+            self.transition_for(Some(agent_id), "context.decision.superseded", |state, _| {
+                let step = current_step(state, agent_id, &step_id)?;
+                if !step.attempts.is_empty() {
+                    return Err(reject(
+                        ErrorCode::RecoveryRequired,
+                        "stale context already dispatched a model",
+                    ));
+                }
+                step.settled = true;
+                step.interrupted = true;
+                let turn = agent_turn(state, agent_id)?;
+                if turn.status == AgentStatus::ModelRunning {
+                    turn.status = AgentStatus::Runnable;
+                }
+                Ok(json!({"step_id":step_id,"reason":"decision source changed"}))
+            })
+            .await?;
             return Ok(());
         }
         match response {
@@ -2717,6 +2872,7 @@ impl CoreSession {
         self.transition_for(Some(agent_id), "model.output.applied", |state, head| {
             let manifest = current_step(state,agent_id,step_id)?.manifest.clone();
             let limit = active_run(state)?.limits.outstanding_tools;
+            let remaining_tools = budget::remaining_tools(state);
             // A text-only or interrupted output does not need a tool reply
             // envelope. Apply admission errors only to actual workspace calls.
             let result_limits = tool_payloads::admit(state, &self.shared.limits, manifest.max_tool_output_bytes);
@@ -2787,7 +2943,8 @@ impl CoreSession {
                                 _ => true,
                             }
                     });
-                    let core_owned = super::protocol::COLLABORATION_TOOLS.contains(&name.as_str());
+                    let core_owned = super::protocol::COLLABORATION_TOOLS.contains(&name.as_str())
+                        || super::context_router::tools::NAMES.contains(&name.as_str());
                     if *provider_executed || !planned || (!core_owned && !manifest.tools.iter().any(|tool| tool.name == *name)) {
                         return Err(reject(
                             ErrorCode::UnsupportedCapability,
@@ -2872,6 +3029,9 @@ impl CoreSession {
             }) {
                 return Err(reject(ErrorCode::InvalidToolResult, "model output violates its frozen tool choice"));
             }
+            if calls.len() as u64 > remaining_tools {
+                return Err(reject(ErrorCode::LimitExceeded, "run total tool-call budget exhausted"));
+            }
             if calls.len() + outstanding > limit as usize {
                 return Err(reject(
                     ErrorCode::LimitExceeded,
@@ -2916,6 +3076,12 @@ impl CoreSession {
         let _input = self.shared.inputs.lock().await;
         self.transition_for(Some(agent_id), "tool.verification.intent", |state, head| {
             budget::ensure(state)?;
+            if budget::remaining_tools(state) == 0 {
+                return Err(reject(
+                    ErrorCode::LimitExceeded,
+                    "run total tool-call budget exhausted",
+                ));
+            }
             steering::ensure_ready(state, agent_id)?;
             let signal_revision = state.signals.revision;
             if pending_dependencies(state, agent_id) {
@@ -3028,7 +3194,12 @@ impl CoreSession {
 
     async fn consume_results(&self, agent_id: &str) -> Result<(), CoreError> {
         self.transition_for(Some(agent_id), "tool.results.consumed", |state, _| {
-            pairing::consume(agent_mut(state, agent_id)?)?;
+            let native_values = state
+                .manifest
+                .required_features
+                .iter()
+                .any(|feature| feature == super::context_router::NATIVE_TOOLS);
+            pairing::consume(agent_mut(state, agent_id)?, native_values)?;
             Ok(json!({}))
         })
         .await
@@ -3233,6 +3404,7 @@ impl CoreSession {
             changed.as_mut().enable();
             let _admission = self.shared.commits.lock().await;
             self.authorize_dispatch().await?;
+            self.shared.harness.admit_model_work().await?;
             let mut live = self.shared.live.lock().await;
             if steering::provisionally_blocked(&live, agent_id) {
                 let disconnected = live.disconnected.clone();
@@ -3366,6 +3538,7 @@ impl CoreSession {
             next.root_queue.paused = true;
         }
         super::accounting::work::synchronize(next)?;
+        context_decisions::synchronize(next)?;
         let mut prepared = archive::prepare(next, false, &self.shared.limits)?;
         let mut proposed = CheckpointPayload {
             identity: BatchIdentity {
@@ -3650,6 +3823,23 @@ impl Drop for StepControl {
 
 #[async_trait]
 impl NativeExecutionControl for StepControl {
+    fn observe_stream(&self) -> bool {
+        self.session.shared.harness.observe_model_stream()
+    }
+
+    async fn on_stream_part(
+        &self,
+        request_id: &str,
+        part: &bitrouter_sdk::language_model::StreamPart,
+    ) {
+        let step_id = self.step_id.lock().await.clone();
+        self.session
+            .shared
+            .harness
+            .model_stream_part(&self.agent_id, &step_id, request_id, part)
+            .await;
+    }
+
     fn provider_response_byte_limit(&self) -> Option<u64> {
         Some(self.provider_response_bytes)
     }
@@ -3673,7 +3863,10 @@ impl NativeExecutionControl for StepControl {
     }
 
     async fn provider_cancelled(&self) {
-        self.provider_cancellation.cancelled().await;
+        tokio::select! {
+            () = self.provider_cancellation.cancelled() => {},
+            () = self.session.shared.harness.model_cancelled() => {},
+        }
     }
 
     async fn before_preparation_work(
@@ -3979,6 +4172,22 @@ impl NativeExecutionControl for StepControl {
                         "prepared plan changed manual effort",
                     ));
                 }
+                let joint_model = state
+                    .context_store
+                    .executions
+                    .get(&step_id)
+                    .and_then(|execution| execution.routing.as_ref())
+                    .map(|routing| routing.selected_model.clone());
+                if rejection.is_none()
+                    && joint_model
+                        .as_ref()
+                        .is_some_and(|model| model != &plan.original_model)
+                {
+                    rejection = Some(reject(
+                        ErrorCode::NoFeasibleRoute,
+                        "SDK model differs from the frozen context/model selection",
+                    ));
+                }
                 let step = current_step(state, &self.agent_id, &step_id)?;
                 if rejection.is_none() {
                     rejection =
@@ -4014,6 +4223,8 @@ impl NativeExecutionControl for StepControl {
                     policy_id: "core_rules_v1".into(),
                     source: if step.reconstructed_from.is_some() {
                         "frozen_model_after_context_rebuild".into()
+                    } else if joint_model.is_some() {
+                        "decision_context_model_policy".into()
                     } else if modes.model == super::protocol::ModelMode::Fixed {
                         "fixed_override".into()
                     } else {
@@ -4052,6 +4263,9 @@ impl NativeExecutionControl for StepControl {
                 step.decision = Some(decision.clone());
                 step.application = Some(application.clone());
                 step.plan = Some(plan.clone());
+                if let Some(execution) = state.context_store.executions.get_mut(&step_id) {
+                    execution.model = Some(plan.clone());
+                }
                 Ok(json!({"plan":plan,"decision":decision,"application":application}))
             })
             .await
@@ -4634,6 +4848,15 @@ pub(super) fn validate_input(input: &TaskInput, limits: &Limits) -> Result<(), C
             "output reservation must be positive",
         ));
     }
+    if input
+        .context_limit_bytes
+        .is_some_and(|bytes| bytes == 0 || bytes > limits.checkpoint_bytes)
+    {
+        return Err(reject(
+            ErrorCode::LimitExceeded,
+            "context limit exceeds checkpoint capacity or is zero",
+        ));
+    }
     for material in &input.required_materials {
         validate_id(material)?;
     }
@@ -4699,14 +4922,27 @@ fn build_prompt(state: &SessionSnapshot, agent_id: &str) -> Result<Prompt, CoreE
         messages.push(material_message(&material)?);
     }
     messages.extend(agent.history.clone());
+    let guidance = format!(
+        "You are agent {agent_id} for this task. Use only declared tools. Preserve user constraints and report observed results."
+    );
+    let instructions = agent.required_instructions.join("\n");
+    let criteria = turn.input.acceptance_criteria.join("\n");
+    let system = if state
+        .manifest
+        .required_features
+        .iter()
+        .any(|feature| feature == super::context_router::NATIVE_TOOLS)
+    {
+        // Native host instructions retain their stable provider-cache prefix.
+        format!("{instructions}\n\n{guidance}\nAcceptance criteria:\n{criteria}")
+    } else {
+        format!(
+            "{guidance}\nRequired user instructions:\n{instructions}\nAcceptance criteria:\n{criteria}"
+        )
+    };
     Ok(Prompt {
         model: turn.input.model.clone(),
-        system: Some(format!(
-            "You are agent {} for this task. Use only declared tools. Preserve user constraints and report observed results.\nRequired user instructions:\n{}\nAcceptance criteria:\n{}",
-            agent_id,
-            agent.required_instructions.join("\n"),
-            turn.input.acceptance_criteria.join("\n")
-        )),
+        system: Some(system),
         system_provider_metadata: Default::default(),
         messages,
         tools: state
@@ -4721,6 +4957,9 @@ fn build_prompt(state: &SessionSnapshot, agent_id: &str) -> Result<Prompt, CoreE
                 provider_metadata: Default::default(),
             })
             .chain(collaboration::declarations())
+            .chain(super::context_router::tools::declarations(
+                context_decisions::enabled(state),
+            ))
             .collect(),
         params: GenerationParams {
             max_tokens: Some(turn.input.max_output_tokens.unwrap_or(4096)),

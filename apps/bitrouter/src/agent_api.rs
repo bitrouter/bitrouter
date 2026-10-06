@@ -80,6 +80,8 @@ pub struct BoundAgentApi {
 struct CreateBody {
     workspace: PathBuf,
     model: String,
+    #[serde(default)]
+    model_mode: bitrouter_orchestrator::core::protocol::ModelMode,
     effort: Option<ReasoningEffort>,
     #[serde(default)]
     read_only: bool,
@@ -345,9 +347,11 @@ async fn create(
                 caller: api_caller(),
                 workspace,
                 config: if body.read_only {
-                    AgentConfig::fixed(body.model, body.effort).read_only()
-                } else {
                     AgentConfig::fixed(body.model, body.effort)
+                        .with_model_mode(body.model_mode)
+                        .read_only()
+                } else {
+                    AgentConfig::fixed(body.model, body.effort).with_model_mode(body.model_mode)
                 },
                 permission_profile: if body.read_only {
                     PermissionProfile::ReadOnly

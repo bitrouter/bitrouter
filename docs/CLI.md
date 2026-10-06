@@ -973,7 +973,7 @@ for migration. BitRouter keeps no session records.
 ### `bro code` — coding conversation
 
 ```bash
-bro code [--model <id>] [--thread-id <id>] [--check <command>|--read-only] [--workspace <path>] [-c <path>]
+bro code [--model <id>] [--model-policy|--thread-id <id>] [--check <command>|--read-only] [--workspace <path>] [-c <path>]
 bro code <agent> [--load <id>|--resume <id>] [--model <id>] [--turn-timeout <secs>] [--direct] [--base-url <url>] [--no-start] [-c <path>]
 bro code --socket <path>
 bro --context <name> code
@@ -989,6 +989,14 @@ Thread state and the server queue; verification is shown in wider terminals.
 `--socket` alone keeps the read-only operations view; native flags select an
 already-running local native server. Explicit remote contexts keep the
 operations view. See the native section above for recovery and draft behavior.
+
+`--model-policy` enables configured decision-model selection for a new native
+Thread. The selected `--model` or `chat.model` is its conservative fallback and
+must appear in `decision_model.policy.generation_models`. Without this flag the
+generation model stays fixed; manual effort remains binding in either mode.
+The flag cannot be combined with `--thread-id` or an ACP agent. See
+[decision-native configuration](../skills/bitrouter/references/decision-native.md)
+for backend configuration, model candidates and context-routing behavior.
 
 The rest of this section describes explicit ACP `bro code <agent>` sessions.
 Those sessions preserve harness-native IDs and history.

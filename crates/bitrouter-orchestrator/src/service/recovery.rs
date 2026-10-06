@@ -1,6 +1,8 @@
 //! Durable reconstruction and explicit checkpoint recovery. Loading alone never
 //! grants execution ownership, resolves effects or permits replay.
 
+mod native;
+
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
@@ -47,6 +49,10 @@ struct Step {
 
 #[derive(Serialize)]
 struct Active {
+    native: bool,
+    native_runs: std::collections::BTreeMap<String, (u32, u64)>,
+    native_unknown_usage: std::collections::BTreeSet<String>,
+    native_unpriced_decisions: std::collections::BTreeSet<String>,
     resources: Option<crate::harness::HarnessInventory>,
     turn_id: String,
     user_item_id: String,
@@ -66,6 +72,8 @@ struct Active {
 }
 
 struct Rebuild {
+    checkpoint_pages: super::checkpoint_pages::Reader,
+    native: Option<crate::agent::native::Saved>,
     caller: CallerContext,
     view: ThreadView,
     messages: Vec<Message>,
@@ -270,6 +278,7 @@ impl ThreadService {
                     thread.config.clone(),
                 )
                 .map_err(storage)?
+                .with_native_record_limit(self.inner.limits.recovery_page_bytes)
                 .with_tool_workers(
                     self.inner.tool_workers.clone(),
                     self.inner.limits.tools_per_turn,
@@ -282,6 +291,7 @@ impl ThreadService {
                         user_item_id: turn.user_item_id.clone(),
                         context_version,
                         checkpoint: Some(RunReport {
+                            native: thread.native.clone(),
                             cleanup_unconfirmed: false,
                             resources: turn.resources.clone(),
                             context_version,
@@ -976,11 +986,13 @@ impl Rebuild {
         };
         view.thread.cursor = 0;
         Ok(Self {
+            checkpoint_pages: Default::default(),
             caller: caller.clone(),
             source_epoch: snapshot.server_instance_id.clone(),
             source_owner: None,
             view,
             messages: Vec::new(),
+            native: None,
             instructions: None,
             instructions_epoch: None,
             queued: VecDeque::new(),
@@ -1025,6 +1037,21 @@ impl Rebuild {
 
     fn consume_page(&mut self, records: Vec<ExecutionRecord>) -> Result<(), ServiceError> {
         for record in records {
+            self.sequence = self
+                .sequence
+                .checked_add(1)
+                .ok_or("Thread cursor exhausted")?;
+            let record = match self.checkpoint_pages.consume(record) {
+                Ok(Some(record)) => record,
+                Ok(None) => {
+                    self.view.thread.cursor = self.sequence;
+                    continue;
+                }
+                Err(error) => {
+                    self.invalid(error);
+                    continue;
+                }
+            };
             if let Some(epoch) = record_epoch(&record) {
                 if epoch.is_empty() || epoch.len() > 128 {
                     self.invalid("invalid record execution epoch");
@@ -1039,10 +1066,6 @@ impl Rebuild {
                     }
                 }
             }
-            self.sequence = self
-                .sequence
-                .checked_add(1)
-                .ok_or("Thread cursor exhausted")?;
             self.consume(&record)?;
             if let ExecutionRecord::ThreadEvent { event } = &record {
                 if event.seq != self.sequence || event.thread_id != self.view.thread.thread_id {
@@ -1115,6 +1138,10 @@ impl Rebuild {
                 let mut messages = self.messages.clone();
                 messages.push(Message::text(Role::User, entry.prompt));
                 self.active = Some(Active {
+                    native: false,
+                    native_runs: Default::default(),
+                    native_unknown_usage: Default::default(),
+                    native_unpriced_decisions: Default::default(),
                     resources: None,
                     turn_id: turn_id.clone(),
                     user_item_id: entry.user_item_id,
@@ -1230,6 +1257,16 @@ impl Rebuild {
                 if let Some(active) = &mut self.active
                     && &active.turn_id == turn_id
                 {
+                    match crate::agent::native::Saved::replay(&mut self.native, fact) {
+                        Ok(Some(snapshot)) => {
+                            if let Err(error) = native::observe(active, &snapshot, fact) {
+                                self.invalid(error);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => self.invalid(error),
+                    }
+                    let active = self.active.as_mut().ok_or("active Turn disappeared")?;
                     if let Err(error) = active.consume(fact) {
                         self.invalid(error);
                     }
@@ -1271,6 +1308,16 @@ impl Rebuild {
         epoch: &str,
         limits: &RuntimeLimits,
     ) -> Result<(state::ThreadRecord, Vec<(String, TurnRecord)>), ServiceError> {
+        if self.checkpoint_pages.incomplete() {
+            self.invalid("native checkpoint parts are incomplete at the recovery cutoff");
+        }
+        if self
+            .native
+            .as_ref()
+            .is_some_and(|saved| !saved.complete_projection())
+        {
+            self.invalid("native checkpoint is missing its committed display projections");
+        }
         let stored_status = self.view.thread.status;
         let stored_pause_reason = self.view.thread.pause_reason.clone();
         let mut context_valid = crate::context::validate_history(&self.messages).is_ok();
@@ -1286,10 +1333,12 @@ impl Rebuild {
                 .iter()
                 .filter(|(_, step)| !step.usage_known)
                 .map(|(id, _)| id.clone())
+                .chain(active.native_unknown_usage.iter().cloned())
                 .collect();
             active.budget.usage_unknown_steps.sort();
             active.budget.estimated_spend_available = self.view.config.estimate_rates.is_some()
-                && active.budget.usage_unknown_steps.is_empty();
+                && active.budget.usage_unknown_steps.is_empty()
+                && active.native_unpriced_decisions.is_empty();
             active.budget.active_duration_unknown = !active.exact_budget;
             active.budget.tool_calls_unknown = !active.exact_budget;
             active.budget.tool_calls_known = active.budget.tool_calls_known.max(
@@ -1447,6 +1496,13 @@ impl Rebuild {
                     })
                     .collect()
             });
+            for input in &record.steering {
+                if input.receipt.status == SteeringStatus::Received {
+                    record
+                        .native
+                        .push(input.receipt.input_id.clone(), input.text.clone());
+                }
+            }
             tasks.push((snapshot.turn_id, record));
         }
         for entry in &self.queued {
@@ -1462,6 +1518,7 @@ impl Rebuild {
             ));
         }
         let thread = state::ThreadRecord {
+            native: self.native,
             presentation: super::observation::Presentation::recovered(self.view.clone(), limits),
             snapshot: self.view.thread,
             caller: self.caller,
@@ -1486,6 +1543,7 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
     cancel.cancel();
     TurnRecord {
         fence: Arc::new(crate::control::LaunchFence::default()),
+        native: Default::default(),
         steering: Vec::new(),
         verification_budget: None,
         thread_id: view.thread.thread_id.clone(),
@@ -1501,6 +1559,11 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
 
 impl Active {
     fn consume(&mut self, fact: &ExecutionRecord) -> Result<(), String> {
+        // Native model/tool Items are display projections of the preceding
+        // Core checkpoint. Only that checkpoint owns raw context and effects.
+        if self.native && native::is_projection(fact, &self.calls) {
+            return Ok(());
+        }
         match fact {
             ExecutionRecord::InstructionContext {
                 context_version,
@@ -1779,8 +1842,9 @@ impl Active {
                     })
                     || serde_json::to_value(messages).map_err(|error| error.to_string())?
                         != serde_json::to_value(expected).map_err(|error| error.to_string())?
-                    || usize::try_from(*model_steps).map_err(|error| error.to_string())?
-                        != self.steps.len()
+                    || (!self.native
+                        && usize::try_from(*model_steps).map_err(|error| error.to_string())?
+                            != self.steps.len())
                     || usize::try_from(*tool_calls).map_err(|error| error.to_string())?
                         != self.calls.len()
                     || *context_version < self.version

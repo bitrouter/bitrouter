@@ -89,6 +89,8 @@ pub enum Operation {
     CreateThread {
         workspace: PathBuf,
         model: String,
+        #[serde(default)]
+        model_mode: bitrouter_orchestrator::core::protocol::ModelMode,
         effort: Option<ReasoningEffort>,
         #[serde(default)]
         read_only: bool,
@@ -406,6 +408,7 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
         Operation::CreateThread {
             workspace,
             model,
+            model_mode,
             effort,
             read_only,
             verification_command,
@@ -418,9 +421,11 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
                         caller,
                         workspace,
                         config: if read_only {
-                            AgentConfig::fixed(model, effort).read_only()
-                        } else {
                             AgentConfig::fixed(model, effort)
+                                .with_model_mode(model_mode)
+                                .read_only()
+                        } else {
+                            AgentConfig::fixed(model, effort).with_model_mode(model_mode)
                         },
                         permission_profile: if read_only {
                             PermissionProfile::ReadOnly
@@ -631,6 +636,7 @@ impl ThreadClient {
         let create = || Operation::CreateThread {
             workspace: workspace.clone(),
             model: model.clone(),
+            model_mode: Default::default(),
             effort,
             read_only,
             verification_command: verification_command.clone(),

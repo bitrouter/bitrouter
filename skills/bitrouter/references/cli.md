@@ -60,6 +60,10 @@ clears only after acceptance. Same-instance reconnect uses the Thread cursor
 and preserves the in-process draft; instance loss never resubmits input.
 `--thread-id` reattaches stored configuration and permissions; `--task-id` has
 been removed. No draft persistence across process exit is provided.
+For new native Threads, `--model-policy` permits the configured decision backend
+to choose among declared generation models, using `--model` as the fallback.
+Without this flag the model remains fixed. See [decision-native.md](decision-native.md)
+for bounded model/context planning and its explicit price assumptions.
 
 Conversation and Agents use the terminal's normal buffer and native scrollback.
 An empty composer permits plain Left to open the **BRO conversation directory**;
@@ -395,7 +399,7 @@ empty-composer `y`/`n` answers approval, and Ctrl-D detaches. Reattach with
 complete model/tool facts and Thread events are committed together.
 
 Coding declares `read`, `glob`, `grep`, `write`, `edit`, `shell` plus configured MCP tools;
-`--read-only` declares only the first three and rejects effectful calls before
+`--read-only` restricts workspace operations to the first three and rejects effectful calls before
 approval. `read` covers UTF-8 files and paginated directories (`path: "."` for
 root); offsets are one-based and complete output is capped at 50 KiB. Directories
 include hidden/ignored entries; searches respect project ignore rules and skip

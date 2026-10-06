@@ -1,18 +1,7 @@
 //! A launch fence shared by input admission and owned worker dispatch. It is
 //! held only for synchronous state changes/spawn, never database or worker I/O.
 use std::sync::Mutex;
-
-use bitrouter_sdk::language_model::Prompt;
-use tokio::sync::{mpsc, oneshot, watch};
-
-pub(crate) struct ModelBoundary {
-    pub prompt: Prompt,
-    pub step_id: String,
-    pub item_id: String,
-    pub context_version: u64,
-    pub max_bytes: usize,
-    pub response: oneshot::Sender<Result<(Prompt, u64), String>>,
-}
+use tokio::sync::watch;
 
 pub(crate) struct LaunchFence {
     sealed: Mutex<bool>,
@@ -47,13 +36,11 @@ impl LaunchFence {
         let sealed = self.lock();
         if *sealed { None } else { Some(work()) }
     }
+
     pub async fn received(&self) {
         let mut changed = self.changed.subscribe();
         loop {
-            if self.pending() {
-                return;
-            }
-            if changed.changed().await.is_err() {
+            if self.pending() || changed.changed().await.is_err() {
                 return;
             }
         }
@@ -63,5 +50,39 @@ impl LaunchFence {
 #[derive(Clone)]
 pub(crate) struct TurnControl {
     pub fence: std::sync::Arc<LaunchFence>,
-    pub models: mpsc::Sender<ModelBoundary>,
+    pub native: std::sync::Arc<NativeInputs>,
+}
+
+/// Native Thread receipt IDs are also Core steering operation IDs. Entries
+/// enter this bounded queue only after the Thread receipt is durable.
+#[derive(Default)]
+pub(crate) struct NativeInputs {
+    pending: Mutex<std::collections::VecDeque<(String, String)>>,
+    changed: tokio::sync::Notify,
+}
+
+impl NativeInputs {
+    pub(crate) fn push(&self, id: String, text: String) {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !pending.iter().any(|(known, _)| known == &id) {
+            pending.push_back((id, text));
+        }
+        self.changed.notify_one();
+    }
+
+    pub(crate) fn take(&self) -> std::collections::VecDeque<(String, String)> {
+        std::mem::take(
+            &mut *self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    }
+
+    pub(crate) async fn changed(&self) {
+        self.changed.notified().await;
+    }
 }

@@ -120,6 +120,7 @@ pub trait PromptTransform: Send + Sync {
 /// injected infrastructure and the collected migration set.
 pub struct App {
     language_model: Option<Arc<language_model::Pipeline>>,
+    decision_model: Option<crate::decision_model::DecisionRuntime>,
     mcp: Option<Arc<mcp::Pipeline>>,
     /// Optional Prometheus-style metrics renderer; if set, the HTTP server
     /// exposes `GET /metrics` against it.
@@ -132,6 +133,11 @@ pub struct App {
 }
 
 impl App {
+    /// Typed decision backend injected by the host, independent of generation.
+    pub fn decision_model(&self) -> Option<&crate::decision_model::DecisionRuntime> {
+        self.decision_model.as_ref()
+    }
+
     /// Start configuring an application.
     pub fn builder() -> AppBuilder {
         AppBuilder::new()
@@ -357,6 +363,14 @@ struct TransformCheckedControl {
 
 #[async_trait::async_trait]
 impl crate::language_model::native::NativeExecutionControl for TransformCheckedControl {
+    fn observe_stream(&self) -> bool {
+        self.inner.observe_stream()
+    }
+
+    async fn on_stream_part(&self, request_id: &str, part: &crate::language_model::StreamPart) {
+        self.inner.on_stream_part(request_id, part).await;
+    }
+
     fn provider_response_byte_limit(&self) -> Option<u64> {
         self.inner.provider_response_byte_limit()
     }
@@ -492,6 +506,7 @@ pub(crate) fn prepare_model_prompt(
 /// `bitrouter` host crate rather than receive this builder.
 pub struct AppBuilder {
     language_model: PipelineBuilder,
+    decision_model: Option<crate::decision_model::DecisionRuntime>,
     mcp: mcp::PipelineBuilder,
     metrics_renderer: Option<Arc<dyn MetricsRenderer>>,
     migrations: Vec<MigrationItem>,
@@ -505,6 +520,7 @@ impl AppBuilder {
     pub fn new() -> Self {
         Self {
             language_model: PipelineBuilder::new(),
+            decision_model: None,
             mcp: mcp::PipelineBuilder::new(),
             metrics_renderer: None,
             migrations: Vec::new(),
@@ -537,6 +553,12 @@ impl AppBuilder {
         F: FnOnce(&mut PipelineBuilder),
     {
         configure(&mut self.language_model);
+        self
+    }
+
+    /// Install a typed decision backend for harness-owned semantic decisions.
+    pub fn decision_model(mut self, runtime: crate::decision_model::DecisionRuntime) -> Self {
+        self.decision_model = Some(runtime);
         self
     }
 
@@ -599,6 +621,22 @@ impl AppBuilder {
     /// configured (the `language_model` pipeline needs at least a routing table
     /// and an executor).
     pub fn build(mut self) -> Result<App> {
+        if let Some(runtime) = &self.decision_model {
+            if runtime.model.trim().is_empty() {
+                return Err(crate::BitrouterError::bad_request(
+                    "decision model is empty",
+                ));
+            }
+            runtime
+                .policy
+                .validate()
+                .map_err(crate::BitrouterError::bad_request)?;
+            if let Some(pricing) = &runtime.pricing {
+                pricing
+                    .validate()
+                    .map_err(crate::BitrouterError::bad_request)?;
+            }
+        }
         let language_model = if self.language_model.is_configured() {
             Some(Arc::new(self.language_model.build()?))
         } else {
@@ -624,6 +662,7 @@ impl AppBuilder {
 
         Ok(App {
             language_model,
+            decision_model: self.decision_model,
             mcp,
             metrics_renderer: self.metrics_renderer,
             migrations: self.migrations,

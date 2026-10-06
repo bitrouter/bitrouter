@@ -7,6 +7,7 @@ mod activity;
 pub mod allocation;
 pub mod checkpoint;
 pub mod collaboration;
+pub mod context_router;
 pub mod protocol;
 pub mod reconstruction;
 pub mod routing;

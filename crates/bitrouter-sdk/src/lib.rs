@@ -161,6 +161,7 @@
 // ===== shared library code (crate root) =====
 pub mod app;
 pub mod caller;
+pub mod decision_model;
 pub mod error;
 pub mod event;
 pub mod extension;

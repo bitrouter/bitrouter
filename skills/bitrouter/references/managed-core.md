@@ -4,6 +4,12 @@ The `bro serve` inference listener also exposes the negotiated managed-core
 profile. The explicit `bro task managed` command connects native workspace resources
 to an in-process core; `task run`, `code`, and ACP keep their existing protocols.
 
+For typed context routing, negotiate `context_views_v1` and set the task's
+`routing.context` to `auto`. See [decision-native.md](decision-native.md) for
+configuration and evidence semantics. `limits.outstanding_tools` bounds pending
+workspace invocations; `limits.total_tools` bounds their cumulative count across
+all workers in a run, including work whose worker turn has retired.
+
 1. Use an active `brvk_` virtual key on both HTTP and WebSocket requests. Managed
    endpoints require authentication even when ordinary inference uses
    `server.skip_auth: true`. The session namespace includes the user and key ID.

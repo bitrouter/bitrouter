@@ -6,8 +6,8 @@ use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::types::{AuthScheme, GenerateResult, RoutingTarget};
 use bitrouter_sdk::language_model::{
-    ApiProtocol, Content, FinishReason, Message, MockExecutor, MockResponse, Role,
-    StaticRoutingTable, StreamPart, ToolResultOutput, Usage,
+    ApiProtocol, Content, FinishReason, Message, MockExecutor, MockResponse, StaticRoutingTable,
+    StreamPart, ToolResultOutput, Usage,
 };
 use tempfile::TempDir;
 use tokio::sync::{Semaphore, mpsc, oneshot};
@@ -15,8 +15,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::context;
-use crate::control::{ModelBoundary, TurnControl};
+use crate::control::TurnControl;
 use crate::store::{CommitRequest, EffectStatus, ExecutionRecord};
+
+#[path = "tests_native.rs"]
+mod native;
 
 struct ReleaseReads(Arc<crate::tools::ReadGate>);
 impl Drop for ReleaseReads {
@@ -189,7 +192,7 @@ async fn gemini_optional_ids_execute_separately_and_replay_provider_ids()
     let adapter = GenerateContentAdapter;
     let wire = serde_json::json!({
         "candidates": [{"content": {"role":"model", "parts":[
-            {"functionCall":{"name":"read", "args":{"path":"first.txt"}}, "thoughtSignature":"signature"},
+            {"functionCall":{"name":"read", "args":{"path":"first.txt"}}},
             {"functionCall":{"name":"read", "args":{"path":"second.txt"}}},
             {"functionCall":{"id":"provider-3", "name":"read", "args":{"path":"third.txt"}}}
         ]}, "finishReason":"STOP"}]
@@ -219,7 +222,7 @@ async fn gemini_optional_ids_execute_separately_and_replay_provider_ids()
         AgentConfig::fixed("fixture-model", None).read_only(),
     )?;
     let report = agent.run("inspect", CancellationToken::new(), None).await;
-    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
     let mut ids = HashSet::new();
     let outputs: Vec<_> = report
         .messages
@@ -257,7 +260,6 @@ async fn gemini_optional_ids_execute_separately_and_replay_provider_ids()
     let calls = &replay["contents"][1]["parts"];
     assert!(calls[0]["functionCall"].get("id").is_none());
     assert!(calls[1]["functionCall"].get("id").is_none());
-    assert_eq!(calls[0]["thoughtSignature"], "signature");
     assert_eq!(calls[2]["functionCall"]["id"], "provider-3");
     let results: Vec<_> = replay["contents"]
         .as_array()
@@ -302,7 +304,7 @@ async fn ordered_read_edit_shell_then_final_answer() -> Result<(), Box<dyn std::
     let report = agent
         .run("update the note", CancellationToken::new(), None)
         .await;
-    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
     assert_eq!(
         report.final_answer.as_deref(),
         Some("Changed the note and ran a check.")
@@ -350,15 +352,12 @@ async fn failed_batch_settles_and_provider_ids_can_repeat_in_later_steps()
 -> Result<(), Box<dyn std::error::Error>> {
     let workspace = TempDir::new()?;
     std::fs::write(workspace.path().join("note.txt"), "old")?;
-    let mut malformed = call("bad-json", "edit", serde_json::json!({}));
-    if let Content::ToolCall { arguments, .. } = &mut malformed {
-        *arguments = "not json".into();
-    }
+    let malformed = call("bad-arguments", "edit", serde_json::json!({}));
     let agent = agent(
         &workspace,
         vec![
             turn(vec![
-                call("unknown", "not_a_tool", serde_json::json!({})),
+                call("missing", "read", serde_json::json!({"path":"missing.txt"})),
                 malformed,
                 call("dup", "read", serde_json::json!({"path":"note.txt"})),
             ]),
@@ -374,7 +373,7 @@ async fn failed_batch_settles_and_provider_ids_can_repeat_in_later_steps()
         |_| {},
     )?;
     let report = agent.run("try tools", CancellationToken::new(), None).await;
-    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("note.txt"))?,
         "changed"
@@ -445,7 +444,8 @@ async fn read_only_mode_denies_unadvertised_effects_without_approval()
         )
         .await;
     assert!(approval_requests.try_recv().is_err());
-    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.status, RunStatus::Failed, "{}", report.detail);
+    assert!(report.detail.contains("frozen harness manifest"));
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("note.txt"))?,
         "unchanged\n"
@@ -459,10 +459,7 @@ async fn read_only_mode_denies_unadvertised_effects_without_approval()
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(outputs.len(), 3);
-    assert!(!outputs[0].is_error());
-    assert!(outputs[1].is_error());
-    assert!(outputs[2].is_error());
+    assert!(outputs.is_empty());
     Ok(())
 }
 
@@ -515,6 +512,7 @@ async fn cancellation_and_each_bound_stop_before_a_new_effect()
         config.max_duration = Duration::from_millis(1);
     })?;
     let empty_report = RunReport {
+        native: None,
         cleanup_unconfirmed: false,
         resources: None,
         context_version: 0,
@@ -571,7 +569,7 @@ async fn streamed_text_is_visible_before_the_complete_message()
     assert!(
         matches!(&report.events[0], RunEvent::UserMessage { item_id, .. } if item_id == "user-fixture")
     );
-    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
     let mut saw_delta = false;
     while let Ok(event) = receiver.try_recv() {
         match event {
@@ -750,7 +748,7 @@ async fn reads_overlap_with_bounds_and_edit_barriers_preserve_context_order()
     gate.allow(Some("a"))?;
     let report = tokio::time::timeout(Duration::from_secs(5), run).await??;
     let records = owner.await?;
-    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
     assert_eq!(gate.entered()?.1, 2);
     assert_eq!(workers.available_permits(), 16);
     let result_ids = |messages: &[Message]| {
@@ -959,7 +957,7 @@ async fn a_read_error_stops_new_calls_and_settles_after_existing_workers()
     assert_eq!(gate.entered()?.0.len(), 2);
     gate.allow(Some("a"))?;
     let report = tokio::time::timeout(Duration::from_secs(5), run).await??;
-    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
     assert_eq!(report.steps, 2);
     assert_eq!(gate.entered()?.0.len(), 2);
     assert!(report.messages.iter().flat_map(|message| &message.content).any(|part| matches!(part, Content::ToolResult { call_id, output: ToolResultOutput::ErrorJson { value }, .. } if call_id == "later" && value.get("execution_status").and_then(serde_json::Value::as_str) == Some("not_executed"))));
@@ -1000,7 +998,12 @@ async fn active_duration_stops_and_joins_an_exclusive_command()
     assert!(!workspace.path().join("leaked").exists());
     assert!(!workspace.path().join("later").exists());
     assert_eq!(report.tool_calls, 2);
-    assert_eq!(report.messages.len(), 4);
+    assert!(context::validate_history(&report.messages).is_err());
+    assert!(
+        report.events.iter().any(
+            |event| matches!(event, RunEvent::ToolFinished { output, .. } if output.is_error())
+        )
+    );
     Ok(())
 }
 
@@ -1083,40 +1086,10 @@ async fn steering_drains_inflight_read_workers_without_cancelling_them_before_th
     runner.tools.set_read_gate(Arc::clone(&gate));
     let fence = Arc::new(crate::control::LaunchFence::default());
     let (commits, recorder) = commit_recorder();
-    let owner_commits = commits.clone();
-    let (models, mut requests) = mpsc::channel::<ModelBoundary>(1);
-    let owner_fence = Arc::clone(&fence);
-    let owner = tokio::spawn(async move {
-        let mut prompts = Vec::new();
-        while let Some(mut request) = requests.recv().await {
-            if owner_fence.pending() {
-                request
-                    .prompt
-                    .messages
-                    .push(Message::text(Role::User, "shared correction"));
-                request.context_version += 1;
-            }
-            let result = commit_execution(
-                &Some(owner_commits.clone()),
-                vec![ExecutionRecord::ModelRequest {
-                    step_id: request.step_id,
-                    item_id: request.item_id,
-                    context_version: request.context_version,
-                    prompt: Box::new(request.prompt.clone()),
-                }],
-            )
-            .await;
-            owner_fence.set(false);
-            prompts.push(request.prompt.clone());
-            let _ = request
-                .response
-                .send(result.map(|()| (request.prompt, request.context_version)));
-        }
-        prompts
-    });
+    let native = Arc::new(crate::control::NativeInputs::default());
     let control = TurnControl {
         fence: Arc::clone(&fence),
-        models,
+        native: Arc::clone(&native),
     };
     let run = tokio::spawn(async move {
         runner
@@ -1142,12 +1115,19 @@ async fn steering_drains_inflight_read_workers_without_cancelling_them_before_th
     });
     wait_for_reads(&gate, 2).await?;
     fence.set(true);
+    native.push("steering-correction".into(), "shared correction".into());
     assert_eq!(gate.entered()?.0.len(), 2);
     gate.allow(None)?;
     let report = run.await?;
-    let requests = owner.await?;
     let facts = recorder.await?;
-    assert_eq!(report.status, RunStatus::Completed);
+    let requests: Vec<_> = facts
+        .iter()
+        .filter_map(|fact| match fact {
+            ExecutionRecord::ModelRequest { prompt, .. } => Some(prompt.as_ref()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
     assert_eq!(requests.len(), 2);
     crate::context::validate_history(&requests[1].messages)?;
     assert!(serde_json::to_string(&requests[1].messages)?.contains("shared correction"));

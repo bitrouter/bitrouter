@@ -50,15 +50,47 @@ pub(super) fn app(turns: Vec<GenerateResult>) -> std::io::Result<Arc<App>> {
 pub(super) fn app_with_executor(
     executor: Arc<dyn bitrouter_sdk::language_model::Executor>,
 ) -> std::io::Result<Arc<App>> {
+    app_with_execution_mode(executor, false)
+}
+
+pub(super) fn app_with_execution_mode(
+    executor: Arc<dyn bitrouter_sdk::language_model::Executor>,
+    native: bool,
+) -> std::io::Result<Arc<App>> {
     let table = StaticRoutingTable::new();
     table.insert("fixture-model", vec![routing_target()]);
-    App::builder()
-        .language_model(|builder| {
-            builder.routing_table(Arc::new(table)).executor(executor);
-        })
-        .build()
-        .map(Arc::new)
-        .map_err(std::io::Error::other)
+    let mut builder = App::builder().language_model(|builder| {
+        builder.routing_table(Arc::new(table)).executor(executor);
+    });
+    if native {
+        builder = builder.decision_model(bitrouter_sdk::decision_model::DecisionRuntime {
+            model: "fixture-decision".into(),
+            executor: Arc::new(UnavailableDecision),
+            policy: Default::default(),
+            pricing: None,
+        });
+    }
+    builder.build().map(Arc::new).map_err(std::io::Error::other)
+}
+
+struct UnavailableDecision;
+
+#[async_trait::async_trait]
+impl bitrouter_sdk::decision_model::DecisionExecutor for UnavailableDecision {
+    async fn execute(
+        &self,
+        _: &bitrouter_sdk::decision_model::types::DecisionRequest,
+        _: &tokio_util::sync::CancellationToken,
+    ) -> Result<
+        bitrouter_sdk::decision_model::types::DecisionResponse,
+        bitrouter_sdk::decision_model::types::DecisionError,
+    > {
+        Err(
+            bitrouter_sdk::decision_model::types::DecisionError::invalid_request(
+                "fixture uses conservative context",
+            ),
+        )
+    }
 }
 
 pub(super) fn turn(parts: Vec<Content>) -> GenerateResult {
@@ -162,7 +194,7 @@ pub(super) async fn wait_for(
         }
     })
     .await
-    .map_err(|error| error.to_string())?
+    .map_err(|error| format!("{error}; latest Turn: {:?}", service.read(turn_id)))?
 }
 
 pub(super) fn thread_request(workspace: &TempDir, key: &str) -> ThreadRequest {
@@ -388,12 +420,13 @@ impl Executor for HeldModel {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> bitrouter_sdk::Result<StreamPartStream> {
+        let stream = self.inner.execute_stream(target, prompt, ctx).await?;
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             self.entered.notify_one();
             if let Ok(permit) = self.release.acquire().await {
                 permit.forget();
             }
         }
-        self.inner.execute_stream(target, prompt, ctx).await
+        Ok(stream)
     }
 }

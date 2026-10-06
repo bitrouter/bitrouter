@@ -74,6 +74,7 @@ pub mod native_continuation;
 mod native_output;
 pub mod native_preparation;
 mod native_report;
+mod native_stream;
 pub mod native_work;
 pub mod pipeline;
 pub mod protocol;

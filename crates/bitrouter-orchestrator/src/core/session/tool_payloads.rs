@@ -13,6 +13,16 @@ pub(super) fn admit(
         run.limits.input_bytes.min(host.input_bytes)
     });
     let mut limits = ToolResultLimits::for_input(input_bytes, output_bytes)?;
+    if state
+        .manifest
+        .required_features
+        .iter()
+        .any(|feature| feature == super::super::context_router::NATIVE_TOOLS)
+    {
+        // Native values offload large bodies; reserve a small, explicitly frozen
+        // metadata envelope instead of the entire command input allowance.
+        limits.payload_bytes = limits.payload_bytes.min(output_bytes.saturating_add(4096));
+    }
     let tools = state
         .run
         .as_ref()

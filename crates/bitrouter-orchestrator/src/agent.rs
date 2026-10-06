@@ -1,4 +1,3 @@
-use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -6,20 +5,15 @@ use std::time::{Duration, Instant};
 use bitrouter_sdk::App;
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::language_model::types::ReasoningEffort;
-use bitrouter_sdk::language_model::{Content, Message, Role, ToolResultOutput, Usage};
+use bitrouter_sdk::language_model::{Message, Role, ToolResultOutput, Usage};
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use self::batch::{BatchControl, Invocation, PendingCall};
-use self::stream::{AssistantAttempt, StreamCollector};
-use crate::context;
-use crate::control::{ModelBoundary, TurnControl};
-use crate::item::{CallOrigin, CallRecord};
-use crate::store::{CommitRequest, EffectStatus, ExecutionRecord};
+use crate::control::TurnControl;
+use crate::store::{CommitRequest, ExecutionRecord};
 use crate::tools::WorkspaceTools;
 
-mod batch;
-mod stream;
+pub(crate) mod native;
 
 const DEFAULT_INSTRUCTIONS: &str = "You are BRO, a coding agent. Work in the selected server workspace. Use read, glob, and grep to inspect code; use write and edit to change it, and the shell tool to run commands and checks. For edit, supply unique oldText values from the original file. Report what actually happened; do not claim a check passed unless its tool result shows it.";
 const READ_ONLY_INSTRUCTIONS: &str = "You are BRO, a read-only coding agent. Inspect the selected server workspace using read, glob, and grep. Do not change files or run commands. Report what you actually observed.";
@@ -35,6 +29,8 @@ pub struct EstimateRates {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AgentConfig {
     pub model: String,
+    #[serde(default, skip_serializing_if = "fixed_model_mode")]
+    pub model_mode: crate::core::protocol::ModelMode,
     pub effort: Option<ReasoningEffort>,
     pub instructions: String,
     pub max_steps: u32,
@@ -44,6 +40,10 @@ pub struct AgentConfig {
     pub max_spend_microusd: Option<u64>,
     pub estimate_rates: Option<EstimateRates>,
     tool_mode: ToolMode,
+}
+
+fn fixed_model_mode(mode: &crate::core::protocol::ModelMode) -> bool {
+    *mode == crate::core::protocol::ModelMode::Fixed
 }
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -58,6 +58,7 @@ impl AgentConfig {
     pub fn fixed(model: impl Into<String>, effort: Option<ReasoningEffort>) -> Self {
         Self {
             model: model.into(),
+            model_mode: crate::core::protocol::ModelMode::Fixed,
             effort,
             instructions: DEFAULT_INSTRUCTIONS.into(),
             max_steps: 32,
@@ -73,6 +74,11 @@ impl AgentConfig {
     pub fn read_only(mut self) -> Self {
         self.tool_mode = ToolMode::ReadOnly;
         self.instructions = READ_ONLY_INSTRUCTIONS.into();
+        self
+    }
+
+    pub fn with_model_mode(mut self, mode: crate::core::protocol::ModelMode) -> Self {
+        self.model_mode = mode;
         self
     }
 
@@ -143,6 +149,7 @@ pub enum RunEvent {
 }
 
 pub struct RunReport {
+    pub(crate) native: Option<native::Saved>,
     pub(crate) cleanup_unconfirmed: bool,
     pub resources: Option<crate::harness::HarnessInventory>,
     pub context_version: u64,
@@ -160,6 +167,8 @@ pub struct RunReport {
 
 #[derive(Clone)]
 pub struct Agent {
+    native: Option<native::Saved>,
+    native_record_bytes: usize,
     app: Arc<App>,
     caller: CallerContext,
     tools: WorkspaceTools,
@@ -202,6 +211,15 @@ pub(crate) struct ApprovalRequest {
 }
 
 impl Agent {
+    pub(crate) fn with_native(mut self, saved: Option<native::Saved>) -> Self {
+        self.native = saved;
+        self
+    }
+
+    pub(crate) fn with_native_record_limit(mut self, bytes: usize) -> Self {
+        self.native_record_bytes = bytes;
+        self
+    }
     pub(crate) fn with_instructions(
         mut self,
         snapshot: Option<crate::harness::instructions::InstructionSnapshot>,
@@ -249,14 +267,6 @@ impl Agent {
             );
         }
         tools
-    }
-
-    fn allowed(&self, name: &str) -> bool {
-        WorkspaceTools::allowed(self.config.tool_mode, name)
-            || self
-                .resources
-                .as_ref()
-                .is_some_and(|resources| resources.contains(name))
     }
 
     fn validate_call(&self, name: &str, arguments: &str) -> Result<(), String> {
@@ -308,6 +318,8 @@ impl Agent {
             WorkspaceTools::new(workspace, config.tool_mode).map_err(|error| error.to_string())?;
         let instruction_root = tools.root().to_path_buf();
         Ok(Self {
+            native: None,
+            native_record_bytes: 4 * 1024 * 1024,
             app,
             caller,
             tools,
@@ -400,6 +412,7 @@ impl Agent {
             commits,
             control,
         } = channels;
+        let native_text = input.prompt.clone();
         let mut prepared = self.clone();
         if !self
             .resource_config
@@ -423,6 +436,7 @@ impl Agent {
             let mut messages = input.messages;
             messages.push(user_message.clone());
             let mut report = RunReport {
+                native: self.native.clone(),
                 cleanup_unconfirmed: false,
                 resources: None,
                 context_version: input.context_version.saturating_add(1),
@@ -534,22 +548,16 @@ impl Agent {
             },
             |(status, _)| status,
         );
-        let mut preparation = Some(preparation.map_err(|detail| (preparation_status, detail)));
-        let mut approval_wait = Duration::ZERO;
-        let mut active_model = None;
-        let (status, detail) = 'execution: loop {
-            if let Some(result) = preparation.take() {
-                if let Err(outcome) = result {
-                    break outcome;
-                }
-                let instruction = instruction_record.take();
+        let (mut status, mut detail) = match preparation {
+            Err(error) => (preparation_status, error),
+            Ok(()) => {
                 let mut records = Vec::new();
-                if let Some(record) = &instruction {
+                if let Some(record) = &instruction_record {
                     records.push(record.clone());
                 }
                 if let Some(inventory) = &report.resources {
                     records.push(ExecutionRecord::HarnessInventory {
-                        context_version: match &instruction {
+                        context_version: match &instruction_record {
                             Some(ExecutionRecord::InstructionContext {
                                 context_version, ..
                             }) => *context_version,
@@ -558,517 +566,45 @@ impl Agent {
                         inventory: Box::new(inventory.clone()),
                     });
                 }
-                if let Err(error) = commit_execution(&commits, records).await {
-                    break (RunStatus::Failed, error);
-                }
-                if let Some(ExecutionRecord::InstructionContext {
-                    context_version,
-                    message,
-                    prepend,
-                    ..
-                }) = instruction
-                {
-                    crate::harness::instructions::apply_message(
-                        &mut report.messages,
-                        message,
-                        prepend,
-                    );
-                    report.context_version = context_version;
-                }
-            }
-            report.active_duration_ms = prior_duration.saturating_add(
-                u64::try_from(started.elapsed().saturating_sub(approval_wait).as_millis())
-                    .unwrap_or(u64::MAX),
-            );
-            if let Err(error) = commit_execution(
-                &commits,
-                vec![ExecutionRecord::RunCheckpoint {
-                    context_version: report.context_version,
-                    messages: report.messages.clone(),
-                    model_steps: report.steps,
-                    tool_calls: report.tool_calls,
-                    estimated_spend_microusd: report.estimated_spend_microusd,
-                    active_duration_ms: report.active_duration_ms,
-                }],
-            )
-            .await
-            {
-                break (RunStatus::Failed, error);
-            }
-            let active_started = started + approval_wait;
-            if let Some(outcome) = self.bound_status(&report, active_started, &cancel) {
-                break outcome;
-            }
-            if let Some(resources) = &prepared.resources
-                && let Err(error) = resources.validate_catalog().await
-            {
-                break (RunStatus::Failed, error);
-            }
-            let prompt = match context::build(
-                &self.config.model,
-                self.config.effort,
-                &self_.config.instructions,
-                &report.messages,
-                self_.declarations(),
-                self.config.max_context_bytes,
-            ) {
-                Ok(prompt) => prompt,
-                Err(error) => break (RunStatus::BoundExceeded, error),
-            };
-            let step_id = uuid::Uuid::new_v4().to_string();
-            let item_id = uuid::Uuid::new_v4().to_string();
-            let (prompt, version) = if let Some(control) = &control {
-                let (response, receive) = oneshot::channel();
-                if control
-                    .models
-                    .send(ModelBoundary {
-                        prompt,
-                        step_id: step_id.clone(),
-                        item_id: item_id.clone(),
-                        context_version: report.context_version,
-                        max_bytes: self.config.max_context_bytes,
-                        response,
-                    })
-                    .await
-                    .is_err()
-                {
-                    break (RunStatus::Failed, "model boundary owner unavailable".into());
-                }
-                match receive.await {
-                    Ok(Ok(value)) => value,
-                    Ok(Err(error)) => break (RunStatus::Failed, error),
-                    Err(_) => break (RunStatus::Failed, "model boundary owner lost".into()),
-                }
-            } else {
-                if let Err(error) = commit_execution(
-                    &commits,
-                    vec![ExecutionRecord::ModelRequest {
-                        step_id: step_id.clone(),
-                        item_id: item_id.clone(),
-                        context_version: report.context_version,
-                        prompt: Box::new(prompt.clone()),
-                    }],
-                )
-                .await
-                {
-                    break (RunStatus::Failed, error);
-                }
-                (prompt, report.context_version)
-            };
-            report.messages = prompt.messages.clone();
-            report.context_version = version;
-            report.steps += 1;
-            record(
-                &mut report,
-                &events,
-                RunEvent::AssistantStarted {
-                    step_id: step_id.clone(),
-                    item_id: item_id.clone(),
-                },
-            )
-            .await;
-            let attempt = active_model.insert(AssistantAttempt {
-                step_id: step_id.clone(),
-                item_id: item_id.clone(),
-                collector: StreamCollector::default(),
-            });
-            let remaining = self
-                .config
-                .max_duration
-                .saturating_sub(active_started.elapsed());
-            let response = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => break (RunStatus::Cancelled, "cancelled during model request".into()),
-                result = tokio::time::timeout(remaining, self.execute_turn(prompt, attempt, events.as_ref())) => match result {
-                    Ok(Ok(response)) => response,
-                    Ok(Err(error)) => break (RunStatus::Failed, error),
-                    Err(_) => break (RunStatus::BoundExceeded, "time bound reached during model request".into()),
-                }
-            };
-            let mut usage_unavailable = false;
-            if let Some(rates) = self.config.estimate_rates {
-                match response.result.usage.as_ref() {
-                    Some(usage) => {
-                        report.estimated_spend_microusd = report
-                            .estimated_spend_microusd
-                            .saturating_add(estimate_cost(
-                                usage.prompt_tokens,
-                                usage.completion_tokens,
-                                rates,
-                            ))
-                    }
-                    None if self.config.max_spend_microusd.is_some() => usage_unavailable = true,
-                    None => {}
-                }
-            }
-            let assistant = Message {
-                role: Role::Assistant,
-                content: response.result.content,
-            };
-            let calls: Vec<PendingCall> = assistant
-                .content
-                .iter()
-                .filter_map(|content| match content {
-                    Content::ToolCall {
-                        id,
-                        name,
-                        arguments,
-                        provider_metadata,
-                        provider_executed: false,
-                        ..
-                    } => Some(PendingCall {
-                        id: id.clone(),
-                        name: name.clone(),
-                        arguments: arguments.clone(),
-                        provider_metadata: provider_metadata.clone(),
-                    }),
-                    _ => None,
-                })
-                .collect();
-            let mut ids = HashSet::new();
-            if calls
-                .iter()
-                .any(|call| call.id.is_empty() || !ids.insert(call.id.clone()))
-            {
-                break (
-                    RunStatus::Failed,
-                    "missing or duplicate tool call ID in model response".into(),
-                );
-            }
-            if report
-                .tool_calls
-                .saturating_add(u32::try_from(calls.len()).unwrap_or(u32::MAX))
-                > self.config.max_tool_calls
-            {
-                break (
-                    RunStatus::BoundExceeded,
-                    "tool call bound exceeded before response admission".into(),
-                );
-            }
-            let mut admission = report.messages.clone();
-            admission.push(assistant.clone());
-            let size = serde_json::to_vec(&admission).map(|value| value.len());
-            let reserve = calls.len().saturating_mul(1024);
-            if size.map_or(true, |size| {
-                size.saturating_add(reserve) > self.config.max_context_bytes
-            }) {
-                break (
-                    RunStatus::BoundExceeded,
-                    "complete model response exceeds context settlement capacity".into(),
-                );
-            }
-            let call_records = calls
-                .iter()
-                .map(|call| CallRecord {
-                    origin: CallOrigin::Model,
-                    item_id: uuid::Uuid::new_v4().to_string(),
-                    provider_call_id: call.id.clone(),
-                    name: call.name.clone(),
-                    arguments: call.arguments.clone(),
-                })
-                .collect::<Vec<_>>();
-            if let Err(error) = commit_execution(
-                &commits,
-                vec![ExecutionRecord::ModelResponse {
-                    step_id: step_id.clone(),
-                    item_id: item_id.clone(),
-                    request_id: response.request_id.clone(),
-                    requested_model: self.config.model.clone(),
-                    usage: response.result.usage.clone(),
-                    estimated_spend_microusd: report.estimated_spend_microusd,
-                    message: assistant.clone(),
-                    calls: call_records.clone(),
-                }],
-            )
-            .await
-            {
-                break (RunStatus::Failed, error);
-            }
-            active_model = None;
-            record(
-                &mut report,
-                &events,
-                RunEvent::ModelTurn {
-                    step_id: step_id.clone(),
-                    item_id: item_id.clone(),
-                    request_id: response.request_id,
-                    requested_model: self.config.model.clone(),
-                    usage: response.result.usage,
-                },
-            )
-            .await;
-            let final_text = assistant
-                .content
-                .iter()
-                .filter_map(|content| match content {
-                    Content::Text { text, .. } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            report.messages.push(assistant.clone());
-            report.context_version = report.context_version.saturating_add(1);
-            record(
-                &mut report,
-                &events,
-                RunEvent::AssistantMessage {
-                    item_id,
-                    message: assistant,
-                },
-            )
-            .await;
-            let mut stop = if usage_unavailable {
-                Some((
-                    RunStatus::Failed,
-                    "model usage unavailable for the configured spend bound".into(),
-                ))
-            } else {
-                self.effect_bound_status(&report, started + approval_wait, &cancel)
-            };
-            if calls.is_empty()
-                && control.as_ref().is_some_and(|value| value.fence.pending())
-                && stop.is_none()
-            {
-                continue;
-            }
-            if calls.is_empty() {
-                if let Some(outcome) = stop {
-                    break outcome;
-                }
-                if final_text.trim().is_empty() {
-                    break (
-                        RunStatus::Failed,
-                        "model returned no final answer or client tool call".into(),
-                    );
-                }
-                report.final_answer = Some(final_text);
-                break (RunStatus::Completed, "final answer recorded".into());
-            }
-            let mut ordinary_batch_error = false;
-            let mut pending = calls.into_iter().zip(call_records).collect::<VecDeque<_>>();
-            while let Some((call, call_record)) = pending.pop_front() {
-                if stop.is_none() && control.as_ref().is_some_and(|value| value.fence.pending()) {
-                    stop = Some((RunStatus::Failed, "not_executed_due_to_steer".into()));
-                    ordinary_batch_error = true;
-                }
-                if stop.is_none() && WorkspaceTools::read_only(&call.name) {
-                    let mut group = vec![Invocation {
-                        call,
-                        record: call_record,
-                    }];
-                    while pending
-                        .front()
-                        .is_some_and(|(call, _)| WorkspaceTools::read_only(&call.name))
-                    {
-                        if let Some((call, record)) = pending.pop_front() {
-                            group.push(Invocation { call, record });
-                        }
-                    }
-                    let control = BatchControl {
-                        cancel: &cancel,
-                        events: &events,
-                        commits: &commits,
-                        started: started + approval_wait,
-                        steering: &control,
-                    };
-                    match self
-                        .execute_shared_group(&step_id, group, &mut report, control)
-                        .await
-                    {
-                        Ok(outcome) => {
-                            stop = outcome.stop;
-                            ordinary_batch_error |= outcome.ordinary_error;
-                        }
-                        Err(error) => break 'execution (RunStatus::Failed, error),
-                    }
-                    continue;
-                }
-                report.tool_calls += 1;
-                if stop.is_none() {
-                    stop = self.effect_bound_status(&report, started + approval_wait, &cancel);
-                }
-                let mut effect = EffectStatus::NotExecuted;
-                let output = if let Some((_, reason)) = &stop {
-                    not_executed(reason)
-                } else if !self_.allowed(&call.name) {
-                    not_executed("tool is unavailable in this task mode")
-                } else if let Err(error) = self_.validate_call(&call.name, &call.arguments) {
-                    not_executed(&error)
-                } else {
-                    let approved = if WorkspaceTools::read_only(&call.name) {
-                        Ok(true)
-                    } else if let Some(approvals) = &approvals {
-                        let (response, receiver) = oneshot::channel();
-                        let request = ApprovalRequest {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            tool_id: call_record.item_id.clone(),
-                            tool_name: call.name.clone(),
-                            arguments: call.arguments.clone(),
-                            response,
-                        };
-                        let wait_started = Instant::now();
-                        let result = if approvals.send(request).await.is_err() {
-                            Err("approval service unavailable".to_string())
-                        } else {
-                            tokio::select! {
-                                _ = cancel.cancelled() => Err("approval cancelled".into()),
-                                result = receiver => result.map_err(|_| "approval channel closed".to_string()),
-                            }
-                        };
-                        approval_wait += wait_started.elapsed();
-                        result
-                    } else {
-                        Ok(true)
-                    };
-                    match approved {
-                        Ok(true) if !cancel.is_cancelled() => {
-                            let control = BatchControl {
-                                cancel: &cancel,
-                                events: &events,
-                                commits: &commits,
-                                started: started + approval_wait,
-                                steering: &control,
-                            };
-                            match self_
-                                .execute_exclusive(
-                                    &step_id,
-                                    &call,
-                                    &call_record,
-                                    &mut report,
-                                    control,
-                                )
-                                .await
-                            {
-                                Ok((result, status)) => {
-                                    effect = status;
-                                    report.unknown_effect |= effect == EffectStatus::Unknown;
-                                    result
-                                }
-                                Err(error) => break 'execution (RunStatus::Failed, error),
-                            }
-                        }
-                        Ok(true) => not_executed("cancelled before tool execution"),
-                        Ok(false)
-                            if control.as_ref().is_some_and(|value| value.fence.pending()) =>
+                match commit_execution(&commits, records).await {
+                    Err(error) => (RunStatus::Failed, error),
+                    Ok(()) => {
+                        if let Some(ExecutionRecord::InstructionContext {
+                            context_version,
+                            message,
+                            prepend,
+                            ..
+                        }) = instruction_record
                         {
-                            not_executed("not_executed_due_to_steer")
+                            crate::harness::instructions::apply_message(
+                                &mut report.messages,
+                                message,
+                                prepend,
+                            );
+                            report.context_version = context_version;
                         }
-                        Ok(false) => ToolResultOutput::ExecutionDenied {
-                            reason: Some("user denied tool execution".into()),
-                        },
-                        Err(error) => not_executed(&error),
+                        report.active_duration_ms = prior_duration.saturating_add(
+                            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        );
+                        self_
+                            .run_native(
+                                &mut report,
+                                &native_text,
+                                &cancel,
+                                RunChannels {
+                                    events: events.clone(),
+                                    approvals,
+                                    commits: commits.clone(),
+                                    control,
+                                },
+                                started,
+                            )
+                            .await
                     }
-                };
-                let message = Message {
-                    role: Role::Tool,
-                    content: vec![Content::ToolResult {
-                        call_id: call.id,
-                        tool_name: Some(call.name.clone()),
-                        output: output.clone(),
-                        dynamic: false,
-                        provider_metadata: call.provider_metadata,
-                    }],
-                };
-                report.messages.push(message.clone());
-                report.context_version = report.context_version.saturating_add(1);
-                if let Err(error) = commit_execution(
-                    &commits,
-                    vec![ExecutionRecord::ToolResult {
-                        step_id: step_id.clone(),
-                        item_id: call_record.item_id.clone(),
-                        message,
-                        effect,
-                    }],
-                )
-                .await
-                {
-                    report.unknown_effect |= effect != EffectStatus::NotExecuted;
-                    break 'execution (RunStatus::Failed, error);
                 }
-                record(
-                    &mut report,
-                    &events,
-                    RunEvent::ToolFinished {
-                        id: call_record.item_id,
-                        name: call.name,
-                        output: output.clone(),
-                    },
-                )
-                .await;
-                if report.unknown_effect {
-                    stop = Some((
-                        RunStatus::Failed,
-                        "tool effects require investigation before continuation".into(),
-                    ));
-                } else if cancel.is_cancelled() {
-                    stop = Some((
-                        RunStatus::Cancelled,
-                        "cancelled during tool execution".into(),
-                    ));
-                } else if let Some(outcome) =
-                    self.effect_bound_status(&report, started + approval_wait, &cancel)
-                {
-                    stop = Some(outcome);
-                } else if matches!(
-                    output,
-                    ToolResultOutput::ErrorJson { .. } | ToolResultOutput::ExecutionDenied { .. }
-                ) && stop.is_none()
-                {
-                    ordinary_batch_error = true;
-                    // Settle later calls in this batch without launching them;
-                    // the model may react to the ordinary error in a new step.
-                    stop = Some((
-                        RunStatus::Failed,
-                        "remaining batch not executed after tool error or denial".into(),
-                    ));
-                }
-            }
-            if let Some(outcome) = stop
-                && (!ordinary_batch_error
-                    || report.unknown_effect
-                    || outcome.0 != RunStatus::Failed
-                    || cancel.is_cancelled()
-                    || usage_unavailable)
-            {
-                break outcome;
             }
         };
-        let (mut status, mut detail) = if let Some(attempt) = active_model {
-            let partial = attempt.collector.partial();
-            let terminal = ExecutionRecord::ModelInterrupted {
-                step_id: attempt.step_id,
-                item_id: attempt.item_id.clone(),
-                request_id: attempt.collector.request_id,
-                usage: attempt.collector.usage,
-                partial: partial.clone(),
-                detail: detail.clone(),
-            };
-            match commit_execution(&commits, vec![terminal]).await {
-                Ok(()) => {
-                    record(
-                        &mut report,
-                        &events,
-                        RunEvent::AssistantInterrupted {
-                            item_id: attempt.item_id,
-                            partial,
-                            detail: detail.clone(),
-                        },
-                    )
-                    .await;
-                    (status, detail)
-                }
-                Err(error) => (
-                    RunStatus::Failed,
-                    format!("{detail}; interrupted Item commit failed: {error}"),
-                ),
-            }
-        } else {
-            (status, detail)
-        };
-        report.active_duration_ms = prior_duration.saturating_add(
-            u64::try_from(started.elapsed().saturating_sub(approval_wait).as_millis())
-                .unwrap_or(u64::MAX),
-        );
+        let cleanup_started = Instant::now();
         if let Some(resources) = &prepared.resources
             && let Err(error) = resources.shutdown().await
         {
@@ -1077,9 +613,8 @@ impl Agent {
             status = RunStatus::Failed;
             detail = error;
         }
-        report.active_duration_ms = prior_duration.saturating_add(
-            u64::try_from(started.elapsed().saturating_sub(approval_wait).as_millis())
-                .unwrap_or(u64::MAX),
+        report.active_duration_ms = report.active_duration_ms.saturating_add(
+            u64::try_from(cleanup_started.elapsed().as_millis()).unwrap_or(u64::MAX),
         );
         let settlement = ExecutionRecord::Settled {
             outcome: Some(crate::store::SettlementOutcome {

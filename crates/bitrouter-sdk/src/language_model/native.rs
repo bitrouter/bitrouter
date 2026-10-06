@@ -456,6 +456,17 @@ pub struct NativeOutputUsage {
 /// Per-request durable controls supplied by a native embedding runtime.
 #[async_trait]
 pub trait NativeExecutionControl: Send + Sync {
+    /// Collect the admitted attempt from provider streaming while retaining the
+    /// same durable plan and complete-result barrier. Display observations do
+    /// not authorize actions. Once a stream opens it is never retried.
+    fn observe_stream(&self) -> bool {
+        false
+    }
+
+    /// Bounded display-only observation after stream policy. Implementations
+    /// must not use partial tool arguments as execution authority.
+    async fn on_stream_part(&self, _request_id: &str, _part: &super::types::StreamPart) {}
+
     /// Bound the HTTP executor's complete decoded response body, including SSE
     /// framing and terminal events. This also bounds unsuccessful response bodies.
     /// The bound is checked before passing each chunk to JSON/SSE parsing. It is

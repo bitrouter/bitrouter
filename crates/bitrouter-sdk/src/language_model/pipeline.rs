@@ -603,7 +603,7 @@ impl Pipeline {
         req: PipelineRequest,
         control: Arc<dyn NativeExecutionControl>,
     ) -> Result<PipelineResponse> {
-        let prepared = self
+        let prepared = Arc::clone(&self)
             .execute_detached_prepared_with_mode(req, false, Some(control))
             .await?;
         prepared.delivery.deliver().await?;
@@ -623,6 +623,9 @@ impl Pipeline {
             ctx.insert_extension(Arc::new(super::native_work::NativeWorkRuntime::new(
                 control.clone(),
             )));
+            if control.observe_stream() {
+                ctx.insert_extension(Arc::new(super::executor::NativeStreamCapture::default()));
+            }
         }
         let control = control.as_deref();
 
@@ -688,8 +691,12 @@ impl Pipeline {
                     // Preserve its original usage for settlement, but never
                     // deliver rejected content or start a fallback attempt.
                     ctx.execution_result = Some(result);
-                    self.run_settlement(&mut ctx, false, Some(error.clone()))
-                        .await;
+                    self.run_settlement(
+                        &mut ctx,
+                        control.is_some_and(|control| control.observe_stream()),
+                        Some(error.clone()),
+                    )
+                    .await;
                     self.observe_after(Phase::Settlement, &ctx).await;
                     self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
                         .await;
@@ -727,8 +734,12 @@ impl Pipeline {
                             .to_string(),
                     };
                     ctx.execution_result = Some(result);
-                    self.run_settlement(&mut ctx, false, Some(error.clone()))
-                        .await;
+                    self.run_settlement(
+                        &mut ctx,
+                        control.is_some_and(|control| control.observe_stream()),
+                        Some(error.clone()),
+                    )
+                    .await;
                     self.observe_after(Phase::Settlement, &ctx).await;
                     self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
                         .await;
@@ -752,7 +763,12 @@ impl Pipeline {
             }
             Err(e) => {
                 // Settlement still runs for failed requests (records the error).
-                self.run_settlement(&mut ctx, false, Some(e.clone())).await;
+                self.run_settlement(
+                    &mut ctx,
+                    control.is_some_and(|control| control.observe_stream()),
+                    Some(e.clone()),
+                )
+                .await;
                 self.observe_after(Phase::Settlement, &ctx).await;
                 self.observe_end(&ctx, RequestOutcome::Failed(e.clone()))
                     .await;
@@ -764,15 +780,24 @@ impl Pipeline {
         let mut finalization = match self.prepare_required_finalizers(&ctx, false).await {
             Ok(finalization) => finalization,
             Err(error) => {
-                self.run_settlement(&mut ctx, false, Some(error.clone()))
-                    .await;
+                self.run_settlement(
+                    &mut ctx,
+                    control.is_some_and(|control| control.observe_stream()),
+                    Some(error.clone()),
+                )
+                .await;
                 self.observe_after(Phase::Settlement, &ctx).await;
                 self.observe_end(&ctx, RequestOutcome::Failed(error.clone()))
                     .await;
                 return Err(error);
             }
         };
-        self.run_settlement(&mut ctx, false, None).await;
+        self.run_settlement(
+            &mut ctx,
+            control.is_some_and(|control| control.observe_stream()),
+            None,
+        )
+        .await;
         self.observe_after(Phase::Settlement, &ctx).await;
         let response = ctx.response();
         #[cfg(feature = "server")]
@@ -1749,6 +1774,76 @@ impl Pipeline {
         Ok(chain)
     }
 
+    /// Keep native streaming state on the heap so ordinary batch callers do
+    /// not inherit its async frame through nested model/judge futures.
+    async fn execute_native_stream_attempt(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+        control: &dyn NativeExecutionControl,
+        started: Instant,
+    ) -> (Result<ExecutionResult>, Option<BitrouterError>) {
+        let mut stream_interruption = None;
+        let mut stream_prompt = prompt.clone();
+        stream_prompt.stream = true;
+        let stream = tokio::select! {
+            biased;
+            _ = control.provider_cancelled() => Err(BitrouterError::internal(
+                "managed provider execution cancelled by durable authority",
+            )),
+            stream = self.executor.execute_stream(target, &stream_prompt, ctx) => stream,
+        };
+        let outcome = match stream {
+            Err(error) => Err(error),
+            Ok(stream) => {
+                let mut stream_context = ctx.stream_context();
+                stream_context
+                    .accumulated_usage
+                    .set_pricing(self.routing_table.usage_pricing(ctx.model(), target));
+                let processor = StreamProcessor::new(
+                    self.stream_hooks.clone(),
+                    self.observe_hooks.clone(),
+                    stream_context,
+                );
+                let (mut result, interruption) =
+                    super::native_stream::collect(stream, processor, control, ctx.request_id())
+                        .await;
+                stream_interruption = interruption;
+                if stream_interruption.is_none() {
+                    let usage = result.usage.clone();
+                    result = match self.executor.finish_native_stream(
+                        target,
+                        &stream_prompt,
+                        ctx,
+                        result,
+                    ) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            stream_interruption = Some(error);
+                            let mut result = super::native_output::empty_result();
+                            result.usage = usage;
+                            result.finish_reason = Some(super::types::FinishReason::Error(
+                                "native terminal rejected".into(),
+                            ));
+                            result
+                        }
+                    };
+                }
+                Ok(ExecutionResult {
+                    provider_id: target.provider_name.clone(),
+                    model_id: target.service_id.clone(),
+                    account_label: target.account_label.clone(),
+                    result,
+                    request_duration_ms: super::timing::duration_millis(started.elapsed()),
+                    upstream_duration_ms: Some(super::timing::duration_millis(started.elapsed())),
+                    server_tool_calls: Vec::new(),
+                })
+            }
+        };
+        (outcome, stream_interruption)
+    }
+
     async fn execute_with_fallback(
         &self,
         chain: &[RoutingTarget],
@@ -1829,7 +1924,16 @@ impl Pipeline {
                 runtime.begin_attempt();
             }
             let started = Instant::now();
+            let mut stream_interruption = None;
             let mut outcome = match attempt_control {
+                Some((control, _)) if control.observe_stream() => {
+                    let (outcome, interruption) = Box::pin(
+                        self.execute_native_stream_attempt(target, prompt, ctx, control, started),
+                    )
+                    .await;
+                    stream_interruption = interruption;
+                    outcome
+                }
                 Some((control, _)) => tokio::select! {
                     // A prior cancellation must not poll a new executor future.
                     // Accepted work may still have unknown provider-side usage.
@@ -1852,6 +1956,7 @@ impl Pipeline {
                     .is_ok_and(|result| !super::native_output::fits(&result.result, limit))
             });
             if !output_rejected
+                && stream_interruption.is_none()
                 && let (Some(runtime), Ok(result)) = (&private_context, &mut outcome)
             {
                 runtime.seal_output(ctx, target, &mut result.result);
@@ -1882,7 +1987,10 @@ impl Pipeline {
                     }),
                     output_rejection: None,
                     report_rejection: None,
-                    error: outcome.as_ref().err().map(ToString::to_string),
+                    error: stream_interruption
+                        .as_ref()
+                        .or_else(|| outcome.as_ref().err())
+                        .map(ToString::to_string),
                     elapsed_ms: super::timing::duration_millis(
                         work.as_ref()
                             .map(|runtime| runtime.work_duration(started.elapsed()))
@@ -1952,6 +2060,13 @@ impl Pipeline {
             }
             match outcome {
                 Ok(result) => {
+                    if let Some(error) = stream_interruption {
+                        ctx.set_successful_target(target.clone());
+                        return Ok(ControlledExecution {
+                            result,
+                            output_rejection: Some(error),
+                        });
+                    }
                     if output_rejected || report_rejected {
                         // Do not let a fallible success hook discard the
                         // original billed result before rejection settlement.

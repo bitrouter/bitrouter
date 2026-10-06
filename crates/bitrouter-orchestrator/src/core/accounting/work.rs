@@ -31,6 +31,7 @@ pub enum CostWorkKind {
     /// Includes App transforms, routing preparation and bound request checks.
     Preparation,
     PreparationCallback,
+    DecisionModel,
     ProviderAttempt,
     InputCount,
     ContextValidation,
@@ -67,6 +68,15 @@ pub struct CostWork {
     pub elapsed_ms: Option<u64>,
     /// An estimate of model tokens only; never a reported or reconciled charge.
     pub token_estimate: Option<NativeTokenCost>,
+    /// Canonical counters survive worker retirement even without registry prices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_usage: Option<bitrouter_sdk::language_model::Usage>,
+    /// Typed decision tokens do not provide language-model cache buckets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_usage: Option<bitrouter_sdk::decision_model::types::DecisionUsage>,
+    /// Estimate at the decision intent's frozen prices, never a settled bill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_estimate_micro_usd: Option<u64>,
     /// Total expenditure remains unknown even when a token estimate is known.
     /// A successful operation, including a denied tool, is not a billing receipt.
     pub unknown_cost_reason: String,
@@ -110,6 +120,9 @@ impl RunCostWork {
             if comparable.outcome_sha256.is_none() {
                 comparable.outcome_sha256 = next.outcome_sha256.clone();
             }
+            if comparable.generation_usage.is_none() {
+                comparable.generation_usage = next.generation_usage.clone();
+            }
             let same_outcome = prior.state != CostWorkState::OutcomeRecorded || comparable == next;
             if !same_identity || !same_outcome {
                 return Err(CoreError::rejected(
@@ -137,6 +150,9 @@ fn work(agent_id: &str, turn: &AgentTurn, step: &ModelStep, kind: CostWorkKind) 
         state: CostWorkState::IntentRecorded,
         elapsed_ms: None,
         token_estimate: None,
+        generation_usage: None,
+        decision_usage: None,
+        decision_estimate_micro_usd: None,
         unknown_cost_reason: "cost_not_reported".into(),
         provider_source: None,
         outcome_sha256: None,
@@ -227,6 +243,11 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                 if let Some(receipt) = &attempt.receipt {
                     entry.state = CostWorkState::OutcomeRecorded;
                     entry.token_estimate = Some(receipt.report.token_cost.clone());
+                    entry.generation_usage = receipt
+                        .report
+                        .result
+                        .as_ref()
+                        .and_then(|result| result.usage.clone());
                     entry.elapsed_ms = Some(receipt.report.elapsed_ms);
                     entry.outcome_sha256 = Some(report_digest(&receipt.report)?);
                 }
@@ -275,6 +296,9 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                     },
                     elapsed_ms: None,
                     token_estimate: None,
+                    generation_usage: None,
+                    decision_usage: None,
+                    decision_estimate_micro_usd: None,
                     unknown_cost_reason: "harness_cost_not_reported".into(),
                     provider_source: None,
                     outcome_sha256: None,
@@ -306,9 +330,70 @@ pub(crate) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                 },
                 elapsed_ms: None,
                 token_estimate: None,
+                generation_usage: None,
+                decision_usage: None,
+                decision_estimate_micro_usd: None,
                 unknown_cost_reason: "harness_cost_not_reported".into(),
                 provider_source: None,
                 outcome_sha256: None,
+            },
+        )?;
+    }
+    for receipt in state.context_store.decisions.values() {
+        let Some(ledger) = state.cost_work.get_mut(&receipt.run_id) else {
+            continue;
+        };
+        let usage = receipt.outcome.as_ref().and_then(|outcome| match outcome {
+            Ok(response) => Some(response.usage),
+            Err(error) => error.usage,
+        });
+        let estimate = usage
+            .zip(receipt.pricing.as_ref())
+            .and_then(|(usage, pricing)| {
+                let amount = pricing.estimate(usage) * 1_000_000.0;
+                (amount.is_finite() && amount >= 0.0 && amount < u64::MAX as f64)
+                    .then(|| amount.ceil() as u64)
+            });
+        let outcome_sha256 = receipt
+            .outcome
+            .as_ref()
+            .map(|outcome| {
+                serde_json::to_vec(outcome)
+                    .map(|bytes| crate::core::checkpoint::sha256(&bytes))
+                    .map_err(|_| {
+                        CoreError::rejected(
+                            ErrorCode::CheckpointConflict,
+                            "decision outcome cannot be encoded",
+                        )
+                    })
+            })
+            .transpose()?;
+        ledger.record(
+            receipt.decision_id.clone(),
+            CostWork {
+                agent_id: receipt.agent_id.clone(),
+                agent_turn_id: receipt.task_id.clone(),
+                step_id: None,
+                request_id: None,
+                kind: CostWorkKind::DecisionModel,
+                state: if receipt.outcome.is_some() {
+                    CostWorkState::OutcomeRecorded
+                } else {
+                    CostWorkState::IntentRecorded
+                },
+                elapsed_ms: receipt.elapsed_ms,
+                token_estimate: None,
+                generation_usage: None,
+                decision_usage: usage,
+                decision_estimate_micro_usd: estimate,
+                unknown_cost_reason: if usage.is_some() {
+                    "decision_bill_not_reported"
+                } else {
+                    "decision_usage_and_bill_unknown"
+                }
+                .into(),
+                provider_source: None,
+                outcome_sha256,
             },
         )?;
     }

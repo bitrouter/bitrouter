@@ -422,6 +422,30 @@ async fn assemble_app(
 ) -> Result<Assembled> {
     validate_host_configuration(config)?;
     config.validate_router_config()?;
+    let decision_runtime = config
+        .decision_model
+        .as_ref()
+        .map(|decision| {
+            let credential = std::env::var(&decision.api_key_env).with_context(|| {
+                format!(
+                    "reading decision_model credential from {}",
+                    decision.api_key_env
+                )
+            })?;
+            let executor = bitrouter_sdk::decision_model::typesafe::TypeSafeExecutor::new(
+                &decision.base_url,
+                &credential,
+                std::time::Duration::from_millis(decision.timeout_ms),
+                decision.max_response_bytes,
+            )?;
+            Ok::<_, anyhow::Error>(bitrouter_sdk::decision_model::DecisionRuntime {
+                model: decision.model.clone(),
+                executor: Arc::new(executor),
+                policy: decision.policy.clone(),
+                pricing: decision.pricing.clone(),
+            })
+        })
+        .transpose()?;
     let mut inactive = native
         .keys()
         .filter(|id| !config.checkers.contains_key(*id))
@@ -940,6 +964,10 @@ async fn assemble_app(
     // declaration. Wired only when `server_tools.fusion` resolves an alias.
     let app = match fusion_alias {
         Some(transform) => app.prompt_transform(transform),
+        None => app,
+    };
+    let app = match decision_runtime {
+        Some(runtime) => app.decision_model(runtime),
         None => app,
     };
     // The Claude Code subscription router: an ingress prompt transform that

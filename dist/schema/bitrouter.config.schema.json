@@ -474,6 +474,169 @@
       },
       "type": "object"
     },
+    "DecisionModelConfig": {
+      "additionalProperties": false,
+      "description": "An optional `decision_model:` block enables native context decisions.",
+      "properties": {
+        "api_key_env": {
+          "default": "TYPESAFE_API_KEY",
+          "description": "Environment variable containing the API credential.",
+          "type": "string"
+        },
+        "base_url": {
+          "default": "https://api.typesafe.ai",
+          "description": "TypeSafe API root; a compatible local endpoint can be used for testing.",
+          "type": "string"
+        },
+        "max_response_bytes": {
+          "default": 1048576,
+          "description": "Maximum response bytes; independent of context and checkpoint limits.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "Decision model name or alias from TypeSafe's authenticated model list.",
+          "type": "string"
+        },
+        "policy": {
+          "$ref": "#/$defs/DecisionPolicy",
+          "default": {
+            "candidate_excerpt_bytes": 2048,
+            "confidence_threshold": 0.85,
+            "generation_models": [],
+            "max_candidates": 32,
+            "max_request_bytes": 131072,
+            "minimum_savings_fraction": 0.1,
+            "model_switch_penalty_microusd": 1000,
+            "prefix_loss_penalty_microusd_per_kib": 0,
+            "retain_recent_groups": 2,
+            "target_context_bytes": 98304
+          },
+          "description": "Native context planning limits, frozen into each decision intent."
+        },
+        "pricing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DecisionPricing"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional operator-supplied token prices; estimates, never settled bills."
+        },
+        "timeout_ms": {
+          "default": 30000,
+          "description": "Whole-attempt timeout, including reading and validating the response.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
+    },
+    "DecisionPolicy": {
+      "additionalProperties": false,
+      "description": "Bounds used by the native harness when compiling task-specific context.\nThese are local planning limits, not claims about provider capacity.",
+      "properties": {
+        "candidate_excerpt_bytes": {
+          "default": 2048,
+          "description": "Maximum text preview per candidate sent to the decision model.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "confidence_threshold": {
+          "default": 0.85,
+          "description": "Minimum confidence for a lossy representation or context omission.",
+          "format": "double",
+          "type": "number"
+        },
+        "generation_models": {
+          "default": [],
+          "description": "Explicit generation candidates used only when a task permits model policy.\nEmpty retains the existing model binding and context-only decisions.",
+          "items": {
+            "$ref": "#/$defs/GenerationModel"
+          },
+          "type": "array"
+        },
+        "max_candidates": {
+          "default": 32,
+          "description": "Most candidate evidence groups judged in one planning pass.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_request_bytes": {
+          "default": 131072,
+          "description": "Maximum serialized decision request, including rubrics and task text.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minimum_savings_fraction": {
+          "default": 0.1,
+          "description": "Required relative improvement before changing a feasible prior plan.",
+          "format": "double",
+          "type": "number"
+        },
+        "model_switch_penalty_microusd": {
+          "default": 1000,
+          "description": "Planning penalty for changing models; not a provider charge.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prefix_loss_penalty_microusd_per_kib": {
+          "default": 0,
+          "description": "Optional planning penalty per KiB of lost exact prompt prefix.\nMatching bytes never establish an actual provider cache hit.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retain_recent_groups": {
+          "default": 2,
+          "description": "Recent complete groups always kept in the active worker's view.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "target_context_bytes": {
+          "default": 98304,
+          "description": "Soft prompt byte target. Required evidence may exceed it up to hard limits.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "DecisionPricing": {
+      "additionalProperties": false,
+      "description": "Optional token prices supplied by the operator, distinct from provider bills.",
+      "properties": {
+        "input_usd_per_million": {
+          "description": "USD per million input tokens.",
+          "format": "double",
+          "type": "number"
+        },
+        "output_usd_per_million": {
+          "description": "USD per million output tokens.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "input_usd_per_million",
+        "output_usd_per_million"
+      ],
+      "type": "object"
+    },
     "EvalAuthorityConfig": {
       "description": "Identity and metric scope admitted for one evaluator authority.",
       "properties": {
@@ -608,6 +771,46 @@
           "type": "array"
         }
       },
+      "type": "object"
+    },
+    "GenerationModel": {
+      "additionalProperties": false,
+      "description": "Operator-declared planning facts. Provider capacity and permission are still\nindependently checked by the SDK after selecting the concrete prompt.",
+      "properties": {
+        "description": {
+          "description": "Capability description for the typed suitability question.",
+          "type": "string"
+        },
+        "input_microusd_per_million": {
+          "description": "Estimated micro-USD per million uncached input tokens.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_prompt_bytes": {
+          "description": "Conservative local byte admission limit, not a measured token window.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "A normal SDK route selector, never provider credentials.",
+          "type": "string"
+        },
+        "output_microusd_per_million": {
+          "description": "Estimated micro-USD per million output tokens.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "model",
+        "description",
+        "max_prompt_bytes",
+        "input_microusd_per_million",
+        "output_microusd_per_million"
+      ],
       "type": "object"
     },
     "InputTokenCounting": {
@@ -2501,6 +2704,17 @@
     "database": {
       "$ref": "#/$defs/DatabaseConfig",
       "description": "Database connection settings."
+    },
+    "decision_model": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DecisionModelConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Typed decision backend for native context routing. Absent means the\nconservative compiler runs without remote semantic judgments."
     },
     "eval": {
       "$ref": "#/$defs/EvalConfig",

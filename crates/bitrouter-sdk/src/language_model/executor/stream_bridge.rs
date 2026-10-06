@@ -18,6 +18,46 @@ struct Source {
 pub(super) struct BridgeCapture(Mutex<Source>);
 
 impl BridgeCapture {
+    /// Full terminal output owns private continuation state. Stream policy must
+    /// not rewrite actionable text/calls and then silently restore their original
+    /// values from that terminal. Refuse such a mismatch before tool admission.
+    pub(super) fn complete_observed(
+        &self,
+        executor: &HttpExecutor,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        ctx: &PipelineContext,
+        folded: GenerateResult,
+    ) -> Result<GenerateResult> {
+        fn visible(result: &GenerateResult) -> Vec<serde_json::Value> {
+            result
+                .content
+                .iter()
+                .filter_map(|part| match part {
+                    Content::Text { text, .. } if !text.is_empty() => {
+                        Some(serde_json::json!({"text":text}))
+                    }
+                    Content::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                        provider_executed: false,
+                        ..
+                    } => Some(serde_json::json!({"id":id,"name":name,"arguments":arguments})),
+                    _ => None,
+                })
+                .collect()
+        }
+        let observed = visible(&folded);
+        let complete = self.complete(executor, target, prompt, ctx, folded)?;
+        if observed != visible(&complete) {
+            return Err(BitrouterError::UpstreamInvalidResponse {
+                message: "managed stream and complete terminal output differ".into(),
+            });
+        }
+        Ok(complete)
+    }
+
     fn source(&self) -> std::sync::MutexGuard<'_, Source> {
         self.0
             .lock()

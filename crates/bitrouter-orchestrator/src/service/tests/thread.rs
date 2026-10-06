@@ -25,6 +25,89 @@ fn correction(turn_id: &str, text: &str, key: &str) -> SteeringRequest {
     }
 }
 
+#[tokio::test]
+async fn native_turns_restore_the_same_core_and_keep_evidence_and_views()
+-> Result<(), Box<dyn std::error::Error>> {
+    let workspace = TempDir::new()?;
+    std::fs::write(
+        workspace.path().join("shared.txt"),
+        "retained native evidence",
+    )?;
+    let store = Arc::new(MemoryExecutionStore::default());
+    let executor = Arc::new(bitrouter_sdk::language_model::MockExecutor::new(vec![
+        super::support::mock_stream(turn(vec![tool_call(
+            "read",
+            "read",
+            serde_json::json!({"path":"shared.txt"}),
+        )])),
+        super::support::mock_stream(final_turn()),
+        super::support::mock_stream(final_turn()),
+    ]));
+    let service = ThreadService::with_store(
+        super::support::app_with_execution_mode(executor, true)?,
+        &[workspace.path().to_path_buf()],
+        store.clone(),
+    )?;
+    let thread = service
+        .create_thread(
+            &service.inner.instance_id,
+            thread_request(&workspace, "native-thread"),
+        )
+        .await?;
+    let target = target(&thread);
+    let caller = CallerContext::local();
+    let first = service
+        .start_turn(&target, &caller, input("Read shared.txt", "native-first"))
+        .await?;
+    let first = wait_for(&service, &first.turn_id, TurnStatus::Completed).await?;
+    assert_eq!(first.status, TurnStatus::Completed, "{:?}", first.detail);
+    let second = service
+        .start_turn(
+            &target,
+            &caller,
+            input("Use the earlier evidence", "native-second"),
+        )
+        .await?;
+    let second = wait_for(&service, &second.turn_id, TurnStatus::Completed).await?;
+    assert_eq!(second.status, TurnStatus::Completed, "{:?}", second.detail);
+    assert_eq!(second.final_answer.as_deref(), Some("done"));
+    let inspection = second
+        .context_routing
+        .as_ref()
+        .ok_or("missing native task inspection")?;
+    assert_eq!(inspection.tasks.len(), 1);
+    assert!(inspection.tasks[0].prompt_bytes.is_some());
+    assert!(inspection.evidence_blocks > 1);
+    let saved = store
+        .load(&thread.thread_id)
+        .await?
+        .ok_or("missing native Thread")?;
+    let mut sessions = std::collections::BTreeSet::new();
+    let mut epochs = std::collections::BTreeSet::new();
+    let mut latest = None;
+    for record in &saved.records {
+        if let ExecutionRecord::TurnRecord { fact, .. } = record
+            && let ExecutionRecord::CoreCheckpoint { batch, limits } = fact.as_ref()
+        {
+            sessions.insert(batch.identity.session_id.clone());
+            epochs.insert(batch.identity.execution_epoch);
+            latest = Some(serde_json::from_value::<
+                crate::core::session::SessionSnapshot,
+            >(batch.decode(limits)?.checkpoint.state)?);
+        }
+    }
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(epochs, std::collections::BTreeSet::from([1, 2]));
+    let latest = latest.ok_or("missing Core snapshot")?;
+    assert_eq!(latest.context_store.work.len(), 2);
+    assert!(latest.context_store.views.len() >= 3);
+    assert!(
+        serde_json::to_string(&latest.context_store.evidence)?.contains("retained native evidence")
+    );
+    service.shutdown().await;
+    Ok(())
+}
+
 #[cfg(unix)]
 async fn wait_file(path: &Path) -> Result<(), String> {
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -149,7 +232,8 @@ async fn steering_settles_dispatched_effects_skips_later_calls_and_applies_input
     assert_eq!(serialized.matches("first correction").count(), 1);
     assert_eq!(serialized.matches("second correction").count(), 1);
     assert!(serialized.find("first correction") < serialized.find("second correction"));
-    assert!(serialized.contains("not_executed_due_to_steer"));
+    assert!(history.iter().flat_map(|message| &message.content).any(|part| matches!(part,
+        bitrouter_sdk::language_model::Content::ToolResult { call_id, output, .. } if call_id == "stale-write" && output.is_error())));
     let saved = store
         .load(&thread.thread_id)
         .await?
@@ -287,11 +371,17 @@ async fn steering_during_tool_approval_retires_the_old_approval_and_never_broade
 #[tokio::test]
 async fn steering_during_verification_resumes_same_turn_with_existing_model_and_tool_budget()
 -> Result<(), Box<dyn std::error::Error>> {
-    for max_steps in [1, 2] {
+    for (native, max_steps) in [(false, 1), (false, 2), (true, 1), (true, 2)] {
         let workspace = TempDir::new()?;
         let store = Arc::new(MemoryExecutionStore::default());
         let service = ThreadService::with_store(
-            app(vec![final_turn(), final_turn()])?,
+            super::support::app_with_execution_mode(
+                Arc::new(bitrouter_sdk::language_model::MockExecutor::new(vec![
+                    super::support::mock_stream(final_turn()),
+                    super::support::mock_stream(final_turn()),
+                ])),
+                native,
+            )?,
             &[workspace.path().to_path_buf()],
             store.clone(),
         )?;
@@ -548,8 +638,11 @@ async fn fifo_admission_and_targeted_withdrawal_do_not_change_active_context_or_
         Some(&first.turn_id)
     );
     assert!(
-        !serde_json::to_string(&prompts(store.as_ref(), &thread.thread_id, &first.turn_id).await?)?
-            .contains("queued")
+        prompts(store.as_ref(), &thread.thread_id, &first.turn_id)
+            .await?
+            .iter()
+            .all(|prompt| !serde_json::to_string(&prompt.messages)
+                .is_ok_and(|messages| messages.contains("queued")))
     );
     service
         .answer_input(

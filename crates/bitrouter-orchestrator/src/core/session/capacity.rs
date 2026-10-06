@@ -179,6 +179,7 @@ pub(super) fn check(
     let mut reserve = Reservation::default();
     reserve.add(model_output::reserved(state)?)?;
     reserve.add(auxiliary_output::reserved(state)?)?;
+    reserve.add(context_decisions::reserved(state)?)?;
     reserve.add(wait_output::reserved(state, host)?)?;
     let mut event_payloads = vec![json!({"reason":"x".repeat(128)})];
     if let Some(event) = responses::reserve_terminal(&mut projected)? {
@@ -206,6 +207,11 @@ pub(super) fn check(
         }
         larger_reason(&mut run.terminal_reason)?;
     }
+    let native_values = state
+        .manifest
+        .required_features
+        .iter()
+        .any(|feature| feature == super::super::context_router::NATIVE_TOOLS);
     for agent in projected.agents.values_mut() {
         let Some(turn) = &mut agent.turn else {
             continue;
@@ -258,7 +264,7 @@ pub(super) fn check(
             // Projection uses the very same pairing implementation as cleanup.
             // Numeric padding below accounts for the real increment separately.
             agent.context_revision = 0;
-            pairing::consume(agent)?;
+            pairing::consume(agent, native_values)?;
         }
         agent.context_revision = u64::MAX;
         let turn = agent
@@ -1004,7 +1010,7 @@ mod tests {
                 responses::capture(&mut state, &event)?;
                 check(&state, &proposal(&state, &grant)?, &host, &grant)?;
             }
-            pairing::consume(agent_mut(&mut state, "root")?)?;
+            pairing::consume(agent_mut(&mut state, "root")?, false)?;
             check(&state, &proposal(&state, &grant)?, &host, &grant)?;
             let root = &state.agents["root"];
             assert_eq!(root.context_sources.len(), 5);
@@ -1148,7 +1154,7 @@ mod tests {
         // Spend every other available byte after the receipt is durable; its
         // downstream source obligation must survive until canonical pairing.
         let host = saturated_host(&state, &grant, &host)?;
-        pairing::consume(agent_mut(&mut state, "child")?)?;
+        pairing::consume(agent_mut(&mut state, "child")?, false)?;
         check(&state, &proposal(&state, &grant)?, &host, &grant)?;
         assert_eq!(
             state.agents["child"].context_sources[0].workspace_revision,
@@ -1173,7 +1179,7 @@ mod tests {
             responses::capture(&mut state, &event)?;
             check(&state, &proposal(&state, &grant)?, &host, &grant)?;
         }
-        pairing::consume(agent_mut(&mut state, "root")?)?;
+        pairing::consume(agent_mut(&mut state, "root")?, false)?;
         check(&state, &proposal(&state, &grant)?, &host, &grant)?;
         assert_eq!(
             state.agents["root"].context_sources,

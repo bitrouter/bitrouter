@@ -106,7 +106,30 @@ async fn separate_process_client_and_server_finish_verified_coding_task() -> Res
             .iter()
             .filter_map(|tool| tool["function"]["name"].as_str())
             .collect();
-        ensure!(names == ["read", "glob", "grep", "write", "edit", "shell"]);
+        ensure!(
+            names
+                == [
+                    "read",
+                    "glob",
+                    "grep",
+                    "write",
+                    "edit",
+                    "shell",
+                    "context_read_artifact",
+                    "spawn_agent",
+                    "delegate_task",
+                    "send_message",
+                    "followup_task",
+                    "wait_agent",
+                    "interrupt_agent",
+                    "list_agents",
+                    "context_search",
+                    "context_recall",
+                    "context_publish",
+                    "context_extract",
+                ],
+            "unexpected native tool contract: {names:?}"
+        );
         ensure!(
             body["tools"][5]["function"]["description"]
                 .as_str()

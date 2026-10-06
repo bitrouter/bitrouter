@@ -164,6 +164,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | `bitrouter/auto`, trace projections, policy locks; history-driven quality/cost optimization; cache-aware pricing, charge evidence, usage export |
 | `references/sessions.md`, `references/updating.md` | ACP controller/supervisor (`acp serve`, foreground/background `run`, `agents`, native sessions, NDJSON, Code); `bro update` and channels |
+| `references/decision-native.md` | TypeSafe decision configuration, native BRO context views, evidence recall and decision accounting |
 
 ## Gotchas
 

@@ -1,6 +1,36 @@
 //! Config parsing + `${VAR}` substitution tests.
 
 use super::*;
+
+#[test]
+fn decision_model_config_validates_bounds_without_loading_credentials() -> crate::Result<()> {
+    let config = parse_with(
+        "inherit_defaults: false\ndecision_model:\n  model: fixture-decision\n",
+        |_| None,
+    )?;
+    let decision = config
+        .decision_model
+        .ok_or_else(|| BitrouterError::internal("missing decision config"))?;
+    assert_eq!(decision.api_key_env, "TYPESAFE_API_KEY");
+    assert_eq!(decision.base_url, "https://api.typesafe.ai");
+    for settings in [
+        "model: ''",
+        "model: fixture\n  timeout_ms: 0",
+        "model: fixture\n  max_response_bytes: 0",
+        "model: fixture\n  base_url: file:///tmp/model",
+        "model: fixture\n  policy: {confidence_threshold: 0.1}",
+        "model: fixture\n  policy: {max_candidates: 0}",
+        "model: fixture\n  pricing: {input_usd_per_million: -1, output_usd_per_million: 0}",
+        "model: fixture\n  credential: do-not-inline-secrets",
+    ] {
+        let yaml = format!("inherit_defaults: false\ndecision_model:\n  {settings}\n");
+        assert!(
+            parse_with(&yaml, |_| None).is_err(),
+            "accepted invalid decision settings"
+        );
+    }
+    Ok(())
+}
 use crate::language_model::types::{ApiProtocol, ReasoningEffort};
 
 #[test]

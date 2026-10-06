@@ -1,12 +1,9 @@
 use std::sync::Arc;
 
 use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{Message, Role};
 
 use super::admission::{fingerprint, key_scope};
-use super::commit::lifecycle_fact;
 use super::{ErrorCode, ServiceError, ThreadService, now_ms, unknown_turn};
-use crate::control::ModelBoundary;
 use crate::store::ExecutionRecord;
 use crate::thread::ThreadTarget;
 use crate::turn::{SteeringReceipt, SteeringRequest, SteeringStatus, TurnEvent, TurnEventPayload};
@@ -17,6 +14,77 @@ pub(super) struct SteeringInput {
 }
 
 impl ThreadService {
+    pub(super) fn native_steering_events(
+        &self,
+        turn_id: &str,
+        records: &[ExecutionRecord],
+    ) -> Result<Vec<TurnEvent>, ServiceError> {
+        let mut resolved = Vec::new();
+        for record in records {
+            let ExecutionRecord::CoreCheckpoint { batch, limits } = record else {
+                continue;
+            };
+            let checkpoint = batch.decode(limits).map_err(|error| error.message)?;
+            let snapshot: crate::core::session::SessionSnapshot =
+                serde_json::from_value(checkpoint.checkpoint.state)
+                    .map_err(|error| ServiceError::storage(error.to_string()))?;
+            let state = self.lock_state();
+            let task = state.turns.get(turn_id).ok_or_else(unknown_turn)?;
+            for pending in &task.steering {
+                if pending.receipt.status != SteeringStatus::Received {
+                    continue;
+                }
+                let Some(core) = snapshot.steering.get(&pending.receipt.input_id) else {
+                    continue;
+                };
+                if core.text != pending.text || core.agent_id != snapshot.agent_id {
+                    return Err(ServiceError::storage(
+                        "native steering projection differs from accepted input",
+                    ));
+                }
+                use crate::core::session::steering::SteeringDisposition;
+                let mut receipt = pending.receipt.clone();
+                match core.disposition {
+                    SteeringDisposition::Received => continue,
+                    SteeringDisposition::Applied => {
+                        receipt.status = SteeringStatus::Applied;
+                        receipt.context_version = snapshot
+                            .agents
+                            .get(&snapshot.agent_id)
+                            .map(|agent| agent.context_revision);
+                        receipt.next_step_id = snapshot
+                            .root_turn()
+                            .and_then(|turn| {
+                                turn.steps.iter().find(|step| {
+                                    core.resolved_state_revision.is_some_and(|revision| {
+                                        step.input_state_revision >= revision
+                                    })
+                                })
+                            })
+                            .map(|step| step.step_id.clone());
+                    }
+                    SteeringDisposition::Cancelled => {
+                        receipt.status = SteeringStatus::NotApplied;
+                        receipt.reason =
+                            Some("Core task cancelled before applying steering".into());
+                    }
+                }
+                resolved.push(TurnEvent {
+                    thread_id: task.thread_id.clone(),
+                    server_instance_id: self.inner.instance_id.clone(),
+                    turn_id: turn_id.into(),
+                    seq: task.snapshot.cursor + resolved.len() as u64 + 1,
+                    timestamp_ms: now_ms(),
+                    payload: TurnEventPayload::SteeringUpdated {
+                        receipt,
+                        text: None,
+                    },
+                });
+            }
+        }
+        Ok(resolved)
+    }
+
     async fn existing_steering(
         &self,
         key: &crate::store::AcceptedKey,
@@ -147,120 +215,12 @@ impl ThreadService {
             .ok_or_else(unknown_turn)?;
         task.steering.push(SteeringInput {
             receipt: receipt.clone(),
-            text: request.text,
+            text: request.text.clone(),
         });
+        task.native.push(receipt.input_id.clone(), request.text);
         if let Some(pending) = task.pending.take() {
             let _ = pending.response.send(false);
         }
         Ok(receipt)
-    }
-
-    pub(super) async fn prepare_model(
-        &self,
-        turn_id: &str,
-        request: &mut ModelBoundary,
-    ) -> Result<(bitrouter_sdk::language_model::Prompt, u64), String> {
-        let gate = self
-            .commit_gate(turn_id)
-            .map_err(|error| error.to_string())?;
-        let _guard = gate.lock().await;
-        let pending = {
-            let state = self.lock_state();
-            let task = state
-                .turns
-                .get(turn_id)
-                .ok_or_else(unknown_turn)
-                .map_err(|error| error.to_string())?;
-            if task.cancel.is_cancelled() {
-                return Err("Turn cancelled before model step".into());
-            }
-            task.steering
-                .iter()
-                .filter(|entry| entry.receipt.status == SteeringStatus::Received)
-                .map(|entry| (entry.receipt.clone(), entry.text.clone()))
-                .collect::<Vec<_>>()
-        };
-        let mut facts = Vec::new();
-        let mut payloads = Vec::new();
-        for (mut receipt, text) in pending {
-            request
-                .prompt
-                .messages
-                .push(Message::text(Role::User, text));
-            request.context_version = request.context_version.saturating_add(1);
-            receipt.status = SteeringStatus::Applied;
-            receipt.context_version = Some(request.context_version);
-            receipt.next_step_id = Some(request.step_id.clone());
-            facts.push(ExecutionRecord::SteeringResolved {
-                receipt: receipt.clone(),
-            });
-            payloads.push(TurnEventPayload::SteeringUpdated {
-                receipt,
-                text: None,
-            });
-        }
-        crate::context::validate_history(&request.prompt.messages)?;
-        if serde_json::to_vec(&request.prompt)
-            .map_err(|error| error.to_string())?
-            .len()
-            > request.max_bytes
-        {
-            return Err("steering cannot be applied within model context capacity".into());
-        }
-        facts.push(ExecutionRecord::ModelRequest {
-            step_id: request.step_id.clone(),
-            item_id: request.item_id.clone(),
-            context_version: request.context_version,
-            prompt: Box::new(request.prompt.clone()),
-        });
-        let events = {
-            let state = self.lock_state();
-            let task = state
-                .turns
-                .get(turn_id)
-                .ok_or_else(unknown_turn)
-                .map_err(|error| error.to_string())?;
-            payloads
-                .into_iter()
-                .enumerate()
-                .map(|(index, payload)| TurnEvent {
-                    thread_id: task.thread_id.clone(),
-                    server_instance_id: self.inner.instance_id.clone(),
-                    turn_id: turn_id.into(),
-                    seq: task.snapshot.cursor + index as u64 + 1,
-                    timestamp_ms: now_ms(),
-                    payload,
-                })
-                .collect::<Vec<_>>()
-        };
-        facts.extend(
-            events
-                .iter()
-                .cloned()
-                .filter_map(|event| lifecycle_fact(&event)),
-        );
-        self.commit_serialized(turn_id, &facts)
-            .await
-            .map_err(|error| error.to_string())?;
-        let mut state = self.lock_state();
-        for fact in &facts {
-            if let ExecutionRecord::SteeringResolved { receipt } = fact
-                && let Some(task) = state.turns.get_mut(turn_id)
-                && let Some(entry) = task
-                    .steering
-                    .iter_mut()
-                    .find(|entry| entry.receipt.input_id == receipt.input_id)
-            {
-                entry.receipt = receipt.clone();
-            }
-        }
-        for event in events {
-            self.append_locked(&mut state, turn_id, event.payload)
-                .map_err(|error| error.to_string())?;
-        }
-        if let Some(task) = state.turns.get(turn_id) {
-            task.fence.set(false);
-        }
-        Ok((request.prompt.clone(), request.context_version))
     }
 }

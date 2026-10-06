@@ -79,7 +79,27 @@ async fn agents_md_is_durable_user_context_in_both_tool_modes()
         assert_eq!(requests[0].messages[0].role, Role::User);
         assert_eq!(requests[0].messages.len(), 2);
         if read_only {
-            assert_eq!(requests[0].tools.len(), 3);
+            let workspace_tools: Vec<_> = requests[0]
+                .tools
+                .iter()
+                .filter_map(|tool| match tool {
+                    bitrouter_sdk::language_model::Tool::Function { name, .. }
+                        if crate::tools::WorkspaceTools::allowed(
+                            crate::agent::ToolMode::Coding,
+                            name,
+                        ) =>
+                    {
+                        Some(name.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(workspace_tools.len(), 3);
+            assert!(
+                workspace_tools
+                    .iter()
+                    .all(|name| crate::tools::WorkspaceTools::read_only(name))
+            );
         }
         let inventory = done.resources.as_ref().ok_or("inventory")?;
         assert!(

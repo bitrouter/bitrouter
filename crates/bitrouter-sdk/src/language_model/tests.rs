@@ -11,6 +11,8 @@ mod provider_body;
 
 #[path = "tests_native_output.rs"]
 mod native_output;
+#[path = "tests_native_stream.rs"]
+mod native_stream;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

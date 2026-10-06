@@ -164,6 +164,9 @@ struct CodeArgs {
     /// Workspace for new BRO native Threads.
     #[arg(long)]
     workspace: Option<PathBuf>,
+    /// Allow the decision policy to choose a generation model for native BRO.
+    #[arg(long, conflicts_with_all = ["agent", "thread_id"])]
+    model_policy: bool,
 }
 
 #[derive(Args)]
@@ -2569,6 +2572,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                     check: None,
                     read_only: false,
                     workspace: None,
+                    model_policy: false,
                 },
                 None,
                 None,
@@ -5930,6 +5934,7 @@ async fn run_code(
         check,
         read_only,
         workspace,
+        model_policy,
     } = options;
     if agent.is_none() && remote_context.is_none() {
         if socket.is_some()
@@ -5938,6 +5943,7 @@ async fn run_code(
             && check.is_none()
             && !read_only
             && workspace.is_none()
+            && !model_policy
         {
             return bitrouter::dashboard::run(None, config.as_deref(), socket.as_deref(), None)
                 .await;
@@ -5955,14 +5961,21 @@ async fn run_code(
             routing.model,
             thread_id,
             check,
-            read_only,
+            bitrouter::native_code::Options {
+                read_only,
+                model_policy,
+            },
             workspace,
         )
         .await;
     }
     anyhow::ensure!(
-        thread_id.is_none() && check.is_none() && !read_only && workspace.is_none(),
-        "--thread-id, --check, --read-only, and --workspace apply only to local bare `bro code`"
+        thread_id.is_none()
+            && check.is_none()
+            && !read_only
+            && workspace.is_none()
+            && !model_policy,
+        "--thread-id, --check, --read-only, --workspace, and --model-policy apply only to local bare `bro code`"
     );
     let initial_session = if let Some(agent) = agent {
         if remote_context.is_some() {
