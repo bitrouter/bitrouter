@@ -529,7 +529,7 @@ enum Command {
     #[command(hide = true)]
     Spawn {
         /// ACP agent id: a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a
+        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`) or a
         /// configured `agents:` entry. A catalog id needs no config entry; run
         /// `--check` to see whether it will route or run direct in headless mode.
         #[arg(required_unless_present = "legacy_agent")]
@@ -668,7 +668,7 @@ enum Command {
     #[command(hide = true)]
     Chat {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
         /// or an entry under `agents:` in the config. A catalog id needs no
         /// config entry.
         agent: String,
@@ -1585,7 +1585,7 @@ enum AcpCmd {
     #[command(override_usage = "bro acp serve <AGENT> [OPTIONS]")]
     Serve {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
         /// or an entry under `agents:` in the config. A catalog id needs no
         /// config entry; `bro agents check <agent>` previews whether it
         /// will route or run direct.
@@ -1618,7 +1618,7 @@ enum AcpCmd {
     #[command(hide = true)]
     Prompt {
         /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
-        /// `gemini-cli`, `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
         /// or an entry under `agents:` in the config. A catalog id needs no
         /// config entry; `bro agents check <agent>` previews whether it
         /// will route or run direct.
@@ -5164,6 +5164,9 @@ async fn providers(action: ProviderAction, output: &Output) -> Result<()> {
         } => {
             // `--key-stdin` reads the key from stdin (one line); it funnels into
             // the same non-interactive API-key path as `--api-key`.
+            if let Some(message) = bitrouter_ai::providers::retired::provider_message(&provider) {
+                anyhow::bail!("{message}");
+            }
             let api_key = if key_stdin {
                 Some(read_api_key_from_stdin()?)
             } else {

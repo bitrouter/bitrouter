@@ -73,7 +73,7 @@ pub fn set_provider_metadata(
 
 /// The wire protocol an upstream provider speaks.
 ///
-/// The four built-in variants are bidirectional — gateway callers serve them to
+/// The three built-in variants are bidirectional — gateway callers serve them to
 /// clients (via an
 /// `InboundAdapter`) and
 /// calls them upstream (via an
@@ -93,8 +93,6 @@ pub enum ApiProtocol {
     ChatCompletions,
     /// Anthropic-style Messages (`POST /v1/messages`).
     Messages,
-    /// Google-style Generate Content (`POST …:generateContent`).
-    GenerateContent,
     /// Responses.
     Responses,
     /// An externally-registered protocol identified by its registration name
@@ -112,7 +110,6 @@ impl ApiProtocol {
         match self {
             Self::ChatCompletions => "chat_completions",
             Self::Messages => "messages",
-            Self::GenerateContent => "generate_content",
             Self::Responses => "responses",
             Self::Custom(name) => name.as_str(),
         }
@@ -137,14 +134,13 @@ impl<'de> Deserialize<'de> for ApiProtocol {
         Ok(match s.as_str() {
             "chat_completions" => Self::ChatCompletions,
             "messages" => Self::Messages,
-            "generate_content" => Self::GenerateContent,
             "responses" => Self::Responses,
             _ => Self::Custom(s),
         })
     }
 }
 
-/// A wire protocol always (de)serializes as a string: one of the four known
+/// A wire protocol always (de)serializes as a string: one of the three known
 /// values, or any other string for an externally-registered `Custom` protocol.
 /// Hand-written because the `Custom(String)` variant means the value is an
 /// open string set, not a closed enum.
@@ -157,9 +153,9 @@ impl schemars::JsonSchema for ApiProtocol {
         schemars::json_schema!({
             "type": "string",
             "description": "Wire protocol. Known values: `chat_completions`, \
-                `messages`, `generate_content`, `responses`; any other string \
+                `messages`, `responses`; any other string \
                 names an externally-registered (outbound-only) custom protocol.",
-            "examples": ["chat_completions", "messages", "generate_content", "responses"],
+            "examples": ["chat_completions", "messages", "responses"],
         })
     }
 }
@@ -313,7 +309,7 @@ impl std::fmt::Debug for NativeReasoning {
 
 /// One content block within a message. Ordered — mixed text + tool-call
 /// sequences must preserve their order (v0 #416 regression).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Content {
     /// Plain text.
@@ -434,7 +430,7 @@ pub enum Content {
         /// The call id this result answers.
         call_id: String,
         /// The tool's name, when the wire carries it. The V3 type makes this a
-        /// required `string`, but that is faithful only to Gemini, whose
+        /// required `string`; historical native Gemini records keyed results by name. Its
         /// `functionResponse` keys results by name. The OpenAI (Chat Completions
         /// and Responses) and Anthropic tool-result wires key purely by call id
         /// and never transmit the name, so it is genuinely absent there —
@@ -442,8 +438,7 @@ pub enum Content {
         /// placeholder name to satisfy a required field would be worse: it would
         /// invent data the wire never carried and could collide with a real tool
         /// name on a downstream re-render. `None` is the correct value when the
-        /// provider omits it; the field round-trips only where the wire supplies
-        /// it (Gemini).
+        /// provider omits it; historical stored names remain readable.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tool_name: Option<String>,
         /// The typed result body.
@@ -510,8 +505,7 @@ pub enum Content {
     /// `mcp_approval_request` item byte-for-byte. When the item carried a raw `id`
     /// *distinct* from that correlation key, the `id` is also preserved under
     /// `provider_metadata["openai"]["itemId"]` and restored on render, so the
-    /// two-id form round-trips losslessly. The other three wires (Anthropic /
-    /// Generate Content / Chat Completions) have no approval-request item and skip
+    /// two-id form round-trips losslessly. The other two wires (Anthropic / Chat Completions) have no approval-request item and skip
     /// this variant on render (documented at each site).
     /// <https://platform.openai.com/docs/api-reference/responses/object>
     ToolApprovalRequest {
@@ -918,7 +912,7 @@ impl Message {
 /// outbound adapter renders it back into the upstream's native shape. The two
 /// variants behave very differently across protocols:
 ///
-/// - [`Self::Function`] has a slot on all four wires, subject to admission.
+/// - [`Self::Function`] has a slot on all three wires, subject to admission.
 ///   Chat Completions / Responses retain explicit `strict`; Messages/Gemini
 ///   currently refuse it. Gemini schema rewrites must pass the initial bounded
 ///   equivalence check before rendering. A shared function slot alone is not
@@ -946,8 +940,8 @@ pub enum Tool {
     ///
     /// The V3 `LanguageModelV3FunctionTool.inputExamples`
     /// (`Array<{ input: JSONObject }>`) field has **no slot here, by design.**
-    /// None of the four provider *request* wires (Chat Completions / Messages /
-    /// Responses / Generate Content) carries per-tool input examples in its tool
+    /// None of the three provider *request* wires (Chat Completions / Messages /
+    /// Responses) carries per-tool input examples in its tool
     /// definition, so no `parse_request` could construct it and no
     /// `render_request` could emit it — an `input_examples` field would be both
     /// unconstructed and unconsumed dead code. (Same documented-N/A reasoning as
@@ -1034,7 +1028,7 @@ pub enum ResponseFormat {
     /// Constrain output to a JSON Schema.
     JsonSchema {
         /// Schema name retained by Chat Completions / Responses. Explicit names
-        /// are refused on Messages/Generate Content, which have no native slot.
+        /// are refused on Messages, which have no native slot.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         /// Optional schema description — the V3 `responseFormat.description`.
@@ -1048,7 +1042,7 @@ pub enum ResponseFormat {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
         /// Strict-mode flag retained by Chat Completions / Responses. An explicit
-        /// flag is refused on Messages/Generate Content until equivalence is
+        /// flag is refused on Messages until equivalence is
         /// established; schema-constrained output alone does not certify it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         strict: Option<bool>,
@@ -1353,6 +1347,9 @@ pub struct ModelCompatibility {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ChatCompletionsCompatibility {
+    /// Enable the demonstrated Google Chat extensions for this selected model.
+    /// Signed tool history additionally requires a credential-bound replay proof.
+    pub google_extensions: bool,
     /// Token-limit field required by this upstream model.
     pub token_limit_field: Option<ChatTokenLimitField>,
     /// Whether this target accepts the optional `store` request field. `None`
@@ -1982,7 +1979,7 @@ impl std::fmt::Debug for ResponseOutputCommitment {
 ///   `encode_error` (protocol-shaped terminal frame: Anthropic `error`, Chat
 ///   error chunk, Responses `response.failed`). A separate `error` `StreamPart`
 ///   would duplicate that path with no extra fidelity.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StreamPart {
     /// Opens a text block — the V3 `text-start` part. Carries the upstream
@@ -2211,6 +2208,59 @@ pub enum AuthScheme {
     /// `Authorization: Bearer <key>`.
     #[serde(rename = "bearer")]
     Bearer,
+}
+
+fn fmt_model_value<T: Serialize>(value: &T, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn redact(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                for (key, value) in fields {
+                    if matches!(
+                        key.as_str(),
+                        "provider_metadata" | "native" | "signature" | "output_commitment"
+                    ) {
+                        *value = serde_json::Value::String("<redacted>".into());
+                    } else {
+                        redact(value);
+                    }
+                }
+            }
+            serde_json::Value::Array(values) => values.iter_mut().for_each(redact),
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(value).map_err(|_| std::fmt::Error)?;
+    redact(&mut value);
+    std::fmt::Debug::fmt(&value, f)
+}
+
+impl std::fmt::Debug for Content {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fmt_model_value(self, f)
+    }
+}
+
+impl std::fmt::Debug for StreamPart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Self::ResponseCompleted {
+            id,
+            source_protocol,
+            status,
+            usage,
+            response_output_commitment,
+        } = self
+        {
+            return f
+                .debug_struct("ResponseCompleted")
+                .field("id", id)
+                .field("source_protocol", source_protocol)
+                .field("status", status)
+                .field("usage", usage)
+                .field("response_output_commitment", response_output_commitment)
+                .finish();
+        }
+        fmt_model_value(self, f)
+    }
 }
 
 #[cfg(test)]
@@ -2504,3 +2554,5 @@ mod tests {
         );
     }
 }
+
+// Debug output must not expose opaque continuity material retained for replay.

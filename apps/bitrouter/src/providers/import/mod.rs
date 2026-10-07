@@ -19,7 +19,6 @@
 //! - Grok — `$GROK_HOME/auth.json` (default `~/.grok/auth.json`), the OIDC
 //!   (SuperGrok subscription) entry. See [`grok`].
 
-pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
 pub mod grok;

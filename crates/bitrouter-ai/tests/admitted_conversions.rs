@@ -7,7 +7,7 @@ use bitrouter_ai::conversion::{
 use bitrouter_ai::protocol::{InboundAdapter, chat_completions::ChatCompletionsAdapter};
 use bitrouter_ai::target::ModelTarget;
 use bitrouter_ai::types::{
-    ApiProtocol, Content, Message, NativeReasoning, Prompt, ProviderMetadata, Role, Tool,
+    ApiProtocol, Content, Message, NativeReasoning, Prompt, ProviderMetadata, Role,
     ToolResultOutput,
 };
 use serde_json::json;
@@ -65,50 +65,6 @@ fn json_encoding_is_reported_without_becoming_a_refusal() -> TestResult {
         report.require_admitted()?;
         safe(&report)?;
     }
-    assert!(
-        request_admission(&prompt, &ApiProtocol::GenerateContent)
-            .admitted
-            .is_empty()
-    );
-    Ok(())
-}
-
-#[test]
-fn schema_normalization_is_reported_only_for_a_classified_actual_rewrite() -> TestResult {
-    let mut prompt = source()?;
-    prompt.tools = vec![Tool::Function {
-        name: "f".into(),
-        description: None,
-        parameters: json!({"type":"object","properties":{"key-secret":{"type":["integer","null"]}}}),
-        strict: None,
-        provider_metadata: ProviderMetadata::new(),
-    }];
-    let report = request_admission(&prompt, &ApiProtocol::GenerateContent);
-    report.require_admitted()?;
-    assert_eq!(report.admitted.len(), 1);
-    assert_eq!(
-        report.admitted[0].reason,
-        ConversionReason::GeminiSchemaNormalization
-    );
-    assert_eq!(
-        report.admitted[0].location,
-        ConversionLocation::ToolDefinition { tool: 0 }
-    );
-    safe(&report)?;
-    if let Tool::Function { parameters, .. } = &mut prompt.tools[0] {
-        *parameters = json!({"type":"object"});
-    }
-    assert!(
-        request_admission(&prompt, &ApiProtocol::GenerateContent)
-            .admitted
-            .is_empty()
-    );
-    if let Tool::Function { parameters, .. } = &mut prompt.tools[0] {
-        *parameters = json!({"type":["integer","null"],"exclusiveMinimum":0});
-    }
-    let refused = request_admission(&prompt, &ApiProtocol::GenerateContent);
-    assert!(!refused.issues.is_empty());
-    assert!(refused.admitted.is_empty());
     Ok(())
 }
 

@@ -86,7 +86,7 @@
       "default": null
     },
     "stop": {
-      "description": "Stop sequences — a single string or an array of up to four. Promoted to\nthe canonical `stop` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-stop>",
+      "description": "Stop sequences \u2014 a single string or an array of up to four. Promoted to\nthe canonical `stop` slot.\n<https://platform.openai.com/docs/api-reference/chat/create#chat-create-stop>",
       "default": null
     },
     "presence_penalty": {
@@ -146,7 +146,7 @@
   ],
   "$defs": {
     "ChatMessage": {
-      "description": "One element of [`ChatRequest`]'s `messages` array — a chat turn carrying\nrole + optional content + optional tool calls / tool-call reply id.",
+      "description": "One element of [`ChatRequest`]'s `messages` array \u2014 a chat turn carrying\nrole + optional content + optional tool calls / tool-call reply id.",
       "type": "object",
       "properties": {
         "role": {
@@ -170,7 +170,7 @@
           "default": null
         },
         "reasoning_content": {
-          "description": "Reasoning content — **not** in OpenAI's Chat Completions spec; this is\na vendor extension used by DeepSeek\n(<https://api-docs.deepseek.com/api/create-chat-completion>), Moonshot\n(Kimi), Qwen, and other OpenAI-compatible providers that expose the\nmodel's chain-of-thought on the Chat envelope. v0 #454-1: it must\nnot be dropped. `parse_response` additionally accepts `reasoning`\n(some OpenRouter passthroughs) and `thinking` (Aliyun) as aliases.",
+          "description": "Reasoning content \u2014 **not** in OpenAI's Chat Completions spec; this is\na vendor extension used by DeepSeek\n(<https://api-docs.deepseek.com/api/create-chat-completion>), Moonshot\n(Kimi), Qwen, and other OpenAI-compatible providers that expose the\nmodel's chain-of-thought on the Chat envelope. v0 #454-1: it must\nnot be dropped. `parse_response` additionally accepts `reasoning`\n(some OpenRouter passthroughs) and `thinking` (Aliyun) as aliases.",
           "type": [
             "string",
             "null"
@@ -191,6 +191,10 @@
         },
         "function": {
           "$ref": "#/$defs/ChatFunctionCall"
+        },
+        "extra_content": {
+          "description": "Provider continuity extensions attached to this specific call.",
+          "default": null
         }
       },
       "required": [
@@ -212,7 +216,7 @@
       }
     },
     "ChatTool": {
-      "description": "One element of [`ChatRequest`]'s `tools` array — a `{ function: { … } }` envelope.",
+      "description": "One element of [`ChatRequest`]'s `tools` array \u2014 a `{ function: { \u2026 } }` envelope.",
       "type": "object",
       "properties": {
         "function": {
@@ -291,10 +295,10 @@
       ]
     },
     "ChatResponseFormat": {
-      "description": "Chat Completions `response_format`\n(<https://platform.openai.com/docs/guides/structured-outputs>) — a closed\nunion over OpenAI's three output modes.",
+      "description": "Chat Completions `response_format`\n(<https://platform.openai.com/docs/guides/structured-outputs>) \u2014 a closed\nunion over OpenAI's three output modes.",
       "oneOf": [
         {
-          "description": "Free-form text — the default.",
+          "description": "Free-form text \u2014 the default.",
           "type": "object",
           "properties": {
             "type": {
@@ -348,7 +352,7 @@
           "type": "string"
         },
         "description": {
-          "description": "Optional schema description — extra LLM guidance OpenAI passes through to\nthe model. Promoted to the canonical `response_format` description.\n<https://platform.openai.com/docs/guides/structured-outputs>",
+          "description": "Optional schema description \u2014 extra LLM guidance OpenAI passes through to\nthe model. Promoted to the canonical `response_format` description.\n<https://platform.openai.com/docs/guides/structured-outputs>",
           "type": [
             "string",
             "null"

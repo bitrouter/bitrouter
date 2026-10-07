@@ -163,11 +163,137 @@ pub struct ChatMessage {
 }
 
 /// One assistant tool-call entry on a [`ChatMessage`].
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Deserialize, JsonSchema)]
 pub struct ChatToolCall {
     id: String,
     #[serde(default)]
     function: ChatFunctionCall,
+    /// Provider continuity extensions attached to this specific call.
+    #[serde(default)]
+    extra_content: Option<serde_json::Value>,
+}
+
+impl std::fmt::Debug for ChatToolCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatToolCall")
+            .field("id", &self.id)
+            .field("function", &self.function)
+            .field("extra_content", &"<redacted>")
+            .finish()
+    }
+}
+
+fn parse_google_chat_metadata(extra: Option<&serde_json::Value>) -> Result<ProviderMetadata> {
+    let mut metadata = ProviderMetadata::new();
+    let Some(google) = extra.and_then(|extra| extra.get("google")) else {
+        if extra.is_some_and(|extra| extra.get("bitrouter").is_some()) {
+            return Err(ModelError::invalid_request(
+                "Google replay proof has no matching signature",
+            ));
+        }
+        return Ok(metadata);
+    };
+    let fields = google.as_object().ok_or_else(|| {
+        ModelError::invalid_request("Google Chat continuity metadata must be an object")
+    })?;
+    if fields.keys().any(|key| key != "thought_signature") {
+        return Err(ModelError::invalid_request(
+            "unclassified Google Chat continuity metadata",
+        ));
+    }
+    if let Some(value) = fields.get("thought_signature") {
+        let signature = value
+            .as_str()
+            .filter(|signature| !signature.is_empty())
+            .ok_or_else(|| {
+                ModelError::invalid_request(
+                    "Google Chat thought signature must be a nonempty string",
+                )
+            })?;
+        set_provider_metadata(
+            &mut metadata,
+            "google",
+            "thoughtSignature",
+            signature.into(),
+        );
+    }
+    if let Some(binding) = extra.and_then(|extra| extra.get("bitrouter")) {
+        let fields = binding
+            .as_object()
+            .filter(|fields| fields.keys().all(|key| key == "google_replay_proof"))
+            .ok_or_else(|| {
+                ModelError::invalid_request("unclassified BitRouter Chat continuity metadata")
+            })?;
+        if let Some(value) = fields.get("google_replay_proof") {
+            let proof = value
+                .as_str()
+                .filter(|proof| !proof.is_empty())
+                .ok_or_else(|| {
+                    ModelError::invalid_request("Google replay proof must be a nonempty string")
+                })?;
+            if !metadata.contains_key("google") {
+                return Err(ModelError::invalid_request(
+                    "Google replay proof has no matching signature",
+                ));
+            }
+            set_provider_metadata(&mut metadata, "google", "replayProof", proof.into());
+        }
+    }
+    Ok(metadata)
+}
+
+fn google_chat_extra_content(metadata: &ProviderMetadata) -> Result<Option<serde_json::Value>> {
+    let Some(value) =
+        provider_namespace(metadata, "google").and_then(|google| google.get("thoughtSignature"))
+    else {
+        return Ok(None);
+    };
+    let signature = value
+        .as_str()
+        .filter(|signature| !signature.is_empty())
+        .ok_or_else(|| {
+            ModelError::invalid_request("Google Chat thought signature must be a nonempty string")
+        })?;
+    let mut extra = serde_json::json!({"google":{"thought_signature":signature}});
+    if let Some(proof) =
+        provider_namespace(metadata, "google").and_then(|google| google.get("replayProof"))
+    {
+        let proof = proof
+            .as_str()
+            .filter(|proof| !proof.is_empty())
+            .ok_or_else(|| {
+                ModelError::invalid_request("Google replay proof must be a nonempty string")
+            })?;
+        if let Some(object) = extra.as_object_mut() {
+            object.insert(
+                "bitrouter".into(),
+                serde_json::json!({"google_replay_proof":proof}),
+            );
+        }
+    }
+    Ok(Some(extra))
+}
+
+fn render_chat_tool_call(content: &Content) -> Option<Result<serde_json::Value>> {
+    let Content::ToolCall {
+        id,
+        name,
+        arguments,
+        provider_metadata,
+        ..
+    } = content
+    else {
+        return None;
+    };
+    Some(google_chat_extra_content(provider_metadata).map(|extra| {
+        let mut call = serde_json::json!({
+            "id":id, "type":"function", "function":{"name":name,"arguments":arguments}
+        });
+        if let (Some(object), Some(extra)) = (call.as_object_mut(), extra) {
+            object.insert("extra_content".into(), extra);
+        }
+        call
+    }))
 }
 
 /// The `function` payload of a [`ChatToolCall`]: name + raw JSON argument string.
@@ -454,6 +580,18 @@ fn ingress_admission(body: &serde_json::Value) -> crate::conversion::ConversionR
         return report;
     };
     for (message, item) in messages.iter().enumerate() {
+        if item
+            .get("extra_content")
+            .and_then(|extra| extra.get("google"))
+            .is_some()
+        {
+            report.push_ingress(
+                &ApiProtocol::ChatCompletions,
+                ConversionLocation::MessageContentValue { message },
+                ConversionReason::InputAttributeUnclassified,
+                ConversionEffect::ReplayAuthority,
+            );
+        }
         let Some(content) = item.get("content").filter(|value| !value.is_null()) else {
             continue;
         };
@@ -583,6 +721,7 @@ impl InboundAdapter for ChatCompletionsAdapter {
                     content.extend(parse_chat_content(value));
                 }
                 for tc in m.tool_calls {
+                    let provider_metadata = parse_google_chat_metadata(tc.extra_content.as_ref())?;
                     content.push(Content::ToolCall {
                         id: tc.id,
                         name: tc.function.name,
@@ -592,7 +731,7 @@ impl InboundAdapter for ChatCompletionsAdapter {
                         provider_executed: false,
                         // …and no provider-executed MCP (`dynamic`) call envelope.
                         dynamic: false,
-                        provider_metadata: ProviderMetadata::new(),
+                        provider_metadata,
                     });
                 }
             }
@@ -765,23 +904,11 @@ impl InboundAdapter for ChatCompletionsAdapter {
         // Chat Completions has no provider-executed server-tool slot, so a
         // `provider_executed` call degrades to a plain `tool_calls` entry here
         // (the flag is dropped) — `..` ignores it deliberately.
-        let tool_calls: Vec<_> = result
+        let tool_calls = result
             .content
             .iter()
-            .filter_map(|c| match c {
-                Content::ToolCall {
-                    id,
-                    name,
-                    arguments,
-                    ..
-                } => Some(serde_json::json!({
-                    "id": id,
-                    "type": "function",
-                    "function": { "name": name, "arguments": arguments },
-                })),
-                _ => None,
-            })
-            .collect();
+            .filter_map(render_chat_tool_call)
+            .collect::<Result<Vec<_>>>()?;
         if !tool_calls.is_empty() {
             message.insert("tool_calls".into(), tool_calls.into());
         }
@@ -965,6 +1092,7 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         prompt: &Prompt,
         target: &ModelTarget,
     ) -> Result<serde_json::Value> {
+        crate::providers::google_chat::admission(prompt, target).require_admitted()?;
         if target.compatibility.chat_completions.supports_store == Some(false)
             && prompt.params.store == Some(true)
         {
@@ -978,6 +1106,26 @@ impl OutboundAdapter for ChatCompletionsAdapter {
             prompt.params.chat_token_limit_field = Some(field);
         }
         let mut rendered = self.render_request(&prompt)?;
+        if let Some(messages) = rendered
+            .get_mut("messages")
+            .and_then(|value| value.as_array_mut())
+        {
+            for message in messages {
+                if let Some(calls) = message
+                    .get_mut("tool_calls")
+                    .and_then(|value| value.as_array_mut())
+                {
+                    for call in calls {
+                        if let Some(extra) = call
+                            .get_mut("extra_content")
+                            .and_then(|value| value.as_object_mut())
+                        {
+                            extra.remove("bitrouter");
+                        }
+                    }
+                }
+            }
+        }
         if let Some(object) = rendered.as_object_mut() {
             if target.compatibility.chat_completions.supports_store == Some(false) {
                 object.remove("store");
@@ -1003,6 +1151,16 @@ impl OutboundAdapter for ChatCompletionsAdapter {
         let message = choice
             .get("message")
             .ok_or_else(|| ModelError::invalid_request("chat choice missing 'message'"))?;
+
+        if message
+            .get("extra_content")
+            .and_then(|extra| extra.get("google"))
+            .is_some()
+        {
+            return Err(ModelError::invalid_request(
+                "message-level Google continuity is not supported",
+            ));
+        }
 
         let mut content = Vec::new();
         // `reasoning_content` is the DeepSeek-/Moonshot-/Qwen-style field name
@@ -1078,7 +1236,7 @@ impl OutboundAdapter for ChatCompletionsAdapter {
                     provider_executed: false,
                     // …and no provider-executed MCP (`dynamic`) call envelope.
                     dynamic: false,
-                    provider_metadata: ProviderMetadata::new(),
+                    provider_metadata: parse_google_chat_metadata(tc.get("extra_content"))?,
                 });
             }
         }
@@ -1494,23 +1652,11 @@ fn render_message(m: &Message) -> Result<Vec<serde_json::Value>> {
     // Chat Completions has no provider-executed server-tool slot, so a
     // `provider_executed` call degrades to a plain `tool_calls` entry here (the
     // flag is dropped) — `..` ignores it deliberately.
-    let tool_calls: Vec<_> = m
+    let tool_calls = m
         .content
         .iter()
-        .filter_map(|c| match c {
-            Content::ToolCall {
-                id,
-                name,
-                arguments,
-                ..
-            } => Some(serde_json::json!({
-                "id": id,
-                "type": "function",
-                "function": { "name": name, "arguments": arguments },
-            })),
-            _ => None,
-        })
-        .collect();
+        .filter_map(render_chat_tool_call)
+        .collect::<Result<Vec<_>>>()?;
     if !tool_calls.is_empty() {
         obj.insert("tool_calls".into(), tool_calls.into());
     }
@@ -1538,7 +1684,7 @@ fn finish_reason_str(r: &FinishReason) -> String {
     }
 }
 
-fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
+pub(crate) fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
     let prompt_tokens = value.get("prompt_tokens")?.as_u64()?;
     let completion_tokens = value
         .get("completion_tokens")
@@ -1709,6 +1855,15 @@ impl StreamDecoder for ChatStreamDecoder {
             .and_then(|c| c.first())
         {
             if let Some(delta) = choice.get("delta") {
+                if delta
+                    .get("extra_content")
+                    .and_then(|extra| extra.get("google"))
+                    .is_some()
+                {
+                    return Err(ModelError::invalid_request(
+                        "message-level Google continuity is not supported",
+                    ));
+                }
                 if let Some(text) = delta.get("content").and_then(|c| c.as_str())
                     && !text.is_empty()
                 {
@@ -1754,7 +1909,7 @@ impl StreamDecoder for ChatStreamDecoder {
                             id: self.tool_ids[idx].clone(),
                             name: name.map(|n| n.to_string()),
                             arguments: args.to_string(),
-                            provider_metadata: Default::default(),
+                            provider_metadata: parse_google_chat_metadata(tc.get("extra_content"))?,
                         });
                     }
                 }
@@ -1810,6 +1965,8 @@ struct ChatToolCallState {
     /// Argument fragments seen before the name arrived, replayed on the opening
     /// chunk so nothing is lost while the call is held back.
     pending_args: String,
+    /// Continuity that arrived before the opening name, or on a later delta.
+    extra_content: Option<serde_json::Value>,
 }
 
 /// Encodes canonical stream parts into Chat Completions `data:` SSE chunks.
@@ -1833,6 +1990,7 @@ impl ChatStreamEncoder {
                 id: id.to_string(),
                 opened: false,
                 pending_args: String::new(),
+                extra_content: None,
             });
             self.tool_calls.len() - 1
         }
@@ -1909,7 +2067,7 @@ impl StreamEncoder for ChatStreamEncoder {
                 id,
                 name,
                 arguments,
-                ..
+                provider_metadata,
             } => {
                 let index = self.tool_call_index(id);
                 let name = name.as_deref().filter(|n| !n.is_empty());
@@ -1928,38 +2086,53 @@ impl StreamEncoder for ChatStreamEncoder {
                 // <https://github.com/anomalyco/opencode/issues/24137>
                 let mut opening_name: Option<String> = None;
                 let mut out_args: Option<String> = None;
+                let extra = google_chat_extra_content(provider_metadata)?;
+                let mut out_extra = None;
                 if let Some(state) = self.tool_calls.get_mut(index) {
+                    if let Some(extra) = &extra {
+                        if state
+                            .extra_content
+                            .as_ref()
+                            .is_some_and(|saved| saved != extra)
+                        {
+                            return Err(ModelError::invalid_request(
+                                "tool delta changed Google continuity metadata",
+                            ));
+                        }
+                        state.extra_content = Some(extra.clone());
+                    }
                     if state.opened {
                         if !arguments.is_empty() {
                             out_args = Some(arguments.clone());
                         }
+                        out_extra = extra;
                     } else if let Some(name) = name {
                         let mut args = std::mem::take(&mut state.pending_args);
                         args.push_str(arguments);
                         state.opened = true;
                         opening_name = Some(name.to_string());
                         out_args = Some(args);
+                        out_extra = state.extra_content.clone();
                     } else {
                         state.pending_args.push_str(arguments);
                     }
                 }
 
-                if opening_name.is_some() || out_args.is_some() {
+                if opening_name.is_some() || out_args.is_some() || out_extra.is_some() {
                     let mut function = serde_json::Map::new();
                     if let Some(name) = opening_name {
                         function.insert("name".into(), name.into());
                     }
                     function.insert("arguments".into(), out_args.unwrap_or_default().into());
+                    let mut call = serde_json::json!({
+                        "index": index, "id": id, "type":"function",
+                        "function":serde_json::Value::Object(function),
+                    });
+                    if let (Some(object), Some(extra)) = (call.as_object_mut(), out_extra) {
+                        object.insert("extra_content".into(), extra);
+                    }
                     let mut delta = self.open_delta();
-                    delta.insert(
-                        "tool_calls".into(),
-                        serde_json::json!([{
-                            "index": index,
-                            "id": id,
-                            "type": "function",
-                            "function": serde_json::Value::Object(function),
-                        }]),
-                    );
+                    delta.insert("tool_calls".into(), serde_json::json!([call]));
                     frames.push(self.chunk(serde_json::Value::Object(delta), None));
                 }
             }

@@ -276,6 +276,7 @@ where
 fn invalid(message: &str) -> ModelError {
     ModelError::InvalidResponse {
         message: message.into(),
+        usage: None,
     }
 }
 

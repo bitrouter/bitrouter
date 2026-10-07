@@ -13,7 +13,7 @@ This draft is authored on main baseline
 present. Paths naming `bitrouter-ai` below describe the audited PR head.
 Recheck the implementation inventory if that head changes.
 
-## 1. Proposed decision
+## 1. Approved decision
 
 Remove Gemini `generateContent` and `streamGenerateContent` from both BitRouter's
 public HTTP gateway and its supported upstream protocols. Retain three built-in
@@ -24,9 +24,9 @@ Completions endpoint. Keep the provider-neutral `Prompt`, `GenerateResult`, and
 `StreamPart` contract introduced in #962; Core does not adopt a provider's wire
 format as its internal protocol.
 
-The proposed provider disposition is:
+The approved provider disposition is:
 
-| Surface | Proposed disposition |
+| Surface | Approved disposition |
 | --- | --- |
 | `google` API-key provider | Retain; serve Gemini through Chat Completions only, after the fidelity and live validation gates below pass. |
 | `google-ai` subscription provider | Retire its private Antigravity/Code Assist transport, auth registration, and credential-import integration. Do not reproduce the Gemini codec under a custom protocol name. |
@@ -203,7 +203,7 @@ path and preserve it; do not invent results or automatically start a fresh sessi
 
 ### 4.5 Antigravity SDK as a client
 
-The proposed integration to validate is:
+The integration to validate is:
 
 ```text
 Antigravity SDK LocalOpenAIAgentConfig
@@ -217,17 +217,27 @@ Candidate configuration:
 from google.antigravity import LocalOpenAIAgentConfig
 
 config = LocalOpenAIAgentConfig(
-    model="bitrouter/auto",
+    model="configured-chat-model",
     base_url="http://127.0.0.1:4356/v1",
 )
 ```
 
-This example assumes a running local router with a usable route and compatible
-gateway authentication. Record the SDK version, effective requests, tools, and
+This example assumes an explicitly configured compatible Chat model, a running local router and compatible
+gateway authentication. The actual 0.1.20 harness completed a fixture tool task, but failed the signed Google fixture by losing replay proof and function details. Google signed-tool use remains a release blocker; do not bypass continuity admission. Record the SDK version, effective requests, tools, and
 stream behavior in validation. `.lightweight()` is an optional SDK preset, not a
 BitRouter requirement. Do not claim CLI, IDE, ACP, or subscription interoperability
 from this SDK connection mechanism alone, and do not add a new launcher in this
 protocol-retirement change.
+
+### 4.6 Implementation decisions
+
+Retire native-only Gemini model entries from `opencode-zen`; its official endpoint table advertises the Google native SDK path, so do not infer a Chat replacement from other Zen models. Keep its supported models. [Zen endpoints](https://opencode.ai/docs/zen/#endpoints).
+
+Remove the bundled `gemini-cli` agent/runtime entry: its first-party harness wiring targets the removed native gateway. Independent own-auth `agy` launch remains supported.
+
+Google tool signatures retain the existing canonical `google.thoughtSignature` slot. Actual selected calls add a stateless `google.replayProof`, scoped to the static bearer key, provider, endpoint, model, account label, tool ID/name, exact argument bytes, and signature. The gateway maps this to `extra_content.bitrouter.google_replay_proof`; clients must echo both Google and BitRouter metadata unchanged. This sidecar is removed before upstream dispatch. Missing or changed proof rejects replay before effects, including unrelated fallbacks. This client preservation requirement must be checked with the actual SDK.
+
+The initial Google schema subset is conservative: unverified schema keywords, explicit strict flags or schema metadata, disabled parallel calls, and unclassified Chat extras exclude Google. Explicit cache resources and message-level continuity have no established replay authority and are refused. Available usage from a successful HTTP response remains attached to late validation errors and settlement.
 
 ## 5. Relationship to #962 and documentation
 
@@ -326,3 +336,5 @@ existing test results do not discharge them.
 The user approved all four recommended decisions. The implementation proceeds as
 a separate change based on #962. This approval does not substitute for the
 replacement validation gates or authorize deleting saved credentials/history.
+
+Google reasoning uses the canonical declared `reasoning_effort` path (`minimal` through `high`) plus scoped `include_thoughts`. Raw `thinking_level`/`thinking_budget`, `none`/`xhigh`/`max`, seeds and penalties remain excluded until selected-model equivalence is demonstrated. Static-auth validation rejects duplicate bearer headers and conflicting Google key headers/query credentials.

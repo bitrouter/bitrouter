@@ -2397,6 +2397,7 @@ impl InboundAdapter for ResponsesAdapter {
         prompt: &Prompt,
         request_id: &str,
     ) -> Result<serde_json::Value> {
+        crate::protocol::reject_google_continuity(result, &ApiProtocol::Responses)?;
         let output = render_output_items(result)?;
         let response_id = encode_gateway_continuation_id(request_id)?;
         let mut body = serde_json::json!({
@@ -3324,6 +3325,7 @@ fn native_reasoning_item(native: &NativeReasoning) -> Result<&serde_json::Value>
     if item.get("type").and_then(serde_json::Value::as_str) != Some("reasoning") {
         return Err(ModelError::InvalidResponse {
             message: "native reasoning payload is not a Responses reasoning item".into(),
+            usage: None,
         });
     }
     for field in ["id", "encrypted_content"] {
@@ -3333,6 +3335,7 @@ fn native_reasoning_item(native: &NativeReasoning) -> Result<&serde_json::Value>
         {
             return Err(ModelError::InvalidResponse {
                 message: "native reasoning contains a malformed identity or encrypted field".into(),
+                usage: None,
             });
         }
     }
@@ -3341,6 +3344,7 @@ fn native_reasoning_item(native: &NativeReasoning) -> Result<&serde_json::Value>
             let Some(parts) = value.as_array() else {
                 return Err(ModelError::InvalidResponse {
                     message: "native reasoning text parts must be arrays".into(),
+                    usage: None,
                 });
             };
             if parts.iter().any(|part| {
@@ -3352,6 +3356,7 @@ fn native_reasoning_item(native: &NativeReasoning) -> Result<&serde_json::Value>
             }) {
                 return Err(ModelError::InvalidResponse {
                     message: "native reasoning text part is malformed".into(),
+                    usage: None,
                 });
             }
         }
@@ -3394,6 +3399,7 @@ fn render_output_items(result: &GenerateResult) -> Result<Vec<serde_json::Value>
                         return Err(ModelError::InvalidResponse {
                             message: "native reasoning text differs from the current result block"
                                 .into(),
+                            usage: None,
                         });
                     }
                     items.push(native_reasoning_item(native)?.clone());
@@ -3684,6 +3690,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
         if self.successful_terminal.is_some() {
             return Err(ModelError::InvalidResponse {
                 message: "Responses stream emitted non-empty data after its terminal".to_string(),
+                usage: None,
             });
         }
         let json: serde_json::Value = match serde_json::from_str(data) {
@@ -3702,6 +3709,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
                 message: format!(
                     "Responses SSE event name '{header}' contradicts JSON type '{body}'"
                 ),
+                usage: None,
             });
         }
         let event_type = body_type.or(explicit_event).unwrap_or_default();
@@ -3716,10 +3724,12 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     .ok_or_else(|| ModelError::InvalidResponse {
                         message: "Responses response.created missing non-empty response id"
                             .to_string(),
+                        usage: None,
                     })?;
                 if self.created_id.is_some() {
                     return Err(ModelError::InvalidResponse {
                         message: "Responses stream emitted duplicate response.created".to_string(),
+                        usage: None,
                     });
                 }
                 self.created_id = Some(id.to_owned());
@@ -3938,7 +3948,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
                                             })
                                             .unwrap_or_default();
                                         let Some(suffix) = complete.strip_prefix(&observed) else {
-                                            return Err(ModelError::InvalidResponse { message: "native reasoning snapshot contradicts its visible deltas".into() });
+                                            return Err(ModelError::InvalidResponse { message: "native reasoning snapshot contradicts its visible deltas".into() , usage: None });
                                         };
                                         if !suffix.is_empty() {
                                             parts.push(StreamPart::ReasoningDelta {
@@ -3979,6 +3989,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
                             "Responses terminal event '{event_type}' contradicts body status '{}'",
                             actual_status.unwrap_or("<missing>")
                         ),
+                        usage: None,
                     });
                 }
                 let usage = response.and_then(|r| r.get("usage")).and_then(parse_usage);
@@ -3994,6 +4005,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     .ok_or_else(|| ModelError::InvalidResponse {
                         message: "Responses terminal event missing non-empty response id"
                             .to_string(),
+                        usage: None,
                     })?
                     .to_string();
                 if self
@@ -4004,6 +4016,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
                     return Err(ModelError::InvalidResponse {
                         message: "Responses terminal id does not match response.created id"
                             .to_string(),
+                        usage: None,
                     });
                 }
                 self.successful_terminal = Some(StreamPart::ResponseCompleted {
@@ -4056,6 +4069,7 @@ impl StreamDecoder for ResponsesStreamDecoder {
             .map(|terminal| vec![terminal])
             .ok_or_else(|| ModelError::InvalidResponse {
                 message: "Responses stream ended before a valid terminal event".to_string(),
+                usage: None,
             })
     }
 }
@@ -4542,6 +4556,7 @@ impl ResponsesStreamEncoder {
 
 impl StreamEncoder for ResponsesStreamEncoder {
     fn encode(&mut self, part: &StreamPart) -> Result<Vec<SseFrame>> {
+        crate::protocol::reject_google_continuity_part(part, &ApiProtocol::Responses)?;
         let mut frames = Vec::new();
         self.ensure_created(&mut frames)?;
         match part {
@@ -4574,6 +4589,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                         return Err(ModelError::InvalidResponse {
                             message: "native reasoning ended after its output block was closed"
                                 .into(),
+                            usage: None,
                         });
                     };
                     if state.item_id != *id
@@ -4583,6 +4599,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                             message:
                                 "native reasoning identity does not match its open output block"
                                     .into(),
+                            usage: None,
                         });
                     }
                     if native.visible_text()
@@ -4590,6 +4607,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                     {
                         return Err(ModelError::InvalidResponse {
                             message: "native reasoning text differs from the emitted block".into(),
+                            usage: None,
                         });
                     }
                     self.reasoning_native = Some(native.clone());
@@ -4621,6 +4639,7 @@ impl StreamEncoder for ResponsesStreamEncoder {
                         .as_mut()
                         .ok_or_else(|| ModelError::InvalidResponse {
                             message: "reasoning output block could not be opened".into(),
+                            usage: None,
                         })?;
                 let opened = if summary {
                     &mut state.summary_opened

@@ -678,7 +678,6 @@ fn restart_required_fields(
         "claude-code",
         "openai-codex",
         "supergrok",
-        bitrouter_ai::providers::antigravity::PROVIDER_ID,
     ] {
         if current.providers.contains_key(provider_id)
             != candidate.providers.contains_key(provider_id)
@@ -2566,6 +2565,7 @@ policies:
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             account_label: None,
             api_key_override: None,
