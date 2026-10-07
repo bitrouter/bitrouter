@@ -38,6 +38,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         reasoning_effort: None,
         provider_id: "openai".into(),
         account_label: None,
+        chat_completion_response_id: None,
         prompt_tokens: prompt,
         completion_tokens: completion,
         reasoning_tokens: 0,

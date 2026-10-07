@@ -186,6 +186,7 @@ pub struct PipelineContext {
     stream_terminal_succeeded: bool,
     stream_native_response_completed: bool,
     nonstream_native_response_completed: bool,
+    stream_chat_completion_response_id: Option<String>,
     stream_assistant_turn_commitment: Option<AssistantTurnCommitment>,
     /// Stable redaction-safe authority returned atomically with the latest
     /// authenticated transport request. Server-tool prompt forks share this
@@ -240,6 +241,7 @@ impl PipelineContext {
             stream_terminal_succeeded: false,
             stream_native_response_completed: false,
             nonstream_native_response_completed: false,
+            stream_chat_completion_response_id: None,
             stream_assistant_turn_commitment: None,
             credential_authority: Arc::new(Mutex::new(None)),
             metadata: HashMap::new(),
@@ -276,6 +278,7 @@ impl PipelineContext {
             stream_terminal_succeeded: false,
             stream_native_response_completed: false,
             nonstream_native_response_completed: false,
+            stream_chat_completion_response_id: None,
             stream_assistant_turn_commitment: None,
             credential_authority: self.credential_authority.clone(),
             metadata: self.metadata.clone(),
@@ -673,6 +676,7 @@ impl PipelineContext {
             assistant_turn_commitment: StreamingAssistantTurnCommitment::default(),
             terminal_assistant_turn_commitment: None,
             response_id: None,
+            chat_completion_response_id: None,
             events: EventBus::new(),
             metadata: HashMap::new(),
             // Refcount-bump copy: a value a pre-request hook deposited (e.g. the
@@ -695,6 +699,7 @@ impl PipelineContext {
         }
         self.stream_terminal_succeeded = stream.terminal_succeeded;
         self.stream_native_response_completed = stream.native_response_completed;
+        self.stream_chat_completion_response_id = stream.chat_completion_response_id;
         let observed = stream.assistant_turn_commitment.finish();
         self.stream_assistant_turn_commitment = stream
             .terminal_assistant_turn_commitment
@@ -755,6 +760,14 @@ impl PipelineContext {
     pub fn settlement_context(&mut self) -> SettlementContext {
         let target = self.serving_target();
         let exec = self.execution_result.as_ref();
+        let chat_completion_response_id = target
+            .as_ref()
+            .filter(|target| target.api_protocol == ApiProtocol::ChatCompletions)
+            .and_then(|_| {
+                self.stream_chat_completion_response_id
+                    .clone()
+                    .or_else(|| exec.and_then(|result| result.result.response_id.clone()))
+            });
         let model_id = exec
             .map(|execution| execution.model_id.clone())
             .or_else(|| target.as_ref().map(|target| target.service_id.clone()))
@@ -781,6 +794,7 @@ impl PipelineContext {
             reasoning_effort: self.prompt.params.reasoning_effort,
             provider_id,
             account_label,
+            chat_completion_response_id,
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             reasoning_tokens: usage.reasoning_tokens,
@@ -910,6 +924,9 @@ pub struct StreamContext {
     /// Request-local only: settlement may derive an opaque owner-bound alias,
     /// but the raw value must never enter durable events or storage.
     response_id: Option<String>,
+    /// Chat Completions response id is retained separately from the native
+    /// Responses continuation id, which must not be copied to settlement.
+    chat_completion_response_id: Option<String>,
     events: EventBus,
     metadata: HashMap<PluginId, serde_json::Value>,
     extensions: Extensions,
@@ -923,6 +940,12 @@ impl StreamContext {
                 source_protocol: ApiProtocol::Responses,
             } if !id.is_empty() => {
                 self.response_id = Some(id.clone());
+            }
+            StreamPart::ResponseStarted {
+                id,
+                source_protocol: ApiProtocol::ChatCompletions,
+            } if !id.is_empty() => {
+                self.chat_completion_response_id = Some(id.clone());
             }
             StreamPart::ResponseCompleted {
                 id,
@@ -1052,7 +1075,9 @@ mod tests {
     // target fail to build under the crate's default features.
     use crate::language_model::routing::PromptOverrides;
     use crate::language_model::stream::{StreamOutcome, StreamProcessor};
-    use crate::language_model::types::{ReasoningEffort, ReasoningEffortSource, StreamPart};
+    use crate::language_model::types::{
+        AuthScheme, ReasoningEffort, ReasoningEffortSource, StreamPart,
+    };
     use crate::language_model::{Message, PipelineRequest, Role};
 
     fn ctx_from_prompt(prompt: Prompt) -> PipelineContext {
@@ -1066,6 +1091,27 @@ mod tests {
             inbound_protocol: None,
         };
         PipelineContext::new(req)
+    }
+
+    fn bind_target(ctx: &mut PipelineContext, api_protocol: ApiProtocol) {
+        let target = RoutingTarget {
+            provider_name: "fixture".into(),
+            service_id: "model".into(),
+            api_base: "https://example.test".into(),
+            api_key: "fixture-key".into(),
+            api_protocol,
+            chat_token_limit_field: None,
+            chat_supports_store: None,
+            chat_supports_stream_options: None,
+            reasoning_effort: None,
+            account_label: None,
+            api_key_override: None,
+            api_base_override: None,
+            auth_scheme: AuthScheme::default(),
+            headers: Vec::new(),
+        };
+        ctx.route_chain = Some(vec![target.clone()]);
+        ctx.set_successful_target(target);
     }
 
     fn empty_prompt() -> Prompt {
@@ -1410,6 +1456,7 @@ mod tests {
             "cache_read_input_tokens": 5
         });
         let mut ctx = ctx_from_prompt(prompt_with_text(None, "hello"));
+        bind_target(&mut ctx, ApiProtocol::ChatCompletions);
         ctx.execution_result = Some(ExecutionResult {
             provider_id: "anthropic".into(),
             model_id: "claude".into(),
@@ -1425,7 +1472,7 @@ mod tests {
                     ..Default::default()
                 }),
                 finish_reason: None,
-                response_id: None,
+                response_id: Some("gen_json".into()),
                 stop_details: None,
                 provider_metadata: Default::default(),
             },
@@ -1440,12 +1487,23 @@ mod tests {
             crate::language_model::types::UsageOrigin::ProviderReported
         );
         assert_eq!(settlement.raw_usage.as_ref(), Some(&raw));
+        assert_eq!(
+            settlement.chat_completion_response_id.as_deref(),
+            Some("gen_json")
+        );
+        bind_target(&mut ctx, ApiProtocol::Responses);
+        assert!(
+            ctx.settlement_context()
+                .chat_completion_response_id
+                .is_none()
+        );
     }
 
     #[test]
-    fn native_responses_id_reaches_only_required_finalization_context() {
-        fn streaming_context() -> PipelineContext {
+    fn response_ids_reach_settlement_and_native_finalization_is_protocol_scoped() {
+        fn streaming_context(api_protocol: ApiProtocol) -> PipelineContext {
             let mut ctx = ctx_from_prompt(prompt_with_text(None, "hello"));
+            bind_target(&mut ctx, api_protocol);
             ctx.execution_result = Some(ExecutionResult {
                 provider_id: "provider".into(),
                 model_id: "model".into(),
@@ -1465,7 +1523,7 @@ mod tests {
             ctx
         }
 
-        let mut native = streaming_context();
+        let mut native = streaming_context(ApiProtocol::Responses);
         let mut stream = native.stream_context();
         stream.observe_upstream_part(&StreamPart::ResponseStarted {
             id: "resp-native".into(),
@@ -1479,8 +1537,14 @@ mod tests {
                 .as_deref(),
             Some("resp-native")
         );
+        assert!(
+            native
+                .settlement_context()
+                .chat_completion_response_id
+                .is_none()
+        );
 
-        let mut cross_protocol = streaming_context();
+        let mut cross_protocol = streaming_context(ApiProtocol::ChatCompletions);
         let mut stream = cross_protocol.stream_context();
         stream.observe_upstream_part(&StreamPart::ResponseStarted {
             id: "chatcmpl-upstream".into(),
@@ -1492,6 +1556,13 @@ mod tests {
                 .required_finalization_context(true)
                 .response_id,
             None
+        );
+        assert_eq!(
+            cross_protocol
+                .settlement_context()
+                .chat_completion_response_id
+                .as_deref(),
+            Some("chatcmpl-upstream")
         );
     }
 

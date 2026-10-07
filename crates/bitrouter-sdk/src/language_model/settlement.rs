@@ -307,6 +307,10 @@ pub struct SettlementContext {
     /// `None` for a single-credential provider. Reflects any failover
     /// hop.
     pub account_label: Option<String>,
+    /// Chat Completions response identifier for the serving hop, when
+    /// reported. Native Responses continuation IDs are deliberately excluded
+    /// from this settlement field.
+    pub chat_completion_response_id: Option<String>,
     /// Prompt tokens consumed.
     pub prompt_tokens: u64,
     /// Completion tokens consumed.
@@ -426,6 +430,7 @@ mod tests {
             reasoning_effort: None,
             provider_id: "test-provider".into(),
             account_label: None,
+            chat_completion_response_id: None,
             prompt_tokens: 0,
             completion_tokens: 0,
             reasoning_tokens: 0,
