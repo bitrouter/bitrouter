@@ -47,7 +47,7 @@ Cloud requires the parent #962 AI API migration plus this retirement migration a
 
 ## Evidence classes
 
-Local fixtures, actual SDK execution against a fixture provider, credentialed Google inference, hosted CI and production proof are recorded separately. The parent PR's test totals are not validation of this branch. No live-provider, hosted-CI or production success is claimed.
+Local fixtures, actual SDK execution against a fixture provider, credentialed Google inference, hosted CI and production proof are recorded separately. The parent PR's test totals are not validation of this branch. No live-provider, complete hosted-CI or production success is claimed. Individual hosted results are recorded below.
 
 ## Actual SDK fixture evidence
 
@@ -73,3 +73,7 @@ The first full workspace build exhausted local disk while linking. Only this wor
 Google reasoning uses the canonical declared `reasoning_effort` path (`minimal` through `high`) plus scoped `include_thoughts`. Raw `thinking_level`/`thinking_budget`, `none`/`xhigh`/`max`, seeds and penalties remain excluded until selected-model equivalence is demonstrated. Static-auth validation rejects duplicate bearer headers and conflicting Google key headers/query credentials.
 
 The initial model for the full text/image/function/schema/thinking validation is `gemini-3.8-flash`, the model used in Google's current Chat compatibility examples. Its route declares those capabilities and the common `minimal`/`low`/`medium`/`high` effort set. This is documentation/fixture evidence; the live gates are still pending. Older entries retain their existing narrower capability declarations.
+
+## Hosted CI follow-up
+
+The [initial hosted CI run](https://github.com/bitrouter/bitrouter/actions/runs/37570017412) at `5066839e` passed the Linux workspace and integration shards, doctests, documentation, MSRV, registry/schema, plugin and pinned public API checks. It found an ungated optional file-store import in the new retirement integration fixture. The credential portion is now guarded by `file-store`; historical protocol decoding/rejection remains covered without file storage. Local AI tests pass with no default features and with `pkce`, `hosted-login`, and `file-store` individually, plus Clippy with all features/tests and warnings denied. The corrected head requires its own hosted CI result; partial green jobs do not establish the entire run.

@@ -1,5 +1,6 @@
 //! Retired execution is rejected; historical catalog/credential bytes survive.
 
+#[cfg(feature = "file-store")]
 use bitrouter_ai::auth::file::snapshot::CredentialStore;
 use bitrouter_ai::catalog::types::RegistryData;
 use bitrouter_ai::client::{HttpTimeouts, ModelClient};
@@ -37,15 +38,19 @@ fn old_catalog_quarantines_native_entries_but_keeps_supported_models() -> TestRe
 
 #[test]
 fn historical_protocol_and_credentials_remain_readable_but_uncallable() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let path = directory.path().join("credentials.json");
-    let bytes = serde_json::to_vec(
-        &json!({"google-ai":{"work":{"type":"oauth","data":{"access_token":"fixture-access","refresh_token":"fixture-refresh","expires_at":10}}}}),
-    )?;
-    std::fs::write(&path, &bytes)?;
-    let saved = CredentialStore::load(&path)?;
-    assert!(saved.get_any("google-ai", "work").is_some());
-    assert_eq!(std::fs::read(&path)?, bytes);
+    #[cfg(feature = "file-store")]
+    let (_directory, path, bytes) = {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("credentials.json");
+        let bytes = serde_json::to_vec(
+            &json!({"google-ai":{"work":{"type":"oauth","data":{"access_token":"fixture-access","refresh_token":"fixture-refresh","expires_at":10}}}}),
+        )?;
+        std::fs::write(&path, &bytes)?;
+        let saved = CredentialStore::load(&path)?;
+        assert!(saved.get_any("google-ai", "work").is_some());
+        assert_eq!(std::fs::read(&path)?, bytes);
+        (directory, path, bytes)
+    };
     let protocol: ApiProtocol = serde_json::from_value(json!("generate_content"))?;
     assert_eq!(protocol, ApiProtocol::Custom("generate_content".into()));
     let selected = ModelTarget {
@@ -70,6 +75,7 @@ fn historical_protocol_and_credentials_remain_readable_but_uncallable() -> TestR
             )
             .is_err()
     );
+    #[cfg(feature = "file-store")]
     assert_eq!(std::fs::read(&path)?, bytes);
     Ok(())
 }
