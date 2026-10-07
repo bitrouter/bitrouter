@@ -1,10 +1,10 @@
 # Decisions API implementation progress
 
-Status: **implementation in progress; full gateway acceptance pending.**
+Status: **implemented and locally verified; live OpenAI acceptance unverified.**
 
 The contract is [DECISIONS_API_SPEC.md](DECISIONS_API_SPEC.md). The implementation
 branch is `codex/decisions-api`, stacked on #962 at `529f2fde`; the approved spec
-is preserved in `3676c99a`. No credentialed OpenAI call, push, publication or deployment has run.
+is preserved in `3676c99a`. Draft stack: [#965](https://github.com/bitrouter/bitrouter/pull/965), based on #962. No credentialed OpenAI call or deployment has run.
 
 ## D1: native AI semantics and selected-target client
 
@@ -229,7 +229,7 @@ Local verification:
 
 Requirement-level evidence and qualifications are in
 [DECISIONS_API_ACCEPTANCE.md](DECISIONS_API_ACCEPTANCE.md). Final rubric validation is complete;
-commit/publication and final source-state review remain; support claims stay scoped to
+source-state review is complete and draft #965 is published. Support claims stay scoped to
 these local checks and the retained upstream billing gate.
 
 Read-only external inventory is in [DECISIONS_API_MIGRATION.md](DECISIONS_API_MIGRATION.md).
@@ -245,8 +245,8 @@ remains unresolved; documented multipliers are estimates rather than invoice pro
 
 ## Delivery status
 
-All four batches are implemented and locally verified. Commit/publication and
-final delivery review are in progress. A11 remains explicitly
+All four batches are implemented and locally verified, committed and published
+as draft #965 on #962. The worktree is clean after the delivery evidence update. A11 remains explicitly
 unverified; hosted CI and deployed Cloud support have no evidence in this task.
 The external SDK migration and product-docs/catalog follow-up are inventoried;
 neither is advertised as a completed deployment. This local ledger does not

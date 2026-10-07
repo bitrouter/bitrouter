@@ -6,7 +6,8 @@ Contract: [DECISIONS_API_SPEC.md](DECISIONS_API_SPEC.md). Evidence is local to
 proof rather than inferring provider or deployed Cloud support from unit tests.
 
 Audit date: 2026-10-07. Local implementation and artifact guards are verified;
-the final source state is validated and stack publication is being completed. A11 is
+the final source state is validated and [draft #965](https://github.com/bitrouter/bitrouter/pull/965)
+is published on #962. A11 is
 explicitly unverified because an OpenAI API key is unavailable.
 
 | Criterion | Authoritative evidence | Scope / qualification |
