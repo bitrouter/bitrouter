@@ -63,7 +63,10 @@ pub fn normalize_auth_extension_error(error: ModelError, operation: AuthOperatio
     let message = operation.diagnostic().to_owned();
     match error {
         ModelError::InvalidRequest { .. } => ModelError::InvalidRequest { message },
-        ModelError::InvalidResponse { .. } => ModelError::InvalidResponse { message },
+        ModelError::InvalidResponse { .. } => ModelError::InvalidResponse {
+            message,
+            usage: None,
+        },
         ModelError::Provider { status, .. } => ModelError::Provider { status, message },
         ModelError::PolicyViolation { .. } => ModelError::PolicyViolation { message },
         ModelError::InvalidCredential { .. } => ModelError::InvalidCredential { message },
@@ -185,7 +188,7 @@ fn static_effective_auth_scheme(target: &ModelTarget) -> AuthScheme {
     match target.api_protocol {
         ApiProtocol::ChatCompletions | ApiProtocol::Responses => AuthScheme::Bearer,
         ApiProtocol::Messages => target.auth_scheme,
-        ApiProtocol::GenerateContent => AuthScheme::XApiKey,
+
         ApiProtocol::Custom(_) => target.auth_scheme,
     }
 }

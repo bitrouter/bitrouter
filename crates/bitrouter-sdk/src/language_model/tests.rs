@@ -31,6 +31,7 @@ fn target(provider: &str) -> RoutingTarget {
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        chat_google_extensions: false,
         reasoning_effort: None,
         account_label: None,
         api_key_override: None,
@@ -3414,6 +3415,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() -> Result<()
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        chat_google_extensions: false,
         reasoning_effort: None,
         account_label: None,
         api_key_override: None,
@@ -3802,6 +3804,7 @@ fn auth_retry_target(api_base: String) -> RoutingTarget {
         chat_token_limit_field: None,
         chat_supports_store: None,
         chat_supports_stream_options: None,
+        chat_google_extensions: false,
         reasoning_effort: None,
         account_label: None,
         api_key_override: None,
@@ -5290,6 +5293,124 @@ async fn projection_admission_routes_file_results_without_asset_loss_or_failure_
     Ok(())
 }
 
+#[derive(Default)]
+struct ConversionEvents(tokio::sync::Mutex<Vec<String>>);
+
+#[async_trait]
+impl ObserveHook for Arc<ConversionEvents> {
+    async fn on_conversion_admitted(
+        &self,
+        _: &PipelineContext,
+        target: &RoutingTarget,
+        report: &bitrouter_ai::conversion::ConversionReport,
+    ) {
+        assert!(report.issues.is_empty());
+        assert_eq!(report.admitted.len(), 1);
+        assert_eq!(
+            report.admitted[0].effect,
+            bitrouter_ai::conversion::ConversionEffect::EquivalentRepresentation
+        );
+        assert!(!format!("{report:?}").contains("secret"));
+        self.0
+            .lock()
+            .await
+            .push(format!("admitted:{}", target.provider_name));
+    }
+    async fn on_conversion_excluded(
+        &self,
+        _: &PipelineContext,
+        target: &RoutingTarget,
+        report: &bitrouter_ai::conversion::ConversionReport,
+    ) {
+        assert!(!report.issues.is_empty());
+        self.0
+            .lock()
+            .await
+            .push(format!("excluded:{}", target.provider_name));
+    }
+    async fn on_hop_start(&self, _: &PipelineContext, target: &RoutingTarget) {
+        self.0
+            .lock()
+            .await
+            .push(format!("start:{}", target.provider_name));
+    }
+    async fn on_hop_end(
+        &self,
+        _: &PipelineContext,
+        target: &RoutingTarget,
+        outcome: HopOutcome<'_>,
+    ) {
+        if matches!(outcome, HopOutcome::Failed(_)) {
+            self.0
+                .lock()
+                .await
+                .push(format!("failed:{}", target.provider_name));
+        }
+    }
+    async fn after_phase(&self, _: Phase, _: &PipelineContext) {}
+    async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
+    async fn on_request_end(&self, _: &PipelineContext, _: &RequestOutcome) {}
+}
+
+fn json_observation_request(streamed: bool) -> PipelineRequest {
+    let mut req = request();
+    req.prompt.tools = vec![Tool::Function {
+        name: "f".into(),
+        description: None,
+        parameters: serde_json::json!({"type":"object"}),
+        strict: Some(true),
+        provider_metadata: Default::default(),
+    }];
+    req.prompt.stream = streamed;
+    req.prompt.messages = vec![Message {
+        role: Role::Tool,
+        content: vec![Content::ToolResult {
+            call_id: "c".into(),
+            tool_name: Some("f".into()),
+            output: ToolResultOutput::Json {
+                value: serde_json::json!(["value-secret", 42]),
+            },
+            dynamic: false,
+            provider_metadata: Default::default(),
+        }],
+    }];
+    req
+}
+
+struct MisreportedAdmission;
+#[async_trait]
+impl Executor for MisreportedAdmission {
+    fn preflight(
+        &self,
+        target: &RoutingTarget,
+        prompt: &Prompt,
+        _: bool,
+    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
+        Ok(bitrouter_ai::conversion::request_admission(
+            prompt,
+            &target.api_protocol,
+        ))
+    }
+    async fn execute(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        Err(BitrouterError::internal("refused report reached execution"))
+    }
+    async fn execute_stream(
+        &self,
+        _: &RoutingTarget,
+        _: &Prompt,
+        _: &PipelineContext,
+    ) -> Result<StreamPartStream> {
+        Err(BitrouterError::internal(
+            "refused report reached stream execution",
+        ))
+    }
+}
+
 #[tokio::test]
 async fn projection_admission_preserves_tool_constraints_during_http_fallback() -> Result<()> {
     use bitrouter_ai::client::{HttpTimeouts, ModelClient};
@@ -5322,7 +5443,8 @@ async fn projection_admission_preserves_tool_constraints_during_http_fallback() 
             .await;
         let mut rejected = target("a-lossy");
         rejected.api_base = server.uri();
-        rejected.api_protocol = ApiProtocol::GenerateContent;
+        rejected.api_protocol = ApiProtocol::ChatCompletions;
+        rejected.chat_google_extensions = true;
         let mut accepted = target("z-preserving");
         accepted.api_base = server.uri();
         let parameters = serde_json::json!({"type":"object","additionalProperties":false,
@@ -5388,195 +5510,6 @@ async fn projection_admission_preserves_tool_constraints_during_http_fallback() 
 }
 
 #[tokio::test]
-async fn projection_admission_routes_json_results_without_rewriting_their_shape() -> Result<()> {
-    use bitrouter_ai::client::{HttpTimeouts, ModelClient};
-    use bitrouter_ai::conversion::{ConversionEffect, ConversionReason};
-    use bitrouter_ai::types::ToolResultOutput;
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-    for streamed in [false, true] {
-        let server = MockServer::start().await;
-        let result = serde_json::json!({"id":"chat-ok","object":"chat.completion","model":"test-model",
-            "choices":[{"index":0,"message":{"role":"assistant","content":"allowed"},"finish_reason":"stop"}],
-            "usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}});
-        let template = if streamed {
-            let body = [
-                serde_json::json!({"id":"chat-ok","model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"allowed"},"finish_reason":null}]}),
-                serde_json::json!({"id":"chat-ok","model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}),
-            ].iter().map(|event|format!("data: {event}\n\n")).collect::<String>() + "data: [DONE]\n\n";
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(body)
-        } else {
-            ResponseTemplate::new(200).set_body_json(result)
-        };
-        Mock::given(method("POST"))
-            .and(path("/chat/completions"))
-            .respond_with(template)
-            .expect(1)
-            .mount(&server)
-            .await;
-        let mut rejected = target("a-lossy");
-        rejected.api_base = server.uri();
-        rejected.api_protocol = ApiProtocol::GenerateContent;
-        let mut accepted = target("z-preserving");
-        accepted.api_base = server.uri();
-        let value = serde_json::json!(["key-secret",42,{"nested":true}]);
-        let mut req = request();
-        req.prompt.stream = streamed;
-        req.prompt.messages = vec![Message {
-            role: Role::Tool,
-            content: vec![Content::ToolResult {
-                call_id: "c".into(),
-                tool_name: Some("f".into()),
-                output: ToolResultOutput::Json {
-                    value: value.clone(),
-                },
-                dynamic: false,
-                provider_metadata: Default::default(),
-            }],
-        }];
-        let original = req.prompt.clone();
-        let direct = ModelClient::new(HttpTimeouts::default())?;
-        let error = direct
-            .render_request(&rejected.model_target(), &original, streamed)
-            .err()
-            .ok_or_else(|| BitrouterError::internal("JSON rewrite admitted"))?;
-        let ModelError::Incompatible { report } = error else {
-            return Err(BitrouterError::internal("lost JSON conversion report"));
-        };
-        assert_eq!(
-            report.issues[0].reason,
-            ConversionReason::ToolResultShapeProjectionUnclassified
-        );
-        assert_eq!(report.issues[0].effect, ConversionEffect::Unknown);
-        assert!(!format!("{report:?}").contains("secret"));
-        let observer = Arc::new(AdmissionObserver::default());
-        let table = Arc::new(StaticRoutingTable::new());
-        table.insert("test-model", vec![rejected, accepted]);
-        let mut builder = PipelineBuilder::new();
-        builder
-            .routing_table(table)
-            .executor(Arc::new(HttpExecutor::with_defaults()?))
-            .observe_hook(observer.clone());
-        let pipeline = Arc::new(builder.build()?);
-        if streamed {
-            for part in collect_stream(pipeline.execute_stream(req).await?).await {
-                let _ = part?;
-            }
-        } else {
-            let _ = pipeline.execute(req).await?;
-        }
-        assert_eq!(observer.excluded.load(Ordering::SeqCst), 1);
-        assert_eq!(observer.starts.load(Ordering::SeqCst), 1);
-        assert_eq!(observer.failures.load(Ordering::SeqCst), 0);
-        let requests = server
-            .received_requests()
-            .await
-            .ok_or_else(|| BitrouterError::internal("missing HTTP inventory"))?;
-        assert_eq!(requests.len(), 1);
-        let body = requests[0]
-            .body_json::<serde_json::Value>()
-            .map_err(BitrouterError::internal)?;
-        let encoded = body["messages"][0]["content"]
-            .as_str()
-            .ok_or_else(|| BitrouterError::internal("missing JSON encoding"))?;
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(encoded).map_err(BitrouterError::internal)?,
-            value
-        );
-        let Content::ToolResult {
-            output: ToolResultOutput::Json {
-                value: source_value,
-            },
-            ..
-        } = &original.messages[0].content[0]
-        else {
-            return Err(BitrouterError::internal("lost source JSON fixture"));
-        };
-        assert_eq!(source_value, &value);
-    }
-    Ok(())
-}
-
-#[derive(Default)]
-struct ConversionEvents(tokio::sync::Mutex<Vec<String>>);
-
-#[async_trait]
-impl ObserveHook for Arc<ConversionEvents> {
-    async fn on_conversion_admitted(
-        &self,
-        _: &PipelineContext,
-        target: &RoutingTarget,
-        report: &bitrouter_ai::conversion::ConversionReport,
-    ) {
-        assert!(report.issues.is_empty());
-        assert_eq!(report.admitted.len(), 1);
-        assert_eq!(
-            report.admitted[0].effect,
-            bitrouter_ai::conversion::ConversionEffect::EquivalentRepresentation
-        );
-        assert!(!format!("{report:?}").contains("secret"));
-        self.0
-            .lock()
-            .await
-            .push(format!("admitted:{}", target.provider_name));
-    }
-    async fn on_conversion_excluded(
-        &self,
-        _: &PipelineContext,
-        target: &RoutingTarget,
-        report: &bitrouter_ai::conversion::ConversionReport,
-    ) {
-        assert!(!report.issues.is_empty());
-        self.0
-            .lock()
-            .await
-            .push(format!("excluded:{}", target.provider_name));
-    }
-    async fn on_hop_start(&self, _: &PipelineContext, target: &RoutingTarget) {
-        self.0
-            .lock()
-            .await
-            .push(format!("start:{}", target.provider_name));
-    }
-    async fn on_hop_end(
-        &self,
-        _: &PipelineContext,
-        target: &RoutingTarget,
-        outcome: HopOutcome<'_>,
-    ) {
-        if matches!(outcome, HopOutcome::Failed(_)) {
-            self.0
-                .lock()
-                .await
-                .push(format!("failed:{}", target.provider_name));
-        }
-    }
-    async fn after_phase(&self, _: Phase, _: &PipelineContext) {}
-    async fn on_stream_part(&self, _: &StreamContext, _: &StreamPart) {}
-    async fn on_request_end(&self, _: &PipelineContext, _: &RequestOutcome) {}
-}
-
-fn json_observation_request(streamed: bool) -> PipelineRequest {
-    let mut req = request();
-    req.prompt.stream = streamed;
-    req.prompt.messages = vec![Message {
-        role: Role::Tool,
-        content: vec![Content::ToolResult {
-            call_id: "c".into(),
-            tool_name: Some("f".into()),
-            output: ToolResultOutput::Json {
-                value: serde_json::json!(["value-secret", 42]),
-            },
-            dynamic: false,
-            provider_metadata: Default::default(),
-        }],
-    }];
-    req
-}
-
-#[tokio::test]
 async fn equivalent_conversion_observation_preserves_retry_content_and_attempt_accounting()
 -> Result<()> {
     use wiremock::matchers::{method, path};
@@ -5616,7 +5549,7 @@ async fn equivalent_conversion_observation_preserves_retry_content_and_attempt_a
             .await;
         let mut excluded = target("a-excluded");
         excluded.api_base = server.uri();
-        excluded.api_protocol = ApiProtocol::GenerateContent;
+        excluded.api_protocol = ApiProtocol::Messages;
         let mut retry = target("b-retry");
         retry.api_base = server.uri();
         let mut final_target = target("z-final");
@@ -5680,47 +5613,13 @@ async fn equivalent_conversion_observation_preserves_retry_content_and_attempt_a
     Ok(())
 }
 
-struct MisreportedAdmission;
-#[async_trait]
-impl Executor for MisreportedAdmission {
-    fn preflight(
-        &self,
-        target: &RoutingTarget,
-        prompt: &Prompt,
-        _: bool,
-    ) -> Result<bitrouter_ai::conversion::ConversionReport> {
-        Ok(bitrouter_ai::conversion::request_admission(
-            prompt,
-            &target.api_protocol,
-        ))
-    }
-    async fn execute(
-        &self,
-        _: &RoutingTarget,
-        _: &Prompt,
-        _: &PipelineContext,
-    ) -> Result<ExecutionResult> {
-        Err(BitrouterError::internal("refused report reached execution"))
-    }
-    async fn execute_stream(
-        &self,
-        _: &RoutingTarget,
-        _: &Prompt,
-        _: &PipelineContext,
-    ) -> Result<StreamPartStream> {
-        Err(BitrouterError::internal(
-            "refused report reached stream execution",
-        ))
-    }
-}
-
 #[tokio::test]
 async fn successful_preflight_cannot_hide_refusals_or_emit_empty_conversion_observations()
 -> Result<()> {
     for streamed in [false, true] {
         let table = Arc::new(StaticRoutingTable::new());
         let mut refused = target("refused");
-        refused.api_protocol = ApiProtocol::GenerateContent;
+        refused.api_protocol = ApiProtocol::Messages;
         table.insert("test-model", vec![refused]);
         let events = Arc::new(ConversionEvents::default());
         let mut builder = PipelineBuilder::new();
@@ -5770,6 +5669,192 @@ async fn successful_preflight_cannot_hide_refusals_or_emit_empty_conversion_obse
             let _ = pipeline.execute(request()).await?;
         }
         assert_eq!(*events.0.lock().await, vec!["start:unchanged"]);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn google_continuity_failure_keeps_reported_usage_in_settlement() -> Result<()> {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("POST")).and(path("/chat/completions")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        "choices":[{"message":{"role":"assistant","tool_calls":[{"id":"","type":"function","function":{"name":"f","arguments":"{}"},"extra_content":{"google":{"thought_signature":"fixture-opaque"}}}]},"finish_reason":"tool_calls"}],
+        "usage":{"prompt_tokens":12,"completion_tokens":7,"completion_tokens_details":{"reasoning_tokens":3}}
+    }))).expect(1).mount(&server).await;
+    let mut selected = target("google");
+    selected.api_base = server.uri();
+    selected.chat_google_extensions = true;
+    let table = Arc::new(StaticRoutingTable::new());
+    table.insert("test-model", vec![selected]);
+    let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut builder = PipelineBuilder::new();
+    builder
+        .routing_table(table)
+        .executor(Arc::new(HttpExecutor::with_defaults()?))
+        .settlement_recorder(SettlementSnapshotRecorder(recorded.clone()));
+    let pipeline = builder.build()?;
+    let error = pipeline
+        .execute(request())
+        .await
+        .err()
+        .ok_or_else(|| BitrouterError::internal("invalid signed response accepted"))?;
+    assert!(matches!(
+        error,
+        BitrouterError::UpstreamInvalidResponse { usage: Some(_), .. }
+    ));
+    let snapshots = recorded
+        .lock()
+        .map_err(|_| BitrouterError::internal("settlement lock unavailable"))?;
+    assert_eq!(
+        *snapshots,
+        vec![SettlementSnapshot {
+            prompt_tokens: 12,
+            completion_tokens: 7,
+            has_error: true
+        }]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn google_signed_parallel_and_sequential_tools_survive_sdk_gateway_cycles() -> Result<()> {
+    use bitrouter_ai::protocol::{InboundAdapter, chat_completions::ChatCompletionsAdapter};
+    use bitrouter_ai::stream::collect::collect_generate;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    for streamed in [false, true] {
+        let server = MockServer::start().await;
+        let mut selected = target("google");
+        selected.api_base = server.uri();
+        selected.chat_google_extensions = true;
+        let call = |id: &str, signature: Option<&str>| {
+            let mut call = serde_json::json!({"id":id,"type":"function","function":{"name":"lookup_city","arguments":"{\"city\":\"Paris\"}"}});
+            if let Some(signature) = signature {
+                call["extra_content"] =
+                    serde_json::json!({"google":{"thought_signature":signature}});
+            }
+            call
+        };
+        let responses = [
+            serde_json::json!({"role":"assistant","tool_calls":[call("one",Some("opaque-first")),call("two",None)]}),
+            serde_json::json!({"role":"assistant","tool_calls":[call("three",Some("opaque-second"))]}),
+            serde_json::json!({"role":"assistant","content":"completed"}),
+        ];
+        for (index, message) in responses.iter().enumerate() {
+            let body = serde_json::json!({"choices":[{"message":message,"finish_reason":if index<2 { "tool_calls" } else { "stop" }}],"usage":{"prompt_tokens":12,"completion_tokens":7}});
+            let response = if streamed {
+                let mut delta = message.clone();
+                if let Some(calls) = delta
+                    .get_mut("tool_calls")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for (index, call) in calls.iter_mut().enumerate() {
+                        call["index"] = index.into();
+                    }
+                }
+                let delta = serde_json::json!({"choices":[{"delta":delta,"finish_reason":null}]});
+                let terminal = serde_json::json!({"choices":[{"delta":{},"finish_reason":body["choices"][0]["finish_reason"]}],"usage":body["usage"]});
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(format!(
+                        "data: {delta}\n\ndata: {terminal}\n\ndata: [DONE]\n\n"
+                    ))
+            } else {
+                ResponseTemplate::new(200).set_body_json(body)
+            };
+            Mock::given(method("POST"))
+                .and(path("/chat/completions"))
+                .respond_with(response)
+                .up_to_n_times(1)
+                .with_priority(index as u8 + 1)
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let table = Arc::new(StaticRoutingTable::new());
+        table.insert("test-model", vec![selected.clone()]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(table.clone())
+            .executor(Arc::new(HttpExecutor::with_defaults()?));
+        let pipeline = Arc::new(builder.build()?);
+        let mut req = request();
+        req.prompt.stream = streamed;
+        req.prompt.tools = vec![Tool::Function {
+            name: "lookup_city".into(),
+            description: None,
+            parameters: serde_json::json!({"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}),
+            strict: None,
+            provider_metadata: Default::default(),
+        }];
+        for cycle in 0..3 {
+            let result = if streamed {
+                collect_generate(pipeline.clone().execute_stream(req.clone()).await?).await?
+            } else {
+                pipeline.execute(req.clone()).await?.result
+            };
+            let gateway =
+                ChatCompletionsAdapter.render_response(&result, &req.prompt, "fixture-gateway")?;
+            let mut messages = vec![gateway["choices"][0]["message"].clone()];
+            let mut count = 0;
+            for content in &result.content {
+                if let Content::ToolCall { id, .. } = content {
+                    messages.push(serde_json::json!({"role":"tool","tool_call_id":id,"content":"fixture-result"}));
+                    count += 1;
+                }
+            }
+            assert_eq!(
+                count,
+                match cycle {
+                    0 => 2,
+                    1 => 1,
+                    _ => 0,
+                }
+            );
+            let continuation = ChatCompletionsAdapter
+                .parse_request(serde_json::json!({"model":"test-model","messages":messages}))?;
+            req.prompt.messages.extend(continuation.messages);
+            let mut unrelated = selected.clone();
+            unrelated.provider_name = "unrelated".into();
+            unrelated.chat_google_extensions = false;
+            table.insert("test-model", vec![unrelated, selected.clone()]);
+        }
+        let sent = server
+            .received_requests()
+            .await
+            .ok_or_else(|| BitrouterError::internal("request inventory missing"))?;
+        assert_eq!(sent.len(), 3);
+        for request in sent.iter().skip(1) {
+            let body: serde_json::Value = serde_json::from_slice(&request.body)
+                .map_err(|_| BitrouterError::internal("invalid captured body"))?;
+            let calls = body["messages"]
+                .as_array()
+                .ok_or_else(|| BitrouterError::internal("missing messages"))?
+                .iter()
+                .flat_map(|message| {
+                    message
+                        .get("tool_calls")
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter()
+                        .flatten()
+                });
+            for call in calls {
+                assert!(call["extra_content"].get("bitrouter").is_none());
+                if call["id"] == "one" {
+                    assert_eq!(
+                        call["extra_content"]["google"]["thought_signature"],
+                        "opaque-first"
+                    );
+                }
+                if call["id"] == "three" {
+                    assert_eq!(
+                        call["extra_content"]["google"]["thought_signature"],
+                        "opaque-second"
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }

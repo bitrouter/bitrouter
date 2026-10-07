@@ -11,8 +11,5 @@ mod anthropic;
 #[path = "subscription/claude_code.rs"]
 mod claude_code;
 
-#[path = "subscription/antigravity.rs"]
-mod antigravity;
-
 #[path = "subscription/hosted.rs"]
 mod hosted;

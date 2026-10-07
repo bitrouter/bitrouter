@@ -1,5 +1,8 @@
 # BitRouter AI refactor progress
 
+The [Gemini retirement progress](GEMINI_PROTOCOL_RETIREMENT_PROGRESS.md) supersedes the four-protocol and Antigravity execution claims below for the retirement branch. These batch records remain historical evidence for their original commits; they do not validate the replacement.
+
+
 Implementation follows the
 [reviewed design](BITROUTER_AI_REFACTOR_SPEC.md). This file distinguishes completed
 batches from the final AI contract. The initial source baseline is PR #953 head

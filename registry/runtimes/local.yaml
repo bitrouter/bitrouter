@@ -27,13 +27,6 @@ agents:
       command: npx
       args: ["-y", "@agentclientprotocol/codex-acp@1.10.0"]
 
-  # UNPINNED — `@latest`. See registry/agents/google.yaml.
-  - id: gemini-cli
-    transport:
-      type: stdio
-      command: npx
-      args: ["-y", "--", "@google/gemini-cli@latest", "--experimental-acp"]
-
   - id: opencode
     transport:
       type: stdio

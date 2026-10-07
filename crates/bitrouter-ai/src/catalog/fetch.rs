@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use super::types::{CanonicalModel, Envelope, RegistryData, RegistryProvider};
+use super::types::{CanonicalModel, Envelope, RegistryData, providers_from_values};
 
 /// Network permission for a requested catalog refresh.
 #[derive(Debug, Clone, Copy)]
@@ -54,12 +54,12 @@ pub async fn fetch_registry(
         return Err(FetchError::InvalidSource);
     }
     let base = base.trim_end_matches('/');
-    let providers: Envelope<RegistryProvider> =
+    let providers: Envelope<serde_json::Value> =
         fetch_envelope(client, &format!("{base}/providers.json"), request_timeout).await?;
     let models: Envelope<CanonicalModel> =
         fetch_envelope(client, &format!("{base}/models.json"), request_timeout).await?;
     Ok(RegistryData {
-        providers: providers.data,
+        providers: providers_from_values(providers.data).map_err(FetchError::Parse)?,
         canonical: models.data,
     })
 }
