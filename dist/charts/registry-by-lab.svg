@@ -223,17 +223,17 @@
 <text class="lab" x="38.0" y="611.0">XAI</text>
 <text class="lab-count" x="286.0" y="611.0" text-anchor="end">6</text>
 <rect x="38.0" y="630.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
-<rect x="38.0" y="630.0" width="96.3" height="22.0" rx="4" fill="#d4d4d8"/>
+<rect x="38.0" y="630.0" width="85.6" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="46.0" y="645.0">grok-4.6</text>
-<text class="routes" x="286.0" y="645.0" text-anchor="end">9</text>
+<text class="routes" x="286.0" y="645.0" text-anchor="end">8</text>
 <rect x="38.0" y="656.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
 <rect x="38.0" y="656.0" width="74.9" height="22.0" rx="4" fill="#d4d4d8"/>
-<text class="model" x="46.0" y="671.0">grok-4.3</text>
+<text class="model" x="46.0" y="671.0">grok-4.5</text>
 <text class="routes" x="286.0" y="671.0" text-anchor="end">7</text>
 <rect x="38.0" y="682.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
-<rect x="38.0" y="682.0" width="74.9" height="22.0" rx="4" fill="#d4d4d8"/>
-<text class="model" x="46.0" y="697.0">grok-4.5</text>
-<text class="routes" x="286.0" y="697.0" text-anchor="end">7</text>
+<rect x="38.0" y="682.0" width="64.2" height="22.0" rx="4" fill="#d4d4d8"/>
+<text class="model" x="46.0" y="697.0">grok-4.3</text>
+<text class="routes" x="286.0" y="697.0" text-anchor="end">6</text>
 <rect x="38.0" y="708.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
 <rect x="38.0" y="708.0" width="53.5" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="46.0" y="723.0">grok-build-0.1</text>
@@ -296,21 +296,21 @@
 <text class="lab" x="914.0" y="611.0">GOOGLE</text>
 <text class="lab-count" x="1162.0" y="611.0" text-anchor="end">4</text>
 <rect x="914.0" y="630.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
-<rect x="914.0" y="630.0" width="64.2" height="22.0" rx="4" fill="#d4d4d8"/>
+<rect x="914.0" y="630.0" width="42.8" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="922.0" y="645.0">gemini-3.5-flash</text>
-<text class="routes" x="1162.0" y="645.0" text-anchor="end">6</text>
+<text class="routes" x="1162.0" y="645.0" text-anchor="end">4</text>
 <rect x="914.0" y="656.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
-<rect x="914.0" y="656.0" width="64.2" height="22.0" rx="4" fill="#d4d4d8"/>
+<rect x="914.0" y="656.0" width="42.8" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="922.0" y="671.0">gemini-3.6-flash</text>
-<text class="routes" x="1162.0" y="671.0" text-anchor="end">6</text>
+<text class="routes" x="1162.0" y="671.0" text-anchor="end">4</text>
 <rect x="914.0" y="682.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
-<rect x="914.0" y="682.0" width="64.2" height="22.0" rx="4" fill="#d4d4d8"/>
+<rect x="914.0" y="682.0" width="42.8" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="922.0" y="697.0">gemini-3.7-flash</text>
-<text class="routes" x="1162.0" y="697.0" text-anchor="end">6</text>
+<text class="routes" x="1162.0" y="697.0" text-anchor="end">4</text>
 <rect x="914.0" y="708.0" width="214.0" height="22.0" rx="4" fill="#f4f4f5"/>
-<rect x="914.0" y="708.0" width="64.2" height="22.0" rx="4" fill="#d4d4d8"/>
+<rect x="914.0" y="708.0" width="42.8" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="922.0" y="723.0">gemini-3.8-flash</text>
-<text class="routes" x="1162.0" y="723.0" text-anchor="end">6</text>
+<text class="routes" x="1162.0" y="723.0" text-anchor="end">4</text>
 <rect x="28.0" y="808.0" width="268.0" height="30.0" rx="5" fill="#0a0a0a"/>
 <text class="lab" x="38.0" y="827.0">KIMI</text>
 <text class="lab-count" x="286.0" y="827.0" text-anchor="end">3</text>
@@ -355,5 +355,5 @@
 <rect x="914.0" y="846.0" width="74.9" height="22.0" rx="4" fill="#d4d4d8"/>
 <text class="model" x="922.0" y="861.0">grok-4.7</text>
 <text class="routes" x="1162.0" y="861.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="954.0">77 models · 47 providers · 569 model→provider routes · 12 providers billed by subscription</text>
+<text class="caption" x="28.0" y="954.0">77 models · 45 providers · 559 model→provider routes · 11 providers billed by subscription</text>
 </svg>
