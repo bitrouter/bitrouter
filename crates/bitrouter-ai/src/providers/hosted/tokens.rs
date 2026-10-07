@@ -141,6 +141,7 @@ pub async fn refresh(
         .await
         .map_err(|_| crate::error::ModelError::InvalidResponse {
             message: "hosted token exchange failed".into(),
+            usage: None,
         })?;
     if !response.status().is_success() {
         return Err(crate::error::ModelError::invalid_credential(
@@ -152,10 +153,12 @@ pub async fn refresh(
         .await
         .map_err(|_| crate::error::ModelError::InvalidResponse {
             message: "hosted token response could not be read".into(),
+            usage: None,
         })?;
     let reply: TokenResponse =
         serde_json::from_slice(&bytes).map_err(|_| crate::error::ModelError::InvalidResponse {
             message: "hosted token response is malformed".into(),
+            usage: None,
         })?;
     if reply.error.is_some() {
         return Err(crate::error::ModelError::invalid_credential(
@@ -168,6 +171,7 @@ pub async fn refresh(
             .clone()
             .ok_or_else(|| crate::error::ModelError::InvalidResponse {
                 message: "hosted token response lacks an access token".into(),
+                usage: None,
             })?;
     Ok(token_set_from_response(access_token, reply))
 }

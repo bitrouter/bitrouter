@@ -544,9 +544,10 @@ mod tests {
     }
 
     #[test]
-    fn install_emits_project_url_for_attribution() {
-        let out = install("gemini-cli").unwrap();
+    fn install_emits_project_url_for_attribution() -> std::result::Result<(), String> {
+        let out = install("claude-acp")?;
         assert!(out.contains("github.com"));
+        Ok(())
     }
 
     #[test]

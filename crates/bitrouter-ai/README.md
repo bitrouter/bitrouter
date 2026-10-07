@@ -11,8 +11,8 @@ use bitrouter_ai::target::ModelTarget;
 use bitrouter_ai::client::{HttpTimeouts, ModelClient};
 ```
 
-The four built-in codecs support Chat Completions, Responses, Messages and
-Generate Content, including ingress/egress and stream conversion. Transports
+The three built-in codecs support Chat Completions, Responses and Messages,
+including ingress/egress and stream conversion. Transports
 accept an effective `ModelTarget`, after the caller resolves routing, account
 selection and credential/endpoint overrides. The target carries connection
 values and model compatibility, with redacted credential debug output.
@@ -54,8 +54,7 @@ An all-excluded chain returns the collected typed report; it never resets histor
 
 Built-in `InboundAdapter::parse_request` also checks initial ingress omissions before
 returning a Prompt. Unknown Responses items, unknown/unmapped message and tool-output
-blocks, unsupported content values, system payloads that would lose structure and
-ambiguous Gemini payload carriers produce request-ingress reports with original wire
+blocks, unsupported content values, system payloads that would lose structure produce request-ingress reports with original wire
 indices. Unsigned Messages thinking is rejected rather than erased. These refusals
 occur before gateway route selection or model execution and contain no raw type names
 or payloads. Known heterogeneous input and promoted tool declarations remain supported.
@@ -69,8 +68,7 @@ be discarded across protocol families or forwarded as plain reasoning text.
 Provider-defined declarations use their existing native-family identity: Chat's
 omission is refused, and foreign/unclassified translation is excluded. Non-object
 provider-tool arguments cannot be replaced by an empty object. Same-family projection
-is not a native-schema or model-capability certificate. Antigravity's custom wrapper
-explicitly delegates admission to its actual Gemini semantic codec.
+is not a native-schema or model-capability certificate.
 
 A Responses denial tagged for approval suppression must have a matching denied
 approval response; otherwise its result cannot disappear. This local pairing check
@@ -81,22 +79,17 @@ structured-output names/descriptions, omitted filenames and tool-result error/de
 status. Filename and schema-metadata omissions remain unclassified rather than assumed
 nonessential. Messages retains error flags; an ordinary text result cannot stand in
 for a typed error or denial. A paired Responses denial cannot silently lose its reason.
-Gemini tool schemas are compared against the actual serializer: unchanged schemas and
-the bounded single-base-type/nullable representation pass; deleted keywords, distinct
-type unions and conflicting nullable declarations are refused. This does not validate
-native schemas or prove all dialects have equivalent model behavior.
+Google Chat uses per-model compatibility and a conservative supported schema/option
+subset. Unknown constraints, explicit cache references and unverified strict flags
+exclude the Google target without changing the source request.
 
 Initial JSON/content-boundary admission rejects malformed argument strings where
-Messages/Gemini would replace them with `{}`, unclassified Gemini `result` wrappers,
-Chat history ordering/concatenation that has no slot, and selected ingress attributes
-that disappear before a Prompt exists. Chat/Message tool-result arrays keep text-only
-part boundaries; Chat messages with several text parts retain a parts array. Native
-Messages JSON/error-JSON MCP bodies and Gemini object results remain represented.
-Canonical JSON encoded into string-only tool-result slots retains the complete value;
-tests verify inverse JSON decoding, with error/denial status checked independently.
-The original typed Prompt remains authoritative rather than being inferred back from
-a projected string. Reports retain classified JSON encoding and Gemini schema
-normalization in a separate `admitted` list; `issues` remains the refusal list.
+Messages would replace them with `{}`, unsupported Chat ordering/concatenation,
+and selected ingress attributes that disappear before a Prompt exists. Chat and
+Messages preserve text-only tool-result boundaries; canonical JSON encoded into
+string-only slots retains the complete value. Error/denial status is checked
+independently. Reports retain classified JSON encoding in `admitted` and refusals
+in `issues`.
 `ModelClient::render_request_with_report` returns the selected body and assessment
 without I/O/authentication. Older serialized reports default to no admitted effects.
 The SDK observes eligible effects through `ObserveHook::on_conversion_admitted`
@@ -126,12 +119,17 @@ Claude CLI adoption, Keychain/file access and OAuth client registration are
 application-side inputs. AI applies the resulting selected credential and
 preserves the source prompt while projecting the provider request.
 
-Google AI (`providers::antigravity`) uses an explicitly registered custom
-protocol over Gemini semantics. Inject an OAuth session and HTTP client;
-`refresh::AntigravityRefresher` accepts explicit client metadata and a permitted
-secret-source callback. Only `invalid_client` permits another secret candidate.
-Project bootstrap/cache entries bind the same bearer and origin used for the
-model request. Local `agy` binary/environment/Keychain discovery stays above AI.
+Native Gemini Generate Content and the private Antigravity subscription backend are
+retired. Metered Google uses the official Chat endpoint. Individual tool signatures
+map to canonical Google metadata; actual selected calls attach a replay proof bound
+to the selected static key, endpoint, provider, model, account and exact call bytes.
+Gateway clients must preserve both `extra_content.google.thought_signature` and
+`extra_content.bitrouter.google_replay_proof`. The proof is removed before upstream
+dispatch. Unrelated target/account replay is refused before authentication or I/O.
+Available provider usage remains attached to late continuity validation failures.
+See [retirement progress](../../docs/GEMINI_PROTOCOL_RETIREMENT_PROGRESS.md) for the
+actual Antigravity SDK limitation and pending live-provider gates.
+
 Custom adapter/transports use an injected `OutboundDispatch`. Token cancellation
 waits for custom authentication to finish, then prevents dispatch; dropping the
 call future can still drop authentication. A transport that rotates credentials
@@ -230,3 +228,5 @@ Persisted credential schemas, default paths, CLI commands and environment policy
 are preserved. Both file stores still coordinate only within one process;
 relocation does not add crash recovery or cross-process exclusion. Local workspace
 migration is separate from external consumer migration and publication.
+
+Google reasoning uses the canonical declared `reasoning_effort` path (`minimal` through `high`) plus scoped `include_thoughts`. Raw `thinking_level`/`thinking_budget`, `none`/`xhigh`/`max`, seeds and penalties remain excluded until selected-model equivalence is demonstrated. Static-auth validation rejects duplicate bearer headers and conflicting Google key headers/query credentials.

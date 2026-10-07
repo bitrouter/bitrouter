@@ -15,6 +15,10 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`BITROUTER_AI_REFACTOR_PROGRESS.md`](BITROUTER_AI_REFACTOR_PROGRESS.md) —
   Implemented extraction batches, breaking import migration, validation evidence
   and remaining work against the AI spec.
+- [`GEMINI_PROTOCOL_RETIREMENT_SPEC.md`](GEMINI_PROTOCOL_RETIREMENT_SPEC.md) —
+  **approved; implementation in progress.** Removes native Gemini Generate Content ingress and
+  upstream support, retains metered Gemini through Chat Completions, and defines
+  provider retirement, Antigravity SDK connectivity, and replacement validation.
 - [`LOCAL_DAEMON_UPGRADE_SPEC.md`](LOCAL_DAEMON_UPGRADE_SPEC.md) — **implemented
   in #932; local and CI verification passed.** Safe local daemon handoff after
   a CLI upgrade: version and capability detection, idle-only restart,

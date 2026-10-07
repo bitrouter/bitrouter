@@ -83,10 +83,12 @@ pub async fn fetch(client: &reqwest::Client, authorization_server: &str) -> Resu
         .await
         .map_err(|_| crate::error::ModelError::InvalidResponse {
             message: "hosted metadata discovery failed".into(),
+            usage: None,
         })?;
     if !resp.status().is_success() {
         return Err(crate::error::ModelError::InvalidResponse {
             message: "hosted metadata discovery was rejected".into(),
+            usage: None,
         });
     }
     let body = resp
@@ -94,10 +96,12 @@ pub async fn fetch(client: &reqwest::Client, authorization_server: &str) -> Resu
         .await
         .map_err(|_| crate::error::ModelError::InvalidResponse {
             message: "hosted metadata response could not be read".into(),
+            usage: None,
         })?;
     let parsed: AsMetadata =
         serde_json::from_slice(&body).map_err(|_| crate::error::ModelError::InvalidResponse {
             message: "hosted metadata response is malformed".into(),
+            usage: None,
         })?;
     for endpoint in [
         Some(parsed.device_authorization_endpoint.as_str()),

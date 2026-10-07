@@ -202,12 +202,11 @@ fn target(base: &str, protocol: ApiProtocol) -> ModelTarget {
     }
 }
 
-fn protocols() -> [ApiProtocol; 4] {
+fn protocols() -> [ApiProtocol; 3] {
     [
         ApiProtocol::ChatCompletions,
         ApiProtocol::Responses,
         ApiProtocol::Messages,
-        ApiProtocol::GenerateContent,
     ]
 }
 
@@ -243,9 +242,7 @@ fn response(protocol: &ApiProtocol) -> Value {
         ApiProtocol::Messages => {
             json!({"id":"msg_fixture","type":"message","role":"assistant","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}})
         }
-        ApiProtocol::GenerateContent => {
-            json!({"responseId":"gemini_fixture","candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2}})
-        }
+
         ApiProtocol::Custom(_) => Value::Null,
     }
 }
@@ -290,7 +287,7 @@ fn response_stream(protocol: &ApiProtocol) -> String {
                 )
                 + &event(json!({"type":"message_stop"}))
         }
-        ApiProtocol::GenerateContent => event(response(protocol)),
+
         ApiProtocol::Custom(_) => String::new(),
     }
 }
@@ -438,97 +435,6 @@ async fn codex_generate_cancellation_and_drop_release_the_upstream_connection() 
         drop(call);
         tokio::time::timeout(DEADLINE, &mut server.disconnected).await??;
         tokio::time::timeout(DEADLINE, &mut server.server).await???;
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn four_protocols_invoke_without_sdk_and_keep_source_prompt() -> TestResult {
-    let client = ModelClient::new(HttpTimeouts::default())?;
-    let source = prompt()?;
-    let original = source.clone();
-    for protocol in protocols() {
-        for stream in [false, true] {
-            let body = if stream {
-                response_stream(&protocol)
-            } else {
-                response(&protocol).to_string()
-            };
-            let mut server = fixture(200, body, stream, None).await?;
-            let selected = target(&server.base, protocol.clone());
-            let cancellation = CancellationToken::new();
-            if stream {
-                let parts =
-                    collect(client.stream(&selected, &source, &cancellation).await?).await?;
-                assert_eq!(
-                    parts
-                        .iter()
-                        .filter_map(|part| match part {
-                            StreamPart::TextDelta { text } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<String>(),
-                    "hello"
-                );
-                assert!(parts.iter().any(StreamPart::is_terminal), "{protocol}");
-                let usage = parts
-                    .iter()
-                    .find_map(|part| match part {
-                        StreamPart::Usage { usage }
-                        | StreamPart::ResponseCompleted {
-                            usage: Some(usage), ..
-                        } => Some(usage),
-                        _ => None,
-                    })
-                    .ok_or_else(|| io::Error::other("missing stream usage"))?;
-                assert_eq!((usage.prompt_tokens, usage.completion_tokens), (3, 2));
-            } else {
-                let result = client.generate(&selected, &source, &cancellation).await?;
-                assert!(
-                    matches!(result.content.as_slice(), [Content::Text { text, .. }] if text == "hello")
-                );
-                assert_eq!(result.finish_reason, Some(FinishReason::Stop));
-                let usage = result
-                    .usage
-                    .ok_or_else(|| io::Error::other("missing usage"))?;
-                assert_eq!((usage.prompt_tokens, usage.completion_tokens), (3, 2));
-            }
-            let request = tokio::time::timeout(DEADLINE, &mut server.received).await??;
-            let headers = request.headers.to_ascii_lowercase();
-            match protocol {
-                ApiProtocol::ChatCompletions => assert!(
-                    headers.starts_with("post /chat/completions ")
-                        && headers.contains("authorization: bearer selected-secret")
-                ),
-                ApiProtocol::Responses => assert!(
-                    headers.starts_with("post /responses ")
-                        && headers.contains("authorization: bearer selected-secret")
-                ),
-                ApiProtocol::Messages => assert!(
-                    headers.starts_with("post /messages ")
-                        && headers.contains("x-api-key: selected-secret")
-                        && !headers.contains("authorization:")
-                ),
-                ApiProtocol::GenerateContent => {
-                    let verb = if stream {
-                        "streamgeneratecontent?alt=sse"
-                    } else {
-                        "generatecontent"
-                    };
-                    assert!(
-                        headers.starts_with(&format!("post /models/selected-model:{verb} "))
-                            && headers.contains("x-goog-api-key: selected-secret")
-                    );
-                }
-                ApiProtocol::Custom(_) => {}
-            }
-            if protocol != ApiProtocol::GenerateContent {
-                assert_eq!(request.body["model"], "selected-model");
-                assert_eq!(request.body["stream"], stream);
-            }
-            assert_eq!(source, original);
-            tokio::time::timeout(DEADLINE, &mut server.server).await???;
-        }
     }
     Ok(())
 }
@@ -1028,6 +934,85 @@ async fn registered_auth_shapes_and_rebuilds_once_after_401_in_both_modes() -> T
                 .all(|request| request.body["provider_field"] == "prepared")
         );
         assert_eq!(serde_json::to_value(&source)?, before);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn three_protocols_invoke_without_sdk_and_keep_source_prompt() -> TestResult {
+    let client = ModelClient::new(HttpTimeouts::default())?;
+    let source = prompt()?;
+    let original = source.clone();
+    for protocol in protocols() {
+        for stream in [false, true] {
+            let body = if stream {
+                response_stream(&protocol)
+            } else {
+                response(&protocol).to_string()
+            };
+            let mut server = fixture(200, body, stream, None).await?;
+            let selected = target(&server.base, protocol.clone());
+            let cancellation = CancellationToken::new();
+            if stream {
+                let parts =
+                    collect(client.stream(&selected, &source, &cancellation).await?).await?;
+                assert_eq!(
+                    parts
+                        .iter()
+                        .filter_map(|part| match part {
+                            StreamPart::TextDelta { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<String>(),
+                    "hello"
+                );
+                assert!(parts.iter().any(StreamPart::is_terminal), "{protocol}");
+                let usage = parts
+                    .iter()
+                    .find_map(|part| match part {
+                        StreamPart::Usage { usage }
+                        | StreamPart::ResponseCompleted {
+                            usage: Some(usage), ..
+                        } => Some(usage),
+                        _ => None,
+                    })
+                    .ok_or_else(|| io::Error::other("missing stream usage"))?;
+                assert_eq!((usage.prompt_tokens, usage.completion_tokens), (3, 2));
+            } else {
+                let result = client.generate(&selected, &source, &cancellation).await?;
+                assert!(
+                    matches!(result.content.as_slice(), [Content::Text { text, .. }] if text == "hello")
+                );
+                assert_eq!(result.finish_reason, Some(FinishReason::Stop));
+                let usage = result
+                    .usage
+                    .ok_or_else(|| io::Error::other("missing usage"))?;
+                assert_eq!((usage.prompt_tokens, usage.completion_tokens), (3, 2));
+            }
+            let request = tokio::time::timeout(DEADLINE, &mut server.received).await??;
+            let headers = request.headers.to_ascii_lowercase();
+            match protocol {
+                ApiProtocol::ChatCompletions => assert!(
+                    headers.starts_with("post /chat/completions ")
+                        && headers.contains("authorization: bearer selected-secret")
+                ),
+                ApiProtocol::Responses => assert!(
+                    headers.starts_with("post /responses ")
+                        && headers.contains("authorization: bearer selected-secret")
+                ),
+                ApiProtocol::Messages => assert!(
+                    headers.starts_with("post /messages ")
+                        && headers.contains("x-api-key: selected-secret")
+                        && !headers.contains("authorization:")
+                ),
+
+                ApiProtocol::Custom(_) => {}
+            }
+            assert_eq!(request.body["model"], "selected-model");
+            assert_eq!(request.body["stream"], stream);
+            assert_eq!(source, original);
+            tokio::time::timeout(DEADLINE, &mut server.server).await???;
+        }
     }
     Ok(())
 }

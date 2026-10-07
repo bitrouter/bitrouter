@@ -19,6 +19,8 @@ client stream encoders remain first-class requirements. The accompanying
 [history compatibility audit](MODEL_HISTORY_COMPATIBILITY_AUDIT.md) records
 existing behavior; it does not approve current losses as the future contract.
 
+The approved [Gemini retirement spec](GEMINI_PROTOCOL_RETIREMENT_SPEC.md) supersedes the earlier four-protocol requirement. The active built-ins are Chat Completions, Responses, and Messages. Remaining extraction acceptance criteria stay open.
+
 ## Decisions recorded from the discussion
 
 | Topic | Selected direction |
@@ -99,7 +101,7 @@ this extraction.
 | `bitrouter-ai` owns | Router, Core, orchestrator or application owns |
 | --- | --- |
 | Model content, generation options, results, usage and stream events | Caller identity, turn/session state and pipeline envelopes |
-| Chat Completions, Responses, Messages and Generate Content bidirectional codecs and stream framing | HTTP endpoints, admin API, App assembly and extension lifecycle |
+| Chat Completions, Responses and Messages bidirectional codecs and stream framing | HTTP endpoints, admin API, App assembly and extension lifecycle |
 | Calls to a selected upstream, timeouts, cancellation and model-call errors | Route resolution, ordering, account selection and cross-provider fallback |
 | Auth application, explicit login/token exchange/refresh and provider request adaptations | BYOK/activation policy, interactive UI, account selection and storage location |
 | Model/provider catalog schema and runtime metadata, including compatibility rules | Editorial YAML, dist publishing, curated routing defaults and settlement |
@@ -367,7 +369,7 @@ replay safety. Authority, ordering and stream cases require their own evidence.
 | Phase | Work | Completion evidence |
 | --- | --- | --- |
 | 0. Establish semantics | Classify audit cases; resolve cardinality/order; define diagnostic/admission contract | Focused conversion assertions and reviewed initial rules |
-| 1. Extract model semantics | Move types, independent errors and four-protocol codecs; split selected target; agree Core bridge | Single type owner; protocol fixtures; no reverse AI dependency |
+| 1. Extract model semantics | Move types, independent errors and three-protocol codecs; split selected target; agree Core bridge | Single type owner; protocol fixtures; no reverse AI dependency |
 | 2. Extract invocation/auth | Move selected-upstream execution, explicit login mechanisms, refresh, cancellation and continuation handling; SDK delegates temporarily | Direct stream/non-stream calls, explicit login fixtures, auth concurrency, failure and commitment evidence |
 | 3. Consolidate catalog/integrations | Move provider/catalog runtime and reusable explicit-path storage; retain activation/config, product defaults and Cloud assembly above AI | Explicit load/refresh, offline fallback, override, file compatibility, shared credential coordination and feature evidence |
 | 4. Relocate ACP data | Move data/schema/build consumers together, independently of model catalog | Harness config/invocation preserved; independent registry generation |
@@ -463,7 +465,7 @@ The following are implementation requirements, not results of this doc PR.
 | --- | --- |
 | AI-01 | AI-only consumer calls an explicit endpoint/model with credentials in streaming and non-streaming modes; handles errors/cancellation without `Config`, catalog, router, App or orchestrator |
 | AI-02 | Core bridge preserves ordered content, tool identity, usage and terminal lifecycle; no model event executes tools or independently commits turns |
-| AI-03 | Four-protocol ingress/egress and stream fixtures pass; cardinality/order findings are corrected or explicitly rejected |
+| AI-03 | Three-protocol ingress/egress and stream fixtures pass; cardinality/order findings are corrected or explicitly rejected |
 | AI-04 | Equivalent/nonessential conversions are eligible; semantic/unknown losses are excluded by default; explicit degradation is scoped; authority/causality cannot be waived |
 | AI-05 | Candidate projections leave source history unchanged; fallback starts from source; no admissible target reports incompatibility without reset |
 | AI-06 | Diagnostics identify stage/effect/disposition without content or secrets; late failures retain attempt/usage facts and respect commitment |

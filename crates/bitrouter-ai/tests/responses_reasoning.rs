@@ -143,7 +143,6 @@ fn output_preservation_does_not_replay_opaque_reasoning_or_turn_it_into_anthropi
         &ResponsesAdapter as &dyn OutboundAdapter,
         &ChatCompletionsAdapter as &dyn OutboundAdapter,
         &bitrouter_ai::protocol::messages::MessagesAdapter as &dyn OutboundAdapter,
-        &bitrouter_ai::protocol::generate_content::GenerateContentAdapter as &dyn OutboundAdapter,
     ] {
         assert!(matches!(
             adapter.render_request(&source),
@@ -272,7 +271,6 @@ async fn native_snapshots_cannot_undo_changed_visible_text_or_cross_into_other_o
     for adapter in [
         &ChatCompletionsAdapter as &dyn InboundAdapter,
         &bitrouter_ai::protocol::messages::MessagesAdapter as &dyn InboundAdapter,
-        &bitrouter_ai::protocol::generate_content::GenerateContentAdapter as &dyn InboundAdapter,
     ] {
         assert!(matches!(
             adapter.render_response(&result, &prompt()?, "gateway-id"),
@@ -430,7 +428,6 @@ fn admission_reports_source_locations_without_opaque_material() -> TestResult {
         ApiProtocol::Responses,
         ApiProtocol::ChatCompletions,
         ApiProtocol::Messages,
-        ApiProtocol::GenerateContent,
         ApiProtocol::Custom("custom-secret".into()),
     ] {
         let report = request_admission(&source, &protocol);

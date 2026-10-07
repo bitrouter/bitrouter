@@ -4,8 +4,7 @@ use bitrouter_ai::conversion::{ConversionReport, ConversionStage};
 use bitrouter_ai::error::ModelError;
 use bitrouter_ai::protocol::{
     InboundAdapter, OutboundAdapter, chat_completions::ChatCompletionsAdapter,
-    generate_content::GenerateContentAdapter, messages::MessagesAdapter,
-    responses::ResponsesAdapter,
+    messages::MessagesAdapter, responses::ResponsesAdapter,
 };
 use bitrouter_ai::types::{ApiProtocol, Prompt};
 use serde_json::json;
@@ -15,7 +14,7 @@ pub fn prompt() -> bitrouter_ai::error::Result<Prompt> {
         .parse_request(json!({"model":"fixture","messages":[{"role":"user","content":"keep"}]}))
 }
 
-pub fn adapters() -> [(ApiProtocol, Box<dyn OutboundAdapter>); 4] {
+pub fn adapters() -> [(ApiProtocol, Box<dyn OutboundAdapter>); 3] {
     [
         (
             ApiProtocol::ChatCompletions,
@@ -23,10 +22,6 @@ pub fn adapters() -> [(ApiProtocol, Box<dyn OutboundAdapter>); 4] {
         ),
         (ApiProtocol::Responses, Box::new(ResponsesAdapter)),
         (ApiProtocol::Messages, Box::new(MessagesAdapter)),
-        (
-            ApiProtocol::GenerateContent,
-            Box::new(GenerateContentAdapter),
-        ),
     ]
 }
 

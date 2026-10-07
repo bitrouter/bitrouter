@@ -1002,7 +1002,9 @@ impl ObserveHook for OtelExporter {
 
             // Optional prompt / response content capture (off by default).
             if self.config.content_capture == ContentCaptureMode::Full {
-                if let Ok(json) = serde_json::to_string(&ctx.prompt().messages) {
+                let mut redactor = bitrouter_ai::diagnostics::DiagnosticRedactor::default();
+                redactor.capture_prompt_continuity(ctx.prompt());
+                if let Some(json) = captured_content_json(&ctx.prompt().messages, &redactor) {
                     span.set_attribute(KeyValue::new(
                         "gen_ai.input.messages",
                         truncate_utf8(json, self.config.content_attr_max_bytes),
@@ -1024,7 +1026,8 @@ impl ObserveHook for OtelExporter {
                     .map(|result| result.result.content.as_slice())
                     .unwrap_or_default();
                 let output_json = if !ir_content.is_empty() {
-                    serde_json::to_string(ir_content).ok()
+                    redactor.capture_content_continuity(ir_content);
+                    captured_content_json(ir_content, &redactor)
                 } else if !streamed_output.is_empty() || !streamed_reasoning.is_empty() {
                     // Reasoning first, then the answer — matching the IR's
                     // `[Reasoning, Text]` ordering for the non-streaming path.
@@ -1042,7 +1045,7 @@ impl ObserveHook for OtelExporter {
                             provider_metadata: Default::default(),
                         });
                     }
-                    serde_json::to_string(&blocks).ok()
+                    captured_content_json(&blocks, &redactor)
                 } else {
                     None
                 };
@@ -1259,6 +1262,15 @@ fn error_type(err: &bitrouter_sdk::error::BitrouterError) -> String {
         .to_string()
 }
 
+fn captured_content_json<T: serde::Serialize + ?Sized>(
+    content: &T,
+    redactor: &bitrouter_ai::diagnostics::DiagnosticRedactor,
+) -> Option<String> {
+    let mut value = serde_json::to_value(content).ok()?;
+    redactor.scrub_value(&mut value);
+    serde_json::to_string(&value).ok()
+}
+
 #[cfg(test)]
 mod hop_tests {
     //! Unit tests for the per-hop `ObserveHook` surface added by issue #477.
@@ -1395,6 +1407,7 @@ mod hop_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: None,
             account_label: Some("primary".to_string()),
             api_key_override: None,
@@ -3165,5 +3178,59 @@ mod hop_tests {
             "expected an `exception` event in the conformance run"
         );
         assert_conforms_to_span_schema(&spans);
+    }
+
+    #[tokio::test]
+    async fn full_capture_redacts_google_continuity_without_changing_transcript()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use bitrouter_ai::types::{Message, Role};
+        let signed = Content::ToolCall {
+            id: "fixture-call".into(),
+            name: "lookup".into(),
+            arguments: "{}".into(),
+            provider_executed: false,
+            dynamic: false,
+            provider_metadata: std::collections::BTreeMap::from([(
+                "google".into(),
+                serde_json::json!({"thoughtSignature":"fixture-private-signature","replayProof":"fixture-private-proof"}),
+            )]),
+        };
+        let mut request = fresh_request();
+        request.prompt.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![signed.clone()],
+        });
+        let mut ctx = PipelineContext::new(request);
+        let mut result = fresh_result(&fresh_target("google"));
+        result.result.content.push(signed.clone());
+        ctx.execution_result = Some(result);
+        let (exporter, captured) = make_test_exporter_with(OtelConfig {
+            content_capture: ContentCaptureMode::Full,
+            ..Default::default()
+        });
+        exporter.after_phase(Phase::PreRequest, &ctx).await;
+        exporter
+            .on_request_end(&ctx, &RequestOutcome::Completed)
+            .await;
+        exporter.provider.force_flush()?;
+        let spans = captured.lock().map_err(|_| "capture lock unavailable")?;
+        let root = spans
+            .iter()
+            .find(|span| span.name == "chat test-model" && span.span_kind == SpanKind::Internal)
+            .ok_or("root span unavailable")?;
+        for attribute in ["gen_ai.input.messages", "gen_ai.output.messages"] {
+            let recorded = str_attr(root, attribute).ok_or("content attribute unavailable")?;
+            assert!(!recorded.contains("fixture-private-signature"));
+            assert!(!recorded.contains("fixture-private-proof"));
+            assert!(recorded.contains("lookup"));
+        }
+        assert!(
+            ctx.prompt()
+                .messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .any(|content| content == &signed)
+        );
+        Ok(())
     }
 }

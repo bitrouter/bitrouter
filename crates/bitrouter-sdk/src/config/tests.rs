@@ -840,26 +840,6 @@ providers:
 }
 
 #[test]
-fn protocol_inference_from_api_base() {
-    assert_eq!(
-        infer_protocol("https://api.anthropic.com/v1"),
-        ApiProtocol::Messages
-    );
-    assert_eq!(
-        infer_protocol("https://generativelanguage.googleapis.com/v1beta"),
-        ApiProtocol::GenerateContent
-    );
-    assert_eq!(
-        infer_protocol("https://api.openai.com/v1"),
-        ApiProtocol::ChatCompletions
-    );
-    assert_eq!(
-        infer_protocol("https://my-llm.example.com/v1"),
-        ApiProtocol::ChatCompletions
-    );
-}
-
-#[test]
 fn derives_inherits_empty_fields_from_parent_provider() {
     let yaml = r#"
 providers:
@@ -1995,5 +1975,59 @@ routers:
             .is_err()
         );
     }
+    Ok(())
+}
+
+#[test]
+fn retired_active_protocols_and_providers_require_explicit_migration() -> crate::Result<()> {
+    for (definition, location) in [
+        (
+            "api_protocol: [{'*': [chat_completions, generate_content]}]",
+            "providers.test.api_protocol",
+        ),
+        (
+            "models: [{id: m, api_protocol: antigravity}]",
+            "providers.test.models[0].api_protocol",
+        ),
+        (
+            "api_base: https://generativelanguage.googleapis.com/v1beta",
+            "providers.test.api_base",
+        ),
+        (
+            "api_base: https://generativelanguage.googleapis.com/v1beta\n    models: [{id: migrated, api_protocol: chat_completions}, {id: still-native}]",
+            "providers.test.api_base",
+        ),
+    ] {
+        let yaml = format!(
+            "inherit_defaults: false\nproviders:\n  test:\n    active: true\n    {definition}\n"
+        );
+        let error = parse_with(&yaml, |_| None)
+            .err()
+            .ok_or_else(|| BitrouterError::internal("retired config accepted"))?;
+        assert!(error.to_string().contains(location), "{error}");
+    }
+    for retired in ["google-ai", "vertex"] {
+        let yaml = format!(
+            "inherit_defaults: false\nproviders:\n  {retired}:\n    active: true\n    api_protocol: [{{'*': chat_completions}}]\n"
+        );
+        let error = parse_with(&yaml, |_| None)
+            .err()
+            .ok_or_else(|| BitrouterError::internal("retired provider accepted"))?;
+        assert!(error.to_string().contains("retired"));
+        let config = parse_with("inherit_defaults: false", |_| None)?;
+        assert!(
+            config
+                .resolve_router(&format!("{retired}:google/fixture"))
+                .is_err()
+        );
+    }
+    assert_eq!(
+        infer_protocol("https://generativelanguage.googleapis.com/v1beta/openai"),
+        ApiProtocol::ChatCompletions
+    );
+    assert_eq!(
+        infer_protocol("https://aiplatform.googleapis.com/v1/publishers/google"),
+        ApiProtocol::Custom("generate_content".into())
+    );
     Ok(())
 }

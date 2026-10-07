@@ -156,6 +156,8 @@ pub struct RoutingTarget {
     pub chat_supports_store: Option<bool>,
     /// Whether this Chat Completions target accepts `stream_options`.
     pub chat_supports_stream_options: Option<bool>,
+    /// Explicit selected-model support for Google Chat extensions.
+    pub chat_google_extensions: bool,
     /// Exact qualitative reasoning-effort support for this provider/model.
     /// `None` means unknown, not unsupported.
     pub reasoning_effort: Option<ReasoningEffortConfig>,
@@ -191,6 +193,7 @@ impl std::fmt::Debug for RoutingTarget {
             .field("api_protocol", &self.api_protocol)
             .field("chat_token_limit_field", &self.chat_token_limit_field)
             .field("chat_supports_store", &self.chat_supports_store)
+            .field("chat_google_extensions", &self.chat_google_extensions)
             .field(
                 "chat_supports_stream_options",
                 &self.chat_supports_stream_options,
@@ -242,6 +245,7 @@ impl RoutingTarget {
                     token_limit_field: self.chat_token_limit_field,
                     supports_store: self.chat_supports_store,
                     supports_stream_options: self.chat_supports_stream_options,
+                    google_extensions: self.chat_google_extensions,
                 },
             },
         }

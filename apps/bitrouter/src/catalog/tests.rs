@@ -140,3 +140,23 @@ fn reload_keeps_custom_source_credential_names_without_mixing_routing_catalogs()
     assert!(public.snapshot().is_none());
     Ok(())
 }
+
+#[test]
+fn retired_catalog_cache_is_quarantined_without_rewriting_saved_bytes() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("registry.json");
+    let bytes = serde_json::to_vec(
+        &serde_json::json!({"source":DEFAULT_REGISTRY_URL,"fetched_at":1,"data":{"canonical":[{"id":"org/chat"}],"providers":[
+            {"name":"google-ai","status":"active","models":[{"api_protocol":"antigravity"}]},
+            {"name":"fixture","status":"active","models":[{"id":"org/chat","provider_model_id":"chat","api_protocol":"openai"}]}
+        ]}}),
+    )?;
+    std::fs::write(&path, &bytes)?;
+    let loaded = DiskCache::at(&path)
+        .load(DEFAULT_REGISTRY_URL)?
+        .ok_or_else(|| anyhow::anyhow!("cache unavailable"))?;
+    assert_eq!(loaded.data.providers.len(), 1);
+    assert_eq!(loaded.data.providers[0].name, "fixture");
+    assert_eq!(std::fs::read(&path)?, bytes);
+    Ok(())
+}

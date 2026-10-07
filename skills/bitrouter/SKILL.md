@@ -15,7 +15,7 @@ metadata:
 ---
 
 # BitRouter
-BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4.
+BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4. Metered `google` uses Chat Completions with `GEMINI_API_KEY`; native Gemini routes, `google-ai` and Vertex Express are retired. Preserve saved credentials and migrate config explicitly.
 
 ## Activate in one pass
 Work top to bottom, probing before asking.
