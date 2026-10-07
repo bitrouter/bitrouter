@@ -2034,14 +2034,14 @@ fn messages_no_beta_header_is_emitted() {
     let transport = crate::protocol::messages::MessagesTransport;
     let client = reqwest::Client::new();
     let req = client
-        .post("http://example.invalid/v1/messages")
+        .post("https://example.invalid/v1/messages")
         .build()
         .unwrap();
     let target = ModelTarget {
         provider_name: "anthropic".into(),
         service_id: "claude-opus-4-7".into(),
         api_protocol: ApiProtocol::Messages,
-        api_base: "http://example.invalid".into(),
+        api_base: "https://example.invalid".into(),
         api_key: "k".into(),
         credential_priority: Default::default(),
         account_label: None,
@@ -2078,7 +2078,7 @@ fn messages_auth_scheme_selects_one_credential_header() {
         provider_name: "gw".into(),
         service_id: "claude".into(),
         api_protocol: ApiProtocol::Messages,
-        api_base: "http://example.invalid".into(),
+        api_base: "https://example.invalid".into(),
         api_key: "secret".into(),
         credential_priority: Default::default(),
         account_label: None,
@@ -2097,7 +2097,7 @@ fn messages_auth_scheme_selects_one_credential_header() {
 
     // Default (x-api-key) scheme → `x-api-key` only.
     let req = client
-        .post("http://example.invalid/v1/messages")
+        .post("https://example.invalid/v1/messages")
         .build()
         .unwrap();
     let req = futures::executor::block_on(transport.authorise(req, &base)).unwrap();
@@ -2113,7 +2113,7 @@ fn messages_auth_scheme_selects_one_credential_header() {
         ..base.clone()
     };
     let req = client
-        .post("http://example.invalid/v1/messages")
+        .post("https://example.invalid/v1/messages")
         .build()
         .unwrap();
     let req = futures::executor::block_on(transport.authorise(req, &bearer)).unwrap();

@@ -3391,7 +3391,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() -> Result<()
             ApiProtocol::Custom("fake".into())
         }
         fn endpoint_url(&self, _: &ModelTarget, _: bool) -> String {
-            "http://example.invalid".into()
+            "https://example.invalid".into()
         }
         async fn authorise(
             &self,
@@ -3409,7 +3409,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() -> Result<()
     let target = RoutingTarget {
         provider_name: "fake".into(),
         service_id: "m".into(),
-        api_base: "http://example.invalid".into(),
+        api_base: "https://example.invalid".into(),
         api_key: "k".into(),
         api_protocol: ApiProtocol::Custom("fake".into()),
         chat_token_limit_field: None,
@@ -3668,7 +3668,7 @@ fn semantic_auth_executor(
 async fn semantic_auth_error(error: ModelError) -> BitrouterError {
     let provider = "semantic-auth-failure";
     let executor = semantic_auth_executor(provider, SemanticAuthFailurePoint::Apply, error);
-    let mut target = auth_retry_target("http://example.invalid".into());
+    let mut target = auth_retry_target("https://example.invalid".into());
     target.provider_name = provider.into();
     let req = request();
     let ctx = PipelineContext::new(req.clone());
@@ -4012,7 +4012,7 @@ async fn http_executor_replaces_every_opaque_auth_failure_in_both_modes() {
             observed.push((
                 point,
                 stream,
-                opaque_auth_error(point, stream, "http://example.invalid".into()).await,
+                opaque_auth_error(point, stream, "https://example.invalid".into()).await,
             ));
         }
     }
