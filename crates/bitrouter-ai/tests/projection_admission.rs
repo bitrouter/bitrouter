@@ -1,60 +1,24 @@
 //! Required canonical content cannot be silently omitted by a target projection.
-use bitrouter_ai::conversion::{
-    ConversionEffect, ConversionLocation, ConversionReport, ConversionStage,
-};
-use bitrouter_ai::error::ModelError;
+
+#[path = "support/conversion.rs"]
+mod conversion;
+use conversion::{adapters, prompt, refusal};
+
+use bitrouter_ai::conversion::{ConversionEffect, ConversionLocation};
 use bitrouter_ai::protocol::{
     InboundAdapter, OutboundAdapter, chat_completions::ChatCompletionsAdapter,
     generate_content::GenerateContentAdapter, messages::MessagesAdapter,
     responses::ResponsesAdapter,
 };
 use bitrouter_ai::types::{
-    ApiProtocol, Content, Message, Prompt, ProviderMetadata, Role, Tool, ToolResultContentPart,
+    ApiProtocol, Content, Message, ProviderMetadata, Role, Tool, ToolResultContentPart,
     ToolResultOutput,
 };
 use serde_json::json;
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
-fn prompt() -> bitrouter_ai::error::Result<Prompt> {
-    ChatCompletionsAdapter
-        .parse_request(json!({"model":"fixture","messages":[{"role":"user","content":"keep"}]}))
-}
-fn adapters() -> [(ApiProtocol, Box<dyn OutboundAdapter>); 4] {
-    [
-        (
-            ApiProtocol::ChatCompletions,
-            Box::new(ChatCompletionsAdapter),
-        ),
-        (ApiProtocol::Responses, Box::new(ResponsesAdapter)),
-        (ApiProtocol::Messages, Box::new(MessagesAdapter)),
-        (
-            ApiProtocol::GenerateContent,
-            Box::new(GenerateContentAdapter),
-        ),
-    ]
-}
-fn refusal(
-    adapter: &dyn OutboundAdapter,
-    source: &Prompt,
-) -> Result<ConversionReport, Box<dyn std::error::Error + Send + Sync>> {
-    let error = adapter
-        .render_request(source)
-        .err()
-        .ok_or("target silently accepted lossy projection")?;
-    let ModelError::Incompatible { report } = error else {
-        return Err("projection lost its structured report".into());
-    };
-    assert!(!report.issues.is_empty());
-    assert!(!format!("{report:?}").contains("secret"));
-    assert!(!serde_json::to_string(&report)?.contains("secret"));
-    for issue in &report.issues {
-        assert_eq!(issue.stage, ConversionStage::RequestProjection);
-    }
-    Ok(report)
-}
 #[test]
 fn uploaded_file_references_are_rejected_where_omitted_and_retained_on_responses() -> TestResult {
     let source=ResponsesAdapter.parse_request(json!({"model":"fixture","input":[{"type":"function_call_output","call_id":"c","output":[{"type":"input_text","text":"before"},{"type":"input_file","file_id":"file-secret"},{"type":"input_text","text":"after"}]}]}))?;
-    let original = source.clone();
     for (protocol, adapter) in adapters() {
         if protocol == ApiProtocol::Responses {
             let body = adapter.render_request(&source)?;
@@ -71,7 +35,6 @@ fn uploaded_file_references_are_rejected_where_omitted_and_retained_on_responses
             );
         }
     }
-    assert_eq!(source, original);
     Ok(())
 }
 #[test]

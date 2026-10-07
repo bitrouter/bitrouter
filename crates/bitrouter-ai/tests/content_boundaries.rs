@@ -1,9 +1,12 @@
 //! Initial argument, JSON, ordering and nested-attribute admission.
 
+#[path = "support/conversion.rs"]
+mod conversion;
+use conversion::{adapters, prompt, refusal, require_refusal};
+
 use bitrouter_ai::conversion::{
     ConversionEffect, ConversionLocation, ConversionReport, ConversionStage,
 };
-use bitrouter_ai::error::ModelError;
 use bitrouter_ai::protocol::{
     InboundAdapter, OutboundAdapter, chat_completions::ChatCompletionsAdapter,
     generate_content::GenerateContentAdapter, messages::MessagesAdapter,
@@ -15,48 +18,12 @@ use bitrouter_ai::types::{
 use serde_json::{Value, json};
 
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
-fn prompt() -> bitrouter_ai::error::Result<Prompt> {
-    ChatCompletionsAdapter
-        .parse_request(json!({"model":"fixture","messages":[{"role":"user","content":"keep"}]}))
-}
-fn adapters() -> [(ApiProtocol, Box<dyn OutboundAdapter>); 4] {
-    [
-        (
-            ApiProtocol::ChatCompletions,
-            Box::new(ChatCompletionsAdapter),
-        ),
-        (ApiProtocol::Responses, Box::new(ResponsesAdapter)),
-        (ApiProtocol::Messages, Box::new(MessagesAdapter)),
-        (
-            ApiProtocol::GenerateContent,
-            Box::new(GenerateContentAdapter),
-        ),
-    ]
-}
-fn report(
-    result: bitrouter_ai::error::Result<Value>,
-) -> Result<ConversionReport, Box<dyn std::error::Error + Send + Sync>> {
-    let Err(ModelError::Incompatible { report }) = result else {
-        return Err("loss was silently admitted or lost its typed report".into());
-    };
-    assert!(!report.issues.is_empty());
-    assert!(!format!("{report:?}").contains("secret"));
-    assert!(!serde_json::to_string(&report)?.contains("secret"));
-    Ok(report)
-}
 fn ingress(
     protocol: ApiProtocol,
     body: Value,
 ) -> Result<ConversionReport, Box<dyn std::error::Error + Send + Sync>> {
     let adapter = bitrouter_ai::protocol::inbound_adapter_for(&protocol).ok_or("no adapter")?;
-    let original = body.clone();
-    let result = adapter.parse_request(body.clone()).map(|_| Value::Null);
-    let report = report(result)?;
-    assert_eq!(body, original);
-    for issue in &report.issues {
-        assert_eq!(issue.stage, ConversionStage::RequestIngress);
-    }
-    Ok(report)
+    require_refusal(adapter.parse_request(body), ConversionStage::RequestIngress)
 }
 fn tool_result(output: ToolResultOutput) -> bitrouter_ai::error::Result<Prompt> {
     let mut source = prompt()?;
@@ -96,13 +63,12 @@ fn invalid_argument_strings_cannot_be_replaced_by_an_empty_object() -> TestResul
         role: Role::Assistant,
         content: vec![call("argument-secret")],
     }];
-    let original = source.clone();
     for (protocol, adapter) in adapters() {
         if matches!(
             protocol,
             ApiProtocol::Messages | ApiProtocol::GenerateContent
         ) {
-            let report = report(adapter.render_request(&source))?;
+            let report = refusal(adapter.as_ref(), &source)?;
             assert_eq!(report.issues[0].effect, ConversionEffect::TaskSemantics);
         } else {
             assert!(
@@ -117,7 +83,6 @@ fn invalid_argument_strings_cannot_be_replaced_by_an_empty_object() -> TestResul
     for (_, adapter) in adapters() {
         adapter.render_request(&source)?;
     }
-    assert_eq!(original.messages[0].content, vec![call("argument-secret")]);
     Ok(())
 }
 
@@ -127,7 +92,6 @@ fn json_encoding_preserves_values_and_native_gemini_objects() -> TestResult {
     let source = tool_result(ToolResultOutput::Json {
         value: value.clone(),
     })?;
-    let original = source.clone();
     for (protocol, adapter) in adapters() {
         if protocol == ApiProtocol::GenerateContent {
             assert_eq!(
@@ -147,7 +111,6 @@ fn json_encoding_preserves_values_and_native_gemini_objects() -> TestResult {
             );
         }
     }
-    assert_eq!(source, original);
     Ok(())
 }
 
@@ -164,7 +127,7 @@ fn scalar_json_and_text_to_object_wrappers_are_unclassified() -> TestResult {
         },
     ] {
         let source = tool_result(output)?;
-        let report = report(GenerateContentAdapter.render_request(&source))?;
+        let report = refusal(&GenerateContentAdapter, &source)?;
         assert_eq!(report.issues[0].effect, ConversionEffect::Unknown);
     }
     Ok(())
@@ -185,7 +148,7 @@ fn text_only_tool_arrays_keep_their_part_boundaries() -> TestResult {
     })?;
     for (protocol, adapter) in adapters() {
         if protocol == ApiProtocol::GenerateContent {
-            report(adapter.render_request(&source))?;
+            refusal(adapter.as_ref(), &source)?;
             continue;
         }
         let body = adapter.render_request(&source)?;
@@ -222,7 +185,6 @@ fn chat_text_parts_remain_separate_and_reasoning_parts_cannot_be_concatenated() 
         role: Role::Assistant,
         content: vec![text("before"), text("after")],
     }];
-    let original = source.clone();
     let body = ChatCompletionsAdapter.render_request(&source)?;
     assert_eq!(
         body["messages"][0]["content"],
@@ -230,7 +192,7 @@ fn chat_text_parts_remain_separate_and_reasoning_parts_cannot_be_concatenated() 
     );
     assert_eq!(
         ChatCompletionsAdapter.parse_request(body)?.messages,
-        original.messages
+        source.messages
     );
     source.messages[0].content = vec![
         Content::Reasoning {
@@ -244,7 +206,7 @@ fn chat_text_parts_remain_separate_and_reasoning_parts_cannot_be_concatenated() 
             provider_metadata: ProviderMetadata::new(),
         },
     ];
-    report(ChatCompletionsAdapter.render_request(&source))?;
+    refusal(&ChatCompletionsAdapter, &source)?;
     Ok(())
 }
 
@@ -255,7 +217,7 @@ fn chat_cannot_move_post_call_text_or_late_reasoning_into_an_earlier_slot() -> T
         role: Role::Assistant,
         content: vec![text("before"), call("{}"), text("after")],
     }];
-    let report = report(ChatCompletionsAdapter.render_request(&source))?;
+    let report = refusal(&ChatCompletionsAdapter, &source)?;
     assert_eq!(
         report.issues[0].location,
         ConversionLocation::MessageContent {
@@ -389,10 +351,8 @@ fn native_messages_mcp_json_errors_keep_the_body_and_error_flag() -> TestResult 
             {"type":"mcp_tool_use","id":"c","name":"f","input":{},"server_name":"server-secret"},
             {"type":"mcp_tool_result","tool_use_id":"c","content":value,"is_error":true}
         ]}]}))?;
-    let original = source.clone();
     let body = MessagesAdapter.render_request(&source)?;
     assert_eq!(body["messages"][0]["content"][1]["content"], value);
     assert_eq!(body["messages"][0]["content"][1]["is_error"], true);
-    assert_eq!(source, original);
     Ok(())
 }

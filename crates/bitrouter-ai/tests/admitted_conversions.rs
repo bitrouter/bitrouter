@@ -43,7 +43,6 @@ fn safe(report: &ConversionReport) -> TestResult {
 #[test]
 fn json_encoding_is_reported_without_becoming_a_refusal() -> TestResult {
     let prompt = source()?;
-    let original = prompt.clone();
     for protocol in [
         ApiProtocol::ChatCompletions,
         ApiProtocol::Responses,
@@ -71,7 +70,6 @@ fn json_encoding_is_reported_without_becoming_a_refusal() -> TestResult {
             .admitted
             .is_empty()
     );
-    assert_eq!(prompt, original);
     Ok(())
 }
 

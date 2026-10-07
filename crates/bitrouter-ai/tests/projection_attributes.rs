@@ -1,10 +1,12 @@
 //! Request attributes, constraints and status cannot silently disappear.
 
-use bitrouter_ai::conversion::{ConversionEffect, ConversionLocation, ConversionReport};
-use bitrouter_ai::error::ModelError;
+#[path = "support/conversion.rs"]
+mod conversion;
+use conversion::{adapters, prompt, refusal};
+
+use bitrouter_ai::conversion::{ConversionEffect, ConversionLocation};
 use bitrouter_ai::protocol::{
-    InboundAdapter, OutboundAdapter, chat_completions::ChatCompletionsAdapter,
-    generate_content::GenerateContentAdapter, messages::MessagesAdapter,
+    InboundAdapter, OutboundAdapter, generate_content::GenerateContentAdapter,
     responses::ResponsesAdapter,
 };
 use bitrouter_ai::types::{
@@ -14,26 +16,6 @@ use bitrouter_ai::types::{
 use serde_json::{Value, json};
 
 type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
-
-fn prompt() -> bitrouter_ai::error::Result<Prompt> {
-    ChatCompletionsAdapter
-        .parse_request(json!({"model":"fixture","messages":[{"role":"user","content":"keep"}]}))
-}
-
-fn adapters() -> [(ApiProtocol, Box<dyn OutboundAdapter>); 4] {
-    [
-        (
-            ApiProtocol::ChatCompletions,
-            Box::new(ChatCompletionsAdapter),
-        ),
-        (ApiProtocol::Responses, Box::new(ResponsesAdapter)),
-        (ApiProtocol::Messages, Box::new(MessagesAdapter)),
-        (
-            ApiProtocol::GenerateContent,
-            Box::new(GenerateContentAdapter),
-        ),
-    ]
-}
 
 fn function(parameters: Value, strict: Option<bool>) -> Tool {
     Tool::Function {
@@ -45,25 +27,11 @@ fn function(parameters: Value, strict: Option<bool>) -> Tool {
     }
 }
 
-fn refusal(
-    adapter: &dyn OutboundAdapter,
-    source: &Prompt,
-) -> Result<ConversionReport, Box<dyn std::error::Error + Send + Sync>> {
-    let Some(ModelError::Incompatible { report }) = adapter.render_request(source).err() else {
-        return Err("target silently accepted lossy attributes or lost its report".into());
-    };
-    assert!(!report.issues.is_empty());
-    assert!(!format!("{report:?}").contains("secret"));
-    assert!(!serde_json::to_string(&report)?.contains("secret"));
-    Ok(report)
-}
-
 #[test]
 fn explicit_function_strict_flags_need_a_faithful_target_slot() -> TestResult {
     for strict in [true, false] {
         let mut source = prompt()?;
         source.tools = vec![function(json!({"type":"object"}), Some(strict))];
-        let original = source.clone();
         for (protocol, adapter) in adapters() {
             if matches!(
                 protocol,
@@ -84,7 +52,6 @@ fn explicit_function_strict_flags_need_a_faithful_target_slot() -> TestResult {
                 assert_eq!(flag, strict);
             }
         }
-        assert_eq!(source, original);
     }
     Ok(())
 }
@@ -101,7 +68,6 @@ fn gemini_schema_cleanup_cannot_delete_constraints_or_collapse_distinct_types() 
     ] {
         let mut source = prompt()?;
         source.tools = vec![function(parameters.clone(), None)];
-        let original = source.clone();
         let report = refusal(&GenerateContentAdapter, &source)?;
         assert_eq!(report.issues[0].effect, ConversionEffect::Unknown);
         for (protocol, adapter) in adapters() {
@@ -116,7 +82,6 @@ fn gemini_schema_cleanup_cannot_delete_constraints_or_collapse_distinct_types() 
             };
             assert_eq!(rendered, &parameters);
         }
-        assert_eq!(source, original);
     }
     Ok(())
 }
@@ -133,7 +98,6 @@ fn gemini_equivalent_nullable_and_single_type_unions_remain_eligible() -> TestRe
         }),
         None,
     )];
-    let original = source.clone();
     let body = GenerateContentAdapter.render_request(&source)?;
     let parameters = &body["tools"][0]["functionDeclarations"][0]["parameters"];
     assert_eq!(parameters["properties"]["x"]["type"], "integer");
@@ -141,7 +105,6 @@ fn gemini_equivalent_nullable_and_single_type_unions_remain_eligible() -> TestRe
     assert_eq!(parameters["properties"]["x"]["minimum"], 0);
     assert_eq!(parameters["properties"]["y"]["items"]["type"], "string");
     assert_eq!(parameters["properties"]["z"]["anyOf"][0]["nullable"], true);
-    assert_eq!(source, original);
     Ok(())
 }
 
@@ -246,7 +209,6 @@ fn error_status_cannot_become_an_ordinary_success_result() -> TestResult {
         },
     ] {
         let source = result_prompt(output)?;
-        let original = source.clone();
         for (protocol, adapter) in adapters() {
             if protocol == ApiProtocol::Messages {
                 assert_eq!(
@@ -265,7 +227,6 @@ fn error_status_cannot_become_an_ordinary_success_result() -> TestResult {
                 );
             }
         }
-        assert_eq!(source, original);
     }
     Ok(())
 }
