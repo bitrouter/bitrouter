@@ -720,12 +720,17 @@ impl RoutingTable for ConfigRoutingTable {
     }
 
     fn usage_pricing(&self, _model: &str, target: &RoutingTarget) -> Option<UsagePricing> {
-        let config = self.config.read().expect("config lock poisoned");
+        let config = self.config.read().ok()?;
         config
             .providers
             .get(&target.provider_name)?
             .model_config(&target.service_id)?
             .pricing_for(&target.api_protocol)
+            .filter(|pricing| {
+                pricing
+                    .endpoint_profile
+                    .is_none_or(|profile| profile.matches_api_base(target.effective_api_base()))
+            })
             .map(usage_pricing)
     }
 

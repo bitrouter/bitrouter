@@ -266,6 +266,11 @@ upstream response fields in the same-protocol codec's native extension storage
 without interpreting them; unknown answer variants and missing required fields
 cannot yield a partial successful result.
 Diagnostics omit evidence text, images, question/choice text and safety IDs.
+The combined extension budget is 64 KiB, including usage and nested usage
+extensions. Oversized additions fail delivery; completed failure retains valid
+provider counters and their required raw fields while dropping over-budget usage
+additions. Typed custom output cannot substitute its own inconsistent counters
+for independently decoded provider usage.
 
 ## 6. Shared lifecycle and hook migration
 
@@ -464,6 +469,7 @@ cache rates are conditional on the cache-billing gate below:
 api_protocol: [chat_completions, responses, decisions]
 pricing_by_protocol:
   decisions:
+    endpoint_profile: openai_global
     input_micro_usd_per_token: 0.10
     cache_read_micro_usd_per_token: 0
     cache_write_micro_usd_per_token: 0
@@ -482,6 +488,7 @@ provider_model_id: gpt-6-luna
 api_protocol: [openai, responses, decisions]
 pricing_by_protocol:
   decisions:
+    endpoint_profile: openai_global
     input_tokens:
       no_cache: 0.10
       cache_read: 0
@@ -538,8 +545,16 @@ I/O. Decisions cannot satisfy that requirement while future cache counters have
 an unverified billing basis; the normal historical spend/rate policies remain
 shared by both operations.
 
+Published rates carry optional `endpoint_profile` provenance in both pricing
+representations (`openai_global`, `openai_us`, `openai_europe`). A declared
+profile stays attached to the tariff even when provider configuration changes;
+inherited global rates cannot rebind to a configured regional host. An absent
+profile keeps the deployment's configured endpoint binding for legacy and
+custom tariffs. Explicit regional prices require a matching declared profile
+and a complete independent tariff; no multiplier is inferred.
+
 A snapshot contains outbound protocol, effective rates/tiers and version,
-endpoint tariff profile and any confirmed billing basis. Validate the effective
+effective endpoint profile, the tariff's bound profile and any confirmed billing basis. Validate the effective
 endpoint after `api_base_override`; provider/model/protocol alone cannot
 distinguish global from regional processing prices. A cross-profile override
 without a matching tariff is unavailable. An explicitly configured regional

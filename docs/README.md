@@ -23,6 +23,8 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
   and remaining gateway/provider acceptance for the stacked Decisions change.
 - [`DECISIONS_API_MIGRATION.md`](DECISIONS_API_MIGRATION.md) — Alpha payload,
   hook and pricing migration, with the read-only external Cloud inventory.
+- [`DECISIONS_API_ACCEPTANCE.md`](DECISIONS_API_ACCEPTANCE.md) — Requirement-by-requirement
+  local evidence and qualified provider/Cloud delivery boundaries.
 - [`LOCAL_DAEMON_UPGRADE_SPEC.md`](LOCAL_DAEMON_UPGRADE_SPEC.md) — **implemented
   in #932; local and CI verification passed.** Safe local daemon handoff after
   a CLI upgrade: version and capability detection, idle-only restart,

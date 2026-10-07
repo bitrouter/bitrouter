@@ -4037,8 +4037,7 @@ async fn http_executor_refreshes_auth_and_retries_non_streaming_401_once()
             })?,
             &ctx,
         )
-        .await
-        .unwrap();
+        .await?;
 
     assert_eq!(refreshes.load(Ordering::SeqCst), 1);
     assert_eq!(
@@ -4812,7 +4811,7 @@ async fn server_tool_loop_resolves_a_router_tool_call()
             .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
             .usage
             .as_ref()
-            .unwrap()
+            .ok_or_else(|| crate::error::BitrouterError::internal("usage fixture missing"))?
             .prompt_tokens,
         6
     );
@@ -4919,7 +4918,7 @@ async fn fusion_declaration_is_advertised_and_executed_end_to_end()
             .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
             .usage
             .as_ref()
-            .unwrap()
+            .ok_or_else(|| crate::error::BitrouterError::internal("usage fixture missing"))?
             .prompt_tokens,
         6
     );

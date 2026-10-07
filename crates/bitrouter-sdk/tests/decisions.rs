@@ -258,6 +258,7 @@ async fn custom_executor_malformed_native_success_keeps_usage_and_cannot_retry()
     let request = request()?;
     let valid = DecisionsCodec::parse_response(native_response(true), &request)?;
     let mut invalid = valid.clone();
+    invalid.usage.prompt_tokens = 1_000_000;
     match invalid.answers.first_mut() {
         Some(bitrouter_ai::decisions::DecisionAnswer::Predicate { probability, .. }) => {
             *probability = 2.0;
@@ -803,9 +804,9 @@ async fn incompatible_bound_checker_fails_before_preparation_or_callback() -> Te
 async fn decisions_projection_covers_names_and_preserves_boolean_choice_identity() -> TestResult {
     let (mut builder, mut inputs, _) = bound_builder(1024, OperationScope::Both)?;
     let req = DecisionsCodec::parse_request(
-        json!({"model":"test","input":[{"role":"user","content":[{"type":"input_text","text":"evidence"},{"type":"input_image","image_url":"data:image/png;base64,eA=="}]}],"safety_identifier":"excluded-safety","questions":[{"type":"choice","name":"name","instructions":"instruction","choices":[{"value":true,"description":"description"},{"value":"true"}]}]}),
+        json!({"model":"test","input":[{"role":"user","content":[{"type":"input_text","text":"evidence"},{"type":"input_image","image_url":"data:image/png;base64,eA=="}]}],"safety_identifier":"excluded-safety","questions":[{"type":"choice","name":"name","instructions":"instruction","choices":[{"value":true,"description":"description"},{"value":"true"}]},{"type":"score","name":"rubric","instructions":"score instruction","levels":[{"label":"low","description":"low criterion"},{"label":"high","description":"high criterion"}]}]}),
     )?;
-    let response = json!({"model":"native-test","answers":[{"type":"choice","name":"name","choice":true,"confidence":0.9,"probabilities":[{"value":true,"probability":0.8},{"value":"true","probability":0.2}]}],"usage":native_response(true)["usage"]});
+    let response = json!({"model":"native-test","answers":[{"type":"choice","name":"name","choice":true,"confidence":0.9,"probabilities":[{"value":true,"probability":0.8},{"value":"true","probability":0.2}]},{"type":"score","name":"rubric","score":0.25,"confidence":0.55,"probabilities":[{"value":0,"label":"low","probability":0.75},{"value":1,"label":"high","probability":0.25}]}],"usage":native_response(true)["usage"]});
     builder.executor(Arc::new(MockExecutor::new(vec![MockResponse::Decisions(
         DecisionsCodec::parse_response(response, &req)?,
     )])));
@@ -833,11 +834,33 @@ async fn decisions_projection_covers_names_and_preserves_boolean_choice_identity
             ContentFragmentKind::DecisionInstructions,
             ContentFragmentKind::DecisionBooleanChoice,
             ContentFragmentKind::DecisionChoiceDescription,
-            ContentFragmentKind::DecisionStringChoice
+            ContentFragmentKind::DecisionStringChoice,
+            ContentFragmentKind::DecisionQuestionName,
+            ContentFragmentKind::DecisionInstructions,
+            ContentFragmentKind::DecisionLevelLabel,
+            ContentFragmentKind::DecisionLevelDescription,
+            ContentFragmentKind::DecisionLevelLabel,
+            ContentFragmentKind::DecisionLevelDescription
         ]
     );
     assert!(!format!("{input:?}").contains("excluded-safety"));
     assert_eq!(input.content[3].text, input.content[5].text);
+    assert_eq!(
+        input
+            .content
+            .iter()
+            .skip(6)
+            .filter_map(|fragment| fragment.text.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            "rubric",
+            "score instruction",
+            "low",
+            "low criterion",
+            "high",
+            "high criterion"
+        ]
+    );
     pipeline.drain_required_pending_settlements().await?;
     let (builder, mut inputs, _) = bound_builder(1, OperationScope::Both)?;
     assert!(matches!(
@@ -969,5 +992,25 @@ fn protocol_tariff_overrides_are_independent_and_usage_pricing_uses_the_wire() -
         .ok_or("stream pricing missing")?;
     assert_eq!(prices.base.input_micro_usd_per_token, Some(0.5));
     assert_eq!(prices.base.output_micro_usd_per_token, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sdk_live_usage_prices_reject_mismatched_declared_profiles() -> TestResult {
+    let config: Config = serde_json::from_value(json!({"providers":{"fixture":{
+        "active":true,"api_base":"https://api.openai.com/v1", "api_protocol":[{"*":"responses"}],
+        "models":[{"id":"test","pricing_by_protocol":{"responses":{"endpoint_profile":"openai_global",
+            "input_micro_usd_per_token":0.1,"output_micro_usd_per_token":0}}}]
+    }}}))?;
+    let table = ConfigRoutingTable::from_config(config);
+    let mut chain = table
+        .route_chain("test", &RoutingPrefs::default(), &CallerContext::local())
+        .await?;
+    let target = chain.first_mut().ok_or("missing route")?;
+    assert!(table.usage_pricing("test", target).is_some());
+    target.api_base_override = Some("https://eu.api.openai.com/v1".into());
+    assert!(table.usage_pricing("test", target).is_none());
+    target.api_base_override = Some("https://unknown.invalid/v1".into());
+    assert!(table.usage_pricing("test", target).is_none());
     Ok(())
 }

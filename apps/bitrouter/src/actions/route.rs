@@ -938,6 +938,7 @@ policies:
         assert!(!flat.note.contains("context_tiers"), "note: {}", flat.note);
 
         let tiered = estimated_cost(&ModelPricing {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(1.0),
             output_micro_usd_per_token: Some(2.0),
             cache_read_micro_usd_per_token: None,

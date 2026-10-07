@@ -141,6 +141,16 @@ fn request_error(location: &str) -> ModelError {
 }
 
 fn completed_error(location: &str, usage: Option<Usage>) -> ModelError {
+    // Canonical fields supplied by a custom executor are not independent
+    // accounting proof. Re-decode valid provider usage before retaining it.
+    let usage = usage.and_then(|usage| {
+        let raw = usage.raw.as_deref()?;
+        let mut decoded = decode_usage(raw).ok()?;
+        if usage_extension_bytes(raw).ok()? > EXTENSION_BYTES {
+            decoded.raw = Some(Box::new(known_usage_fields(raw)));
+        }
+        Some(decoded)
+    });
     ModelError::DecisionResponse {
         failure: DecisionResponseFailure {
             message: format!("invalid Decisions field at {location}"),
@@ -463,6 +473,9 @@ fn validate_extensions(result: &DecisionResult) -> std::result::Result<(), &'sta
     let mut size = serde_json::to_vec(&result.extensions)
         .map_err(|_| "extensions")?
         .len();
+    if let Some(raw) = result.usage.raw.as_deref() {
+        size = size.saturating_add(usage_extension_bytes(raw)?);
+    }
     if result
         .extensions
         .keys()
@@ -541,4 +554,67 @@ fn validate_extensions(result: &DecisionResult) -> std::result::Result<(), &'sta
         return Err("extensions size");
     }
     Ok(())
+}
+
+fn usage_extension_bytes(raw: &Value) -> std::result::Result<usize, &'static str> {
+    fn extra_bytes(value: &Value, known: &[&str]) -> std::result::Result<usize, &'static str> {
+        let fields = value.as_object().ok_or("usage extensions")?;
+        let extras = fields
+            .iter()
+            .filter(|(key, _)| !known.contains(&key.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        serde_json::to_vec(&extras)
+            .map(|bytes| bytes.len())
+            .map_err(|_| "usage extensions")
+    }
+    let mut bytes = extra_bytes(
+        raw,
+        &[
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "input_tokens_details",
+            "output_tokens_details",
+        ],
+    )?;
+    for (field, known) in [
+        (
+            "input_tokens_details",
+            &["cached_tokens", "cache_write_tokens"][..],
+        ),
+        ("output_tokens_details", &["reasoning_tokens"][..]),
+    ] {
+        bytes = bytes.saturating_add(extra_bytes(
+            raw.get(field).ok_or("usage extensions")?,
+            known,
+        )?);
+    }
+    Ok(bytes)
+}
+
+/// Invalid oversized additive metadata is not retained as unbounded evidence;
+/// the original required counters remain available on the completed failure.
+fn known_usage_fields(raw: &Value) -> Value {
+    let mut fields = Map::new();
+    for key in ["input_tokens", "output_tokens", "total_tokens"] {
+        if let Some(value) = raw.get(key) {
+            fields.insert(key.into(), value.clone());
+        }
+    }
+    for (field, known) in [
+        (
+            "input_tokens_details",
+            &["cached_tokens", "cache_write_tokens"][..],
+        ),
+        ("output_tokens_details", &["reasoning_tokens"][..]),
+    ] {
+        let mut details = Map::new();
+        for key in known {
+            if let Some(value) = raw.get(field).and_then(|details| details.get(*key)) {
+                details.insert((*key).into(), value.clone());
+            }
+        }
+        fields.insert(field.into(), Value::Object(details));
+    }
+    Value::Object(fields)
 }

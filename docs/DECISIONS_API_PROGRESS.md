@@ -173,32 +173,81 @@ Current validation:
 - `cargo fmt -- --check`, whitespace checks, Markdown fences and local links:
   passed.
 
-D3/D4 acceptance remains open: catalog-derived tariffs need declared endpoint
-profile provenance so configured regional endpoints cannot silently inherit
-published global native rates. Registry activation and generated schema/catalog
-artifacts must include that contract. Application-specific native guards,
-full-workspace checks, public API/feature isolation, final lifecycle/privacy
-coverage and provider proof remain.
+## D4: catalog activation, profile provenance and final audit
+
+Implemented locally on 2026-10-06/07:
+
+- Pricing in source/dist/AI catalog, SDK config and application snapshots retains
+  declared `endpoint_profile` provenance. Global/US/European declarations are
+  typed metadata; configured regional hosts cannot rebind inherited global
+  rates. Unknown/custom endpoints receive no inferred premium. Profile changes
+  remain restart-required and context resolution preserves the declaration.
+- SDK-only live stream price lookup also rejects a declared profile mismatch.
+  Registry append/serialization keeps profile metadata and tier inheritance.
+- Only OpenAI's API-key Luna model advertises native Decisions; existing
+  generative order and ordinary prices remain. Native global $0.10/$0.20 rates
+  are tagged `openai_global`, with the existing cache-billing gate retained.
+- Main and embedded catalog artifacts and the config schema are regenerated.
+  Registry validation/build and the dist freshness check passed.
+- Real native app gateway tests enforce virtual-key authentication, key/policy
+  expiry, ACLs, spend and rate limits. The shared reserved-ID guard rejects
+  native replay and preserves the metering namespace. Native telemetry conforms
+  to the committed span schema; capture is off by default and safety ID is
+  excluded from full content capture.
+- A real TCP gateway cancellation test observes handler cancellation after a
+  closed socket, verifies shutdown waits for admitted HTTP work, and confirms
+  exactly one SQLite settlement. Direct AI native cancellation/read-timeout
+  tests observe upstream admission and confirm one request without replay.
+- Response extension bounds include nested usage additions. Completed malformed
+  custom output retains only independently decoded provider counters; oversized
+  usage additions fail delivery and preserve required raw counters within the
+  bound. Wrong-operation generation usage cannot become native charge evidence.
+- Changed fixture panic calls were removed while retaining assertions. The ACP
+  control-socket spend fixture now supplies its serving target and admitted
+  tariff; its existing 70-micro-USD assertion is unchanged.
+
+Local verification:
+
+- Full workspace all-feature nextest: **3769 passed, 22 existing skips** after
+  the final in-flight client fixture and panic-call audit, run
+  `258bdf17-8ab9-4c7d-ac79-8f5a0d7837b1`. The preceding complete
+  run passed 3768 tests, run `9c203624-cf63-4b4a-afb9-d547e19f5a1c`.
+- Workspace doctests: **6 passed, 1 ignored**. Strict all-feature Clippy with
+  tests, formatting and dist freshness passed for the preceding complete run.
+  The final score-rubric projection assertion passed separately, run
+  `6796daa9-5977-46c2-9dfb-fd34b6fae5f1`; strict Clippy, formatting and dist
+  freshness passed again after that final fixture change.
+- Native/pricing/guard/telemetry selected subset: **137 passed**, run
+  `ce40dcc1-41bc-43cd-957d-bf9b0bab8100`.
+- Pinned SDK public API listing (`nightly-2026-05-05`, tool 0.52.0), positive
+  sentinels, unchanged foreign-dependency manifest and OTel exclusion: passed.
+- CI feature matrix (AI minimal/pkce/hosted-login/file-store; SDK
+  minimal/config/server/ACP; guardrails minimal/SDK; telemetry HTTP/gRPC/server)
+  and positive-backed dependency guards: passed.
+- No new lint bypasses, public forwarding exports or panic calls remain in the
+  Rust diff against the parent. Old fixture assertions are retained.
+
+Requirement-level evidence and qualifications are in
+[DECISIONS_API_ACCEPTANCE.md](DECISIONS_API_ACCEPTANCE.md). Final rubric validation is complete;
+commit/publication and final source-state review remain; support claims stay scoped to
+these local checks and the retained upstream billing gate.
 
 Read-only external inventory is in [DECISIONS_API_MIGRATION.md](DECISIONS_API_MIGRATION.md).
 The Cloud checkout at `184c1f2e` still resolves published alpha.30 and has not adopted
 the parent SDK extraction. No Cloud files, build or deployment were changed;
 its untracked `lib/` was preserved. PR #962 remains open at `529f2fdeb7dc1f6bd3cef2ae243b22106b66ef16`.
 
-On 2026-10-06, `OPENAI_API_KEY` and the default credential store's OpenAI API-key
-slot were absent. No credentialed call was made; A11 remains unverified. The
-upstream Decisions/Luna pricing pages were refreshed and still do not resolve
-whether cached subsets are included in the base input charge. The accepted
-cache-billing gate remains in place.
+On 2026-10-07, `OPENAI_API_KEY`, the default credential store's OpenAI API-key
+slot and the configured OpenAI provider/account keys were absent. No credentialed
+call was made; A11 remains unverified as permitted by the spec. The beta HTTP and
+typed resource references and pricing pages were refreshed. Cached-subset billing
+remains unresolved; documented multipliers are estimates rather than invoice proof.
 
-## Remaining work
+## Delivery status
 
-| Batch | Current state |
-| --- | --- |
-| D2 | Lifecycle implemented; full workspace regression baseline green; Decisions-specific app guard coverage and final audit remain |
-| D3 | Protocol tariffs and frozen settlement implemented locally; selected regressions pass; declared catalog profile provenance and full acceptance remain |
-| D4 | Skill/setup and external inventory updated; registry/profile/schema/API artifacts, full-workspace checks and qualified provider proof remain |
-
-Spec acceptance A1-A12 remains pending as an end-to-end audit. Local AI/SDK
-evidence must not be presented as completed gateway support. Nonzero-cache
-Decisions pricing remains an explicitly unresolved upstream billing gate.
+All four batches are implemented and locally verified. Commit/publication and
+final delivery review are in progress. A11 remains explicitly
+unverified; hosted CI and deployed Cloud support have no evidence in this task.
+The external SDK migration and product-docs/catalog follow-up are inventoried;
+neither is advertised as a completed deployment. This local ledger does not
+establish upstream cache billing or invoice amounts.

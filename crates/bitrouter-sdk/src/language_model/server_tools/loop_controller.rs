@@ -820,7 +820,7 @@ mod tests {
                 ))?
                 .usage
                 .as_ref()
-                .unwrap()
+                .ok_or_else(|| crate::error::BitrouterError::internal("usage fixture missing"))?
                 .prompt_tokens,
             2
         );

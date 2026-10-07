@@ -39,6 +39,9 @@ use sha2::{Digest, Sha256};
 ///   service id that differs from the public model name still resolves.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelPricing {
+    /// Published processing-profile provenance, retained across tier selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_profile: Option<bitrouter_ai::catalog::types::PricingEndpointProfile>,
     /// Micro-USD charged per prompt (input) token (base bracket). `None` =
     /// unconfigured.
     pub input_micro_usd_per_token: Option<f64>,
@@ -83,6 +86,7 @@ impl ModelPricing {
     /// Use [`partial`](Self::partial) when only some rates are known.
     pub fn new(input_micro_usd_per_token: f64, output_micro_usd_per_token: f64) -> Self {
         Self {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(input_micro_usd_per_token),
             cache_read_micro_usd_per_token: None,
             cache_write_micro_usd_per_token: None,
@@ -95,6 +99,7 @@ impl ModelPricing {
     /// are billed as `None` (charge is skipped).
     pub fn partial(input: Option<f64>, output: Option<f64>) -> Self {
         Self {
+            endpoint_profile: None,
             input_micro_usd_per_token: input,
             cache_read_micro_usd_per_token: None,
             cache_write_micro_usd_per_token: None,
@@ -112,6 +117,7 @@ impl ModelPricing {
         output: Option<f64>,
     ) -> Self {
         Self {
+            endpoint_profile: None,
             input_micro_usd_per_token: input,
             cache_read_micro_usd_per_token: cache_read,
             cache_write_micro_usd_per_token: cache_write,
@@ -132,6 +138,7 @@ impl ModelPricing {
             .max_by_key(|t| t.above_input_tokens)
         {
             Some(tier) => ModelPricing {
+                endpoint_profile: self.endpoint_profile,
                 input_micro_usd_per_token: tier
                     .input_micro_usd_per_token
                     .or(self.input_micro_usd_per_token),
@@ -147,6 +154,7 @@ impl ModelPricing {
                 context_tiers: Vec::new(),
             },
             None => ModelPricing {
+                endpoint_profile: self.endpoint_profile,
                 input_micro_usd_per_token: self.input_micro_usd_per_token,
                 cache_read_micro_usd_per_token: self.cache_read_micro_usd_per_token,
                 cache_write_micro_usd_per_token: self.cache_write_micro_usd_per_token,
@@ -180,6 +188,7 @@ impl ModelPricing {
 impl From<&bitrouter_sdk::config::PricingConfig> for ModelPricing {
     fn from(pricing: &bitrouter_sdk::config::PricingConfig) -> Self {
         Self {
+            endpoint_profile: pricing.endpoint_profile,
             input_micro_usd_per_token: pricing.input_micro_usd_per_token,
             cache_read_micro_usd_per_token: pricing.cache_read_micro_usd_per_token,
             cache_write_micro_usd_per_token: pricing.cache_write_micro_usd_per_token,
@@ -630,6 +639,10 @@ fn unknown_evidence(
 
 pub(crate) fn pricing_version(pricing: &ModelPricing) -> String {
     let mut hasher = Sha256::new();
+    if let Some(profile) = pricing.endpoint_profile {
+        hasher.update(b"endpoint-profile-v1|");
+        hasher.update(profile.as_str().as_bytes());
+    }
     hash_rate(&mut hasher, pricing.input_micro_usd_per_token);
     hash_rate(&mut hasher, pricing.cache_read_micro_usd_per_token);
     hash_rate(&mut hasher, pricing.cache_write_micro_usd_per_token);
@@ -800,6 +813,7 @@ mod tests {
     #[test]
     fn context_tier_inherits_omitted_cache_rates_from_base() {
         let pricing = ModelPricing {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(2.0),
             cache_read_micro_usd_per_token: Some(0.2),
             cache_write_micro_usd_per_token: Some(2.5),
@@ -901,6 +915,7 @@ mod tests {
     /// Base ≤128k = 1.3/7.8 µ$/token; higher bracket >128k = 2.0/12.0.
     fn tiered() -> ModelPricing {
         ModelPricing {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(1.3),
             cache_read_micro_usd_per_token: None,
             cache_write_micro_usd_per_token: None,
@@ -941,6 +956,7 @@ mod tests {
     #[test]
     fn resolve_highest_applicable_tier_is_order_independent() {
         let p = ModelPricing {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(1.0),
             cache_read_micro_usd_per_token: None,
             cache_write_micro_usd_per_token: None,
@@ -1017,6 +1033,7 @@ mod tests {
     #[test]
     fn tier_inherits_base_rate_when_bucket_rate_is_omitted() {
         let pricing = ModelPricing {
+            endpoint_profile: None,
             input_micro_usd_per_token: Some(1.3),
             cache_read_micro_usd_per_token: None,
             cache_write_micro_usd_per_token: None,

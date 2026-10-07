@@ -25,6 +25,27 @@ use super::recorder::MeteringRecorder;
 use super::store::{MeteringStore, TimeWindow};
 use super::tariff::endpoint_profile;
 
+struct PendingHandler(Option<tokio::sync::mpsc::UnboundedSender<()>>);
+impl Drop for PendingHandler {
+    fn drop(&mut self) {
+        if let Some(sender) = &self.0 {
+            let _ = sender.send(());
+        }
+    }
+}
+
+async fn observe_handler_cancellation(
+    axum::extract::State(sender): axum::extract::State<tokio::sync::mpsc::UnboundedSender<()>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut pending = PendingHandler(Some(sender));
+    let response = next.run(request).await;
+    // Normal completion must not be mistaken for a cancelled handler.
+    pending.0 = None;
+    response
+}
+
 fn target() -> RoutingTarget {
     RoutingTarget {
         provider_name: "fixture".into(),
@@ -351,6 +372,80 @@ fn frozen_tariffs_keep_rates_and_endpoint_billing_conditions() -> anyhow::Result
     Ok(())
 }
 
+#[test]
+fn published_global_tariffs_cannot_rebind_to_configured_regional_endpoints() -> anyhow::Result<()> {
+    use bitrouter_ai::catalog::types::PricingEndpointProfile;
+    let mut target = target();
+    for (base, regional_profile) in [
+        (
+            "https://eu.api.openai.com/v1",
+            PricingEndpointProfile::OpenaiEurope,
+        ),
+        (
+            "https://us.api.openai.com/v1",
+            PricingEndpointProfile::OpenaiUs,
+        ),
+    ] {
+        target.api_base = base.into();
+        let mut table = native_prices(base);
+        let mut global = ModelPricing::cache_aware(Some(0.1), Some(0.0), Some(0.0), Some(0.0));
+        global.endpoint_profile = Some(PricingEndpointProfile::OpenaiGlobal);
+        table.insert_for_protocol("fixture", "native-test", ApiProtocol::Decisions, global);
+        let rejected = table.snapshot(&target).tariff;
+        assert_eq!(rejected.endpoint_profile, regional_profile.as_str());
+        assert_eq!(rejected.tariff_profile.as_deref(), Some("openai_global"));
+        assert_eq!(
+            rejected.unavailable_reason.as_deref(),
+            Some("endpoint_profile_mismatch")
+        );
+        let mut regional = ModelPricing::cache_aware(Some(0.11), Some(0.0), Some(0.0), Some(0.0));
+        regional.endpoint_profile = Some(regional_profile);
+        regional.context_tiers.push(ContextTier {
+            above_input_tokens: 272_000,
+            input_micro_usd_per_token: Some(0.22),
+            cache_read_micro_usd_per_token: None,
+            cache_write_micro_usd_per_token: None,
+            output_micro_usd_per_token: None,
+        });
+        table.insert_for_protocol("fixture", "native-test", ApiProtocol::Decisions, regional);
+        let accepted = table.snapshot(&target).tariff;
+        assert!(accepted.unavailable_reason.is_none());
+        assert_ne!(accepted.pricing_version, rejected.pricing_version);
+        let at = Usage {
+            prompt_tokens: 272_000,
+            origin: UsageOrigin::ProviderReported,
+            ..Default::default()
+        };
+        assert_eq!(
+            accepted
+                .charge_evidence(&at, PricingSource::Configured)
+                .charge_micro_usd,
+            Some(29_920)
+        );
+        let above = Usage {
+            prompt_tokens: 272_001,
+            ..at
+        };
+        assert_eq!(
+            accepted
+                .charge_evidence(&above, PricingSource::Configured)
+                .charge_micro_usd,
+            Some(59_840)
+        );
+        assert_eq!(
+            accepted
+                .pricing
+                .as_ref()
+                .map(|p| p.resolve_for_input_tokens(272_001).endpoint_profile),
+            Some(Some(regional_profile))
+        );
+    }
+    let invalid: std::result::Result<bitrouter_sdk::config::PricingConfig, _> =
+        serde_json::from_value(json!({"endpoint_profile":"private-unsupported-profile"}));
+    assert!(invalid.is_err());
+    Ok(())
+}
+
 #[tokio::test]
 async fn known_price_admission_rejects_native_cache_uncertainty_before_http() -> anyhow::Result<()>
 {
@@ -393,5 +488,287 @@ async fn known_price_admission_rejects_native_cache_uncertainty_before_http() ->
             .is_some_and(|requests| requests.is_empty())
     );
     pipeline.drain_required_pending_settlements().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_gateway_enforces_shared_auth_acl_expiry_spend_and_rate() -> anyhow::Result<()> {
+    use crate::auth::db::{NewApiKey, insert_api_key, upsert_user};
+    use crate::auth::hook::AuthHook;
+    use crate::policy::hook::PolicyHook;
+    use crate::policy::policy::Policy;
+    use crate::policy::store::PolicyStore;
+    use bitrouter_sdk::language_model::operations::HookStage;
+    use sea_orm::ConnectionTrait;
+
+    for (policy, credential_mode, first_status, second_status) in [
+        (Policy::default(), "missing", StatusCode::UNAUTHORIZED, None),
+        (Policy::default(), "invalid", StatusCode::UNAUTHORIZED, None),
+        (
+            Policy::default(),
+            "expired-key",
+            StatusCode::UNAUTHORIZED,
+            None,
+        ),
+        (
+            Policy {
+                denied_models: vec!["test".into()],
+                ..Default::default()
+            },
+            "valid",
+            StatusCode::FORBIDDEN,
+            None,
+        ),
+        (
+            Policy {
+                expires_at: Some(chrono::Utc::now() - chrono::Duration::seconds(60)),
+                ..Default::default()
+            },
+            "valid",
+            StatusCode::FORBIDDEN,
+            None,
+        ),
+        (
+            Policy {
+                allowed_models: Some(vec!["test".into()]),
+                allowed_tools: Some(Vec::new()),
+                ..Default::default()
+            },
+            "valid",
+            StatusCode::OK,
+            None,
+        ),
+        (
+            Policy {
+                max_spend_micro_usd: Some(10),
+                ..Default::default()
+            },
+            "valid",
+            StatusCode::OK,
+            Some(StatusCode::FORBIDDEN),
+        ),
+        (
+            Policy {
+                max_requests_per_minute: Some(1),
+                ..Default::default()
+            },
+            "valid",
+            StatusCode::OK,
+            Some(StatusCode::TOO_MANY_REQUESTS),
+        ),
+    ] {
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/v1/decisions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "model":"native-test", "answers":[{"type":"predicate","name":"q","probability":0.7}],
+                "usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100,
+                    "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},
+                    "output_tokens_details":{"reasoning_tokens":0}}
+            }))).mount(&upstream).await;
+        let db = crate::db::connect("sqlite::memory:").await?;
+        crate::db::run_migrations(&db).await?;
+        upsert_user(&db, "native-owner").await?;
+        let key = crate::auth::keys::generate();
+        insert_api_key(
+            &db,
+            &NewApiKey {
+                id: "native-key".into(),
+                key_hash: key.hash,
+                user_id: "native-owner".into(),
+                policy_id: Some("native-policy".into()),
+                spend_limit_micro_usd: None,
+                rpm_limit: None,
+            },
+        )
+        .await?;
+        if credential_mode == "expired-key" {
+            db.execute(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                "UPDATE api_keys SET expires_at = '2020-01-01T00:00:00Z' WHERE id = 'native-key'",
+            ))
+            .await?;
+        }
+        let mut policy = policy;
+        policy.id = "native-policy".into();
+        let store = MeteringStore::new(db.clone());
+        let base = format!("{}/v1", upstream.uri());
+        let recorder = MeteringRecorder::new(store.clone(), Arc::new(native_prices(&base)));
+        let mut native = target();
+        native.api_base = base;
+        let table = Arc::new(StaticRoutingTable::new());
+        table.insert("test", vec![native]);
+        let mut builder = PipelineBuilder::new();
+        builder
+            .routing_table(table)
+            .executor(Arc::new(HttpExecutor::with_defaults()?))
+            .served_operations(OperationScope::Both)
+            .require_hook::<AuthHook>(HookStage::PreResolution, OperationScope::Both)
+            .require_hook::<PolicyHook>(HookStage::PreRequest, OperationScope::Both)
+            .pre_resolution_hook_for(AuthHook::new(db), OperationScope::Both)
+            .pre_request_hook_for(
+                PolicyHook::new(
+                    Arc::new(PolicyStore::from_policies([policy])),
+                    Some(store.clone()),
+                ),
+                OperationScope::Both,
+            )
+            .route_hook_for(recorder.tariff_capture(false), OperationScope::Both)
+            .settlement_recorder_for(recorder, OperationScope::Both);
+        let pipeline = Arc::new(builder.build()?);
+        let router = build_router(AppState {
+            language_model: pipeline.clone(),
+            mcp: None,
+            skip_auth: false,
+            metrics_renderer: None,
+            prompt_transforms: Vec::new(),
+        });
+        for expected_status in std::iter::once(first_status).chain(second_status) {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/v1/decisions")
+                .header("content-type", "application/json");
+            if credential_mode != "missing" {
+                let secret = if credential_mode == "invalid" {
+                    "invalid-key"
+                } else {
+                    &key.secret
+                };
+                request = request.header("authorization", format!("Bearer {secret}"));
+            }
+            let response = router.clone().oneshot(request.body(Body::from(serde_json::to_vec(&json!({
+                "model":"test","input":"evidence","questions":[{"type":"predicate","name":"q","instructions":"check"}]
+            }))?))?).await?;
+            assert_eq!(response.status(), expected_status, "{credential_mode}");
+            let _body = to_bytes(response.into_body(), 1024 * 1024).await?;
+        }
+        pipeline.drain_required_pending_settlements().await?;
+        let expected_calls = usize::from(first_status == StatusCode::OK);
+        assert!(
+            upstream
+                .received_requests()
+                .await
+                .is_some_and(|requests| requests.len() == expected_calls)
+        );
+        if expected_calls != 0 {
+            let rows = store.export_usage(TimeWindow::ThisMonth).await?;
+            assert!(
+                rows.iter()
+                    .any(|row| row.final_charge_micro_usd == Some(10))
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn observed_native_disconnect_and_shutdown_preserve_sqlite_settlement() -> anyhow::Result<()>
+{
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tokio::sync::{Notify, mpsc, oneshot};
+    let (admitted_tx, mut admitted) = mpsc::unbounded_channel();
+    let release = Arc::new(Notify::new());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let held = axum::Router::new().route("/v1/decisions", axum::routing::post({
+        let release = release.clone();
+        let calls = calls.clone();
+        move || { let release = release.clone(); let calls = calls.clone(); let admitted = admitted_tx.clone(); async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let _ = admitted.send(());
+            release.notified().await;
+            axum::Json(json!({"model":"native-test","answers":[{"type":"predicate","name":"q","probability":0.7}],
+                "usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100,
+                    "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},
+                    "output_tokens_details":{"reasoning_tokens":0}}}))
+        }}
+    }));
+    let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let base = format!("http://{}/v1", upstream_listener.local_addr()?);
+    let (upstream_stop, upstream_stopped) = oneshot::channel();
+    let upstream = tokio::spawn(async move {
+        axum::serve(upstream_listener, held)
+            .with_graceful_shutdown(async {
+                let _ = upstream_stopped.await;
+            })
+            .await
+    });
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let store = MeteringStore::new(db);
+    let recorder = MeteringRecorder::new(store.clone(), Arc::new(native_prices(&base)));
+    let capture = recorder.tariff_capture(false);
+    let mut native = target();
+    native.api_base = base;
+    let routes = Arc::new(StaticRoutingTable::new());
+    routes.insert("test", vec![native]);
+    let executor = Arc::new(HttpExecutor::with_defaults()?);
+    let app = bitrouter_sdk::App::builder()
+        .skip_auth(true)
+        .language_model(|lm| {
+            lm.routing_table(routes)
+                .executor(executor)
+                .served_operations(OperationScope::Both)
+                .route_hook_for(capture, OperationScope::Both)
+                .settlement_recorder_for(recorder, OperationScope::Both);
+        })
+        .build()?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let (cancelled_tx, mut cancelled) = mpsc::unbounded_channel();
+    let (shutdown, shutdown_received) = oneshot::channel();
+    let gateway = tokio::spawn(async move {
+        app.serve_listener_with_router_wrapper_and_shutdown(
+            listener,
+            move |router| {
+                router.layer(axum::middleware::from_fn_with_state(
+                    cancelled_tx.clone(),
+                    observe_handler_cancellation,
+                ))
+            },
+            async {
+                let _ = shutdown_received.await;
+            },
+        )
+        .await
+    });
+    use tokio::io::AsyncWriteExt;
+    let body = serde_json::to_vec(
+        &json!({"model":"test","input":"evidence","questions":[{"type":"predicate","name":"q","instructions":"check"}]}),
+    )?;
+    let mut client = tokio::net::TcpStream::connect(address).await?;
+    let headers = format!(
+        "POST /v1/decisions HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nX-Bitrouter-Request-Id: native-disconnected\r\n\r\n",
+        body.len()
+    );
+    client.write_all(headers.as_bytes()).await?;
+    client.write_all(&body).await?;
+    tokio::time::timeout(Duration::from_secs(10), admitted.recv())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no upstream admission"))?;
+    client.shutdown().await?;
+    drop(client);
+    tokio::time::timeout(Duration::from_secs(10), cancelled.recv())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("gateway did not observe cancellation"))?;
+    shutdown
+        .send(())
+        .map_err(|_| anyhow::anyhow!("gateway shutdown channel closed"))?;
+    assert!(!gateway.is_finished());
+    assert!(store.export_usage(TimeWindow::ThisMonth).await?.is_empty());
+    release.notify_one();
+    tokio::time::timeout(Duration::from_secs(10), gateway).await???;
+    let rows = store.export_usage(TimeWindow::ThisMonth).await?;
+    assert_eq!(rows.len(), 1);
+    let row = rows
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("no settled request"))?;
+    assert_eq!(row.request_id.as_deref(), Some("native-disconnected"));
+    assert_eq!(row.final_charge_micro_usd, Some(10));
+    assert_eq!(row.prompt_tokens, 100);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    upstream_stop
+        .send(())
+        .map_err(|_| anyhow::anyhow!("upstream shutdown channel closed"))?;
+    tokio::time::timeout(Duration::from_secs(10), upstream).await???;
     Ok(())
 }

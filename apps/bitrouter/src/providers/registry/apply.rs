@@ -275,10 +275,12 @@ fn map_pricing(p: &RegistryPricing) -> Option<PricingConfig> {
         && cache_write.is_none()
         && output.is_none()
         && context_tiers.is_empty()
+        && p.endpoint_profile.is_none()
     {
         return None;
     }
     Some(PricingConfig {
+        endpoint_profile: p.endpoint_profile,
         input_micro_usd_per_token: input,
         cache_read_micro_usd_per_token: cache_read,
         cache_write_micro_usd_per_token: cache_write,
@@ -310,6 +312,7 @@ mod tests {
                 api_protocol: ProtocolSet::One(RegistryProtocol::Openai),
                 pricing_by_protocol: std::collections::HashMap::new(),
                 pricing: Some(RegistryPricing {
+                    endpoint_profile: None,
                     input_tokens: Some(InputTokenPricing {
                         no_cache: Some(0.27),
                         cache_read: None,
@@ -380,6 +383,7 @@ mod tests {
     #[test]
     fn registry_cache_rates_map_without_fabricating_missing_values() -> anyhow::Result<()> {
         let pricing = RegistryPricing {
+            endpoint_profile: None,
             input_tokens: Some(InputTokenPricing {
                 no_cache: Some(3.0),
                 cache_read: Some(0.3),
@@ -898,7 +902,7 @@ mod tests {
         model.pricing_by_protocol.insert(
             ApiProtocol::Decisions,
             serde_json::from_value(
-                serde_json::json!({"input_tokens":{"no_cache":0.1},"output_tokens":{"text":0.0}}),
+                serde_json::json!({"endpoint_profile":"openai_global","input_tokens":{"no_cache":0.1},"output_tokens":{"text":0.0}}),
             )?,
         );
         model.pricing_by_protocol.insert(
@@ -910,6 +914,10 @@ mod tests {
         let native = mapped
             .pricing_for(&ApiProtocol::Decisions)
             .context("native override missing")?;
+        assert_eq!(
+            native.endpoint_profile,
+            Some(bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiGlobal)
+        );
         assert_eq!(native.input_micro_usd_per_token, Some(0.1));
         assert_eq!(native.cache_read_micro_usd_per_token, None);
         assert_eq!(native.output_micro_usd_per_token, Some(0.0));

@@ -1416,7 +1416,9 @@ impl Pipeline {
                 };
                 if !matches {
                     if ctx.operation() == ModelOperation::Decisions {
-                        ctx.record_decision_failure_usage(result.result.usage().cloned());
+                        // Usage from a generation result is not native wire
+                        // evidence and cannot be charged as Decisions usage.
+                        ctx.record_decision_failure_usage(None);
                     }
                     return Err(BitrouterError::UpstreamInvalidResponse {
                         message: "executor result operation mismatch".into(),

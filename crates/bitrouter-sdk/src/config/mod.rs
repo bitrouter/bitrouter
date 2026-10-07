@@ -1101,6 +1101,10 @@ pub struct RateLimit {
 /// [`context_tiers`]: PricingConfig::context_tiers
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct PricingConfig {
+    /// Published tariff's processing profile. A mismatch with the effective
+    /// endpoint makes application price evidence unavailable.
+    #[serde(default)]
+    pub endpoint_profile: Option<bitrouter_ai::catalog::types::PricingEndpointProfile>,
     /// Micro-USD per uncached prompt token (base bracket). `None` means the
     /// provider did not publish a rate; explicit `0` remains free.
     #[serde(default)]

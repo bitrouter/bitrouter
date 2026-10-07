@@ -149,6 +149,54 @@ fn refusals_and_invalid_answers_keep_independent_usage_evidence() -> TestResult 
 }
 
 #[test]
+fn native_usage_extensions_are_bounded_and_failures_use_provider_counters() -> TestResult {
+    let request = DecisionsCodec::parse_request(request())?;
+    let mut within = response();
+    within["usage"]["input_tokens_details"]["provider_extra"] = json!(true);
+    let decoded = DecisionsCodec::parse_response(within.clone(), &request)?;
+    assert_eq!(DecisionsCodec::render_response(&decoded, &request)?, within);
+    for nested in [false, true] {
+        let mut oversized = response();
+        let usage = if nested {
+            &mut oversized["usage"]["input_tokens_details"]
+        } else {
+            &mut oversized["usage"]
+        };
+        usage["private-extra"] = json!("private-payload".repeat(6000));
+        let error = DecisionsCodec::parse_response(oversized, &request)
+            .err()
+            .ok_or("oversized usage admitted")?;
+        let retained = error.decision_usage().ok_or("valid counters lost")?;
+        assert_eq!(retained.prompt_tokens, 42);
+        let raw = retained
+            .raw
+            .as_deref()
+            .ok_or("required raw counters lost")?;
+        assert!(serde_json::to_vec(raw)?.len() < 1024);
+        assert!(!serde_json::to_string(raw)?.contains("private-extra"));
+        assert!(!format!("{error:?}").contains("private-payload"));
+    }
+    let mut inconsistent = decoded;
+    inconsistent.usage.prompt_tokens = 1_000_000;
+    if let Some(DecisionAnswer::Predicate { probability, .. }) = inconsistent.answers.first_mut() {
+        *probability = 2.0;
+    }
+    let error = DecisionsCodec::render_response(&inconsistent, &request)
+        .err()
+        .ok_or("inconsistent typed result admitted")?;
+    assert_eq!(
+        error.decision_usage().map(|usage| usage.prompt_tokens),
+        Some(42)
+    );
+    inconsistent.usage.raw = None;
+    let missing = DecisionsCodec::render_response(&inconsistent, &request)
+        .err()
+        .ok_or("missing usage proof admitted")?;
+    assert!(missing.decision_usage().is_none());
+    Ok(())
+}
+
+#[test]
 fn image_budget_and_inconsistent_usage_are_refused() -> TestResult {
     let mut body = request();
     let image = body["input"][0]["content"][1].clone();
@@ -231,13 +279,11 @@ async fn authentication_refresh_rebuilds_once_for_the_same_selected_account() ->
     Mock::given(path("/decisions"))
         .and(header("authorization", "Bearer first-private"))
         .respond_with(ResponseTemplate::new(401))
-        .expect(1)
         .mount(&server)
         .await;
     Mock::given(path("/decisions"))
         .and(header("authorization", "Bearer replacement-private"))
         .respond_with(ResponseTemplate::new(200).set_body_json(response()))
-        .expect(1)
         .mount(&server)
         .await;
     let auth = Arc::new(SelectedAuth::default());
@@ -251,6 +297,12 @@ async fn authentication_refresh_rebuilds_once_for_the_same_selected_account() ->
         .await?;
     assert_eq!(auth.refreshes.load(Ordering::SeqCst), 1);
     assert_eq!(auth.preparations.load(Ordering::SeqCst), 2);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .is_some_and(|requests| requests.len() == 2)
+    );
     Ok(())
 }
 
@@ -262,7 +314,6 @@ async fn malformed_answers_return_usage_without_replaying_or_exposing_credential
     body["usage"]["echo"] = json!("private-key");
     Mock::given(path("/decisions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(body))
-        .expect(1)
         .mount(&server)
         .await;
     let client = ModelClient::new(HttpTimeouts::default())?;
@@ -276,6 +327,12 @@ async fn malformed_answers_return_usage_without_replaying_or_exposing_credential
     let usage = error.decision_usage().ok_or("usage was lost")?;
     assert_eq!(usage.prompt_tokens, 42);
     assert!(!format!("{error:?} {error} {:?}", usage.raw).contains("private-key"));
+    assert!(
+        server
+            .received_requests()
+            .await
+            .is_some_and(|requests| requests.len() == 1)
+    );
     Ok(())
 }
 
@@ -291,7 +348,6 @@ async fn selected_call_projects_model_without_mutating_source() -> TestResult {
         .and(header("authorization", "Bearer private-key"))
         .and(body_json(expected))
         .respond_with(ResponseTemplate::new(200).set_body_json(response()))
-        .expect(1)
         .mount(&server)
         .await;
     let client = ModelClient::new(HttpTimeouts::default())?;
@@ -300,6 +356,12 @@ async fn selected_call_projects_model_without_mutating_source() -> TestResult {
         .await?;
     assert_eq!(result.model, "native-model");
     assert_eq!(request, before);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .is_some_and(|requests| requests.len() == 1)
+    );
     Ok(())
 }
 
@@ -329,5 +391,60 @@ async fn operation_mismatch_and_cancellation_stop_before_dispatch() -> TestResul
         .await
         .ok_or("requests unavailable")?;
     assert!(received.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn admitted_native_io_cancels_and_times_out_without_replay() -> TestResult {
+    use std::time::Duration;
+    for cancel in [true, false] {
+        let server = MockServer::start().await;
+        let (sender, mut admitted) = tokio::sync::mpsc::unbounded_channel();
+        Mock::given(path("/decisions"))
+            .respond_with(move |_request: &wiremock::Request| {
+                let _ = sender.send(());
+                ResponseTemplate::new(200)
+                    .set_body_json(response())
+                    .set_delay(Duration::from_secs(2))
+            })
+            .mount(&server)
+            .await;
+        let timeouts = HttpTimeouts {
+            read: if cancel {
+                Duration::from_secs(10)
+            } else {
+                Duration::from_millis(300)
+            },
+            ..Default::default()
+        };
+        let client = ModelClient::new(timeouts)?;
+        let native = DecisionsCodec::parse_request(request())?;
+        let selected = target(server.uri());
+        let cancellation = CancellationToken::new();
+        let call_cancel = cancellation.clone();
+        let call =
+            tokio::spawn(async move { client.decide(&selected, &native, &call_cancel).await });
+        tokio::time::timeout(Duration::from_secs(2), admitted.recv())
+            .await?
+            .ok_or("upstream admission missing")?;
+        if cancel {
+            cancellation.cancel();
+        }
+        let error = tokio::time::timeout(Duration::from_secs(2), call)
+            .await??
+            .err()
+            .ok_or("held request succeeded")?;
+        if cancel {
+            assert!(matches!(error, ModelError::Cancelled));
+        } else {
+            assert!(matches!(error, ModelError::Timeout));
+        }
+        assert!(
+            server
+                .received_requests()
+                .await
+                .is_some_and(|requests| requests.len() == 1)
+        );
+    }
     Ok(())
 }

@@ -3157,17 +3157,6 @@ fn validate_pricing(pricing: &ModelPricing, file: &str, model_id: &str, issues: 
             ));
         }
         prev = Some(tier.above_input_tokens);
-        if tier
-            .input_tokens
-            .as_ref()
-            .and_then(|p| p.no_cache)
-            .is_none()
-            || tier.output_tokens.as_ref().and_then(|p| p.text).is_none()
-        {
-            issues.push(format!(
-                "{file}: model '{model_id}' context tier must set no_cache and text rates"
-            ));
-        }
     }
 }
 
@@ -3387,6 +3376,7 @@ fn pricing_from_cost(cost: Option<&ModelsDevCost>) -> Option<ModelPricing> {
         return None;
     }
     Some(ModelPricing {
+        endpoint_profile: None,
         input_tokens: Some(input),
         output_tokens: Some(output),
         context_tiers: Vec::new(),
@@ -4148,6 +4138,8 @@ struct RateLimits {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ModelPricing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    endpoint_profile: Option<bitrouter_ai::catalog::types::PricingEndpointProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     input_tokens: Option<InputTokenPricing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -6133,6 +6125,7 @@ models:
       openai:
         input_tokens: {no_cache: 1}
       decisions:
+        endpoint_profile: openai_global
         input_tokens: {no_cache: 0.1, cache_read: 0, cache_write: 0}
         output_tokens: {text: 0}
         context_tiers:
@@ -6140,6 +6133,14 @@ models:
             input_tokens: {no_cache: 0.2}
 "#;
         let provider: ProviderFile = serde_saphyr::from_str(source)?;
+        let pricing = provider
+            .models
+            .first()
+            .and_then(|model| model.pricing_by_protocol.get(&ApiProtocol::Decisions))
+            .context("source tariff missing")?;
+        let mut issues = Vec::new();
+        validate_pricing(pricing, "fixture.yaml", "fixture/model", &mut issues);
+        assert!(issues.is_empty(), "{issues:?}");
         let models = resolved_models(&provider)?;
         let model = models.first().context("resolved model missing")?;
         assert_eq!(
@@ -6151,6 +6152,10 @@ models:
             0.0
         );
         assert!(model["pricing_by_protocol"].get("openai").is_none());
+        assert_eq!(
+            model["pricing_by_protocol"]["decisions"]["endpoint_profile"],
+            "openai_global"
+        );
         let model = provider.models.first().context("source model missing")?;
         let append = render_model_append(model)?;
         let parsed: ProviderFile = serde_saphyr::from_str(&format!(
@@ -6161,6 +6166,10 @@ models:
             .pricing_by_protocol
             .get(&ApiProtocol::Decisions)
             .context("native tariff lost during append")?;
+        assert_eq!(
+            tariff.endpoint_profile,
+            Some(bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiGlobal)
+        );
         let tier = tariff
             .context_tiers
             .first()

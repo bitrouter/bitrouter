@@ -181,12 +181,13 @@
       "type": "object"
     },
     "ApiProtocol": {
-      "description": "Wire protocol. Known values: `chat_completions`, `messages`, `generate_content`, `responses`; any other string names an externally-registered (outbound-only) custom protocol.",
+      "description": "Wire protocol. Known values: `chat_completions`, `messages`, `generate_content`, `responses`, `decisions`; any other string names an externally-registered (outbound-only) custom protocol.",
       "examples": [
         "chat_completions",
         "messages",
         "generate_content",
-        "responses"
+        "responses",
+        "decisions"
       ],
       "type": "string"
     },
@@ -1024,6 +1025,18 @@
           },
           "type": "array"
         },
+        "endpoint_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PricingEndpointProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Published tariff's processing profile. A mismatch with the effective\nendpoint makes application price evidence unavailable."
+        },
         "input_micro_usd_per_token": {
           "default": null,
           "description": "Micro-USD per uncached prompt token (base bracket). `None` means the\nprovider did not publish a rate; explicit `0` remains free.",
@@ -1044,6 +1057,26 @@
         }
       },
       "type": "object"
+    },
+    "PricingEndpointProfile": {
+      "description": "Published processing-profile provenance; application pricing validates the\neffective endpoint rather than inferring premiums from this declaration.",
+      "oneOf": [
+        {
+          "const": "openai_global",
+          "description": "OpenAI global processing.",
+          "type": "string"
+        },
+        {
+          "const": "openai_us",
+          "description": "OpenAI US regional processing.",
+          "type": "string"
+        },
+        {
+          "const": "openai_europe",
+          "description": "OpenAI European regional processing.",
+          "type": "string"
+        }
+      ]
     },
     "PricingTierConfig": {
       "description": "One higher context-pricing bracket in config — see\n[`PricingConfig::context_tiers`].",
@@ -1372,6 +1405,13 @@
             }
           ],
           "description": "Per-model pricing."
+        },
+        "pricing_by_protocol": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PricingConfig"
+          },
+          "description": "Independent complete tariffs by outbound wire. Missing buckets never inherit\nordinary generation rates; Decisions requires its own tariff.",
+          "type": "object"
         },
         "provider_model_id": {
           "default": null,
@@ -1786,6 +1826,11 @@
           "default": "info",
           "description": "Log filter for the daemon, in `tracing-subscriber` `EnvFilter` syntax —\na bare level (`debug`) or a per-target list (`info,bitrouter=debug`).\n\n`RUST_LOG` overrides this when set, following the Rust convention. The\nfilter is resolved once at startup, so changing it needs a restart —\n`bro reload` will not pick it up. Applies to `bro serve`\n(and therefore `start`); other subcommands install their subscriber\nbefore any config is read and honour `RUST_LOG` only.",
           "type": "string"
+        },
+        "require_known_pricing": {
+          "default": false,
+          "description": "Deny dispatch when any routed tariff cannot guarantee complete known-price\ncoverage. Decisions caching remains unverified and fails this admission.",
+          "type": "boolean"
         },
         "skip_auth": {
           "default": false,

@@ -933,13 +933,31 @@ async fn client_fails_clearly_when_no_daemon_is_listening() {
 async fn settle_attributed_request(metering: MeteringStore, controller: &str, root: &str) {
     let mut pricing = PricingTable::new();
     pricing.insert("openai", "gpt-5", ModelPricing::new(2.0, 10.0));
+    let target = bitrouter_sdk::language_model::types::RoutingTarget {
+        provider_name: "openai".into(),
+        service_id: "gpt-5".into(),
+        api_protocol: bitrouter_ai::types::ApiProtocol::ChatCompletions,
+        api_base: "https://fixture.invalid/v1".into(),
+        api_key: String::new(),
+        api_key_override: None,
+        api_base_override: None,
+        account_label: None,
+        auth_scheme: Default::default(),
+        headers: Vec::new(),
+        reasoning_effort: None,
+        chat_token_limit_field: None,
+        chat_supports_store: None,
+        chat_supports_stream_options: None,
+    };
+    pricing.configure_endpoint("openai", None, &target.api_base);
+    let tariff = pricing.snapshot(&target);
     let recorder = MeteringRecorder::new(metering, Arc::new(pricing));
     let request_id = format!("spend-{controller}-{root}");
     let mut settled = SettlementContext {
         operation: bitrouter_ai::types::ModelOperation::Generation,
         request_id: request_id.clone(),
         caller: CallerContext::local(),
-        target: None,
+        target: Some(target),
         model_id: "gpt-5".into(),
         reasoning_effort: None,
         provider_id: "openai".into(),
@@ -965,6 +983,7 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
         error: None,
         events: bitrouter_sdk::EventBus::new(),
     };
+    settled.emit(tariff);
     settled.emit(SessionIdentityObserved {
         router_request_id: request_id,
         origin: RequestOrigin::AcpHarnessRequest,

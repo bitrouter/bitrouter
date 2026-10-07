@@ -27,6 +27,9 @@ pub struct FrozenTariff {
     pub protocol: ApiProtocol,
     /// Effective endpoint profile, with custom URLs represented only by a digest.
     pub endpoint_profile: String,
+    /// Profile to which the admitted rates were bound; absent in older evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tariff_profile: Option<String>,
     /// Complete independent rates and context tiers, when applicable.
     pub pricing: Option<ModelPricing>,
     /// Digest covering wire, profile, rates/tiers and the billing condition.
@@ -137,23 +140,29 @@ impl PricingTable {
     /// Freeze the configured rates and the effective endpoint's applicability.
     pub fn snapshot(&self, target: &RoutingTarget) -> TargetTariffSnapshot {
         let profile = endpoint_profile(target.effective_api_base());
-        let configured = self.endpoint_profile_for(&target.provider_name, &target.api_protocol);
-        let mut reason = match configured {
+        let pricing = self.resolve(
+            &target.provider_name,
+            &target.service_id,
+            &target.api_protocol,
+        );
+        let configured = pricing
+            .as_ref()
+            .and_then(|pricing| pricing.endpoint_profile)
+            .map(|profile| profile.as_str())
+            .or_else(|| self.endpoint_profile_for(&target.provider_name, &target.api_protocol));
+        let reason = match configured {
             _ if profile == "invalid_endpoint" => Some("endpoint_profile_unavailable"),
             None => Some("endpoint_profile_unavailable"),
             Some(expected) if expected != profile => Some("endpoint_profile_mismatch"),
+            Some(_)
+                if pricing
+                    .as_ref()
+                    .is_none_or(|pricing| pricing.is_unconfigured()) =>
+            {
+                Some("pricing_not_found")
+            }
             Some(_) => None,
         };
-        let pricing = self
-            .resolve(
-                &target.provider_name,
-                &target.service_id,
-                &target.api_protocol,
-            )
-            .filter(|pricing| !pricing.is_unconfigured());
-        if reason.is_none() && pricing.is_none() {
-            reason = Some("pricing_not_found");
-        }
         let basis = if target.api_protocol == ApiProtocol::Decisions {
             "decisions-zero-cache-only-v1"
         } else {
@@ -167,7 +176,7 @@ impl PricingTable {
             "sha256:{}",
             hex::encode(Sha256::digest(
                 format!(
-                    "tariff-v1|{}|{profile}|{basis}|{rates_version}|{}",
+                    "tariff-v2|{}|{profile}|{configured:?}|{basis}|{rates_version}|{}",
                     target.api_protocol,
                     reason.unwrap_or("available")
                 )
@@ -179,6 +188,7 @@ impl PricingTable {
             tariff: FrozenTariff {
                 protocol: target.api_protocol.clone(),
                 endpoint_profile: profile,
+                tariff_profile: configured.map(str::to_owned),
                 pricing,
                 pricing_version: version,
                 billing_basis: basis.into(),

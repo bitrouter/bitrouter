@@ -2233,6 +2233,94 @@ mod hop_tests {
     }
 
     #[tokio::test]
+    async fn native_decision_spans_conform_and_exclude_safety_identifier()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use bitrouter_ai::protocol::decisions::DecisionsCodec;
+        for mode in [ContentCaptureMode::Off, ContentCaptureMode::Full] {
+            let (exporter, captured) = make_test_exporter_with(OtelConfig {
+                content_capture: mode,
+                ..Default::default()
+            });
+            let request = DecisionsCodec::parse_request(serde_json::json!({
+                "model":"test-model","input":"private-native-evidence",
+                "safety_identifier":"private-native-safety",
+                "questions":[{"type":"predicate","name":"q","instructions":"check evidence"}]
+            }))?;
+            let native = DecisionsCodec::parse_response(
+                serde_json::json!({
+                    "model":"test-model","answers":[{"type":"predicate","name":"q","probability":0.7}],
+                    "usage":{"input_tokens":10,"output_tokens":0,"total_tokens":10,
+                        "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},
+                        "output_tokens_details":{"reasoning_tokens":0}}
+                }),
+                &request,
+            )?;
+            let mut target = fresh_target("openai");
+            target.api_protocol = ApiProtocol::Decisions;
+            let mut ctx = PipelineContext::new(PipelineRequest::new_decisions(
+                "test-model",
+                CallerContext::new("k1", "u1"),
+                request,
+            ));
+            let mut result = fresh_result(&target);
+            result.result = native.into();
+            exporter.after_phase(Phase::PreRequest, &ctx).await;
+            exporter.on_hop_start(&ctx, &target).await;
+            exporter
+                .on_hop_end(&ctx, &target, HopOutcome::Generated(&result))
+                .await;
+            ctx.execution_result = Some(result);
+            exporter
+                .on_request_end(&ctx, &RequestOutcome::Completed)
+                .await;
+            assert!(exporter.provider.force_flush().is_ok());
+            let spans = captured
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            assert_conforms_to_span_schema(&spans);
+            let root = spans
+                .iter()
+                .find(|span| {
+                    span.name == "decisions test-model" && span.span_kind == SpanKind::Internal
+                })
+                .ok_or("missing native root span")?;
+            assert_eq!(str_attr(root, "bitrouter.operation"), Some("decisions"));
+            assert_eq!(
+                str_attr(root, "bitrouter.inbound_protocol"),
+                Some("decisions")
+            );
+            assert_eq!(i64_attr(root, "gen_ai.usage.input_tokens"), Some(10));
+            assert_eq!(str_attr(root, "gen_ai.input.messages"), None);
+            assert_eq!(str_attr(root, "gen_ai.output.messages"), None);
+            let input = str_attr(root, "bitrouter.decisions.input");
+            let answers = str_attr(root, "bitrouter.decisions.answers");
+            if mode == ContentCaptureMode::Full {
+                assert!(input.is_some_and(|input| input.contains("private-native-evidence")));
+                assert!(answers.is_some_and(|answers| answers.contains("probability")));
+            } else {
+                assert!(input.is_none());
+                assert!(answers.is_none());
+            }
+            assert!(!format!("{spans:?}").contains("private-native-safety"));
+            let hop = spans
+                .iter()
+                .find(|span| span.span_kind == SpanKind::Client)
+                .ok_or("missing native hop span")?;
+            assert_eq!(
+                str_attr(hop, "bitrouter.outbound_protocol"),
+                Some("decisions")
+            );
+            assert!(
+                !hop.attributes
+                    .iter()
+                    .any(|attribute| attribute.key.as_str().starts_with("gen_ai."))
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn route_and_settle_internal_spans_parent_on_root_chat() {
         // The exporter emits brief `route` and `settle` INTERNAL spans at
         // their respective phase boundaries; they should sit alongside the

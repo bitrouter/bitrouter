@@ -3579,6 +3579,19 @@ presets:
             restart_required_fields(&current, &protocol_endpoint, Some(&BTreeSet::new()))
                 .contains(&expected)
         );
+        let mut provenance = current.clone();
+        provenance
+            .providers
+            .get_mut("fixture")
+            .and_then(|provider| provider.models.first_mut())
+            .and_then(|model| model.pricing_by_protocol.get_mut(&ApiProtocol::Decisions))
+            .ok_or_else(|| anyhow::anyhow!("missing tariff"))?
+            .endpoint_profile =
+            Some(bitrouter_ai::catalog::types::PricingEndpointProfile::OpenaiGlobal);
+        assert!(
+            restart_required_fields(&current, &provenance, Some(&BTreeSet::new()))
+                .contains(&expected)
+        );
         let mut strict = current.clone();
         strict.server.require_known_pricing = true;
         assert!(

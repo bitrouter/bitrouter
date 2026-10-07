@@ -46,7 +46,7 @@ compatible configured protocol.
 
 Runtime models accept `pricing_by_protocol`; each entry is a complete independent
 tariff, expressed in micro-USD per token like ordinary `pricing`. For example,
-this synthetic target sets an input rate of $0.10 per million tokens:
+this synthetic global tariff sets an input rate of $0.10 per million tokens:
 
 ```yaml
 models:
@@ -54,6 +54,7 @@ models:
     api_protocol: [chat_completions, responses, decisions]
     pricing_by_protocol:
       decisions:
+        endpoint_profile: openai_global
         input_micro_usd_per_token: 0.10
         cache_read_micro_usd_per_token: 0
         cache_write_micro_usd_per_token: 0
@@ -82,3 +83,10 @@ Unavailable costs remain unknown. A completed malformed native response fails
 delivery, retains usable usage, settles once and cannot retry. Pre-completion
 transport/status fallback follows the existing policy. Old rows without frozen
 protocol evidence retain their legacy status.
+
+Published tariffs may declare `endpoint_profile: openai_global`, `openai_us`, or
+`openai_europe`. Such prices keep their declared processing scope when you change
+`api_base` or `protocol_endpoints`; inherited global catalog prices become
+unavailable on a regional host. Provide that region's complete native tariff and
+matching profile explicitly. An omitted profile binds custom/legacy tariffs to
+the configured endpoint. This metadata change also requires restart.

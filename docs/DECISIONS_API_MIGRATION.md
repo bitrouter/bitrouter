@@ -16,6 +16,7 @@ evidence of hosted Cloud support.
 | Infallible context response construction | Propagate `response()` / `into_response()` errors; missing execution cannot synthesize a generation result |
 | `SettlementContext` literals | Supply `operation`; retain actual `target` evidence; native calls have no generation finish reason or first-token observation |
 | Provider-model literals | Add independent `pricing_by_protocol` maps; ordinary `pricing` remains the generation fallback |
+| Pricing literals | Supply optional `endpoint_profile` provenance or use the default; declared global/regional rates cannot rebind to another endpoint |
 | Server-config literals | Supply `require_known_pricing: false` or use the default; app-level strict price coverage is opt-in |
 
 Native custom executors implement `preflight_decisions` and `execute_decisions`.

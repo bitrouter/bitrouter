@@ -130,7 +130,10 @@ generation wire; the enum/unknown-host fallback is Chat Completions.
 Route hooks may capture evidence in `after_resolve`, after every mutable
 `resolve` hook and operation/effort filtering. App-owned `CaptureTariffs` freezes
 each effective target's independent protocol tariff and endpoint profile here.
-Metering and evaluation use that snapshot; `UsagePricingSnapshot` projects the
+Published tariffs retain their optional `endpoint_profile` provenance across
+registry merge and configuration changes, so global rates cannot silently rebind
+to a regional endpoint. Legacy/custom tariffs without a declaration bind to the
+configured endpoint. Metering and evaluation use that snapshot; `UsagePricingSnapshot` projects the
 same rates to the SDK's conservative stream usage selection. Unknown frozen
 prices disable live price lookup. Custom hosts composing `MeteringRecorder`
 must also install `recorder.tariff_capture(require_known)` at the route stage.

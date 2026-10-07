@@ -4062,15 +4062,13 @@ fn raw_extras_are_scoped_to_their_inbound_protocol() -> crate::error::Result<()>
         } else {
             body[field] = value;
         }
-        let prompt = adapter_for(source.clone())?.parse_request(body).unwrap();
+        let prompt = adapter_for(source.clone())?.parse_request(body)?;
 
         for target in all_protocols()
             .into_iter()
             .filter(|target| target != &source)
         {
-            let rendered = adapter_for(target.clone())?
-                .render_request(&prompt)
-                .unwrap();
+            let rendered = adapter_for(target.clone())?.render_request(&prompt)?;
             assert!(
                 rendered.get(field).is_none(),
                 "{source} extra `{field}` leaked to {target}: {rendered}"

@@ -2375,7 +2375,9 @@ mod openai_codex_stream_bridge_tests {
             .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
             .usage
             .as_ref()
-            .expect("provider usage");
+            .ok_or_else(|| {
+                crate::error::BitrouterError::internal("provider usage fixture missing")
+            })?;
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(usage.cache_read_tokens, 5);
         assert_eq!(usage.cache_write_tokens, 0);

@@ -1,0 +1,88 @@
+# Decisions API acceptance evidence
+
+Contract: [DECISIONS_API_SPEC.md](DECISIONS_API_SPEC.md). Evidence is local to
+`codex/decisions-api`, stacked on #962 at
+`529f2fdeb7dc1f6bd3cef2ae243b22106b66ef16`. This ledger records the scope of
+proof rather than inferring provider or deployed Cloud support from unit tests.
+
+Audit date: 2026-10-07. Local implementation and artifact guards are verified;
+the final source state is validated and stack publication is being completed. A11 is
+explicitly unverified because an OpenAI API key is unavailable.
+
+| Criterion | Authoritative evidence | Scope / qualification |
+| --- | --- | --- |
+| A1: native text/image input | [AI native tests](../crates/bitrouter-ai/tests/decisions.rs): native round-trip, nullable fields, unsupported input/privacy, image budget; [SDK gateway tests](../crates/bitrouter-sdk/tests/decisions.rs): projected model and preserved wire, unsupported input before dispatch | Synthetic text/images; inline-only image validation, ordered detail and fields retained |
+| A2: typed answers/refusals | AI native round-trip and `refusals_and_invalid_answers_keep_independent_usage_evidence`; SDK completed-invalid-output test; [app accounting](../apps/bitrouter/src/metering/decisions_tests.rs) covers refusal and malformed outputs | Predicate/choice/score validation and positional names/order; boolean/string identity; no synthetic generation result |
+| A3: direct invocation/auth | AI selected-model projection/source immutability, bounded selected-account 401 recovery, credential redaction and cancellation tests; admitted native I/O cancellation/timeout fixture | Controlled HTTP, no real OpenAI account; same shared selected-target transport |
+| A4: hard operation routing | SDK operation/pin/mixed-protocol tests and default generation-host rejection; AI generation/decision mismatch checks | Operation filtering before protocol preference and again after route hooks; custom executor native output also validated |
+| A5: required protections | SDK builder/global and bound-router checker requirements; app gateway auth/ACL/key/policy expiry/spend/rate cases; [judge reservation test](../apps/bitrouter/src/evolution/costs.rs) preserves namespace on native rejection | Actual app hook implementations over SQLite; independent registration requirements; generation-only defaults/tools/continuation retain scope |
+| A6: price/usage agreement | App native HTTP/gateway/SQLite tariff test; [eval shared-tariff test](../apps/bitrouter/src/eval/settlement.rs); SDK protocol/frozen/unknown stream pricing tests; cache-gated export and authoritative correction | Exact independent overrides, missing buckets preserved, actual target match; native nonzero cache remains unavailable |
+| A7: disconnect/shutdown | `observed_native_disconnect_and_shutdown_preserve_sqlite_settlement` uses a real TCP gateway, held HTTP upstream, gateway-side cancelled-handler signal, shutdown join and one persisted row | Explicit upstream admission and closed client socket; no sleeps or cancellation-status-only proof; synthetic upstream |
+| A8: malformed completion/fallback | SDK malformed HTTP and inconsistent custom typed-result fixtures retain independently decoded usage, fail delivery and bypass retry-all policy; app invalid-output cost row; pre-completion status fallback test | One native attempt settles once; wrong-operation generation usage is not native accounting evidence; generation charging is preserved |
+| A9: generation/boundaries | Full workspace all-feature tests and doctests; CI feature matrix and positive-backed dependency tree guards | Generation conversion, tools, Responses continuation, auth, evolution, IPC and telemetry regressions; local evidence only |
+| A10: representations/artifacts/legacy | Registry profile/key/append mechanism test; app registry mapping and alias assembly tests; threshold/profile/frozen/legacy tests; reload tariff/profile/known-price classifier; generated catalog/schema and pinned SDK public API guards | Global and US/EU matching profiles, 272000/272001 whole-input boundaries; old rows remain legacy; source and embedded catalogs rebuilt |
+| A11: credentialed gateway call | Not executed. `OPENAI_API_KEY`, the default stored OpenAI API-key slot and the configured OpenAI provider/account keys were absent on 2026-10-07 | Unverified, as the spec permits when credentials are unavailable. No provider/account, invoice or production claim |
+| A12: native request checks | SDK operation declaration/preparation rejection and fragment projection/cap cases; evidence/name/instructions, boolean/string choices, descriptions and ordered score rubrics | Images reported as excluded coverage; safety ID excluded; bounded fail-closed entry-request scope |
+
+## Local validation
+
+- Full all-feature workspace nextest: **3769 passed, 22 existing skips**, run
+  `258bdf17-8ab9-4c7d-ac79-8f5a0d7837b1`. This includes the final admitted direct
+  native cancellation/timeout fixture and panic-free fixture migration.
+- The expanded ordered score-rubric projection assertion passed separately after
+  that run, `6796daa9-5977-46c2-9dfb-fd34b6fae5f1`. It preserves every earlier
+  boolean/string, image-exclusion, safety-ID and fail-closed assertion.
+- Workspace doctests: **6 passed, 1 ignored**.
+- Strict workspace all-feature Clippy including tests, formatting and dist
+  freshness: passed after the final score-rubric assertion. No Rust source or
+  fixture changes followed those checks.
+- Native/pricing/guard/telemetry selected subset: **137 passed**, run
+  `ce40dcc1-41bc-43cd-957d-bf9b0bab8100`.
+- Registry validate/build, schema generation and `dist-helper check`: passed.
+- Pinned public API: nightly `2026-05-05`, cargo-public-api `0.52.0`; positive
+  sentinels, native envelopes, unchanged foreign dependency set and no public
+  OpenTelemetry types: passed. Source has no added public forwarding exports.
+- Feature matrix: AI minimal plus `pkce`, `hosted-login`, `file-store` tests;
+  SDK minimal/config/server/ACP; guardrails minimal/SDK; telemetry HTTP/gRPC/server
+  checks: passed. Dependency guards verify AI isolation, separate host/guardrail
+  trees, SDK/telemetry default leanness and transport separation.
+- Resource settings for checks: `CARGO_INCREMENTAL=0`, dev/test debug 0,
+  `CARGO_BUILD_JOBS=2`. These change build resource use, not the requested feature
+  or test scope. Generated caches were cleaned only in this checkout after disk
+  exhaustion; source and other worktrees were preserved.
+
+## Catalog and billing interpretation
+
+Only the API-key OpenAI Luna model gets the native protocol declaration. Its
+generative order and ordinary prices remain unchanged. The published native
+tariff is tagged `openai_global`; configured regional hosts cannot silently
+rebind that tariff. Regional deployments provide complete matching rates.
+
+The $0.10/M global input rate and absence of separate cache/output charges are
+documented for Decisions. Whole-request long-context and regional multipliers
+are combined from the Luna model page. These are documentation-derived estimates,
+not invoice evidence. Cache-subset inclusion in the base charge remains
+unresolved, so nonzero native cache counters keep cost unavailable. An
+authenticated receipt may establish one request's amount without changing this
+general gate. [Decisions pricing](https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability),
+[Luna pricing](https://developers.openai.com/api/docs/models/gpt-6-luna).
+
+The beta HTTP/typed references were refreshed on 2026-10-07; native user-only
+input, image detail/nullability, typed choices, nullable answer names and required
+usage counters still match the implementation.
+[HTTP create](https://developers.openai.com/api/reference/resources/decisions/methods/create),
+[typed resource](https://developers.openai.com/api/reference/typescript/resources/decisions).
+
+## Delivery boundaries
+
+[DECISIONS_API_MIGRATION.md](DECISIONS_API_MIGRATION.md) inventories the alpha
+public API migration and the external Cloud checkout. Cloud remains on alpha.30
+and its parent SDK migration is separate; no Cloud code/build/deployment was
+changed. Generation-only hosts do not implicitly enable native requests.
+
+The shipped BitRouter skill/setup reference is updated and its entrypoint remains
+under 200 lines. Plugin CLI references are unchanged and distribute the same skill;
+no CLI command, listen port, env var or default model was added. Product API prose,
+English/Chinese synchronization and the docs catalog refresh are a coordinated
+`bitrouter-docs` follow-up. No hosted CI, deployment or live provider evidence is
+implied by this local audit.
