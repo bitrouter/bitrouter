@@ -88,6 +88,11 @@ impl<T> PatternMap<T> {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Inspect every configured value before routing can select a pattern.
+    pub(crate) fn values(&self) -> impl Iterator<Item = &T> {
+        self.entries.iter().map(|(_, value)| value)
+    }
 }
 
 /// YAML shape for a pattern list: `[ { "pattern": value }, ... ]`. Each map in

@@ -1,11 +1,9 @@
 //! axum HTTP server — gated behind the `server` feature.
 //!
-//! Wires all four inbound protocols to the `language_model` pipeline:
+//! Wires all three inbound protocols to the `language_model` pipeline:
 //! - `POST /v1/messages` — Messages
 //! - `POST /v1/chat/completions` — Chat Completions
 //! - `POST /v1/responses` — Responses
-//! - `POST /v1beta/models/{*model_action}` — Google `generateContent` /
-//!   `streamGenerateContent`
 //!
 //! Each handler parses the inbound body with that protocol's adapter, runs the
 //! pipeline, and renders the result back in the **same** inbound protocol —
@@ -302,8 +300,7 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
     let mut router = Router::new()
         .route("/v1/messages", post(messages))
         .route("/v1/chat/completions", post(chat_completions))
-        .route("/v1/responses", post(responses))
-        .route("/v1beta/models/{*model_action}", post(generate_content));
+        .route("/v1/responses", post(responses));
     if !options.omit_v1_models {
         router = router.route("/v1/models", get(list_models));
     }
@@ -1285,7 +1282,7 @@ async fn messages(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    handle(state, headers, ApiProtocol::Messages, body, None).await
+    handle(state, headers, ApiProtocol::Messages, body).await
 }
 
 async fn chat_completions(
@@ -1293,7 +1290,7 @@ async fn chat_completions(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    handle(state, headers, ApiProtocol::ChatCompletions, body, None).await
+    handle(state, headers, ApiProtocol::ChatCompletions, body).await
 }
 
 async fn responses(
@@ -1301,45 +1298,7 @@ async fn responses(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Response {
-    handle(state, headers, ApiProtocol::Responses, body, None).await
-}
-
-/// Generate Content encodes the model and streaming verb in the path. The
-/// catch-all also admits slash selectors such as `bitrouter/coding`; Axum
-/// decodes a percent-escaped slash before this handler validates the selector.
-async fn generate_content(
-    State(state): State<AppState>,
-    Path(model_action): Path<String>,
-    headers: HeaderMap,
-    Json(mut body): Json<serde_json::Value>,
-) -> Response {
-    let (model, action) = match model_action.rsplit_once(':') {
-        Some((m, a))
-            if !m.is_empty() && matches!(a, "generateContent" | "streamGenerateContent") =>
-        {
-            (m.to_string(), a.to_string())
-        }
-        _ => {
-            return BitrouterError::bad_request(
-                "google path must be 'models/{model}:generateContent' or 'models/{model}:streamGenerateContent'",
-            )
-            .into_response();
-        }
-    };
-    // Generate Content carries the model in the URL, not the body — inject it so the
-    // adapter sees it, and set the stream flag from the verb.
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert("model".into(), model.clone().into());
-        obj.insert("stream".into(), (action == "streamGenerateContent").into());
-    }
-    handle(
-        state,
-        headers,
-        ApiProtocol::GenerateContent,
-        body,
-        Some(model),
-    )
-    .await
+    handle(state, headers, ApiProtocol::Responses, body).await
 }
 
 /// Shared handler: parse with the inbound adapter, run the pipeline, render the
@@ -1349,7 +1308,6 @@ async fn handle(
     mut headers: HeaderMap,
     inbound: ApiProtocol,
     body: serde_json::Value,
-    model_override: Option<String>,
 ) -> Response {
     add_inbound_protocol_hint(&mut headers, &inbound);
     let request_id = match add_request_id_hint(&mut headers) {
@@ -1373,9 +1331,6 @@ async fn handle(
     };
     let (prompt, original_model) = match adapter.parse_request(body).map_err(BitrouterError::from) {
         Ok(mut p) => {
-            if let Some(model) = model_override {
-                p.model = model;
-            }
             p.model = sanitize_model_name(&p.model);
             let original_model = p.model.clone();
             // Ingress-time prompt transforms (e.g. the bitrouter/fusion model
@@ -1918,17 +1873,6 @@ mod tests {
                     serde_json::json!({"model":"gpt-5.5","stream":stream,"max_tokens":8,"messages":[{"role":"user","content":[{"type":"text","text":"keep"},{"type":"future-secret","data":"opaque-secret"}]}]}),
                 ),
                 (
-                    format!(
-                        "/v1beta/models/gpt-5.5:{}",
-                        if stream {
-                            "streamGenerateContent"
-                        } else {
-                            "generateContent"
-                        }
-                    ),
-                    serde_json::json!({"contents":[{"role":"user","parts":[{"text":"keep"},{"future-secret":"opaque-secret"}]}]}),
-                ),
-                (
                     "/v1/chat/completions".to_owned(),
                     serde_json::json!({"model":"gpt-5.5","stream":stream,"messages":[{"role":"tool","tool_call_id":"c","content":[{"type":"file","file":{"file_data":"data:application/pdf;base64,payload-secret","filename":"name-secret"}}]}]}),
                 ),
@@ -1939,17 +1883,6 @@ mod tests {
                 (
                     "/v1/messages".to_owned(),
                     serde_json::json!({"model":"gpt-5.5","stream":stream,"max_tokens":8,"messages":[{"role":"user","content":[{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"payload-secret"},"context":"context-secret"}]}]}),
-                ),
-                (
-                    format!(
-                        "/v1beta/models/gpt-5.5:{}",
-                        if stream {
-                            "streamGenerateContent"
-                        } else {
-                            "generateContent"
-                        }
-                    ),
-                    serde_json::json!({"contents":[{"role":"user","parts":[{"functionResponse":{"id":"c","name":"f","response":{"ok":true},"parts":[{"inlineData":{"mimeType":"image/png","data":"payload-secret"}}]}}]}]}),
                 ),
             ];
             for (url, body) in cases {
@@ -2058,67 +1991,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn google_slash_selectors_and_actions_reach_the_pipeline()
+    async fn retired_google_endpoints_never_execute()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
         let calls = Arc::new(AtomicUsize::new(0));
-        let scripted = (0..2)
-            .flat_map(|_| {
-                [
-                    MockResponse::Generate(bitrouter_ai::types::GenerateResult {
-                        content: vec![bitrouter_ai::types::Content::Text {
-                            text: "ok".into(),
-                            provider_metadata: Default::default(),
-                        }],
-                        usage: None,
-                        finish_reason: Some(bitrouter_ai::types::FinishReason::Stop),
-                        response_id: Some("response-fixture".into()),
-                        stop_details: None,
-                        provider_metadata: Default::default(),
-                    }),
-                    MockResponse::Stream(vec![
-                        bitrouter_ai::types::StreamPart::TextDelta { text: "ok".into() },
-                        bitrouter_ai::types::StreamPart::Finish {
-                            reason: bitrouter_ai::types::FinishReason::Stop,
-                        },
-                    ]),
-                ]
-            })
-            .collect();
-        let table = StaticRoutingTable::new();
-        table.insert(
-            "gpt-5.5",
-            vec![RoutingTarget {
-                provider_name: "fixture".into(),
-                service_id: "gpt-5.5".into(),
-                api_base: "https://fixture.invalid".into(),
-                api_key: String::new(),
-                api_protocol: ApiProtocol::ChatCompletions,
-                chat_token_limit_field: None,
-                chat_supports_store: None,
-                chat_supports_stream_options: None,
-                reasoning_effort: None,
-                account_label: None,
-                api_key_override: None,
-                api_base_override: None,
-                auth_scheme: AuthScheme::Bearer,
-                headers: Vec::new(),
-            }],
-        );
-        let mut builder = PipelineBuilder::new();
-        builder
-            .routing_table(Arc::new(table))
-            .executor(Arc::new(CountingExecutor {
-                calls: calls.clone(),
-                inner: MockExecutor::new(scripted),
-            }));
-        let app = build_router(AppState {
-            language_model: Arc::new(builder.build()?),
-            mcp: None,
-            skip_auth: true,
-            metrics_renderer: None,
-            prompt_transforms: vec![Arc::new(RewriteModel("gpt-5.5"))],
-        });
-        for selector in ["bitrouter/coding", "bitrouter%2Fcoding"] {
+        let app = build_router(test_state_with_executor(Arc::new(CountingExecutor {
+            calls: calls.clone(),
+            inner: MockExecutor::always_text("must not execute"),
+        })));
+        for selector in ["bitrouter/coding", "bitrouter%2Fcoding", "gemini-fixture"] {
             for action in ["generateContent", "streamGenerateContent"] {
                 let response = app
                     .clone()
@@ -2127,42 +2007,13 @@ mod tests {
                             .method("POST")
                             .uri(format!("/v1beta/models/{selector}:{action}"))
                             .header(header::CONTENT_TYPE, "application/json")
-                            .body(Body::from(
-                                r#"{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}"#,
-                            ))?,
+                            .body(Body::from("{}"))?,
                     )
                     .await?;
-                assert_eq!(response.status(), axum::http::StatusCode::OK);
-                assert!(
-                    !to_bytes(response.into_body(), MAX_BODY_BYTES)
-                        .await?
-                        .is_empty()
-                );
+                assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
             }
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 4);
-        for invalid in [
-            "bitrouter/coding:unknown",
-            "bitrouter/coding",
-            ":generateContent",
-        ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method("POST")
-                        .uri(format!("/v1beta/models/{invalid}"))
-                        .header(header::CONTENT_TYPE, "application/json")
-                        .body(Body::from("{}"))?,
-                )
-                .await?;
-            assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
-        }
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            4,
-            "invalid action must not execute upstream"
-        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
         Ok(())
     }
 
@@ -2186,6 +2037,7 @@ mod tests {
                 chat_token_limit_field: None,
                 chat_supports_store: None,
                 chat_supports_stream_options: None,
+                chat_google_extensions: false,
                 reasoning_effort: None,
                 account_label: None,
                 api_key_override: None,
@@ -2229,6 +2081,7 @@ mod tests {
                 chat_token_limit_field: None,
                 chat_supports_store: None,
                 chat_supports_stream_options: None,
+                chat_google_extensions: false,
                 reasoning_effort: None,
                 account_label: None,
                 api_key_override: None,

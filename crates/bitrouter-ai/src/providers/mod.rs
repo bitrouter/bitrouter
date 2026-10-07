@@ -3,10 +3,11 @@
 //! These integrations select no storage paths, accounts, catalogs or login UI.
 
 pub mod anthropic;
-pub mod antigravity;
 pub mod claude_code;
 pub mod codex;
 pub mod copilot;
+pub mod google_chat;
+pub mod retired;
 pub mod supergrok;
 
 #[cfg(feature = "pkce")]

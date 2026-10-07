@@ -595,6 +595,7 @@ impl Pipeline {
                     let error = BitrouterError::UpstreamInvalidResponse {
                         message: "native Responses result has no valid successful terminal"
                             .to_string(),
+                        usage: None,
                     };
                     ctx.execution_result = Some(result);
                     self.run_settlement(&mut ctx, false, Some(error.clone()))
@@ -1460,6 +1461,19 @@ impl Pipeline {
         ctx.finalize_request_duration();
         let mut settle = ctx.settlement_context();
         settle.streamed = streamed;
+        if let Some(BitrouterError::UpstreamInvalidResponse {
+            usage: Some(usage), ..
+        }) = &error
+        {
+            settle.prompt_tokens = usage.prompt_tokens;
+            settle.completion_tokens = usage.completion_tokens;
+            settle.reasoning_tokens = usage.reasoning_tokens;
+            settle.cache_read_tokens = usage.cache_read_tokens;
+            settle.cache_write_tokens = usage.cache_write_tokens;
+            settle.web_search_count = usage.web_search_count;
+            settle.usage_origin = usage.origin;
+            settle.raw_usage = usage.raw.as_deref().cloned();
+        }
         settle.error = error;
 
         // Emit the canonical "request finished" line before recorders
@@ -1704,6 +1718,7 @@ mod policy_effort_target_tests {
             chat_token_limit_field: None,
             chat_supports_store: None,
             chat_supports_stream_options: None,
+            chat_google_extensions: false,
             reasoning_effort: levels.map(|levels| ReasoningEffortConfig {
                 levels,
                 default: None,
@@ -2168,6 +2183,7 @@ impl StreamSettlementGuard {
             if matches!(outcome, RequestOutcome::Completed) && !ctx.stream_terminal_succeeded() {
                 let error = BitrouterError::UpstreamInvalidResponse {
                     message: "stream ended with a non-success provider terminal".to_string(),
+                    usage: None,
                 };
                 let missing_terminal = ctx
                     .required_finalization_context(true)

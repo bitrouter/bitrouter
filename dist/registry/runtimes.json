@@ -25,19 +25,6 @@
           }
         },
         {
-          "id": "gemini-cli",
-          "transport": {
-            "args": [
-              "-y",
-              "--",
-              "@google/gemini-cli@latest",
-              "--experimental-acp"
-            ],
-            "command": "npx",
-            "type": "stdio"
-          }
-        },
-        {
           "id": "opencode",
           "requires_binary": "opencode",
           "transport": {

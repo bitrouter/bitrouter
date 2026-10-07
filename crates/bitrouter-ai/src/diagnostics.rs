@@ -24,6 +24,38 @@ fn is_sensitive_credential_name(name: &str) -> bool {
 }
 
 impl DiagnosticRedactor {
+    /// Capture opaque history continuity before a provider can echo it in errors.
+    pub fn capture_prompt_continuity(&mut self, prompt: &crate::types::Prompt) {
+        for message in &prompt.messages {
+            self.capture_content_continuity(&message.content);
+        }
+    }
+
+    /// Capture opaque output continuity before diagnostic/telemetry serialization.
+    pub fn capture_content_continuity(&mut self, content: &[crate::types::Content]) {
+        for content in content {
+            let metadata = match content {
+                crate::types::Content::ToolCall {
+                    provider_metadata, ..
+                }
+                | crate::types::Content::Reasoning {
+                    provider_metadata, ..
+                } => provider_metadata,
+                _ => continue,
+            };
+            for namespace in metadata.values().filter_map(serde_json::Value::as_object) {
+                for (key, value) in namespace {
+                    if matches!(
+                        key.as_str(),
+                        "thoughtSignature" | "replayProof" | "signature"
+                    ) && let Some(value) = value.as_str()
+                    {
+                        self.add_replacement(value.to_owned(), "[redacted continuity]".into());
+                    }
+                }
+            }
+        }
+    }
     /// Capture credentials from the final request headers and URL.
     pub fn capture_request_credentials(
         &mut self,
@@ -121,7 +153,18 @@ impl DiagnosticRedactor {
             serde_json::Value::Object(object) => {
                 let entries = std::mem::take(object);
                 for (key, mut value) in entries {
-                    self.scrub_value(&mut value);
+                    if matches!(
+                        key.as_str(),
+                        "thought_signature"
+                            | "thoughtSignature"
+                            | "google_replay_proof"
+                            | "replayProof"
+                            | "signature"
+                    ) {
+                        value = serde_json::Value::String("[redacted continuity]".into());
+                    } else {
+                        self.scrub_value(&mut value);
+                    }
                     object.insert(self.scrub_text(&key), value);
                 }
             }
@@ -145,8 +188,14 @@ impl DiagnosticRedactor {
             ModelError::InvalidRequest { message } => {
                 ModelError::invalid_request(self.scrub_text(&message))
             }
-            ModelError::InvalidResponse { message } => ModelError::InvalidResponse {
+            ModelError::InvalidResponse { message, mut usage } => ModelError::InvalidResponse {
                 message: self.scrub_text(&message),
+                usage: {
+                    if let Some(raw) = usage.as_mut().and_then(|usage| usage.raw.as_mut()) {
+                        self.scrub_value(raw);
+                    }
+                    usage
+                },
             },
             ModelError::Provider { status, message } => ModelError::Provider {
                 status,

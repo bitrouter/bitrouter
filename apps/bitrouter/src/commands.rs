@@ -201,6 +201,7 @@ pub async fn key_sign(
 /// than bubbling an error, but a caller on a hot path should prefer the
 /// daemon: see `crate::actions::models`.
 pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
+    config.validate_router_config()?;
     let mut resolved = resolve_static(config.clone());
     bitrouter_sdk::config::discover_models(&mut resolved).await;
     Ok(ConfigRoutingTable::from_config(resolved).list_models())
@@ -218,6 +219,9 @@ pub async fn list_models(config: &Config) -> Result<Vec<ModelInfo>> {
 /// would then be missing exactly the providers the daemon routes to. Mirrors
 /// `assemble.rs`; best-effort, an unreadable store is a no-op.
 pub fn resolve_static(mut config: Config) -> Config {
+    if config.validate_router_config().is_err() {
+        return config;
+    }
     crate::providers::apply::apply_builtin_defaults(&mut config);
     if let Ok(store) = crate::provider_credentials::load_default() {
         crate::providers::apply::activate_stored_credential_providers(&mut config, &store);
@@ -378,7 +382,7 @@ fn import_cli_for(provider_id: &str) -> Option<&'static str> {
     match provider_id {
         bitrouter_ai::providers::codex::PROVIDER_ID => Some("Codex"),
         bitrouter_ai::providers::supergrok::PROVIDER_ID => Some("Grok"),
-        bitrouter_ai::providers::antigravity::PROVIDER_ID => Some("Antigravity (agy)"),
+
         _ => None,
     }
 }
@@ -497,6 +501,9 @@ pub async fn login_provider_with_options(
     options: ProviderLoginOptions,
 ) -> Result<LoginOutcome> {
     use crate::providers::builtin;
+    if let Some(message) = bitrouter_ai::providers::retired::provider_message(provider_id) {
+        anyhow::bail!("{message}");
+    }
 
     // Cloud and the maintained ACP subscription providers have bundled login
     // defaults. Other providers resolve against the fetched/cached registry.
@@ -901,9 +908,6 @@ fn run_cli_import(provider_id: &str) -> Result<bitrouter_ai::auth::credentials::
     let imported = match provider_id {
         bitrouter_ai::providers::codex::PROVIDER_ID => crate::providers::import::codex::import(),
         bitrouter_ai::providers::supergrok::PROVIDER_ID => crate::providers::import::grok::import(),
-        bitrouter_ai::providers::antigravity::PROVIDER_ID => {
-            crate::providers::import::antigravity::import()
-        }
         other => anyhow::bail!("no vendor-CLI import is available for provider '{other}'"),
     }
     .with_context(|| format!("importing a CLI credential for {provider_id}"))?;

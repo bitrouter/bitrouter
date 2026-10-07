@@ -29,7 +29,7 @@ fn refused(
     Ok(report)
 }
 #[test]
-fn unknown_blocks_on_all_four_wires_have_original_locations_and_no_payload() -> TestResult {
+fn unknown_blocks_on_all_three_wires_have_original_locations_and_no_payload() -> TestResult {
     let cases = [
         (
             ApiProtocol::ChatCompletions,
@@ -47,14 +47,6 @@ fn unknown_blocks_on_all_four_wires_have_original_locations_and_no_payload() -> 
         (
             ApiProtocol::Messages,
             json!({"model":"fixture","max_tokens":8,"messages":[{"role":"user","content":[{"type":"text","text":"keep"},{"type":"future-secret","payload":"opaque-secret"}]}]}),
-            ConversionLocation::MessageContent {
-                message: 0,
-                block: 1,
-            },
-        ),
-        (
-            ApiProtocol::GenerateContent,
-            json!({"contents":[{"role":"user","parts":[{"text":"keep"},{"future-secret":"opaque-secret"}]}]}),
             ConversionLocation::MessageContent {
                 message: 0,
                 block: 1,
@@ -154,11 +146,6 @@ fn system_text_slots_cannot_silently_flatten_media() -> TestResult {
             json!({"model":"fixture","max_tokens":8,"system":[{"type":"text","text":"rules"},{"type":"image","source":{"type":"url","url":"https://example.test/image"}}],"messages":[{"role":"user","content":"hi"}]}),
             ConversionLocation::SystemContent { block: 1 },
         ),
-        (
-            ApiProtocol::GenerateContent,
-            json!({"systemInstruction":{"parts":[{"text":"rules"},{"inlineData":{"mimeType":"image/png","data":"AA=="}}]},"contents":[{"role":"user","parts":[{"text":"hi"}]}]}),
-            ConversionLocation::SystemContent { block: 1 },
-        ),
     ];
     for (protocol, body, location) in cases {
         let report = refused(protocol, body)?;
@@ -181,15 +168,6 @@ fn unsigned_thinking_is_rejected_instead_of_erased() -> TestResult {
         report.issues[0].disposition,
         ConversionDisposition::RejectReplay
     );
-    Ok(())
-}
-#[test]
-fn gemini_ambiguous_payload_does_not_choose_one_and_discard_another() -> TestResult {
-    let report = refused(
-        ApiProtocol::GenerateContent,
-        json!({"contents":[{"role":"user","parts":[{"text":"lost-secret","functionResponse":{"name":"f","response":{"ok":true}}}]}]}),
-    )?;
-    assert_eq!(report.issues[0].effect, ConversionEffect::TaskSemantics);
     Ok(())
 }
 
@@ -238,10 +216,6 @@ fn known_media_json_continuity_and_declarations_remain_supported() -> TestResult
         (
             ApiProtocol::Messages,
             json!({"model":"fixture","system":[{"text":"implicit system text","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"retained","signature":"sig"},{"type":"tool_use","id":"c","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[{"type":"text","text":"kept"},{"type":"image","source":{"type":"url","url":"https://example.test/image"}}]},{"type":"mcp_tool_result","tool_use_id":"mcp","content":[{"type":"future","opaque":"retain"}]}]}]}),
-        ),
-        (
-            ApiProtocol::GenerateContent,
-            json!({"systemInstruction":{"parts":[{"text":"rules"}]},"contents":[{"role":"model","parts":[{"functionCall":{"id":"c","name":"f","args":{}},"thoughtSignature":"sig"}]},{"role":"user","parts":[{"functionResponse":{"id":"c","name":"f","response":{"opaque":"retain"}}},{"inlineData":{"mimeType":"image/png","data":"AA=="}}]}]}),
         ),
     ];
     for (protocol, body) in cases {

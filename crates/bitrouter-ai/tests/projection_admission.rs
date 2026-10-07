@@ -6,9 +6,7 @@ use conversion::{adapters, prompt, refusal};
 
 use bitrouter_ai::conversion::{ConversionEffect, ConversionLocation};
 use bitrouter_ai::protocol::{
-    InboundAdapter, OutboundAdapter, chat_completions::ChatCompletionsAdapter,
-    generate_content::GenerateContentAdapter, messages::MessagesAdapter,
-    responses::ResponsesAdapter,
+    InboundAdapter, OutboundAdapter, messages::MessagesAdapter, responses::ResponsesAdapter,
 };
 use bitrouter_ai::types::{
     ApiProtocol, Content, Message, ProviderMetadata, Role, Tool, ToolResultContentPart,
@@ -58,10 +56,7 @@ fn tool_result_media_is_rejected_only_on_the_current_lossy_targets() -> TestResu
         }],
     }];
     for (protocol, adapter) in adapters() {
-        if matches!(
-            protocol,
-            ApiProtocol::Messages | ApiProtocol::GenerateContent
-        ) {
+        if matches!(protocol, ApiProtocol::Messages) {
             refusal(adapter.as_ref(), &source)?;
         } else {
             assert!(
@@ -156,111 +151,6 @@ fn provider_defined_tools_are_not_dropped_or_forwarded_to_an_unclassified_wire()
     }
     Ok(())
 }
-#[test]
-fn reasoning_and_sources_are_not_silently_removed_from_request_history() -> TestResult {
-    let mut source = prompt()?;
-    source.messages.push(Message {
-        role: Role::Assistant,
-        content: vec![Content::Reasoning {
-            text: "thought-secret".into(),
-            provider_metadata: ProviderMetadata::new(),
-            native: None,
-        }],
-    });
-    refusal(&ResponsesAdapter, &source)?;
-    refusal(&MessagesAdapter, &source)?;
-    assert!(
-        ChatCompletionsAdapter
-            .render_request(&source)?
-            .to_string()
-            .contains("thought-secret")
-    );
-    assert!(
-        GenerateContentAdapter
-            .render_request(&source)?
-            .to_string()
-            .contains("thought-secret")
-    );
-    source.messages[1].content = vec![Content::Source {
-        source: bitrouter_ai::types::Source::Url {
-            id: "id-secret".into(),
-            url: "https://example.test/secret".into(),
-            title: None,
-        },
-        provider_metadata: ProviderMetadata::new(),
-    }];
-    for (_, adapter) in adapters() {
-        refusal(adapter.as_ref(), &source)?;
-    }
-    Ok(())
-}
-
-#[test]
-fn native_continuity_tokens_are_preserved_only_on_their_wire() -> TestResult {
-    let mut source = prompt()?;
-    let mut metadata = ProviderMetadata::new();
-    bitrouter_ai::types::set_provider_metadata(
-        &mut metadata,
-        "google",
-        "thoughtSignature",
-        json!("signature-secret"),
-    );
-    source.messages.push(Message {
-        role: Role::Assistant,
-        content: vec![Content::ToolCall {
-            id: "c".into(),
-            name: "f".into(),
-            arguments: "{}".into(),
-            provider_executed: false,
-            dynamic: false,
-            provider_metadata: metadata,
-        }],
-    });
-    for (protocol, adapter) in adapters() {
-        if protocol == ApiProtocol::GenerateContent {
-            assert!(
-                adapter
-                    .render_request(&source)?
-                    .to_string()
-                    .contains("signature-secret")
-            );
-        } else {
-            let report = refusal(adapter.as_ref(), &source)?;
-            assert_eq!(report.issues[0].effect, ConversionEffect::ReplayAuthority);
-        }
-    }
-    let mut metadata = ProviderMetadata::new();
-    bitrouter_ai::types::set_provider_metadata(
-        &mut metadata,
-        "anthropic",
-        "redactedThinking",
-        json!(true),
-    );
-    bitrouter_ai::types::set_provider_metadata(
-        &mut metadata,
-        "anthropic",
-        "redactedData",
-        json!("encrypted-secret"),
-    );
-    source.messages[1].content = vec![Content::Reasoning {
-        text: "encrypted-secret".into(),
-        provider_metadata: metadata,
-        native: None,
-    }];
-    for (protocol, adapter) in adapters() {
-        if protocol == ApiProtocol::Messages {
-            assert!(
-                adapter
-                    .render_request(&source)?
-                    .to_string()
-                    .contains("encrypted-secret")
-            );
-        } else {
-            refusal(adapter.as_ref(), &source)?;
-        }
-    }
-    Ok(())
-}
 
 #[test]
 fn native_dynamic_mcp_history_is_kept_and_foreign_or_unrepresentable_history_is_refused()
@@ -325,10 +215,6 @@ fn provider_tool_arguments_cannot_be_silently_replaced_by_an_empty_object() -> T
             "anthropic.web_search",
             &MessagesAdapter as &dyn OutboundAdapter,
         ),
-        (
-            "google.googleSearch",
-            &GenerateContentAdapter as &dyn OutboundAdapter,
-        ),
     ] {
         source.tools = vec![Tool::ProviderDefined {
             id: id.into(),
@@ -359,53 +245,6 @@ fn output_only_approval_requests_need_an_explicit_replay_representation() -> Tes
             report.issues[0].reason,
             bitrouter_ai::conversion::ConversionReason::ApprovalUnrepresentable
         );
-    }
-    Ok(())
-}
-
-#[test]
-fn native_provider_declarations_and_known_custom_wrappers_share_the_actual_projection() -> TestResult
-{
-    let mut source = prompt()?;
-    for (id, protocol, adapter) in [
-        (
-            "openai.web_search",
-            ApiProtocol::Responses,
-            &ResponsesAdapter as &dyn OutboundAdapter,
-        ),
-        (
-            "anthropic.web_search_20250305",
-            ApiProtocol::Messages,
-            &MessagesAdapter as &dyn OutboundAdapter,
-        ),
-        (
-            "google.googleSearch",
-            ApiProtocol::GenerateContent,
-            &GenerateContentAdapter as &dyn OutboundAdapter,
-        ),
-    ] {
-        source.tools = vec![Tool::ProviderDefined {
-            id: id.into(),
-            name: id.split_once('.').ok_or("missing native family")?.1.into(),
-            args: json!({}),
-            provider_metadata: ProviderMetadata::new(),
-        }];
-        assert!(adapter.admission(&source).issues.is_empty());
-        assert!(adapter.render_request(&source)?.get("tools").is_some());
-        let report = bitrouter_ai::conversion::request_admission(
-            &source,
-            &ApiProtocol::Custom("custom-secret".into()),
-        );
-        assert_eq!(report.issues[0].effect, ConversionEffect::Unknown);
-        assert!(!format!("{report:?}").contains("custom-secret"));
-        if protocol == ApiProtocol::GenerateContent {
-            let custom = bitrouter_ai::providers::antigravity::protocol::AntigravityAdapter::new();
-            assert!(custom.admission(&source).issues.is_empty());
-            assert_eq!(
-                custom.render_request(&source)?,
-                adapter.render_request(&source)?
-            );
-        }
     }
     Ok(())
 }

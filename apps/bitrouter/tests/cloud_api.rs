@@ -198,11 +198,6 @@ async fn both_credential_types_cover_generation_protocol_matrix() {
             "{\"kind\":\"generateContent\"}",
             "application/json",
         ),
-        (
-            "/v1beta/models/google/gemini-2.5-flash:streamGenerateContent",
-            "data: {\"text\":\"hello\"}\n\ndata: [DONE]\n\n",
-            "text/event-stream",
-        ),
     ];
     for oauth in [false, true] {
         let server = MockServer::start().await;

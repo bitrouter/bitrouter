@@ -107,6 +107,9 @@ pub fn apply_builtin_defaults(config: &mut Config) {
         return;
     }
     for (id, provider) in config.providers.iter_mut() {
+        if bitrouter_ai::providers::retired::provider_message(id).is_some() {
+            continue;
+        }
         let Some(builtin) = builtin::find(id) else {
             continue;
         };
@@ -172,6 +175,9 @@ pub fn apply_builtin_defaults(config: &mut Config) {
 /// them.
 pub fn activate_stored_credential_providers(config: &mut Config, store: &CredentialStore) {
     for (id, provider) in config.providers.iter_mut() {
+        if bitrouter_ai::providers::retired::provider_message(id).is_some() {
+            continue;
+        }
         if !provider.active && !store.labels(id).is_empty() {
             provider.active = true;
         }
@@ -399,6 +405,36 @@ mod tests {
             assert!(p.active);
             Ok(())
         })?;
+        Ok(())
+    }
+
+    #[test]
+    fn stored_retired_credentials_do_not_reactivate_providers() -> anyhow::Result<()> {
+        use bitrouter_ai::auth::credentials::Credential;
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("credentials.json");
+        let mut store = CredentialStore::load(&path)?;
+        let mut config = Config::default();
+        for id in ["google-ai", "vertex"] {
+            store.set(
+                id,
+                "saved",
+                Credential::ApiKey {
+                    value: "fixture-private".into(),
+                },
+            )?;
+            config.providers.insert(
+                id.into(),
+                bitrouter_sdk::config::ProviderConfig {
+                    active: false,
+                    ..Default::default()
+                },
+            );
+        }
+        let original = std::fs::read(&path)?;
+        activate_stored_credential_providers(&mut config, &store);
+        assert!(config.providers.values().all(|provider| !provider.active));
+        assert_eq!(std::fs::read(&path)?, original);
         Ok(())
     }
 }

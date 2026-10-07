@@ -9,8 +9,7 @@ use bitrouter_ai::conversion::{
 };
 use bitrouter_ai::protocol::{
     InboundAdapter, OutboundAdapter, chat_completions::ChatCompletionsAdapter,
-    generate_content::GenerateContentAdapter, messages::MessagesAdapter,
-    responses::ResponsesAdapter,
+    messages::MessagesAdapter, responses::ResponsesAdapter,
 };
 use bitrouter_ai::types::{
     ApiProtocol, Content, Message, Prompt, ProviderMetadata, Role, ToolResultOutput,
@@ -57,6 +56,27 @@ fn text(value: &str) -> Content {
 }
 
 #[test]
+fn json_encoding_preserves_values_on_remaining_wires() -> TestResult {
+    let value = json!({"key-secret":[42,{"nested":true}]});
+    let source = tool_result(ToolResultOutput::Json {
+        value: value.clone(),
+    })?;
+    for (protocol, adapter) in adapters() {
+        let body = adapter.render_request(&source)?;
+        let encoded = match protocol {
+            ApiProtocol::ChatCompletions => &body["messages"][0]["content"],
+            ApiProtocol::Responses => &body["input"][0]["output"],
+            _ => &body["messages"][0]["content"][0]["content"],
+        };
+        assert_eq!(
+            serde_json::from_str::<Value>(encoded.as_str().ok_or("missing JSON encoding")?)?,
+            value
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn invalid_argument_strings_cannot_be_replaced_by_an_empty_object() -> TestResult {
     let mut source = prompt()?;
     source.messages = vec![Message {
@@ -64,10 +84,7 @@ fn invalid_argument_strings_cannot_be_replaced_by_an_empty_object() -> TestResul
         content: vec![call("argument-secret")],
     }];
     for (protocol, adapter) in adapters() {
-        if matches!(
-            protocol,
-            ApiProtocol::Messages | ApiProtocol::GenerateContent
-        ) {
+        if matches!(protocol, ApiProtocol::Messages) {
             let report = refusal(adapter.as_ref(), &source)?;
             assert_eq!(report.issues[0].effect, ConversionEffect::TaskSemantics);
         } else {
@@ -82,98 +99,6 @@ fn invalid_argument_strings_cannot_be_replaced_by_an_empty_object() -> TestResul
     source.messages[0].content = vec![call("{\"x\":42}")];
     for (_, adapter) in adapters() {
         adapter.render_request(&source)?;
-    }
-    Ok(())
-}
-
-#[test]
-fn json_encoding_preserves_values_and_native_gemini_objects() -> TestResult {
-    let value = json!({"key-secret":[42,{"nested":true}]});
-    let source = tool_result(ToolResultOutput::Json {
-        value: value.clone(),
-    })?;
-    for (protocol, adapter) in adapters() {
-        if protocol == ApiProtocol::GenerateContent {
-            assert_eq!(
-                adapter.render_request(&source)?["contents"][0]["parts"][0]["functionResponse"]["response"],
-                value
-            );
-        } else {
-            let body = adapter.render_request(&source)?;
-            let encoded = match protocol {
-                ApiProtocol::ChatCompletions => &body["messages"][0]["content"],
-                ApiProtocol::Responses => &body["input"][0]["output"],
-                _ => &body["messages"][0]["content"][0]["content"],
-            };
-            assert_eq!(
-                serde_json::from_str::<Value>(encoded.as_str().ok_or("missing JSON encoding")?)?,
-                value
-            );
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn scalar_json_and_text_to_object_wrappers_are_unclassified() -> TestResult {
-    for output in [
-        ToolResultOutput::Json {
-            value: json!(["value-secret", 42]),
-        },
-        ToolResultOutput::Json { value: json!(42) },
-        ToolResultOutput::Json { value: Value::Null },
-        ToolResultOutput::Text {
-            value: "value-secret".into(),
-        },
-    ] {
-        let source = tool_result(output)?;
-        let report = refusal(&GenerateContentAdapter, &source)?;
-        assert_eq!(report.issues[0].effect, ConversionEffect::Unknown);
-    }
-    Ok(())
-}
-
-#[test]
-fn text_only_tool_arrays_keep_their_part_boundaries() -> TestResult {
-    use bitrouter_ai::types::ToolResultContentPart;
-    let source = tool_result(ToolResultOutput::Content {
-        value: vec![
-            ToolResultContentPart::Text {
-                text: "before".into(),
-            },
-            ToolResultContentPart::Text {
-                text: "after".into(),
-            },
-        ],
-    })?;
-    for (protocol, adapter) in adapters() {
-        if protocol == ApiProtocol::GenerateContent {
-            refusal(adapter.as_ref(), &source)?;
-            continue;
-        }
-        let body = adapter.render_request(&source)?;
-        let parsed = bitrouter_ai::protocol::inbound_adapter_for(&protocol)
-            .ok_or("no adapter")?
-            .parse_request(body)?;
-        let output = parsed
-            .messages
-            .iter()
-            .flat_map(|message| &message.content)
-            .find_map(|content| {
-                if let Content::ToolResult { output, .. } = content {
-                    Some(output)
-                } else {
-                    None
-                }
-            })
-            .ok_or("missing tool result")?;
-        let Content::ToolResult {
-            output: original, ..
-        } = &source.messages[0].content[0]
-        else {
-            return Err("bad fixture".into());
-        };
-        assert_eq!(output, original);
     }
     Ok(())
 }
@@ -288,23 +213,6 @@ fn responses_argument_values_and_ambiguous_tool_media_cannot_be_erased() -> Test
     ] {
         ingress(ApiProtocol::Responses, body)?;
     }
-    Ok(())
-}
-
-#[test]
-fn ignored_document_and_function_response_attributes_are_refused() -> TestResult {
-    ingress(
-        ApiProtocol::Messages,
-        json!({"model":"fixture","max_tokens":8,"messages":[{"role":"user","content":[{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"payload-secret"},"context":"context-secret","title":"title-secret"}]}]}),
-    )?;
-    ingress(
-        ApiProtocol::GenerateContent,
-        json!({"contents":[{"role":"user","parts":[{"functionResponse":{"id":"c","name":"f","response":{"ok":true},"parts":[{"inlineData":{"mimeType":"image/png","data":"payload-secret"}}]}}]}]}),
-    )?;
-    ingress(
-        ApiProtocol::GenerateContent,
-        json!({"contents":[{"role":"user","parts":[{"functionResponse":{"id":"c","name":"f","response":{"ok":true},"willContinue":true}}]}]}),
-    )?;
     Ok(())
 }
 
