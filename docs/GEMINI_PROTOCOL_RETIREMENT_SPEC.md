@@ -313,7 +313,8 @@ doctests, so the separate doctest invocation is required when using it. Registry
 data changes do not need tests that freeze provider entries or model counts;
 runtime protocol/retirement behavior does need focused verification.
 
-No credentialed-provider or SDK proof has been collected for this proposal.
+At approval, no credentialed-provider or SDK proof had been collected. Current
+implementation evidence is recorded in `GEMINI_PROTOCOL_RETIREMENT_PROGRESS.md`.
 Failure of those gates blocks claiming a successful replacement; mocks and #962's
 existing test results do not discharge them.
 
