@@ -19,7 +19,7 @@ fn decide(request: &Request) -> ResponseTemplate {
         .iter()
         .map(|(id, question)| {
             let criteria = question.get("criteria").and_then(serde_json::Value::as_object);
-            let selected = if body["state"]["task"].as_str() == Some("shared-context child") { "full" }
+            let selected = if id.starts_with("routing_") { "unknown" } else if body["state"]["task"].as_str() == Some("shared-context child") { "full" }
                 else if criteria.is_some_and(|criteria| criteria.contains_key("summary")) { "summary" }
                 else if criteria.is_some_and(|criteria| criteria.contains_key("extract")) { "extract" } else { "hide" };
             let probabilities: serde_json::Map<String, serde_json::Value> = criteria.into_iter()
@@ -116,7 +116,7 @@ async fn read_result(session: &CoreSession, harness: &Harness) -> TestResult {
     {
         observation.workspace_revision = None;
     }
-    observation.output = "optional-archive-sentinel: unrelated migration notes".into();
+    observation.output = "optional-archive-sentinel: unrelated migration notes ".repeat(128);
     session.tool_result("read_result", observation).await?;
     Ok(())
 }

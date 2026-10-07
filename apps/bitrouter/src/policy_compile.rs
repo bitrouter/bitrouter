@@ -6,92 +6,24 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::adequacy::reliability::ReliabilityEvent;
-use crate::adequacy::store::{
-    AdequacyStore, LegacyPin, PersistedExplorationState, PersistedReliabilityEvent,
-    PersistedSemanticSuccess,
-};
 use crate::eval::compiler::{EvalEvidenceSnapshot, RouteEvalEvidence, TierEvalEvidence};
 use crate::eval::types::EvaluatorKind;
 use crate::policy_lock::{
-    CertificateSource, CompilerIdentity, EconomicsSummary, LatencySummary, LegacyAdequacySummary,
-    LegacyMigration, POLICY_COMPILER_ID, POLICY_COMPILER_VERSION, POLICY_LOCKFILE_VERSION,
-    PolicyArtifact, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
-    QualitySummary, RouteOwner, semantic_digest, validate_document,
+    CertificateSource, CompilerIdentity, EconomicsSummary, LatencySummary, POLICY_COMPILER_ID,
+    POLICY_COMPILER_VERSION, POLICY_LOCKFILE_VERSION, PolicyArtifact, PolicyCertificate,
+    PolicyDefinition, PolicyLock, PromotionVerdict, QualitySummary, RouteOwner, semantic_digest,
+    validate_document,
 };
 use crate::trajectory::guard::ProgressGuardPolicy;
-use crate::workflow_state::predictive::{NextStepRole, PredictiveRouteProjection};
+use crate::workflow_state::predictive::PredictiveRouteProjection;
+use bitrouter_sdk::routing::signals::NextStepRole;
 
 const ACTIVE_ROUTE_MINIMUM_QUALITY_PPM: i64 = 900_000;
-
-/// A point-in-time, ordered view of every pre-v2 learned-state table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct LegacyAdequacySnapshot {
-    pub snapshot_time_unix_ms: i64,
-    pub pins: Vec<LegacyPin>,
-    pub exploration: Vec<PersistedExplorationState>,
-    pub semantic_successes: Vec<PersistedSemanticSuccess>,
-    pub reliability_events: Vec<PersistedReliabilityEvent>,
-}
-
-impl LegacyAdequacySnapshot {
-    pub async fn load(store: &AdequacyStore, snapshot_time_unix_ms: i64) -> Result<Self> {
-        if snapshot_time_unix_ms < 0 {
-            anyhow::bail!("legacy snapshot time cannot be negative");
-        }
-        let mut pins = store.load_pins().await?;
-        let mut exploration = store.load_exploration_all().await?;
-        let mut semantic_successes = store.load_semantic_successes().await?;
-        let mut reliability_events = store.load_reliability_events().await?;
-        pins.sort_by(|left, right| left.fingerprint.cmp(&right.fingerprint));
-        exploration.sort_by(|left, right| left.fingerprint.cmp(&right.fingerprint));
-        semantic_successes.sort_by(|left, right| left.evidence_id.cmp(&right.evidence_id));
-        reliability_events
-            .sort_by(|left, right| left.event.request_id.cmp(&right.event.request_id));
-        Ok(Self {
-            snapshot_time_unix_ms,
-            pins,
-            exploration,
-            semantic_successes,
-            reliability_events,
-        })
-    }
-
-    pub fn semantic_digest(&self) -> Result<String> {
-        #[derive(Serialize)]
-        struct DigestInput<'a> {
-            pins: &'a [LegacyPin],
-            exploration: &'a [PersistedExplorationState],
-            semantic_successes: &'a [PersistedSemanticSuccess],
-            reliability_events: Vec<&'a ReliabilityEvent>,
-        }
-
-        let canonical = serde_json::to_vec(&DigestInput {
-            pins: &self.pins,
-            exploration: &self.exploration,
-            semantic_successes: &self.semantic_successes,
-            reliability_events: self
-                .reliability_events
-                .iter()
-                .map(|row| &row.event)
-                .collect(),
-        })
-        .context("serializing legacy adequacy snapshot")?;
-        Ok(format!("sha256:{}", hex::encode(Sha256::digest(canonical))))
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.pins.is_empty()
-            && self.exploration.is_empty()
-            && self.semantic_successes.is_empty()
-            && self.reliability_events.is_empty()
-    }
-}
 
 pub struct CompileInput<'a> {
     pub current: &'a PolicyLock,
     pub parent_digest: Option<&'a str>,
-    pub legacy: &'a LegacyAdequacySnapshot,
+    pub snapshot_time_unix_ms: i64,
     pub eval: Option<&'a EvalEvidenceSnapshot>,
     /// Explicit operator/compiler input for guard proposals. `None` preserves
     /// the active lock exactly; admitted L1 evidence never mutates guards.
@@ -195,14 +127,7 @@ struct CompilerConfigDigest {
     progress_guard_proposals_digest: String,
 }
 
-#[derive(Default)]
-struct RouteEvidence<'a> {
-    pin: Option<&'a LegacyPin>,
-    exploration: Option<&'a PersistedExplorationState>,
-    semantic_tasks: BTreeSet<&'a str>,
-}
-
-/// Compile a deterministic v3 candidate without mutating the active lock.
+/// Compile a deterministic v4 candidate without mutating the active lock.
 pub fn compile_candidate(input: CompileInput<'_>) -> Result<CompileResult> {
     compile_candidate_with_quality(input, &PromotionQualityCriteria::quality_first())
 }
@@ -216,17 +141,15 @@ pub fn compile_candidate_with_quality(
     validate_document(input.current)?;
     quality.validate()?;
     if let Some(eval) = input.eval {
-        validate_eval_effort_treatments(input.current, eval)?;
+        validate_eval_action_treatments(input.current, eval)?;
     }
-    let legacy_evidence_root = input.legacy.semantic_digest()?;
-    let evidence_root = match input.eval {
-        Some(eval) => canonical_digest(&(
-            "policy-evidence-v2",
-            legacy_evidence_root.as_str(),
-            eval.evidence_root.as_str(),
-        ))?,
-        None => legacy_evidence_root.clone(),
-    };
+    if input.snapshot_time_unix_ms < 0 {
+        anyhow::bail!("snapshot time cannot be negative");
+    }
+    let evidence_root = input
+        .eval
+        .map(|eval| eval.evidence_root.clone())
+        .unwrap_or(canonical_digest(&("policy-evidence-v4", "empty"))?);
     let eval_routes = match input.eval {
         Some(eval) => eval.route_evidence()?,
         None => BTreeMap::new(),
@@ -234,7 +157,7 @@ pub fn compile_candidate_with_quality(
     let compiler_config_digest = canonical_digest(&CompilerConfigDigest {
         id: POLICY_COMPILER_ID,
         version: POLICY_COMPILER_VERSION,
-        precedence: "guardrail>operator>eval_negative>eval_positive>legacy_negative>legacy_positive>inherited",
+        precedence: "guardrail>operator>eval_negative>eval_positive>inherited",
         active_route_minimum_quality_ppm: ACTIVE_ROUTE_MINIMUM_QUALITY_PPM,
         promotion_quality: quality.clone(),
         progress_guard_proposals_digest: canonical_digest(&input.proposed_progress_guards)?,
@@ -250,10 +173,6 @@ pub fn compile_candidate_with_quality(
             evidence_root: evidence_root.clone(),
             eval_snapshot_root: input.eval.map(|eval| eval.evidence_root.clone()),
             source_snapshot_time_unix_ms: source_snapshot_time(&input)?,
-            migration: Some(LegacyMigration {
-                legacy_adequacy_digest: legacy_evidence_root,
-                source: crate::policy_lock::LegacyEvidenceSource::DatabaseAtSnapshot,
-            }),
             compiler: CompilerIdentity {
                 id: POLICY_COMPILER_ID.to_string(),
                 version: POLICY_COMPILER_VERSION,
@@ -275,278 +194,120 @@ pub fn compile_candidate_with_quality(
     let mut conflicts = Vec::new();
 
     for (policy_name, policy) in &input.current.policies {
-        let evidence = route_evidence(policy_name, input.legacy);
         let policy_eval = eval_routes
             .iter()
-            .filter_map(|((eval_policy, request_key), route)| {
-                (eval_policy == policy_name
-                    && PredictiveRouteProjection::parse_key(request_key).is_some())
-                .then_some((request_key.clone(), route))
+            .filter_map(|((name, key), route)| {
+                (name == policy_name && PredictiveRouteProjection::parse_key(key).is_some())
+                    .then_some((key.clone(), route))
             })
             .collect::<BTreeMap<_, _>>();
-        let mut request_keys = policy.routes.keys().cloned().collect::<BTreeSet<_>>();
-        request_keys.extend(evidence.keys().cloned());
-        request_keys.extend(policy_eval.keys().cloned());
+        let mut keys = policy.routes.keys().cloned().collect::<BTreeSet<_>>();
+        keys.extend(policy_eval.keys().cloned());
         let mut compiled_routes = BTreeMap::new();
         let mut certificates = BTreeMap::new();
-
-        for request_key in request_keys {
-            let prior_tier = policy.routes.get(&request_key).cloned();
-            let route_evidence = evidence.get(&request_key);
-            let prior_certificate = input.current.certificate(policy_name, &request_key);
-            let owner = route_owner(
-                input.current,
-                policy,
-                prior_tier.as_deref(),
-                prior_certificate,
-                route_evidence,
-            );
-            let active_pin = route_evidence.and_then(|item| item.pin).is_some_and(|pin| {
-                pin_is_active(
-                    pin,
-                    policy.adequacy.pin_cooldown_secs,
-                    input.legacy.snapshot_time_unix_ms,
+        for request_key in keys {
+            let prior_tier = policy.routes.get(&request_key);
+            let prior = input.current.certificate(policy_name, &request_key);
+            let route = policy_eval.get(&request_key).copied();
+            let recommendation = route.and_then(|route| {
+                eval_recommendation(
+                    policy,
+                    &request_key,
+                    prior_tier.map(String::as_str),
+                    route,
+                    quality,
                 )
             });
-            let semantic_successes = match route_evidence.map(|item| item.semantic_tasks.len()) {
-                Some(count) => u32::try_from(count).unwrap_or(u32::MAX),
-                None => 0,
-            };
-            let positive = route_evidence
-                .and_then(|item| item.exploration)
-                .is_some_and(|row| {
-                    row.locked
-                        && positive_route_is_allowed(policy, request_key.as_str())
-                        && semantic_successes >= semantic_threshold(policy, request_key.as_str())
-                });
-            let escalation_tier = policy
-                .adequacy
-                .escalation_tier
-                .as_deref()
-                .or(policy.default_tier.as_deref());
-            let explore_tier = policy.adequacy.explore_tier.as_deref();
-            let eval_evidence = policy_eval.get(&request_key).copied();
-            let eval_recommendation = eval_evidence.and_then(|route| {
-                eval_recommendation(policy, &request_key, prior_tier.as_deref(), route, quality)
-            });
-            let legacy_recommendation = if active_pin {
-                escalation_tier.map(|tier| (tier.to_string(), PromotionVerdict::Demote))
-            } else if positive {
-                explore_tier.map(|tier| (tier.to_string(), PromotionVerdict::Promote))
-            } else {
-                None
-            };
-            let recommendation = eval_recommendation
-                .map(|(tier, verdict)| {
-                    (
-                        tier,
-                        verdict,
-                        eval_evidence
-                            .map(eval_certificate_source)
-                            .unwrap_or(CertificateSource::Mixed),
-                        false,
-                        true,
-                    )
-                })
-                .or_else(|| {
-                    legacy_recommendation.map(|(tier, verdict)| {
-                        (
-                            tier,
-                            verdict,
-                            CertificateSource::LegacyAdequacyV1,
-                            true,
-                            false,
-                        )
-                    })
-                });
-
-            let (selected_tier, selected_owner, source, verdict, uses_legacy, uses_eval) =
-                match (prior_tier.as_deref(), owner, recommendation) {
-                    (Some(prior), RouteOwner::Operator, Some((recommended, _, _, _, _)))
-                        if prior != recommended =>
+            if let Some(prior) = prior {
+                if prior.owner == RouteOwner::Operator {
+                    if let Some((recommended, _)) = recommendation
+                        && recommended != prior.selected_tier
                     {
                         conflicts.push(CompileConflict {
                             policy: policy_name.clone(),
                             request_key: request_key.clone(),
-                            operator_tier: prior.to_string(),
+                            operator_tier: prior.selected_tier.clone(),
                             recommended_tier: recommended,
                             reason: "admitted evidence conflicts with an operator-owned route"
                                 .into(),
                         });
-                        (
-                            prior.to_string(),
-                            RouteOwner::Operator,
-                            CertificateSource::Operator,
-                            PromotionVerdict::Blocked,
-                            false,
-                            false,
-                        )
                     }
-                    (Some(prior), RouteOwner::Operator, _) => (
-                        prior.to_string(),
-                        RouteOwner::Operator,
-                        CertificateSource::Operator,
-                        PromotionVerdict::Retain,
-                        false,
-                        false,
-                    ),
-                    (
-                        _,
-                        RouteOwner::Compiler,
-                        Some((recommended, verdict, source, legacy, eval)),
-                    ) => (
-                        recommended,
-                        RouteOwner::Compiler,
-                        source,
-                        verdict,
-                        legacy,
-                        eval,
-                    ),
-                    (Some(prior), RouteOwner::Compiler, None) => {
-                        let source = prior_certificate
-                            .map(|certificate| certificate.source)
-                            .unwrap_or(CertificateSource::LegacyAdequacyV1);
-                        (
-                            prior.to_string(),
-                            RouteOwner::Compiler,
-                            source,
-                            PromotionVerdict::Retain,
-                            prior_certificate.is_none(),
-                            false,
-                        )
-                    }
-                    (None, _, Some((recommended, verdict, source, legacy, eval))) => (
-                        recommended,
-                        RouteOwner::Compiler,
-                        source,
-                        verdict,
-                        legacy,
-                        eval,
-                    ),
-                    (None, _, None) => continue,
-                };
-
-            if prior_tier.as_deref() != Some(selected_tier.as_str()) {
+                    compiled_routes.insert(request_key.clone(), prior.selected_tier.clone());
+                    certificates.insert(request_key, prior.clone());
+                    continue;
+                }
+                if recommendation.is_none() {
+                    compiled_routes.insert(request_key.clone(), prior.selected_tier.clone());
+                    certificates.insert(request_key, prior.clone());
+                    continue;
+                }
+            }
+            let Some((selected_tier, verdict)) = recommendation else {
+                continue;
+            };
+            let route = route
+                .ok_or_else(|| anyhow::anyhow!("recommendation has no evaluation evidence"))?;
+            if prior_tier != Some(&selected_tier) {
                 changes.push(CompileChange {
                     policy: policy_name.clone(),
                     request_key: request_key.clone(),
-                    previous_tier: prior_tier.clone(),
+                    previous_tier: prior_tier.cloned(),
                     selected_tier: selected_tier.clone(),
                     verdict,
                 });
             }
             compiled_routes.insert(request_key.clone(), selected_tier.clone());
-            if !uses_legacy
-                && !uses_eval
-                && selected_owner == RouteOwner::Compiler
-                && let Some(prior) = prior_certificate
-            {
-                // No new authority exists for this route. Carry its complete
-                // certificate forward byte-for-byte so compiling a different
-                // route cannot rewrite prior provenance or ownership.
-                certificates.insert(request_key, prior.clone());
-                continue;
-            }
-            let evidence_digest = if uses_eval {
-                eval_route_evidence_digest(policy_name, &request_key, eval_evidence)?
-            } else if uses_legacy {
-                route_evidence_digest(policy_name, &request_key, route_evidence)?
-            } else {
-                match prior_certificate {
-                    Some(certificate) => certificate.evidence_digest.clone(),
-                    None => {
-                        canonical_digest(&("operator", policy_name, &request_key, &selected_tier))?
-                    }
-                }
-            };
-            let legacy = uses_legacy.then(|| LegacyAdequacySummary {
-                observed: route_evidence
-                    .and_then(|item| item.exploration)
-                    .map(|row| row.observed)
-                    .unwrap_or_default(),
-                adequate_trials: route_evidence
-                    .and_then(|item| item.exploration)
-                    .map(|row| row.adequate_trials)
-                    .unwrap_or_default(),
-                semantic_successes,
-                pinned: active_pin,
-            });
-            let eval_tier = uses_eval
-                .then(|| eval_evidence.and_then(|route| route.tiers.get(&selected_tier)))
-                .flatten();
-            let baseline_tier = eval_evidence
-                .and_then(|route| route.baseline_tier.clone())
+            let candidate = route.tiers.get(&selected_tier);
+            let baseline_tier = route
+                .baseline_tier
+                .clone()
                 .or_else(|| policy.default_tier.clone());
-            let baseline_eval = eval_evidence.and_then(|route| {
-                baseline_tier
-                    .as_deref()
-                    .and_then(|tier| route.tiers.get(tier))
-            });
+            let baseline = baseline_tier
+                .as_ref()
+                .and_then(|tier| route.tiers.get(tier));
             certificates.insert(
-                request_key,
+                request_key.clone(),
                 PolicyCertificate {
-                    owner: selected_owner,
+                    classifier_digest: route.classifier_cohorts.first().cloned(),
+                    owner: RouteOwner::Compiler,
                     selected_tier,
                     baseline_tier,
-                    source,
-                    eligible_episodes: eval_tier.map_or_else(
-                        || {
-                            legacy
-                                .as_ref()
-                                .map(|summary| summary.adequate_trials)
-                                .unwrap_or_default()
-                        },
-                        |tier| tier.eligible_episodes,
-                    ),
-                    independent_tasks: eval_tier.map_or_else(
-                        || {
-                            legacy
-                                .as_ref()
-                                .map(|_| semantic_successes)
-                                .unwrap_or_default()
-                        },
-                        |tier| u32::try_from(tier.independent_tasks.len()).unwrap_or(u32::MAX),
-                    ),
-                    quality: eval_tier.map(|tier| quality_summary(tier, baseline_eval)),
-                    economics: metric_delta_summary(eval_tier, baseline_eval, |tier| {
+                    source: eval_certificate_source(route),
+                    eligible_episodes: candidate.map_or(0, |tier| tier.eligible_episodes),
+                    independent_tasks: candidate.map_or(0, |tier| {
+                        u32::try_from(tier.independent_tasks.len()).unwrap_or(u32::MAX)
+                    }),
+                    quality: candidate.map(|tier| quality_summary(tier, baseline)),
+                    economics: metric_delta_summary(candidate, baseline, |tier| {
                         tier.cost_micro_usd.mean()
                     })
                     .map(|normalized_cost_delta_ppm| EconomicsSummary {
                         normalized_cost_delta_ppm,
                     }),
-                    latency: metric_delta_summary(eval_tier, baseline_eval, |tier| {
+                    latency: metric_delta_summary(candidate, baseline, |tier| {
                         tier.latency_ms.mean()
                     })
                     .map(|normalized_latency_delta_ppm| LatencySummary {
                         normalized_latency_delta_ppm,
                     }),
-                    critical_violations: eval_tier.map_or_else(
-                        || u32::from(uses_legacy && active_pin),
-                        |tier| tier.critical_violations,
-                    ),
+                    critical_violations: candidate.map_or(0, |tier| tier.critical_violations),
                     verdict,
-                    evaluator_config_digest: uses_eval
-                        .then(|| {
-                            eval_evidence
-                                .map(|route| canonical_digest(&route.evaluator_config_digests))
-                        })
-                        .flatten()
-                        .transpose()?,
+                    evaluator_config_digest: Some(canonical_digest(
+                        &route.evaluator_config_digests,
+                    )?),
                     compiler_config_digest: compiler_config_digest.clone(),
-                    evidence_digest,
-                    legacy,
+                    evidence_digest: eval_route_evidence_digest(
+                        policy_name,
+                        &request_key,
+                        Some(route),
+                    )?,
                 },
             );
         }
-
-        if let Some(compiled_policy) = document.policies.get_mut(policy_name) {
-            compiled_policy.routes = compiled_routes;
-            if compiled_policy
-                .routes
-                .keys()
-                .any(|request_key| request_key.starts_with("agent_route/"))
-            {
-                compiled_policy.predictor =
+        if let Some(compiled) = document.policies.get_mut(policy_name) {
+            compiled.routes = compiled_routes;
+            if !compiled.routes.is_empty() {
+                compiled.predictor =
                     Some(crate::workflow_state::predictive::compiled_predictor_contract());
             }
         }
@@ -565,10 +326,9 @@ pub fn compile_candidate_with_quality(
     })
 }
 
-/// Refuse to compile structured policy targets from evidence that does not
-/// identify the exact effort treatment. Scalar targets intentionally remain
-/// compatible with caller-owned effort, including legacy Eval v1 records.
-fn validate_eval_effort_treatments(
+/// Refuse to relabel a measured model/effort/context action under a changed
+/// tier catalog. Semantic evidence must carry its frozen candidate catalog.
+pub(crate) fn validate_eval_action_treatments(
     current: &PolicyLock,
     eval: &EvalEvidenceSnapshot,
 ) -> Result<()> {
@@ -577,6 +337,44 @@ fn validate_eval_effort_treatments(
             let Some(policy) = current.policies.get(&decision.policy) else {
                 continue;
             };
+            let assessed = crate::eval::types::classifier_cohorts(&record.subject)
+                .iter()
+                .any(|cohort| cohort != "unassessed");
+            if assessed && decision.route_measurement.is_none() {
+                anyhow::bail!(
+                    "semantic eval result '{}' has no action measurement",
+                    record.result_id
+                );
+            }
+            if let Some(measurement) = &decision.route_measurement {
+                crate::eval::types::validate_route_measurement(measurement)?;
+                for tier in std::iter::once(decision.selected_tier.as_str())
+                    .chain(decision.baseline_tier.as_deref())
+                {
+                    let expected = policy
+                        .tiers
+                        .get(tier)
+                        .ok_or_else(|| anyhow::anyhow!("eval names unavailable tier '{tier}'"))?;
+                    let measured = measurement
+                        .candidates
+                        .iter()
+                        .find(|candidate| candidate.tier == tier)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("eval action measurement omits tier '{tier}'")
+                        })?;
+                    if measured.model != expected.model()
+                        || measured.context != expected.context
+                        || expected
+                            .effort()
+                            .is_some_and(|effort| measured.effort != Some(effort))
+                    {
+                        anyhow::bail!(
+                            "eval result '{}' attributes tier '{tier}' to a different model/effort/context action",
+                            record.result_id
+                        );
+                    }
+                }
+            }
             if let Some(expected) = policy
                 .tiers
                 .get(&decision.selected_tier)
@@ -620,7 +418,7 @@ fn source_snapshot_time(input: &CompileInput<'_>) -> Result<i64> {
             .timestamp_millis(),
         None => 0,
     };
-    Ok(input.legacy.snapshot_time_unix_ms.max(eval_time))
+    Ok(input.snapshot_time_unix_ms.max(eval_time))
 }
 
 fn eval_recommendation(
@@ -630,6 +428,9 @@ fn eval_recommendation(
     route: &RouteEvalEvidence,
     quality: &PromotionQualityCriteria,
 ) -> Option<(String, PromotionVerdict)> {
+    if route.classifier_cohorts.len() > 1 || route.evaluator_config_digests.len() > 1 {
+        return None;
+    }
     let baseline = route
         .baseline_tier
         .as_deref()
@@ -737,73 +538,6 @@ fn eval_route_evidence_digest(
     ))
 }
 
-fn route_evidence<'a>(
-    policy_name: &str,
-    legacy: &'a LegacyAdequacySnapshot,
-) -> BTreeMap<String, RouteEvidence<'a>> {
-    let mut evidence = BTreeMap::<String, RouteEvidence<'a>>::new();
-    for pin in &legacy.pins {
-        if let Some(request_key) = adequacy_request_key(policy_name, &pin.fingerprint) {
-            evidence.entry(request_key).or_default().pin = Some(pin);
-        }
-    }
-    for row in &legacy.exploration {
-        if let Some(request_key) = adequacy_request_key(policy_name, &row.fingerprint) {
-            evidence.entry(request_key).or_default().exploration = Some(row);
-        }
-    }
-    for row in &legacy.semantic_successes {
-        if let Some(request_key) = adequacy_request_key(policy_name, &row.fingerprint) {
-            evidence
-                .entry(request_key)
-                .or_default()
-                .semantic_tasks
-                .insert(&row.task_id);
-        }
-    }
-    evidence
-}
-
-fn adequacy_request_key(policy_name: &str, fingerprint: &str) -> Option<String> {
-    let (namespace, request_key) = fingerprint.split_once('\0')?;
-    (namespace == policy_name && PredictiveRouteProjection::parse_key(request_key).is_some())
-        .then(|| request_key.to_string())
-}
-
-fn route_owner(
-    current: &PolicyLock,
-    policy: &PolicyDefinition,
-    prior_tier: Option<&str>,
-    prior_certificate: Option<&PolicyCertificate>,
-    evidence: Option<&RouteEvidence<'_>>,
-) -> RouteOwner {
-    if current.is_compiled() {
-        return prior_certificate
-            .map(|certificate| certificate.owner)
-            .unwrap_or(RouteOwner::Compiler);
-    }
-    let inferred_compiler = prior_tier.is_some_and(|tier| {
-        policy.adequacy.explore_tier.as_deref() == Some(tier)
-            && evidence
-                .and_then(|item| item.exploration)
-                .is_some_and(|row| row.locked)
-    });
-    if inferred_compiler {
-        RouteOwner::Compiler
-    } else {
-        RouteOwner::Operator
-    }
-}
-
-fn pin_is_active(pin: &LegacyPin, cooldown_secs: u64, snapshot_time_unix_ms: i64) -> bool {
-    if cooldown_secs == 0 {
-        return true;
-    }
-    let snapshot_secs = snapshot_time_unix_ms / 1_000;
-    let cooldown = i64::try_from(cooldown_secs).unwrap_or(i64::MAX);
-    pin.pinned_at_unix.saturating_add(cooldown) > snapshot_secs
-}
-
 fn semantic_threshold(policy: &PolicyDefinition, request_key: &str) -> u32 {
     let opening = is_opening_like(request_key);
     if opening {
@@ -826,30 +560,6 @@ fn is_opening_like(request_key: &str) -> bool {
         .is_some_and(|projection| projection.next_step_role == NextStepRole::Orchestrate)
 }
 
-fn route_evidence_digest(
-    policy_name: &str,
-    request_key: &str,
-    evidence: Option<&RouteEvidence<'_>>,
-) -> Result<String> {
-    #[derive(Serialize)]
-    struct DigestInput<'a> {
-        policy: &'a str,
-        request_key: &'a str,
-        pin: Option<&'a LegacyPin>,
-        exploration: Option<&'a PersistedExplorationState>,
-        semantic_tasks: Vec<&'a str>,
-    }
-    canonical_digest(&DigestInput {
-        policy: policy_name,
-        request_key,
-        pin: evidence.and_then(|item| item.pin),
-        exploration: evidence.and_then(|item| item.exploration),
-        semantic_tasks: evidence
-            .map(|item| item.semantic_tasks.iter().copied().collect())
-            .unwrap_or_default(),
-    })
-}
-
 fn canonical_digest<T: Serialize>(value: &T) -> Result<String> {
     let canonical = serde_json::to_vec(value).context("serializing canonical compiler input")?;
     Ok(format!("sha256:{}", hex::encode(Sha256::digest(canonical))))
@@ -862,10 +572,6 @@ mod tests {
     use bitrouter_sdk::config::{AdequacyConfig, PolicyModelTarget};
     use bitrouter_sdk::language_model::types::ReasoningEffort;
 
-    use crate::adequacy::reliability::{ReliabilityEvent, ReliabilityKey, ReliabilityObservation};
-    use crate::adequacy::store::AdequacyStore;
-    use crate::adequacy::store::{LegacyPin, PersistedExplorationState, PersistedSemanticSuccess};
-    use crate::db;
     use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
     use crate::eval::types::{
         EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict, EvaluationResult, EvaluatorIdentity,
@@ -873,10 +579,9 @@ mod tests {
     };
     use crate::policy_lock::{
         CertificateSource, PolicyDefinition, PolicyLock, PromotionVerdict, RouteOwner,
-        deterministic_yaml,
     };
 
-    const EDIT_KEY: &str = "agent_route/v1|unknown|implement|normal";
+    const EDIT_KEY: &str = "semantic_route/v1|unknown|implement|normal";
 
     fn policy(route: Option<&str>) -> PolicyDefinition {
         PolicyDefinition {
@@ -900,12 +605,10 @@ mod tests {
         }
     }
 
-    fn v1(route: Option<&str>) -> PolicyLock {
+    fn lock(route: Option<&str>) -> PolicyLock {
         PolicyLock {
-            lockfile_version: 1,
-            artifact: None,
             policies: BTreeMap::from([("auto".into(), policy(route))]),
-            certificates: BTreeMap::new(),
+            ..Default::default()
         }
     }
 
@@ -997,23 +700,25 @@ mod tests {
 
     #[test]
     fn structured_targets_require_exact_effort_attribution() -> anyhow::Result<()> {
-        let mut current = v1(None);
+        let mut current = lock(None);
         let policy = current
             .policies
             .get_mut("auto")
             .ok_or_else(|| anyhow::anyhow!("test fixture is missing policy auto"))?;
         policy.tiers.insert(
             "strong".into(),
-            PolicyModelTarget::ModelEffort {
+            PolicyModelTarget {
+                context: Default::default(),
                 model: "openai:gpt-5.6".into(),
-                effort: ReasoningEffort::High,
+                effort: Some(ReasoningEffort::High),
             },
         );
         policy.tiers.insert(
             "economy".into(),
-            PolicyModelTarget::ModelEffort {
+            PolicyModelTarget {
+                context: Default::default(),
                 model: "openai:gpt-5.6".into(),
-                effort: ReasoningEffort::Low,
+                effort: Some(ReasoningEffort::Low),
             },
         );
         let mut eval = EvalEvidenceSnapshot {
@@ -1072,173 +777,85 @@ mod tests {
             }],
         };
 
-        let error = super::validate_eval_effort_treatments(&current, &eval)
+        let error = super::validate_eval_action_treatments(&current, &eval)
             .err()
             .ok_or_else(|| anyhow::anyhow!("missing effort attribution must fail"))?;
         assert!(error.to_string().contains("expected 'low'"));
 
         eval.records[0].subject.decisions[0].selected_effort = Some(ReasoningEffort::Low);
-        super::validate_eval_effort_treatments(&current, &eval)?;
-        Ok(())
-    }
-
-    fn snapshot(positive: bool, pinned_at_unix: Option<i64>) -> super::LegacyAdequacySnapshot {
-        let fingerprint = format!("auto\0{EDIT_KEY}");
-        super::LegacyAdequacySnapshot {
-            snapshot_time_unix_ms: 1_700_000_100_000,
-            pins: pinned_at_unix
-                .map(|timestamp| {
-                    vec![LegacyPin {
-                        fingerprint: fingerprint.clone(),
-                        pinned_at_unix: timestamp,
-                    }]
-                })
-                .unwrap_or_default(),
-            exploration: if positive {
-                vec![PersistedExplorationState {
-                    fingerprint: fingerprint.clone(),
-                    observed: 8,
-                    adequate_trials: 4,
-                    locked: true,
-                }]
-            } else {
-                Vec::new()
-            },
-            semantic_successes: if positive {
-                vec![PersistedSemanticSuccess {
-                    evidence_id: format!("{fingerprint}\ntask-a"),
-                    fingerprint,
-                    task_id: "task-a".into(),
-                }]
-            } else {
-                Vec::new()
-            },
-            reliability_events: Vec::new(),
-        }
-    }
-
-    async fn populated_store(order: [&str; 2]) -> anyhow::Result<AdequacyStore> {
-        let db = db::connect("sqlite::memory:").await?;
-        db::run_migrations(&db).await?;
-        let store = AdequacyStore::new(db);
-        for key in order {
-            let fingerprint = format!("auto\0agent_trace/v1|{key}|normal");
-            store.upsert_pin(&fingerprint, 1_700_000_000).await?;
-            store.upsert_exploration(&fingerprint, 8, 4, true).await?;
-            store
-                .record_semantic_success(&fingerprint, &format!("task-{key}"))
-                .await?;
-            store
-                .append_reliability_event(&ReliabilityEvent {
-                    request_id: format!("request-{key}"),
-                    route_key: fingerprint,
-                    endpoint_key: ReliabilityKey {
-                        provider: "provider".into(),
-                        model: format!("model-{key}"),
-                        credential_class: "shared".into(),
-                        endpoint_scope: "default".into(),
-                        protocol: "responses".into(),
-                    },
-                    observation: ReliabilityObservation::Success,
-                    half_open_probe: false,
-                    observed_at_unix: 1_700_000_001,
-                })
-                .await?;
-        }
-        Ok(store)
-    }
-
-    #[tokio::test]
-    async fn legacy_snapshot_digest_is_order_independent_and_complete() -> anyhow::Result<()> {
-        let first = populated_store(["edit", "test"]).await?;
-        let second = populated_store(["test", "edit"]).await?;
-
-        let left = super::LegacyAdequacySnapshot::load(&first, 1_785_369_600_000).await?;
-        let right = super::LegacyAdequacySnapshot::load(&second, 1_785_369_600_000).await?;
-
-        assert_eq!(left.semantic_digest()?, right.semantic_digest()?);
-        assert!(!left.is_empty());
-        let mut incomplete = left.clone();
-        incomplete.reliability_events.clear();
-        assert_ne!(left.semantic_digest()?, incomplete.semantic_digest()?);
-        Ok(())
-    }
-
-    #[test]
-    fn active_pin_replaces_a_compiler_owned_economy_route() -> anyhow::Result<()> {
-        let learned = super::compile_candidate(super::CompileInput {
-            current: &v1(None),
-            parent_digest: None,
-            legacy: &snapshot(true, None),
-            eval: None,
-            proposed_progress_guards: None,
-        })?;
-        let corrected = super::compile_candidate(super::CompileInput {
-            current: &learned.document,
-            parent_digest: None,
-            legacy: &snapshot(true, Some(1_700_000_000)),
-            eval: None,
-            proposed_progress_guards: None,
-        })?;
-
-        assert_eq!(
-            corrected.document.policies["auto"].routes[EDIT_KEY],
-            "strong"
-        );
-        let certificate = &corrected.document.certificates["auto"][EDIT_KEY];
-        assert_eq!(certificate.source, CertificateSource::LegacyAdequacyV1);
-        assert_eq!(certificate.verdict, PromotionVerdict::Demote);
-        assert!(certificate.legacy.as_ref().is_some_and(|item| item.pinned));
-        Ok(())
-    }
-
-    #[test]
-    fn negative_evidence_conflicting_with_operator_route_blocks_publication() -> anyhow::Result<()>
-    {
-        let template_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("templates/auto-router/policy-lock.yaml");
-        let mut current: PolicyLock =
-            serde_saphyr::from_str(&std::fs::read_to_string(template_path)?)?;
+        super::validate_eval_action_treatments(&current, &eval)?;
+        let policy = current
+            .policies
+            .get("auto")
+            .ok_or_else(|| anyhow::anyhow!("missing policy"))?;
+        let candidates = policy
+            .tiers
+            .iter()
+            .map(|(tier, target)| crate::eval::types::RouteActionCandidate {
+                tier: tier.clone(),
+                model: target.model.clone(),
+                effort: target.effort,
+                context: target.context,
+                logging_probability_ppm: if tier == "economy" { 1_000_000 } else { 0 },
+            })
+            .collect();
+        eval.records[0].subject.decisions[0].route_measurement =
+            Some(crate::eval::types::RouteDecisionMeasurement::new(
+                "economy",
+                "openai:gpt-5.6",
+                Some(ReasoningEffort::Low),
+                candidates,
+            )?);
+        super::validate_eval_action_treatments(&current, &eval)?;
         current
             .policies
             .get_mut("auto")
-            .expect("template auto policy")
-            .routes
-            .insert(EDIT_KEY.to_string(), "economy".to_string());
-        let certificate = current
-            .certificates
-            .get_mut("auto")
-            .and_then(|certificates| certificates.get_mut(EDIT_KEY))
-            .expect("template edit certificate");
-        certificate.owner = RouteOwner::Operator;
-        certificate.selected_tier = "economy".into();
-        certificate.source = CertificateSource::Operator;
-        let result = super::compile_candidate(super::CompileInput {
-            current: &current,
-            parent_digest: None,
-            legacy: &snapshot(false, Some(1_700_000_000)),
-            eval: None,
-            proposed_progress_guards: None,
-        })?;
-
-        assert_eq!(result.document.policies["auto"].routes[EDIT_KEY], "economy");
-        assert_eq!(result.conflicts.len(), 1);
-        assert_eq!(
-            result.document.certificates["auto"][EDIT_KEY].source,
-            CertificateSource::Operator
+            .and_then(|policy| policy.tiers.get_mut("economy"))
+            .ok_or_else(|| anyhow::anyhow!("missing tier"))?
+            .context = bitrouter_sdk::routing::ContextStrategy::Preserve;
+        assert!(
+            super::validate_eval_action_treatments(&current, &eval).is_err(),
+            "evidence context cannot be reattributed to preserve"
         );
         Ok(())
     }
 
     #[test]
-    fn admitted_negative_evidence_demotes_pretrained_economy_route() -> anyhow::Result<()> {
-        const TEMPLATE_ECONOMY_KEY: &str = "agent_route/v1|unknown|verify|normal";
-        let template_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("templates/auto-router/policy-lock.yaml");
-        let template_raw = std::fs::read_to_string(template_path)?;
-        let current: PolicyLock = serde_saphyr::from_str(&template_raw)?;
+    fn admitted_negative_evidence_demotes_compiler_owned_route() -> anyhow::Result<()> {
+        const TEMPLATE_ECONOMY_KEY: &str = "semantic_route/v1|unknown|verify|normal";
+        let mut current = lock(None);
+        let policy = current
+            .policies
+            .get_mut("auto")
+            .ok_or_else(|| anyhow::anyhow!("policy missing"))?;
+        policy
+            .routes
+            .insert(TEMPLATE_ECONOMY_KEY.into(), "economy".into());
+        policy.predictor = Some(crate::workflow_state::predictive::compiled_predictor_contract());
+        let digest = format!("sha256:{}", "a".repeat(64));
+        current.certificates.insert(
+            "auto".into(),
+            BTreeMap::from([(
+                TEMPLATE_ECONOMY_KEY.into(),
+                crate::policy_lock::PolicyCertificate {
+                    classifier_digest: None,
+                    owner: crate::policy_lock::RouteOwner::Compiler,
+                    selected_tier: "economy".into(),
+                    baseline_tier: Some("strong".into()),
+                    source: crate::policy_lock::CertificateSource::TaskNative,
+                    eligible_episodes: 1,
+                    independent_tasks: 1,
+                    quality: None,
+                    economics: None,
+                    latency: None,
+                    critical_violations: 0,
+                    verdict: PromotionVerdict::Experiment,
+                    evaluator_config_digest: None,
+                    compiler_config_digest: digest.clone(),
+                    evidence_digest: digest,
+                },
+            )]),
+        );
         let evidence = Vec::new();
         let evidence_digest = evidence_digest(&evidence)?;
         let subject = EvalSubject {
@@ -1308,7 +925,7 @@ mod tests {
         let compiled = super::compile_candidate(super::CompileInput {
             current: &current,
             parent_digest: None,
-            legacy: &snapshot(false, None),
+            snapshot_time_unix_ms: 1_785_369_600_000,
             eval: Some(&eval),
             proposed_progress_guards: None,
         })?;
@@ -1323,156 +940,6 @@ mod tests {
         assert_eq!(certificate.source, CertificateSource::TaskNative);
         assert_eq!(certificate.verdict, PromotionVerdict::Demote);
         Ok(())
-    }
-
-    #[test]
-    fn compiler_is_deterministic_and_reliability_never_changes_routes() -> anyhow::Result<()> {
-        let current = v1(None);
-        let evidence = snapshot(false, None);
-        let left = super::compile_candidate(super::CompileInput {
-            current: &current,
-            parent_digest: None,
-            legacy: &evidence,
-            eval: None,
-            proposed_progress_guards: None,
-        })?;
-        let right = super::compile_candidate(super::CompileInput {
-            current: &current,
-            parent_digest: None,
-            legacy: &evidence,
-            eval: None,
-            proposed_progress_guards: None,
-        })?;
-
-        assert_eq!(left.document, right.document);
-        assert_eq!(
-            deterministic_yaml(&left.document)?,
-            deterministic_yaml(&right.document)?
-        );
-        assert!(left.document.policies["auto"].routes.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn opening_guardrail_blocks_positive_legacy_promotion() -> anyhow::Result<()> {
-        let opening_key = "agent_trace/v1|opening|normal";
-        let fingerprint = format!("auto\0{opening_key}");
-        let mut current = v1(None);
-        current
-            .policies
-            .get_mut("auto")
-            .ok_or_else(|| anyhow::anyhow!("test fixture is missing policy auto"))?
-            .adequacy
-            .min_semantic_successes_for_opening = 1;
-        let evidence = super::LegacyAdequacySnapshot {
-            snapshot_time_unix_ms: 1_700_000_100_000,
-            pins: Vec::new(),
-            exploration: vec![PersistedExplorationState {
-                fingerprint: fingerprint.clone(),
-                observed: 8,
-                adequate_trials: 4,
-                locked: true,
-            }],
-            semantic_successes: vec![PersistedSemanticSuccess {
-                evidence_id: format!("{fingerprint}\ntask-a"),
-                fingerprint,
-                task_id: "task-a".into(),
-            }],
-            reliability_events: Vec::new(),
-        };
-
-        let result = super::compile_candidate(super::CompileInput {
-            current: &current,
-            parent_digest: None,
-            legacy: &evidence,
-            eval: None,
-            proposed_progress_guards: None,
-        })?;
-
-        assert!(
-            !result.document.policies["auto"]
-                .routes
-                .contains_key(opening_key)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn predictive_orchestrate_guardrail_blocks_positive_legacy_promotion() -> anyhow::Result<()> {
-        let opening_key = "agent_route/v1|unknown|orchestrate|normal";
-        let fingerprint = format!("auto\0{opening_key}");
-        let mut current = v1(None);
-        current
-            .policies
-            .get_mut("auto")
-            .ok_or_else(|| anyhow::anyhow!("test fixture is missing policy auto"))?
-            .adequacy
-            .min_semantic_successes_for_opening = 1;
-        let evidence = super::LegacyAdequacySnapshot {
-            snapshot_time_unix_ms: 1_700_000_100_000,
-            pins: Vec::new(),
-            exploration: vec![PersistedExplorationState {
-                fingerprint: fingerprint.clone(),
-                observed: 8,
-                adequate_trials: 4,
-                locked: true,
-            }],
-            semantic_successes: vec![PersistedSemanticSuccess {
-                evidence_id: format!("{fingerprint}\ntask-a"),
-                fingerprint,
-                task_id: "task-a".into(),
-            }],
-            reliability_events: Vec::new(),
-        };
-
-        let result = super::compile_candidate(super::CompileInput {
-            current: &current,
-            parent_digest: None,
-            legacy: &evidence,
-            eval: None,
-            proposed_progress_guards: None,
-        })?;
-
-        assert!(
-            !result.document.policies["auto"]
-                .routes
-                .contains_key(opening_key)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn adequacy_evidence_accepts_only_canonical_predictive_keys() {
-        assert_eq!(
-            super::adequacy_request_key("auto", "auto\0agent_route/v1|unknown|implement|normal")
-                .as_deref(),
-            Some("agent_route/v1|unknown|implement|normal")
-        );
-        assert_eq!(
-            super::adequacy_request_key("auto", "auto\0agent_trace/v2|edit|normal"),
-            None
-        );
-        assert_eq!(
-            super::adequacy_request_key(
-                "auto",
-                &format!(
-                    "auto\0agent_route/{}|code:review|verify|normal",
-                    ["v", "2"].concat()
-                )
-            ),
-            None
-        );
-        assert_eq!(
-            super::adequacy_request_key(
-                "auto",
-                &format!("auto\0agent_route/v1|{}|normal", "implement")
-            ),
-            None
-        );
-        assert_eq!(
-            super::adequacy_request_key("auto", "auto\0agent_route/v1|unknown|developer|normal"),
-            None
-        );
     }
 
     #[test]
@@ -1544,9 +1011,9 @@ mod tests {
         };
 
         let compiled = super::compile_candidate(super::CompileInput {
-            current: &v1(None),
+            current: &lock(None),
             parent_digest: None,
-            legacy: &snapshot(false, None),
+            snapshot_time_unix_ms: 1_785_369_600_000,
             eval: Some(&eval),
             proposed_progress_guards: None,
         })?;
@@ -1569,7 +1036,7 @@ mod tests {
         let second = super::compile_candidate(super::CompileInput {
             current: &compiled.document,
             parent_digest: None,
-            legacy: &snapshot(false, None),
+            snapshot_time_unix_ms: 1_785_369_600_000,
             eval: None,
             proposed_progress_guards: None,
         })?;
@@ -1582,7 +1049,7 @@ mod tests {
 
     #[test]
     fn qualified_eval_candidates_prefer_lower_observed_cost() -> anyhow::Result<()> {
-        let mut current = v1(None);
+        let mut current = lock(None);
         current
             .policies
             .get_mut("auto")
@@ -1665,7 +1132,7 @@ mod tests {
         let compiled = super::compile_candidate(super::CompileInput {
             current: &current,
             parent_digest: None,
-            legacy: &snapshot(false, None),
+            snapshot_time_unix_ms: 1_785_369_600_000,
             eval: Some(&eval),
             proposed_progress_guards: None,
         })?;
@@ -1701,7 +1168,7 @@ mod tests {
         let preserved = super::compile_candidate(super::CompileInput {
             current: &current,
             parent_digest: None,
-            legacy: &snapshot(false, None),
+            snapshot_time_unix_ms: 1_785_369_600_000,
             eval: None,
             proposed_progress_guards: None,
         })?;
@@ -1716,7 +1183,7 @@ mod tests {
         let changed = super::compile_candidate(super::CompileInput {
             current: &current,
             parent_digest: None,
-            legacy: &snapshot(false, None),
+            snapshot_time_unix_ms: 1_785_369_600_000,
             eval: None,
             proposed_progress_guards: Some(&proposals),
         })?;

@@ -363,6 +363,17 @@ struct TransformCheckedControl {
 
 #[async_trait::async_trait]
 impl crate::language_model::native::NativeExecutionControl for TransformCheckedControl {
+    async fn prepare_routing(
+        &self,
+        prompt: &Prompt,
+    ) -> Result<Option<crate::routing::preparation::Prepared>> {
+        self.inner.prepare_routing(prompt).await
+    }
+
+    async fn commit_routing(&self, plan: &crate::routing::plan::Plan) -> Result<()> {
+        self.inner.commit_routing(plan).await
+    }
+
     fn observe_stream(&self) -> bool {
         self.inner.observe_stream()
     }
@@ -637,6 +648,7 @@ impl AppBuilder {
                     .map_err(crate::BitrouterError::bad_request)?;
             }
         }
+        self.language_model.decision_model = self.decision_model.clone();
         let language_model = if self.language_model.is_configured() {
             Some(Arc::new(self.language_model.build()?))
         } else {

@@ -6,7 +6,7 @@ use bitrouter::eval::store::EvalStore;
 use bitrouter::metering::{
     ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
 };
-use bitrouter::policy_compile::{CompileInput, LegacyAdequacySnapshot, compile_candidate};
+use bitrouter::policy_compile::{CompileInput, compile_candidate};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
 use bitrouter::workflow_state::archive::{CloudUsageRecord, WorkflowRunArtifact};
 use bitrouter::workflow_state::decision::PolicyDecisionRecord;
@@ -87,8 +87,8 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
     let request_id = "req-smithers-1";
     let run_id = "run-smithers-1";
     let task_id = "case-release-review";
-    let target_key = "agent_route/v1|unknown|orchestrate|normal";
-    let other_key = "agent_route/v1|unknown|implement|normal";
+    let target_key = "semantic_route/v1|unknown|orchestrate|normal";
+    let other_key = "semantic_route/v1|unknown|implement|normal";
     let ledger_key = format!("smithers\0{target_key}");
     let trace = CapturedIngressTrace {
         id: request_id.to_string(),
@@ -205,23 +205,14 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
     let evidence = EvalEvidenceSnapshot::load(&eval_store, &manifest.evidence_root).await?;
 
     let lock = PolicyLock {
-        lockfile_version: 1,
-        artifact: None,
         policies: BTreeMap::from([("smithers".to_string(), policy())]),
-        certificates: BTreeMap::new(),
-    };
-    let legacy = LegacyAdequacySnapshot {
-        snapshot_time_unix_ms: 1_785_369_600_000,
-        pins: Vec::new(),
-        exploration: Vec::new(),
-        semantic_successes: Vec::new(),
-        reliability_events: Vec::new(),
+        ..Default::default()
     };
     let parent_digest = semantic_digest(&lock)?;
     let evolved = compile_candidate(CompileInput {
         current: &lock,
         parent_digest: Some(&parent_digest),
-        legacy: &legacy,
+        snapshot_time_unix_ms: 1_785_369_600_000,
         eval: Some(&evidence),
         proposed_progress_guards: None,
     })?
@@ -232,7 +223,7 @@ async fn smithers_terminal_reward_materializes_only_the_credited_route() -> anyh
     let independently_evolved = compile_candidate(CompileInput {
         current: &lock,
         parent_digest: Some(&parent_digest),
-        legacy: &legacy,
+        snapshot_time_unix_ms: 1_785_369_600_000,
         eval: Some(&evidence),
         proposed_progress_guards: None,
     })?

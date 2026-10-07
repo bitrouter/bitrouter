@@ -50,8 +50,7 @@ impl RunningFixture {
                 ReloadSource::File(source.clone()),
             )
             .with_startup_configuration(baseline)
-            .with_policy_runtime(assembled.policy_runtime.clone())
-            .with_policy_table_router(assembled.policy_table_router.clone()),
+            .with_policy_runtime(assembled.policy_runtime.clone()),
         );
         let administration = Administration {
             source: ConfigSource::File(source.clone()),
@@ -236,8 +235,8 @@ async fn unknown_field_diagnostics_do_not_disclose_dynamic_keys_or_values() -> R
     ensure!(fixture.reloader.reload().await.is_err());
     let report = fixture.status(&fixture.source).await?;
     let state = configuration(&report)?;
-    ensure!(state["running"] == "restart_required", "{state}");
-    ensure!(state["restart_required_fields"] == serde_json::json!(["unclassified"]));
+    ensure!(state["saved"] == "invalid", "{state}");
+    ensure!(state["running"] == "unknown", "{state}");
     let serialized = serde_json::to_string(&report)?;
     ensure!(!serialized.contains("private-unrecognized"));
     ensure!(!serialized.contains("old-private-api-key"));

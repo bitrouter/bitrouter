@@ -89,7 +89,9 @@ async fn native_continuation_uses_suffix_and_same_count_body_after_restart() -> 
             .execute_native_controlled(next.clone(), owner(), capture.clone())
             .await?;
         let plans = capture.plans.lock().await;
-        assert_eq!(plans[1].prompt, next);
+        let mut bound_next = next;
+        bound_next.model = plans[1].effective_model.clone();
+        assert_eq!(plans[1].prompt, bound_next);
         assert_eq!(
             plans[1].routes[0].continuation,
             NativeContinuationInput::Resumed { prefix_messages: 2 }

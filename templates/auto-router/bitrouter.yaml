@@ -21,10 +21,12 @@ trajectory:
   enabled: true
   retention_days: 30
   outbox_batch_size: 100
-presets:
+routers:
   auto:
-    model: "openai-codex:gpt-5.6-sol"
-    policy: auto
+    selection:
+      kind: policy
+      base_model: "openai-codex:gpt-5.6-sol"
+      policy: auto
 variants:
   cost:
     routing: { sort: cost }

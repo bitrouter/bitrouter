@@ -91,7 +91,7 @@ pub struct ExecutionPlan {
     pub model: Option<NativePlan>,
     /// Finite model/view optimization and its explicit local cost assumptions.
     #[serde(default)]
-    pub routing: Option<models::Selection>,
+    pub routing: Option<bitrouter_sdk::routing::plan::Selection>,
 }
 
 pub(super) fn invalid(message: impl Into<String>) -> CoreError {

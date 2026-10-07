@@ -512,6 +512,11 @@ impl PipelineContext {
         self.inbound_protocol.clone()
     }
 
+    pub(crate) fn apply_routing_prompt(&mut self, prompt: Prompt) {
+        self.model.clone_from(&prompt.model);
+        self.prompt = prompt;
+    }
+
     /// Replace the canonical model name (used after preset/variant stripping).
     pub fn set_model(&mut self, model: impl Into<String>) {
         self.model = model.into();

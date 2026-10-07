@@ -31,6 +31,9 @@ use crate::language_model::routing::{PromptOverrides, RouterRequestIdentity};
 use crate::language_model::types::{AuthScheme, ReasoningEffort, ReasoningEffortSource};
 use crate::language_model::*;
 
+#[path = "tests_unified_routing.rs"]
+mod unified_routing;
+
 // ===== test fixtures =====
 
 fn target(provider: &str) -> RoutingTarget {

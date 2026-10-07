@@ -122,12 +122,6 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
             || receipt.agent_id != work.agent_id
             || receipt.candidates.task_id != work.task_id
             || receipt.response_limit_bytes == 0
-            || receipt.candidates.models.len() > 16
-            || receipt
-                .candidates
-                .models
-                .values()
-                .any(|model| !receipt.policy.generation_models.contains(model))
             || receipt
                 .candidates
                 .ordered_blocks
@@ -254,36 +248,25 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
         {
             return Err(invalid("execution is not bound to a context view"));
         }
-        if let Some(routing) = &execution.routing {
-            let receipt = execution
-                .decision_id
-                .as_ref()
-                .and_then(|id| store.decisions.get(id));
-            if routing.candidates.len() > 32
+        if let Some(routing) = &execution.routing
+            && (store.views.get(&execution.view_id).is_none_or(|view| {
+                format!("sha256:{}", view.prompt_sha256) != routing.prompt_digest
+            }) || routing.candidates.len() > 512
                 || routing.candidates.is_empty()
                 || !routing.candidates.iter().any(|candidate| {
-                    candidate.model == routing.selected_model
+                    candidate.eligible
+                        && candidate.policy_admitted
+                        && candidate.model == routing.selected_model
                         && candidate.context == routing.selected_context
-                })
-                || receipt.is_none_or(|receipt| {
-                    !receipt
-                        .candidates
-                        .models
-                        .values()
-                        .any(|model| model.model == routing.selected_model)
                 })
                 || execution
                     .model
                     .as_ref()
-                    .is_some_and(|model| model.original_model != routing.selected_model)
-                || (receipt
-                    .is_some_and(|receipt| receipt.outcome.as_ref().is_none_or(Result::is_err))
-                    && routing.selected_model != routing.requested_model)
-            {
-                return Err(invalid(
-                    "model/context selection differs from its frozen candidates or SDK binding",
-                ));
-            }
+                    .is_some_and(|model| model.effective_model != routing.selected_model))
+        {
+            return Err(invalid(
+                "model/context selection differs from its frozen candidates or SDK binding",
+            ));
         }
     }
     Ok(())

@@ -173,10 +173,11 @@ fn judgment(request: &Request, suitability: f64) -> ResponseTemplate {
         if question["type"] == "noul" {
             return (id.clone(), serde_json::json!({"type":"noul", "noul":suitability}));
         }
+        let selected = if id.starts_with("routing_") { "unknown" } else { "hide" };
         let probabilities = question["criteria"].as_object().into_iter().flat_map(|criteria| criteria.keys())
-            .map(|key| (key.clone(), serde_json::json!(if key == "hide" { 1.0 } else { 0.0 })))
+            .map(|key| (key.clone(), serde_json::json!(if key == selected { 1.0 } else { 0.0 })))
             .collect::<serde_json::Map<_, _>>();
-        (id.clone(), serde_json::json!({"type":"choice", "choice":"hide", "confidence":1.0, "probabilities":probabilities}))
+        (id.clone(), serde_json::json!({"type":"choice", "choice":selected, "confidence":1.0, "probabilities":probabilities}))
     }).collect::<serde_json::Map<_, _>>();
     ResponseTemplate::new(200).set_body_json(serde_json::json!({
         "model":"decision-serving-model", "answers":answers, "usage":{"input_tokens":30,"output_tokens":3}
@@ -229,144 +230,6 @@ fn app_with_policy(
         })
         .build()?;
     Ok((Arc::new(app), executor))
-}
-
-#[tokio::test]
-async fn native_joint_policy_selects_a_feasible_model_and_preserves_manual_overrides()
--> Result<(), Box<dyn std::error::Error>> {
-    use crate::core::protocol::ModelMode;
-    use bitrouter_sdk::decision_model::policy::GenerationModel;
-    for (mode, byte_limit, price, suitability, failed, expected) in [
-        (
-            ModelMode::Fixed,
-            512 * 1024,
-            100_000,
-            0.99,
-            false,
-            "fixture-model",
-        ),
-        (
-            ModelMode::Policy,
-            512 * 1024,
-            100_000,
-            0.99,
-            false,
-            "efficient-model",
-        ),
-        (ModelMode::Policy, 1, 100_000, 0.99, false, "fixture-model"),
-        (
-            ModelMode::Policy,
-            512 * 1024,
-            9_900_000,
-            0.99,
-            false,
-            "fixture-model",
-        ),
-        (
-            ModelMode::Policy,
-            512 * 1024,
-            100_000,
-            0.5,
-            false,
-            "fixture-model",
-        ),
-        (
-            ModelMode::Policy,
-            512 * 1024,
-            100_000,
-            0.99,
-            true,
-            "fixture-model",
-        ),
-    ] {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/v1/systemone"))
-            .respond_with(move |request: &Request| {
-                if failed {
-                    ResponseTemplate::new(503)
-                } else {
-                    judgment(request, suitability)
-                }
-            })
-            .expect(u64::from(mode == ModelMode::Policy))
-            .mount(&server)
-            .await;
-        let workspace = TempDir::new()?;
-        let policy = DecisionPolicy {
-            generation_models: vec![
-                GenerationModel {
-                    model: "fixture-model".into(),
-                    description: "General coding model".into(),
-                    max_prompt_bytes: 512 * 1024,
-                    input_microusd_per_million: 10_000_000,
-                    output_microusd_per_million: 10_000_000,
-                },
-                GenerationModel {
-                    model: "efficient-model".into(),
-                    description: "Model for routine coding tasks".into(),
-                    max_prompt_bytes: byte_limit,
-                    input_microusd_per_million: price,
-                    output_microusd_per_million: price,
-                },
-            ],
-            ..Default::default()
-        };
-        let (app, executor) = app_with_policy(&server, vec![turn(vec![text("done")])], policy)?;
-        let runner = Agent::new(
-            app,
-            CallerContext::local(),
-            workspace.path(),
-            AgentConfig::fixed("fixture-model", Some(ReasoningEffort::High)).with_model_mode(mode),
-        )?;
-        let (commits, owner) = commit_recorder();
-        let report = runner
-            .run_with_approvals(
-                "Report completion",
-                CancellationToken::new(),
-                None,
-                None,
-                Some(commits),
-                None,
-            )
-            .await;
-        assert_eq!(report.status, RunStatus::Completed, "{}", report.detail);
-        let prompts = executor.prompts.lock().await;
-        assert_eq!(prompts.len(), 1);
-        assert_eq!(
-            prompts[0].params.reasoning_effort,
-            Some(ReasoningEffort::High)
-        );
-        assert_eq!(prompts[0].model, expected);
-        let records = owner.await?;
-        let mut replayed = None;
-        let mut latest = None;
-        for record in &records {
-            if let Some(snapshot) = crate::agent::native::Saved::replay(&mut replayed, record)? {
-                latest = Some(snapshot);
-            }
-        }
-        let state = latest.ok_or("native state missing")?;
-        let execution = state
-            .context_store
-            .executions
-            .values()
-            .next()
-            .ok_or("execution missing")?;
-        assert_eq!(execution.routing.is_some(), mode == ModelMode::Policy);
-        if let Some(routing) = &execution.routing {
-            assert_eq!(routing.selected_model, expected);
-            assert_eq!(routing.candidates.len(), 4);
-            assert_eq!(
-                execution
-                    .model
-                    .as_ref()
-                    .map(|model| model.original_model.as_str()),
-                Some(expected)
-            );
-        }
-    }
-    Ok(())
 }
 
 #[tokio::test]

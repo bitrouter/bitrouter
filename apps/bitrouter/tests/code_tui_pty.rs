@@ -151,7 +151,10 @@ def control_loop(server):
     while True:
         connection, _ = server.accept()
         try:
-            command = connection.recv(128).decode("utf-8").strip()
+            # A stream read can end between the command and its newline. Wait
+            # for the complete frame before acknowledging and closing it.
+            with connection.makefile("rb") as control_input:
+                command = control_input.readline(128).decode("utf-8").strip()
             if command == "release":
                 settle_pending("end_turn", "FXRL")
             elif command == "refusal":

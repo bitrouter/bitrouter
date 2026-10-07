@@ -470,6 +470,7 @@ impl TrajectoryStore {
             sequence,
             kind: TrajectoryEventKind::RequestStarted,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: std::collections::BTreeMap::from([
                     (
                         "correlation.ancestor_prefix_count".to_owned(),
@@ -2292,6 +2293,7 @@ fn build_guarded_route_batch(
         sequence: route_sequence,
         kind: TrajectoryEventKind::RouteIntentRecorded,
         evidence: TrajectoryEvidence {
+            routing_evidence: Vec::new(),
             structural: std::collections::BTreeMap::from([
                 (
                     "route.applied_clause_count".to_owned(),
@@ -2348,6 +2350,7 @@ fn build_guarded_route_batch(
                 .ok_or_else(|| anyhow::anyhow!("guard activation sequence overflow"))?,
             kind: TrajectoryEventKind::GuardActivated,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: std::collections::BTreeMap::from([(
                     "guard.hold_for_requests".to_owned(),
                     input.policy.hold_for_requests,
@@ -5682,6 +5685,7 @@ mod tests {
             sequence,
             kind,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: BTreeMap::from([("request.input_count".into(), 1)]),
                 categorical: BTreeMap::new(),
                 digests: BTreeMap::new(),
@@ -5699,7 +5703,7 @@ mod tests {
             route_event_id: route_event_id.into(),
             guard_event_id: guard_event_id.into(),
             policy_name: "auto:cost".into(),
-            route_projection: "agent_route/v1|code:generation|implement|normal".into(),
+            route_projection: "semantic_route/v1|code:generation|implement|normal".into(),
             request_key: "agent_trace/v2|edit|normal".into(),
             baseline_tier: Some("reference".into()),
             baseline_effort: None,

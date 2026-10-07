@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use bitrouter_sdk::language_model::types::ReasoningEffort;
 
 pub const EVAL_SCHEMA_VERSION: u32 = 1;
-pub const ROUTE_MEASUREMENT_SCHEMA_VERSION: u32 = 1;
+pub const ROUTE_MEASUREMENT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -58,6 +58,7 @@ pub struct EvalExperimentRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteActionCandidate {
+    pub context: bitrouter_sdk::routing::ContextStrategy,
     pub tier: String,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -170,6 +171,21 @@ impl EvalSubject {
         validate_subject(self)?;
         canonical_digest(self)
     }
+}
+
+/// Classification cohorts are commitments to backend revision, rubric and
+/// acceptance threshold. Missing semantic evidence is its own cohort.
+pub(crate) fn classifier_cohorts(subject: &EvalSubject) -> BTreeSet<String> {
+    let mut cohorts = subject
+        .evidence
+        .iter()
+        .filter(|item| item.kind == "routing.assessment")
+        .filter_map(|item| item.attributes.get("classifier_digest").cloned())
+        .collect::<BTreeSet<_>>();
+    if cohorts.is_empty() {
+        cohorts.insert("unassessed".into());
+    }
+    cohorts
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -457,17 +473,20 @@ pub(crate) fn validate_route_measurement_for_experiment(
     Ok(())
 }
 
-fn candidate_key(candidate: &RouteActionCandidate) -> (&str, &str, &str) {
+fn candidate_key(
+    candidate: &RouteActionCandidate,
+) -> (&str, &str, &str, bitrouter_sdk::routing::ContextStrategy) {
     (
         candidate.tier.as_str(),
         candidate.model.as_str(),
         candidate.effort.map_or("inherit", ReasoningEffort::as_str),
+        candidate.context,
     )
 }
 
 fn route_candidate_set_digest(candidates: &[RouteActionCandidate]) -> Result<String> {
     let targets = candidates.iter().map(candidate_key).collect::<Vec<_>>();
-    canonical_digest(&("bitrouter.route-candidate-set.v1", targets))
+    canonical_digest(&("bitrouter.route-candidate-set.v2", targets))
 }
 
 fn validate_model_id(value: &str, field: &str) -> Result<()> {
@@ -735,7 +754,7 @@ mod tests {
         let incomplete = serde_json::json!({
             "decision_id": "decision-1",
             "policy": "auto",
-            "request_key": "agent_route/v1|unknown|implement|normal",
+            "request_key": "semantic_route/v1|unknown|implement|normal",
             "selected_tier": "economy",
             "baseline_tier": "strong",
             "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -748,8 +767,8 @@ mod tests {
         let mut retired = serde_json::json!({
             "decision_id": "decision-1",
             "policy": "auto",
-            "route_projection": "agent_route/v1|code:generation|implement|normal",
-            "request_key": "agent_route/v1|unknown|implement|normal",
+            "route_projection": "semantic_route/v1|code:generation|implement|normal",
+            "request_key": "semantic_route/v1|unknown|implement|normal",
             "selected_tier": "balanced",
             "baseline_tier": "balanced",
             "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -772,7 +791,7 @@ mod tests {
             decision_id: "decision-1".into(),
             policy: "auto".into(),
             route_projection: "x".repeat(513),
-            request_key: "agent_route/v1|unknown|implement|normal".into(),
+            request_key: "semantic_route/v1|unknown|implement|normal".into(),
             selected_tier: "balanced".into(),
             selected_effort: None,
             baseline_tier: Some("balanced".into()),
@@ -790,8 +809,8 @@ mod tests {
         let decision = EvalDecisionRef {
             decision_id: "decision-duplicate".into(),
             policy: "auto".into(),
-            route_projection: "agent_route/v1|unknown|implement|normal".into(),
-            request_key: "agent_route/v1|unknown|implement|normal".into(),
+            route_projection: "semantic_route/v1|unknown|implement|normal".into(),
+            request_key: "semantic_route/v1|unknown|implement|normal".into(),
             selected_tier: "balanced".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
@@ -812,8 +831,8 @@ mod tests {
         let legacy = serde_json::json!({
             "decision_id": "decision-1",
             "policy": "auto",
-            "route_projection": "agent_route/v1|code:generation|implement|normal",
-            "request_key": "agent_route/v1|unknown|implement|normal",
+            "route_projection": "semantic_route/v1|code:generation|implement|normal",
+            "request_key": "semantic_route/v1|unknown|implement|normal",
             "selected_tier": "strong",
             "baseline_tier": "strong",
             "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -851,8 +870,8 @@ mod tests {
         let legacy = serde_json::json!({
             "decision_id": "decision-1",
             "policy": "auto",
-            "route_projection": "agent_route/v1|code:generation|implement|normal",
-            "request_key": "agent_route/v1|unknown|implement|normal",
+            "route_projection": "semantic_route/v1|code:generation|implement|normal",
+            "request_key": "semantic_route/v1|unknown|implement|normal",
             "selected_tier": "balanced",
             "baseline_tier": "balanced",
             "policy_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -863,12 +882,14 @@ mod tests {
 
         let candidates = vec![
             RouteActionCandidate {
+                context: Default::default(),
                 tier: "balanced".into(),
                 model: "bitrouter:balanced".into(),
                 effort: None,
                 logging_probability_ppm: 900_000,
             },
             RouteActionCandidate {
+                context: Default::default(),
                 tier: "economy".into(),
                 model: "bitrouter:economy".into(),
                 effort: Some(ReasoningEffort::Low),
@@ -893,7 +914,7 @@ mod tests {
         });
         decision.route_measurement = Some(measurement.clone());
         let encoded = serde_json::to_value(&decision)?;
-        assert_eq!(encoded["route_measurement"]["schema_version"], 1);
+        assert_eq!(encoded["route_measurement"]["schema_version"], 2);
         assert_eq!(
             encoded["route_measurement"]["logging_action_probability_ppm"],
             100_000
@@ -915,8 +936,8 @@ mod tests {
         let base = EvalDecisionRef {
             decision_id: "decision-1".into(),
             policy: "auto".into(),
-            route_projection: "agent_route/v1|code:generation|implement|normal".into(),
-            request_key: "agent_route/v1|unknown|implement|normal".into(),
+            route_projection: "semantic_route/v1|code:generation|implement|normal".into(),
+            request_key: "semantic_route/v1|unknown|implement|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
@@ -935,12 +956,14 @@ mod tests {
                 None,
                 vec![
                     RouteActionCandidate {
+                        context: Default::default(),
                         tier: "economy".into(),
                         model: "bitrouter:economy".into(),
                         effort: None,
                         logging_probability_ppm: 100_000,
                     },
                     RouteActionCandidate {
+                        context: Default::default(),
                         tier: "strong".into(),
                         model: "bitrouter:strong".into(),
                         effort: None,
@@ -960,18 +983,21 @@ mod tests {
             None,
             vec![
                 RouteActionCandidate {
+                    context: Default::default(),
                     tier: "economy".into(),
                     model: "bitrouter:economy".into(),
                     effort: None,
                     logging_probability_ppm: 100_000,
                 },
                 RouteActionCandidate {
+                    context: Default::default(),
                     tier: "standard".into(),
                     model: "bitrouter:standard".into(),
                     effort: None,
                     logging_probability_ppm: 200_000,
                 },
                 RouteActionCandidate {
+                    context: Default::default(),
                     tier: "strong".into(),
                     model: "bitrouter:strong".into(),
                     effort: None,
@@ -992,12 +1018,14 @@ mod tests {
             None,
             vec![
                 RouteActionCandidate {
+                    context: Default::default(),
                     tier: "balanced".into(),
                     model: "bitrouter:balanced".into(),
                     effort: None,
                     logging_probability_ppm: 750_000,
                 },
                 RouteActionCandidate {
+                    context: Default::default(),
                     tier: "economy".into(),
                     model: "bitrouter:economy".into(),
                     effort: None,

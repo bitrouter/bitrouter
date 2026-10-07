@@ -896,6 +896,9 @@ enum WorkflowStateAction {
         /// Frozen BitRouter config that defines the reliability thresholds.
         #[arg(long)]
         config: PathBuf,
+        /// Named policy supplying reliability thresholds.
+        #[arg(long, default_value = "auto")]
+        policy: String,
         /// Output JSON report path.
         #[arg(long)]
         output: PathBuf,
@@ -3027,6 +3030,7 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
             Ok(())
         }
         WorkflowStateAction::ReliabilityReport {
+            policy,
             database_url,
             config,
             output,
@@ -3044,7 +3048,15 @@ async fn workflow_state_cmd(action: WorkflowStateAction) -> Result<()> {
                 .load_reliability_events()
                 .await
                 .with_context(|| format!("load reliability events from {database_url}"))?;
-            let report = ReliabilityReport::build(&config_document.policy_table.adequacy, &rows)
+            let lock = bitrouter::policy_lock::load_for_config(&config_document, Some(&config))
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("reliability report requires a named policy lock")
+                })?;
+            let policy = lock.document.policies.get(&policy).ok_or_else(|| {
+                anyhow::anyhow!("reliability report policy is absent from the lock")
+            })?;
+            let report = ReliabilityReport::build(&policy.adequacy, &rows)
                 .context("replay provider reliability events")?;
             report
                 .write(&output)
@@ -7694,8 +7706,8 @@ mod tests {
     {
       "decision_id": "decision-1",
       "policy": "auto",
-      "route_projection": "agent_route/v1|code:generation|implement|normal",
-      "request_key": "agent_route/v1|unknown|implement|normal",
+      "route_projection": "semantic_route/v1|code:generation|implement|normal",
+      "request_key": "semantic_route/v1|unknown|implement|normal",
       "selected_tier": "economy",
       "baseline_tier": "strong",
       "policy_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -8325,7 +8337,7 @@ mod tests {
                 observed_subject_digest: None,
                 active_experiment: Some(bitrouter::optimization::exploration::RouteExploration {
                     experiment_id: "experiment-1".into(),
-                    target_request_key: "agent_route/v1|unknown|implement|normal".into(),
+                    target_request_key: "semantic_route/v1|unknown|implement|normal".into(),
                     champion_tier: "strong".into(),
                     challenger_tier: "economy".into(),
                     challenger_exposure_ppm: 100_000,
@@ -8404,8 +8416,8 @@ mod tests {
                 decisions: vec![EvalDecisionRef {
                     decision_id: format!("decision-{subject_id}"),
                     policy: "auto".into(),
-                    route_projection: "agent_route/v1|unknown|implement|normal".into(),
-                    request_key: "agent_route/v1|unknown|implement|normal".into(),
+                    route_projection: "semantic_route/v1|unknown|implement|normal".into(),
+                    request_key: "semantic_route/v1|unknown|implement|normal".into(),
                     selected_tier: "strong".into(),
                     selected_effort: None,
                     baseline_tier: None,
@@ -8607,8 +8619,8 @@ mod tests {
                 decisions: vec![EvalDecisionRef {
                     decision_id: format!("decision-{subject_id}"),
                     policy: "auto".into(),
-                    route_projection: "agent_route/v1|unknown|implement|normal".into(),
-                    request_key: "agent_route/v1|unknown|implement|normal".into(),
+                    route_projection: "semantic_route/v1|unknown|implement|normal".into(),
+                    request_key: "semantic_route/v1|unknown|implement|normal".into(),
                     selected_tier: "strong".into(),
                     selected_effort: None,
                     baseline_tier: None,
@@ -9143,11 +9155,13 @@ mod tests {
             Some(Command::WorkflowState {
                 action:
                     WorkflowStateAction::ReliabilityReport {
+                        policy,
                         database_url,
                         config,
                         output,
                     },
             }) => {
+                assert_eq!(policy, "auto");
                 assert_eq!(database_url, "sqlite:///tmp/bitrouter.db");
                 assert_eq!(config, PathBuf::from("/tmp/bitrouter.yaml"));
                 assert_eq!(output, PathBuf::from("/tmp/reliability.json"));

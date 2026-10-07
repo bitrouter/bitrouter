@@ -124,13 +124,13 @@ pub(super) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
 }
 
 impl CoreSession {
-    pub(super) async fn compile_context(
+    pub(super) async fn prepare_context(
         &self,
         agent_id: &str,
         step_id: &str,
         original: Prompt,
         control: &StepControl,
-    ) -> Result<Prompt, CoreError> {
+    ) -> Result<Option<bitrouter_sdk::routing::preparation::Prepared>, CoreError> {
         let snapshot = self.snapshot().await;
         let agent = snapshot
             .agents
@@ -140,10 +140,13 @@ impl CoreSession {
             .turn
             .as_ref()
             .ok_or_else(|| reject(ErrorCode::Busy, "context task is absent"))?;
-        if !enabled(&snapshot)
-            || turn.input.routing.context != super::super::protocol::ContextMode::Auto
-        {
-            return Ok(original);
+        if !enabled(&snapshot) {
+            return Ok(Some(
+                bitrouter_sdk::routing::preparation::Prepared::from_prompt(
+                    &original, None, step_id,
+                )
+                .await,
+            ));
         }
         let task_id = turn.agent_turn_id.clone();
         let run_id = turn.run_id.clone();
@@ -232,18 +235,25 @@ impl CoreSession {
         }
         let mut candidates =
             CandidateSet::prepare(&store, &task_id, ordered, &snapshot.manifest, &policy)?;
-        if turn.input.routing.model == crate::core::protocol::ModelMode::Policy {
-            crate::core::context_router::models::candidates(
-                &mut candidates,
-                &policy,
-                &original.model,
-            );
-        }
+        let mut semantic_prompt = original.clone();
+        semantic_prompt.system = Some(agent.required_instructions.join("\n"));
+        let mut input = bitrouter_sdk::routing::input::Input::from_prompt(
+            &semantic_prompt,
+            policy.max_request_bytes / 4,
+        );
+        input.task = Some(bitrouter_sdk::routing::input::Task {
+            objective: turn.input.text.clone(),
+            acceptance_criteria: turn.input.acceptance_criteria.clone(),
+        });
         let mut decision_id = None;
         let mut response = None;
         let mut reason = "conservative_context";
-        if let Some(runtime) = runtime
-            && let Some(request) = candidates.request(&store, &runtime.model, &policy)?
+        let needs_assessment = turn.input.routing.model == crate::core::protocol::ModelMode::Policy
+            || (turn.input.routing.context == crate::core::protocol::ContextMode::Auto
+                && !candidates.candidates.is_empty());
+        if needs_assessment
+            && let Some(runtime) = runtime
+            && let Some(request) = candidates.request(&store, &runtime.model, &policy, &input)?
         {
             let request_sha256 = digest(&request)?;
             let prior = store.decisions.values().find(|receipt| {
@@ -374,25 +384,21 @@ impl CoreSession {
                 hard_limit_bytes,
             },
         )?;
-        let full = if candidates.models.is_empty() {
-            None
-        } else {
-            match candidates.compile(
-                &store,
-                &original,
-                CompileOptions {
-                    source: source.clone(),
-                    policy: &policy,
-                    response: None,
-                    decision_id: decision_id.clone(),
-                    reason: "full_context_candidate",
-                    hard_limit_bytes,
-                },
-            ) {
-                Ok(full) => Some(full),
-                Err(error) if error.code == ErrorCode::NoFeasibleRoute => None,
-                Err(error) => return Err(error),
-            }
+        let full = match candidates.compile(
+            &store,
+            &original,
+            CompileOptions {
+                source: source.clone(),
+                policy: &policy,
+                response: None,
+                decision_id: decision_id.clone(),
+                reason: "full_context_candidate",
+                hard_limit_bytes,
+            },
+        ) {
+            Ok(full) => Some(full),
+            Err(error) if error.code == ErrorCode::NoFeasibleRoute => None,
+            Err(error) => return Err(error),
         };
         let previous = store
             .work
@@ -404,22 +410,109 @@ impl CoreSession {
                     .values()
                     .find(|execution| &execution.view_id == view)
             })
-            .and_then(|execution| execution.model.as_ref());
-        let (view, prompt, routing) = crate::core::context_router::models::select(
-            &candidates,
-            &original.model,
-            routed,
-            full,
-            crate::core::context_router::models::Options {
-                policy: &policy,
-                response: response.as_ref(),
-                previous,
-                hard_limit_bytes,
+            .and_then(|execution| execution.model.clone());
+        let mut offered = vec![("routed", routed)];
+        if let Some(full) = full {
+            offered.push(("full", full));
+        }
+        let views = offered
+            .iter()
+            .map(|(id, (view, prompt))| crate::core::context_router::models::view(id, view, prompt))
+            .collect();
+        let current = self.snapshot().await;
+        let receipt = decision_id
+            .as_ref()
+            .and_then(|id| current.context_store.decisions.get(id))
+            .map(|receipt| {
+                let outcome = receipt.outcome.as_ref();
+                let usage = outcome.and_then(|outcome| match outcome {
+                    Ok(response) => Some(response.usage),
+                    Err(error) => error.usage,
+                });
+                let decoded = outcome
+                    .and_then(|outcome| outcome.as_ref().ok())
+                    .map(|response| {
+                        bitrouter_sdk::routing::assessment::decode(
+                            &receipt.request,
+                            response,
+                            policy.confidence_threshold,
+                        )
+                    });
+                let (assessment, error) = match decoded {
+                    Some(Ok(value)) => (Some(value), None),
+                    Some(Err(error)) => (None, Some(error)),
+                    None => (
+                        None,
+                        outcome.and_then(|outcome| outcome.as_ref().err()).cloned(),
+                    ),
+                };
+                bitrouter_sdk::routing::preparation::Receipt {
+                    id: receipt.decision_id.clone(),
+                    assessment,
+                    error,
+                    usage,
+                }
+            });
+        *control.routing_pending.lock().await = Some(Pending {
+            source,
+            task_id,
+            decision_id,
+            reason: reason.into(),
+            views: offered
+                .into_iter()
+                .map(|(id, (view, _))| (id.into(), view))
+                .collect(),
+        });
+        Ok(Some(bitrouter_sdk::routing::preparation::Prepared {
+            receipt,
+            views,
+            policy,
+            previous,
+            hard_limit_bytes,
+            capabilities: if turn.input.routing.context == super::super::protocol::ContextMode::Auto
+            {
+                std::collections::BTreeSet::from([
+                    bitrouter_sdk::routing::ContextCapability::OmitEvidence,
+                    bitrouter_sdk::routing::ContextCapability::UseExtract,
+                    bitrouter_sdk::routing::ContextCapability::UseSummary,
+                    bitrouter_sdk::routing::ContextCapability::RecallEvidence,
+                ])
+            } else {
+                Default::default()
             },
-        )?;
+        }))
+    }
+
+    pub(super) async fn commit_context(
+        &self,
+        agent_id: &str,
+        step_id: &str,
+        pending: Pending,
+        plan: &bitrouter_sdk::routing::plan::Plan,
+    ) -> Result<(), CoreError> {
+        let Pending {
+            source,
+            task_id,
+            decision_id,
+            reason,
+            mut views,
+        } = pending;
+        let mut view = views
+            .remove(&plan.selection.selected_context)
+            .ok_or_else(|| {
+                reject(
+                    ErrorCode::OperationConflict,
+                    "selected context was not offered",
+                )
+            })?;
+        let prompt = &plan.prompt;
+        view.prompt_sha256 = digest(prompt)?;
+        view.prompt_bytes = serde_json::to_vec(prompt).map_err(json_error)?.len();
+        view.view_id = crate::core::context_router::planner::view_identity(&view)?;
+        let routing = Some(plan.selection.clone());
         self.transition_for(Some(agent_id), "context.view.applied", |state, _| {
             validate_decision_source(state, agent_id, step_id, &source)?;
-            let manifest = ContextManifest::capture(state, agent_id, &prompt)?;
+            let manifest = ContextManifest::capture(state, agent_id, prompt)?;
             current_step(state, agent_id, step_id)?.context = manifest;
             let work =
                 state.context_store.work.get_mut(&task_id).ok_or_else(|| {
@@ -461,8 +554,16 @@ impl CoreSession {
             )
         })
         .await?;
-        Ok(prompt)
+        Ok(())
     }
+}
+
+pub(super) struct Pending {
+    source: SourceRevision,
+    task_id: String,
+    decision_id: Option<String>,
+    reason: String,
+    views: std::collections::BTreeMap<String, crate::core::context_router::planner::ContextView>,
 }
 
 fn validate_decision_source(

@@ -306,6 +306,7 @@ pub fn select_opportunity(
 }
 
 pub fn prepare_step(input: OptimizationStepInput<'_>) -> Result<OptimizationStep> {
+    crate::policy_compile::validate_eval_action_treatments(input.active_policy, input.eval)?;
     let observed_subject_digest = observed_subject_digest(input.eval)?;
     let active_exploration = input
         .active_policy
@@ -354,7 +355,6 @@ pub fn prepare_step(input: OptimizationStepInput<'_>) -> Result<OptimizationStep
         source_snapshot_time_unix_ms: chrono::DateTime::parse_from_rfc3339(&input.eval.frozen_at)
             .context("eval snapshot frozen_at must be RFC3339")?
             .timestamp_millis(),
-        migration: None,
         compiler: CompilerIdentity {
             id: HISTORY_OPTIMIZER_ID.into(),
             version: HISTORY_OPTIMIZER_VERSION,
@@ -383,6 +383,7 @@ pub fn prepare_step(input: OptimizationStepInput<'_>) -> Result<OptimizationStep
     certificates.insert(
         target.request_key.clone(),
         PolicyCertificate {
+            classifier_digest: None,
             owner: RouteOwner::Compiler,
             selected_tier: target.champion_tier.clone(),
             baseline_tier: Some(target.champion_tier.clone()),
@@ -397,7 +398,6 @@ pub fn prepare_step(input: OptimizationStepInput<'_>) -> Result<OptimizationStep
             evaluator_config_digest: input.options.evaluator_config_digest.clone(),
             compiler_config_digest,
             evidence_digest: observed_subject_digest.clone(),
-            legacy: None,
         },
     );
 
@@ -434,6 +434,7 @@ fn prepare_active_step(
         CohortGateVerdict::Pass
         | CohortGateVerdict::InsufficientEvidence
         | CohortGateVerdict::QualityFailed
+        | CohortGateVerdict::AmbiguousClassifier
         | CohortGateVerdict::AmbiguousEvaluator
             if budget_reached =>
         {
@@ -442,6 +443,7 @@ fn prepare_active_step(
         CohortGateVerdict::Pass
         | CohortGateVerdict::InsufficientEvidence
         | CohortGateVerdict::QualityFailed
+        | CohortGateVerdict::AmbiguousClassifier
         | CohortGateVerdict::AmbiguousEvaluator => ControllerAction::Hold,
     };
     let target = HistoricalOpportunity {
@@ -606,7 +608,6 @@ fn successor_artifact(
         source_snapshot_time_unix_ms: chrono::DateTime::parse_from_rfc3339(&input.eval.frozen_at)
             .context("eval snapshot frozen_at must be RFC3339")?
             .timestamp_millis(),
-        migration: None,
         compiler: CompilerIdentity {
             id: HISTORY_OPTIMIZER_ID.into(),
             version: HISTORY_OPTIMIZER_VERSION,
@@ -628,6 +629,7 @@ fn cohort_certificate(
         i64::from(assessment.challenger.pass_rate_ppm.unwrap_or_default());
     let normalized_cost_delta_ppm = normalized_cost_delta(assessment)?;
     Ok(PolicyCertificate {
+        classifier_digest: assessment.classifier_digest.clone(),
         owner: RouteOwner::Compiler,
         selected_tier,
         baseline_tier: Some(baseline_tier),
@@ -651,7 +653,6 @@ fn cohort_certificate(
         evaluator_config_digest: assessment.evaluator_config_digest.clone(),
         compiler_config_digest,
         evidence_digest,
-        legacy: None,
     })
 }
 
@@ -1111,29 +1112,29 @@ mod tests {
 
     fn lock() -> PolicyLock {
         let request_keys = [
-            "agent_route/v1|unknown|verify|normal",
-            "agent_route/v1|unknown|implement|normal",
-            "agent_route/v1|code:review|verify|normal",
-            "agent_route/v1|unknown|orchestrate|normal",
-            "agent_route/v1|agent:multi_step_planning|orchestrate|normal",
-            "agent_route/v1|unknown|verify|guarded",
-            "agent_route/v1|code:debugging|implement|normal",
-            "agent_route/v1|unknown|finalize|normal",
+            "semantic_route/v1|unknown|verify|normal",
+            "semantic_route/v1|unknown|implement|normal",
+            "semantic_route/v1|code:review|verify|normal",
+            "semantic_route/v1|unknown|orchestrate|normal",
+            "semantic_route/v1|agent:multi_step_planning|orchestrate|normal",
+            "semantic_route/v1|unknown|verify|guarded",
+            "semantic_route/v1|code:debugging|implement|normal",
+            "semantic_route/v1|unknown|finalize|normal",
         ];
         let mut policy = PolicyDefinition::default();
         policy.tiers.insert(
             "strong".into(),
-            PolicyModelTarget::Model("strong-model".into()),
+            PolicyModelTarget::model_only("strong-model".into()),
         );
         policy.tiers.insert(
             "economy".into(),
-            PolicyModelTarget::Model("economy-model".into()),
+            PolicyModelTarget::model_only("economy-model".into()),
         );
         for request_key in request_keys {
             policy.routes.insert(request_key.into(), "strong".into());
         }
         policy.routes.insert(
-            "agent_route/v1|agent:multi_step_planning|orchestrate|normal".into(),
+            "semantic_route/v1|agent:multi_step_planning|orchestrate|normal".into(),
             "economy".into(),
         );
         policy.predictor = Some(compiled_predictor_contract());
@@ -1149,14 +1150,15 @@ mod tests {
                 (
                     request_key.into(),
                     PolicyCertificate {
-                        owner: if request_key == "agent_route/v1|unknown|orchestrate|normal" {
+                        classifier_digest: None,
+                        owner: if request_key == "semantic_route/v1|unknown|orchestrate|normal" {
                             RouteOwner::Operator
                         } else {
                             RouteOwner::Compiler
                         },
                         selected_tier,
                         baseline_tier: None,
-                        source: if request_key == "agent_route/v1|unknown|orchestrate|normal" {
+                        source: if request_key == "semantic_route/v1|unknown|orchestrate|normal" {
                             CertificateSource::Operator
                         } else {
                             CertificateSource::TaskNative
@@ -1171,7 +1173,6 @@ mod tests {
                         evaluator_config_digest: None,
                         compiler_config_digest: CONFIG_DIGEST.into(),
                         evidence_digest: SNAPSHOT_ROOT.into(),
-                        legacy: None,
                     },
                 )
             })
@@ -1283,18 +1284,22 @@ mod tests {
     fn snapshot() -> EvalEvidenceSnapshot {
         let mut records = Vec::new();
         let ranked = [
-            ("agent_route/v1|unknown|verify|normal", 900, 4),
-            ("agent_route/v1|unknown|implement|normal", 500, 5),
-            ("agent_route/v1|code:review|verify|normal", 900, 3),
-            ("agent_route/v1|unknown|orchestrate|normal", 2_000, 5),
+            ("semantic_route/v1|unknown|verify|normal", 900, 4),
+            ("semantic_route/v1|unknown|implement|normal", 500, 5),
+            ("semantic_route/v1|code:review|verify|normal", 900, 3),
+            ("semantic_route/v1|unknown|orchestrate|normal", 2_000, 5),
             (
-                "agent_route/v1|agent:multi_step_planning|orchestrate|normal",
+                "semantic_route/v1|agent:multi_step_planning|orchestrate|normal",
                 1_900,
                 5,
             ),
-            ("agent_route/v1|unknown|verify|guarded", 1_800, 5),
-            ("agent_route/v1|code:debugging|implement|normal", 1_700, 0),
-            ("agent_route/v1|unknown|finalize|normal", 1_600, 5),
+            ("semantic_route/v1|unknown|verify|guarded", 1_800, 5),
+            (
+                "semantic_route/v1|code:debugging|implement|normal",
+                1_700,
+                0,
+            ),
+            ("semantic_route/v1|unknown|finalize|normal", 1_600, 5),
         ];
         for (request_key, cost, units) in ranked {
             records.push(request_record(
@@ -1322,7 +1327,7 @@ mod tests {
             policy.optimization = Some(PolicyOptimizationState {
                 active: Some(crate::optimization::exploration::RouteExploration {
                     experiment_id: EXPERIMENT_ID.into(),
-                    target_request_key: "agent_route/v1|unknown|implement|normal".into(),
+                    target_request_key: "semantic_route/v1|unknown|implement|normal".into(),
                     champion_tier: "strong".into(),
                     challenger_tier: "economy".into(),
                     challenger_exposure_ppm: 100_000,
@@ -1347,7 +1352,7 @@ mod tests {
         cost: i64,
         hard_violation: bool,
     ) -> EvalEvidenceRecord {
-        let mut record = unit_record("agent_route/v1|unknown|implement|normal", subject_id);
+        let mut record = unit_record("semantic_route/v1|unknown|implement|normal", subject_id);
         record.subject.decisions[0].selected_tier = match arm {
             ExperimentArm::Control => "strong",
             ExperimentArm::Challenger => "economy",
@@ -1422,7 +1427,7 @@ mod tests {
         };
         let rejected_context = treatment_context_digest(
             "auto",
-            "agent_route/v1|unknown|finalize|normal",
+            "semantic_route/v1|unknown|finalize|normal",
             "strong",
             "economy",
             100_000,
@@ -1435,7 +1440,7 @@ mod tests {
             active: None,
             rejections: vec![RouteRejection {
                 experiment_id: SNAPSHOT_ROOT.into(),
-                target_request_key: Some("agent_route/v1|unknown|finalize|normal".into()),
+                target_request_key: Some("semantic_route/v1|unknown|finalize|normal".into()),
                 treatment_context_digest: Some(rejected_context),
                 treatment: None,
                 experiment_parent_digest: None,
@@ -1455,7 +1460,10 @@ mod tests {
         })?
         .ok_or_else(|| anyhow::anyhow!("expected one eligible historical opportunity"))?;
 
-        assert_eq!(selected.request_key, "agent_route/v1|unknown|verify|normal");
+        assert_eq!(
+            selected.request_key,
+            "semantic_route/v1|unknown|verify|normal"
+        );
         assert_eq!(selected.observed_cost_micro_usd, 900);
         assert_eq!(selected.independent_units, 4);
         Ok(())
@@ -1498,7 +1506,7 @@ mod tests {
     #[test]
     fn request_result_multiplicity_does_not_change_opportunity_ranking() -> Result<()> {
         let repeated = request_record(
-            "agent_route/v1|unknown|implement|normal",
+            "semantic_route/v1|unknown|implement|normal",
             "shared-request-subject",
             Some(600),
         );
@@ -1515,12 +1523,12 @@ mod tests {
             repeated,
             duplicate_result,
             request_record(
-                "agent_route/v1|unknown|verify|normal",
+                "semantic_route/v1|unknown|verify|normal",
                 "larger-request-subject",
                 Some(1_000),
             ),
-            unit_record("agent_route/v1|unknown|implement|normal", "edit-task"),
-            unit_record("agent_route/v1|unknown|verify|normal", "verify-task"),
+            unit_record("semantic_route/v1|unknown|implement|normal", "edit-task"),
+            unit_record("semantic_route/v1|unknown|verify|normal", "verify-task"),
         ];
         let snapshot = EvalEvidenceSnapshot {
             evidence_root: SNAPSHOT_ROOT.into(),
@@ -1539,7 +1547,10 @@ mod tests {
         })?
         .ok_or_else(|| anyhow::anyhow!("expected one opportunity"))?;
 
-        assert_eq!(selected.request_key, "agent_route/v1|unknown|verify|normal");
+        assert_eq!(
+            selected.request_key,
+            "semantic_route/v1|unknown|verify|normal"
+        );
         assert_eq!(selected.observed_cost_micro_usd, 1_000);
         records.reverse();
         let reversed = EvalEvidenceSnapshot {
@@ -1562,8 +1573,8 @@ mod tests {
 
     #[test]
     fn opportunity_uses_primary_route_projection_over_matched_fallback() -> Result<()> {
-        let route_projection = "agent_route/v1|code:debugging|implement|normal";
-        let matched_fallback = "agent_route/v1|unknown|implement|normal";
+        let route_projection = "semantic_route/v1|code:debugging|implement|normal";
+        let matched_fallback = "semantic_route/v1|unknown|implement|normal";
         let mut lock = lock();
         let policy = lock
             .policies
@@ -1601,8 +1612,8 @@ mod tests {
 
     #[test]
     fn opportunity_uses_matched_fallback_without_a_default_route() -> Result<()> {
-        let route_projection = "agent_route/v1|code:debugging|implement|normal";
-        let matched_fallback = "agent_route/v1|unknown|implement|normal";
+        let route_projection = "semantic_route/v1|code:debugging|implement|normal";
+        let matched_fallback = "semantic_route/v1|unknown|implement|normal";
         let mut lock = lock();
         let policy = lock
             .policies
@@ -1638,8 +1649,8 @@ mod tests {
 
     #[test]
     fn opportunity_rejects_inconsistent_matched_fallback_evidence() -> Result<()> {
-        let route_projection = "agent_route/v1|code:debugging|implement|normal";
-        let mismatched_fallback = "agent_route/v1|unknown|verify|normal";
+        let route_projection = "semantic_route/v1|code:debugging|implement|normal";
+        let mismatched_fallback = "semantic_route/v1|unknown|verify|normal";
         let mut lock = lock();
         let policy = lock
             .policies
@@ -1672,8 +1683,8 @@ mod tests {
 
     #[test]
     fn opportunity_rejects_inconsistent_fallback_baseline_tier() -> Result<()> {
-        let route_projection = "agent_route/v1|code:debugging|implement|normal";
-        let matched_fallback = "agent_route/v1|unknown|implement|normal";
+        let route_projection = "semantic_route/v1|code:debugging|implement|normal";
+        let matched_fallback = "semantic_route/v1|unknown|implement|normal";
         let mut lock = lock();
         let policy = lock
             .policies
@@ -1708,8 +1719,8 @@ mod tests {
 
     #[test]
     fn opportunity_respects_an_operator_owned_matched_fallback() -> Result<()> {
-        let route_projection = "agent_route/v1|code:debugging|implement|normal";
-        let matched_fallback = "agent_route/v1|unknown|implement|normal";
+        let route_projection = "semantic_route/v1|code:debugging|implement|normal";
+        let matched_fallback = "semantic_route/v1|unknown|implement|normal";
         let mut lock = lock();
         let policy = lock
             .policies
@@ -1751,7 +1762,7 @@ mod tests {
 
     #[test]
     fn pruning_preserves_explicit_operator_and_other_compiler_certificates() -> Result<()> {
-        let request_key = "agent_route/v1|unknown|implement|normal";
+        let request_key = "semantic_route/v1|unknown|implement|normal";
         let mut explicit = lock();
         let artifact = explicit
             .artifact
@@ -1886,7 +1897,7 @@ mod tests {
         assert_eq!(
             successor_policy
                 .routes
-                .get("agent_route/v1|unknown|implement|normal"),
+                .get("semantic_route/v1|unknown|implement|normal"),
             Some(&"economy".to_string())
         );
         assert!(
@@ -1904,7 +1915,7 @@ mod tests {
         assert_eq!(artifact.compiler.id, "bitrouter-history-optimizer");
         assert_eq!(
             successor
-                .certificate("auto", "agent_route/v1|unknown|implement|normal")
+                .certificate("auto", "semantic_route/v1|unknown|implement|normal")
                 .map(|certificate| certificate.verdict),
             Some(PromotionVerdict::Promote)
         );
@@ -1958,15 +1969,14 @@ mod tests {
             .successor
             .ok_or_else(|| anyhow::anyhow!("retreat must create a successor"))?;
         assert_eq!(
-            successor
-                .policies
-                .get("auto")
-                .and_then(|policy| policy.routes.get("agent_route/v1|unknown|implement|normal")),
+            successor.policies.get("auto").and_then(|policy| policy
+                .routes
+                .get("semantic_route/v1|unknown|implement|normal")),
             Some(&"strong".to_string())
         );
         assert_eq!(
             successor
-                .certificate("auto", "agent_route/v1|unknown|implement|normal")
+                .certificate("auto", "semantic_route/v1|unknown|implement|normal")
                 .map(|certificate| certificate.verdict),
             Some(PromotionVerdict::Blocked)
         );
@@ -2130,7 +2140,7 @@ mod tests {
         let mut history = snapshot();
         history.records.retain(|record| {
             record.subject.decisions.iter().any(|decision| {
-                decision.route_projection == "agent_route/v1|code:review|verify|normal"
+                decision.route_projection == "semantic_route/v1|code:review|verify|normal"
             })
         });
         set_snapshot_policy_digest(&mut history, &initial_digest);
@@ -2160,9 +2170,9 @@ mod tests {
         set_snapshot_policy_digest(&mut experiment_history, &exploration_digest);
         for record in &mut experiment_history.records {
             record.subject.decisions[0].route_projection =
-                "agent_route/v1|code:review|verify|normal".into();
+                "semantic_route/v1|code:review|verify|normal".into();
             record.subject.decisions[0].request_key =
-                "agent_route/v1|code:review|verify|normal".into();
+                "semantic_route/v1|code:review|verify|normal".into();
             if let Some(experiment) = record.subject.decisions[0].experiment.as_mut() {
                 experiment.experiment_id = experiment_id.clone();
             }
@@ -2259,8 +2269,8 @@ mod file_tests {
     };
     use crate::workflow_state::predictive::compiled_predictor_contract;
 
-    const REQUEST_KEY: &str = "agent_route/v1|unknown|implement|normal";
-    const SECOND_REQUEST_KEY: &str = "agent_route/v1|code:generation|verify|normal";
+    const REQUEST_KEY: &str = "semantic_route/v1|unknown|implement|normal";
+    const SECOND_REQUEST_KEY: &str = "semantic_route/v1|code:generation|verify|normal";
     const SHA: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     struct Harness {
@@ -2293,11 +2303,11 @@ mod file_tests {
                 tiers: BTreeMap::from([
                     (
                         "strong".into(),
-                        PolicyModelTarget::Model("strong-model".into()),
+                        PolicyModelTarget::model_only("strong-model".into()),
                     ),
                     (
                         "economy".into(),
-                        PolicyModelTarget::Model("economy-model".into()),
+                        PolicyModelTarget::model_only("economy-model".into()),
                     ),
                 ]),
                 default_tier: Some("strong".into()),
@@ -2307,6 +2317,7 @@ mod file_tests {
             policy.predictor = Some(compiled_predictor_contract());
             policy.adequacy.explore_tier = Some("economy".into());
             let certificate = PolicyCertificate {
+                classifier_digest: None,
                 owner: RouteOwner::Compiler,
                 selected_tier: "strong".into(),
                 baseline_tier: None,
@@ -2321,7 +2332,6 @@ mod file_tests {
                 evaluator_config_digest: None,
                 compiler_config_digest: SHA.into(),
                 evidence_digest: SHA.into(),
-                legacy: None,
             };
             let lock = PolicyLock {
                 policies: BTreeMap::from([("auto".into(), policy)]),
@@ -2599,7 +2609,9 @@ mod file_tests {
                                 experiment_id: exploration.experiment_id.clone(),
                                 arm,
                                 assignment_unit: ExperimentAssignmentUnit::Task,
-                                assignment_id_digest: SHA.into(),
+                                assignment_id_digest: crate::eval::types::canonical_digest(
+                                    &subject_id,
+                                )?,
                                 challenger_propensity_ppm: exploration.challenger_exposure_ppm,
                             }),
                             route_measurement: None,
@@ -2801,7 +2813,7 @@ mod file_tests {
             .get_mut("auto")
             .context("retreated certificates are missing")?
             .insert(
-                "agent_route/v1|code:generation|verify|normal".into(),
+                "semantic_route/v1|code:generation|verify|normal".into(),
                 copied,
             );
         let forged_error = validate_document(&forged)

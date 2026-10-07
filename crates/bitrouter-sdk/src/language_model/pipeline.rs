@@ -300,6 +300,7 @@ pub struct Pipeline {
     pub(crate) router_preparation_hooks: Vec<Arc<dyn PreRequestHook>>,
     pub(crate) pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
     pub(crate) route_hooks: Vec<Arc<dyn RouteHook>>,
+    pub(crate) decision_model: Option<crate::decision_model::DecisionRuntime>,
     pub(crate) model_selectors: Vec<Arc<dyn crate::language_model::routing::ModelSelector>>,
     pub(crate) execution_hooks: Vec<Arc<dyn ExecutionHook>>,
     pub(crate) stream_hooks: Vec<Arc<dyn StreamHook>>,
@@ -1682,6 +1683,41 @@ impl Pipeline {
             ));
         }
         let resolution = binding.resolution;
+        if selection != Some(NativeModelSelection::Fixed)
+            && let Some(policy) = resolution.policy.as_deref()
+        {
+            for selector in &self.model_selectors {
+                selector
+                    .prepare_selection(policy, resolution.variant.as_deref(), ctx)
+                    .await?;
+            }
+        }
+        let native = preparation_runtime(ctx);
+        let prepared =
+            if let Some(prepared) = ctx.extension::<crate::routing::preparation::Prepared>() {
+                Some(prepared.as_ref().clone())
+            } else {
+                match native.as_ref() {
+                    Some(native) => native.control.prepare_routing(ctx.prompt()).await?,
+                    None => None,
+                }
+            };
+        let prepared = match prepared {
+            Some(prepared) => prepared,
+            None => {
+                crate::routing::preparation::Prepared::from_prompt(
+                    ctx.prompt(),
+                    resolution.policy.as_ref().and(self.decision_model.as_ref()),
+                    ctx.request_id(),
+                )
+                .await
+            }
+        };
+        prepared.validate_for(ctx.prompt())?;
+        if let Some(receipt) = &prepared.receipt {
+            ctx.emit(receipt.clone());
+        }
+        ctx.insert_extension(Arc::new(prepared));
         ctx.set_model(resolution.clean_model);
         if selection != Some(NativeModelSelection::Fixed)
             && let Some(policy) = resolution.policy.as_deref()
@@ -1700,6 +1736,55 @@ impl Pipeline {
         if let Some(effort) = manual_effort {
             ctx.preserve_caller_effort(effort);
         }
+
+        let prepared = ctx
+            .extension::<crate::routing::preparation::Prepared>()
+            .ok_or_else(|| BitrouterError::internal("routing preparation vanished"))?;
+        let mut views = prepared.views.clone();
+        for view in &mut views {
+            view.prompt.params.reasoning_effort = ctx.prompt().params.reasoning_effort;
+            view.prompt.params.reasoning_effort_source =
+                ctx.prompt().params.reasoning_effort_source;
+        }
+        let model = crate::routing::plan::AdmittedModel {
+            model: crate::routing::plan::Model {
+                model: ctx.model().into(),
+                max_prompt_bytes: prepared.hard_limit_bytes,
+                input_microusd_per_million: None,
+                output_microusd_per_million: None,
+            },
+            admitted: true,
+        };
+        let plan = crate::routing::plan::select(
+            &[model],
+            ctx.model(),
+            &views,
+            crate::routing::plan::Options {
+                strategy: ctx
+                    .extension::<crate::routing::ContextStrategy>()
+                    .as_deref()
+                    .copied()
+                    .unwrap_or_default(),
+                policy: crate::routing::plan::CostPolicy {
+                    minimum_savings_fraction: prepared.policy.minimum_savings_fraction,
+                    model_switch_penalty_microusd: prepared.policy.model_switch_penalty_microusd,
+                    prefix_loss_penalty_microusd_per_kib: prepared
+                        .policy
+                        .prefix_loss_penalty_microusd_per_kib,
+                },
+                previous: prepared.previous.as_ref(),
+                hard_limit_bytes: prepared.hard_limit_bytes,
+                capabilities: &prepared.capabilities,
+            },
+        )?;
+        let context_changed = plan.prompt.messages != ctx.prompt().messages
+            || plan.prompt.system != ctx.prompt().system;
+        if let Some(native) = &native {
+            native.control.commit_routing(&plan).await?;
+        }
+        ctx.apply_routing_prompt(plan.prompt.clone());
+        ctx.emit(plan.selection.clone());
+        ctx.insert_extension(Arc::new(plan.selection));
 
         // Supply actual prompt requirements to the shared routing table. The
         // configured catalog carries positive observations; omitted declarations
@@ -1770,7 +1855,43 @@ impl Pipeline {
                 ctx.model()
             )));
         }
+        if ctx.model() != plan.prompt.model || ctx.prompt() != &plan.prompt {
+            return Err(BitrouterError::bad_request(
+                "route hook changed the frozen routing prompt",
+            ));
+        }
         ctx.route_chain = Some(chain.clone());
+        if context_changed {
+            for hook in self
+                .pre_resolution_hooks
+                .iter()
+                .chain(&self.router_preparation_hooks)
+                .chain(&self.pre_request_hooks)
+            {
+                match observe_pipeline(
+                    preparation_runtime(ctx),
+                    ctx.request_id().into(),
+                    NativePreparationWorkKind::PreRequestHook,
+                    hook.revalidate_context(ctx),
+                )
+                .await?
+                {
+                    HookDecision::Allow => {}
+                    HookDecision::Deny(reason) => return Err(reason.into()),
+                }
+            }
+            self.run_request_checks(ctx, &resolution.request_checks, None)
+                .await?;
+            for hook in &self.route_hooks {
+                observe_pipeline(
+                    preparation_runtime(ctx),
+                    ctx.request_id().into(),
+                    NativePreparationWorkKind::RouteHook,
+                    hook.revalidate_context(&chain, ctx),
+                )
+                .await?;
+            }
+        }
         Ok(chain)
     }
 

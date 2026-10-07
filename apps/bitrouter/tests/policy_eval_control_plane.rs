@@ -11,7 +11,7 @@ use bitrouter::eval::types::{
     EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict, EvaluationResult,
     EvaluatorIdentity, EvaluatorKind, evidence_digest,
 };
-use bitrouter::policy_compile::{CompileInput, LegacyAdequacySnapshot, compile_candidate};
+use bitrouter::policy_compile::{CompileInput, compile_candidate};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
 use bitrouter::workflow_state::response_observer::PredictiveResponseObserver;
 use bitrouter_sdk::caller::CallerContext;
@@ -25,8 +25,6 @@ use bitrouter_sdk::language_model::{
 
 fn base_lock() -> PolicyLock {
     PolicyLock {
-        lockfile_version: 1,
-        artifact: None,
         policies: BTreeMap::from([(
             "auto".to_string(),
             PolicyDefinition {
@@ -40,7 +38,7 @@ fn base_lock() -> PolicyLock {
                 ..PolicyDefinition::default()
             },
         )]),
-        certificates: BTreeMap::new(),
+        ..Default::default()
     }
 }
 
@@ -62,17 +60,10 @@ presets:
     )?;
     let active = base_lock();
     std::fs::write(&active_path, deterministic_yaml(&active)?)?;
-    let legacy = LegacyAdequacySnapshot {
-        snapshot_time_unix_ms: 1_785_369_600_000,
-        pins: Vec::new(),
-        exploration: Vec::new(),
-        semantic_successes: Vec::new(),
-        reliability_events: Vec::new(),
-    };
     let candidate = compile_candidate(CompileInput {
         current: &active,
         parent_digest: Some(&semantic_digest(&active)?),
-        legacy: &legacy,
+        snapshot_time_unix_ms: 1_785_369_600_000,
         eval: None,
         proposed_progress_guards: None,
     })?
@@ -207,17 +198,10 @@ fn concurrent_publishers_allow_exactly_one_parent_transition() -> anyhow::Result
 }
 
 fn compile(active: &PolicyLock) -> anyhow::Result<PolicyLock> {
-    let legacy = LegacyAdequacySnapshot {
-        snapshot_time_unix_ms: 1_785_369_600_000,
-        pins: Vec::new(),
-        exploration: Vec::new(),
-        semantic_successes: Vec::new(),
-        reliability_events: Vec::new(),
-    };
     Ok(compile_candidate(CompileInput {
         current: active,
         parent_digest: Some(&semantic_digest(active)?),
-        legacy: &legacy,
+        snapshot_time_unix_ms: 1_785_369_600_000,
         eval: None,
         proposed_progress_guards: None,
     })?
@@ -240,8 +224,8 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
             policy: "auto:cost".into(),
             policy_digest:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
-            route_projection: "agent_route/v1|unknown|implement|normal".into(),
-            request_key: "agent_route/v1|unknown|implement|normal".into(),
+            route_projection: "semantic_route/v1|unknown|implement|normal".into(),
+            request_key: "semantic_route/v1|unknown|implement|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
@@ -475,8 +459,8 @@ async fn snapshot_compile_publish_preserves_exact_eval_lineage() -> anyhow::Resu
         decisions: vec![EvalDecisionRef {
             decision_id: "decision-publication".into(),
             policy: "auto".into(),
-            route_projection: "agent_route/v1|unknown|implement|normal".into(),
-            request_key: "agent_route/v1|unknown|implement|normal".into(),
+            route_projection: "semantic_route/v1|unknown|implement|normal".into(),
+            request_key: "semantic_route/v1|unknown|implement|normal".into(),
             selected_tier: "economy".into(),
             selected_effort: None,
             baseline_tier: Some("strong".into()),
@@ -520,17 +504,10 @@ async fn snapshot_compile_publish_preserves_exact_eval_lineage() -> anyhow::Resu
         .freeze_snapshot_for_owner("2026-07-30T00:02:00Z", "local")
         .await?;
     let eval = EvalEvidenceSnapshot::load(&store, &manifest.evidence_root).await?;
-    let legacy = LegacyAdequacySnapshot {
-        snapshot_time_unix_ms: 1_785_369_600_000,
-        pins: Vec::new(),
-        exploration: Vec::new(),
-        semantic_successes: Vec::new(),
-        reliability_events: Vec::new(),
-    };
     let candidate = compile_candidate(CompileInput {
         current: &active,
         parent_digest: Some(&semantic_digest(&active)?),
-        legacy: &legacy,
+        snapshot_time_unix_ms: 1_785_369_600_000,
         eval: Some(&eval),
         proposed_progress_guards: None,
     })?
@@ -549,7 +526,7 @@ async fn snapshot_compile_publish_preserves_exact_eval_lineage() -> anyhow::Resu
         Some(manifest.evidence_root.as_str())
     );
     assert_eq!(
-        published.policies["auto"].routes["agent_route/v1|unknown|implement|normal"],
+        published.policies["auto"].routes["semantic_route/v1|unknown|implement|normal"],
         "economy"
     );
     Ok(())

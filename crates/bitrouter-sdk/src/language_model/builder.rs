@@ -26,6 +26,7 @@ pub struct PipelineBuilder {
     pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
     route_hooks: Vec<Arc<dyn RouteHook>>,
     model_selectors: Vec<Arc<dyn ModelSelector>>,
+    pub(crate) decision_model: Option<crate::decision_model::DecisionRuntime>,
     execution_hooks: Vec<Arc<dyn ExecutionHook>>,
     stream_hooks: Vec<Arc<dyn StreamHook>>,
     settlement_recorders: Vec<Arc<dyn SettlementRecorder>>,
@@ -52,6 +53,7 @@ impl PipelineBuilder {
             pre_request_hooks: Vec::new(),
             route_hooks: Vec::new(),
             model_selectors: Vec::new(),
+            decision_model: None,
             execution_hooks: Vec::new(),
             stream_hooks: Vec::new(),
             settlement_recorders: Vec::new(),
@@ -240,6 +242,11 @@ impl PipelineBuilder {
     /// Finalise into a [`Pipeline`]. Fails if the routing table or executor is
     /// missing.
     pub fn build(self) -> Result<Pipeline> {
+        if self.model_selectors.len() > 1 {
+            return Err(BitrouterError::bad_request(
+                "one policy selector must own the complete routing action",
+            ));
+        }
         if self.required_finalizers.len() > 1 {
             return Err(BitrouterError::internal(
                 "language_model pipeline: at most one required finalizer is supported; compose atomic success-critical work behind one finalizer",
@@ -261,6 +268,7 @@ impl PipelineBuilder {
             pre_request_hooks: self.pre_request_hooks,
             route_hooks: self.route_hooks,
             model_selectors: self.model_selectors,
+            decision_model: self.decision_model,
             execution_hooks: self.execution_hooks,
             stream_hooks: self.stream_hooks,
             settlement_recorders: self.settlement_recorders,

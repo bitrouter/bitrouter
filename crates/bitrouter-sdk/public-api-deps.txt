@@ -50,3 +50,4 @@ schemars
 serde_core
 serde_json
 tokio
+tokio_util

@@ -548,6 +548,7 @@ mod tests {
             sequence,
             kind,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural,
                 categorical,
                 digests: BTreeMap::new(),

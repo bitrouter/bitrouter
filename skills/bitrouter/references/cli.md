@@ -498,9 +498,9 @@ selection; a physical-model-only allowlist does not authorize the alias.
 | `bro policy check [--config PATH]` | Cross-validate the local main config and lock. |
 | `bro policy status [--view active\|disk] [--config PATH] [--socket PATH]` | Report an explicit policy source, digest, mode, policies, and preset bindings. Local default is `disk`; named remote context default is `active`. |
 | `bro policy show <name> [--view active\|disk] [--config PATH] [--socket PATH]` | Print one named policy from the explicit source; the same local/remote defaults apply. |
-| `bro policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS] [--config PATH]` | Compile legacy migration evidence and an optional frozen generic-eval snapshot into a deterministic v3 candidate. Never changes the active lock. |
+| `bro policy compile --output FILE [--eval-snapshot SHA256] [--snapshot-time UNIX_MS] [--config PATH]` | Compile a frozen generic-eval snapshot into a deterministic v4 candidate. Never changes the active lock. |
 | `bro policy diff <ACTIVE> <CANDIDATE>` | Compare explicit route selections. |
-| `bro policy publish <CANDIDATE> [--config PATH] [--socket PATH]` | Publish that exact compiled v3 candidate under adaptive mode using its parent digest as a compare-and-swap token. |
+| `bro policy publish <CANDIDATE> [--config PATH] [--socket PATH]` | Publish that exact compiled v4 candidate under adaptive mode using its parent digest as a compare-and-swap token. |
 | `bro policy verify --evidence [--config PATH]` | Reconstruct the active compiled lock's evidence root from the local ledger/snapshot. |
 | `bro policy evolve [--apply \| --output FILE] [--config PATH]` | Compatibility compile/publish command. `--apply` requires `policy.mode: adaptive`; request-time routing remains lock-only. |
 | `bro policy reload [--config PATH] [--socket PATH]` | Hot-reload main config and policy lock through the existing daemon control socket. Invalid locks preserve the last-known-good runtime snapshot. |
@@ -512,7 +512,7 @@ selection; a physical-model-only allowlist does not authorize the alias.
 
 Adaptive routing uses a source-independent predictor selected by
 `key_strategy: agent_trace`. Its static policy keys are exclusively canonical
-`agent_route/v1|<task-family>|<role>|<risk>` values. Native runtime adapters add
+`semantic_route/v1|<task-family>|<role>|<risk>` values. Native runtime adapters add
 diagnostics only, not policy keys, and private BitRouter headers are not needed.
 Observed `agent_trace/v2` values remain telemetry; retired route shapes and
 `key_strategy: legacy_fingerprint` are rejected during configuration
@@ -686,3 +686,5 @@ Active Turns discover workspace skills plus the daemon user's `.agents/skills`,
 `.codex/skills`, `.claude/skills` and `$CODEX_HOME/skills` when configured. Runtime
 snapshots expose metadata and hashed versions. Discovery does not inject skill
 bodies or MCP instructions into the prompt, install skills or execute scripts.
+
+`bro workflow-state reliability-report --database-url <URL> --config <PATH> --policy <NAME> --output <PATH>` reads reliability thresholds from the named policy in the version 4 lock (`--policy` defaults to `auto`).

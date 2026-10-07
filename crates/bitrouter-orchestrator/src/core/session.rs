@@ -2659,24 +2659,13 @@ impl CoreSession {
             agent_id: agent_id.to_owned(),
             step_id: Mutex::new(step_id.clone()),
             validation_gate_time: Default::default(),
+            routing_pending: Default::default(),
+            routing_stale: Default::default(),
             run_id: turn.run_id.clone(),
             agent_turn_id: turn.agent_turn_id.clone(),
             provider_cancellation: self.shared.live.lock().await.disconnected.child_token(),
             model_selection: match turn.input.routing.model {
                 super::protocol::ModelMode::Fixed => NativeModelSelection::Fixed,
-                super::protocol::ModelMode::Policy
-                    if context_decisions::enabled(&state)
-                        && turn.input.routing.context == super::protocol::ContextMode::Auto
-                        && self.shared.app.decision_model().is_some_and(|runtime| {
-                            runtime
-                                .policy
-                                .generation_models
-                                .iter()
-                                .any(|model| model.model == turn.input.model)
-                        }) =>
-                {
-                    NativeModelSelection::Fixed
-                }
                 super::protocol::ModelMode::Policy => NativeModelSelection::Policy,
             },
         });
@@ -2688,27 +2677,19 @@ impl CoreSession {
             live.model_controls.push(Arc::downgrade(&control));
         }
         drop(preparing);
-        let mut context_replan = false;
-        let response = match self
-            .compile_context(agent_id, &step_id, prompt, &control)
-            .await
-        {
-            Ok(prompt) => {
-                self.shared
-                    .app
-                    .execute_native_controlled_with_headers(
-                        prompt,
-                        self.shared.caller.clone(),
-                        self.shared.request_headers.clone(),
-                        control.clone(),
-                    )
-                    .await
-            }
-            Err(error) => {
-                context_replan = error.code == ErrorCode::StaleRevision;
-                Err(sdk_error(error))
-            }
-        };
+        let response = self
+            .shared
+            .app
+            .execute_native_controlled_with_headers(
+                prompt,
+                self.shared.caller.clone(),
+                self.shared.request_headers.clone(),
+                control.clone(),
+            )
+            .await;
+        let context_replan = control
+            .routing_stale
+            .load(std::sync::atomic::Ordering::Acquire);
         // Settlement has completed (or the source remains unavailable). Amount
         // observations cannot erase the already committed unknown work costs.
         if let Err(error) = self.refresh_costs(&id("cost_refresh"), &turn.run_id).await {
@@ -3791,6 +3772,8 @@ struct StepControl {
     agent_id: String,
     step_id: Mutex<String>,
     model_selection: NativeModelSelection,
+    routing_pending: Mutex<Option<context_decisions::Pending>>,
+    routing_stale: std::sync::atomic::AtomicBool,
     run_id: String,
     agent_turn_id: String,
     provider_cancellation: CancellationToken,
@@ -3823,6 +3806,39 @@ impl Drop for StepControl {
 
 #[async_trait]
 impl NativeExecutionControl for StepControl {
+    async fn prepare_routing(
+        &self,
+        prompt: &Prompt,
+    ) -> bitrouter_sdk::Result<Option<bitrouter_sdk::routing::preparation::Prepared>> {
+        let step_id = self.step_id.lock().await.clone();
+        let result = self
+            .session
+            .prepare_context(&self.agent_id, &step_id, prompt.clone(), self)
+            .await;
+        if result
+            .as_ref()
+            .is_err_and(|error| error.code == ErrorCode::StaleRevision)
+        {
+            self.routing_stale
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+        result.map_err(sdk_error)
+    }
+
+    async fn commit_routing(
+        &self,
+        plan: &bitrouter_sdk::routing::plan::Plan,
+    ) -> bitrouter_sdk::Result<()> {
+        if let Some(pending) = self.routing_pending.lock().await.take() {
+            let step_id = self.step_id.lock().await.clone();
+            self.session
+                .commit_context(&self.agent_id, &step_id, pending, plan)
+                .await
+                .map_err(sdk_error)?;
+        }
+        Ok(())
+    }
+
     fn observe_stream(&self) -> bool {
         self.session.shared.harness.observe_model_stream()
     }
@@ -4181,7 +4197,7 @@ impl NativeExecutionControl for StepControl {
                 if rejection.is_none()
                     && joint_model
                         .as_ref()
-                        .is_some_and(|model| model != &plan.original_model)
+                        .is_some_and(|model| model != &plan.effective_model)
                 {
                     rejection = Some(reject(
                         ErrorCode::NoFeasibleRoute,

@@ -111,11 +111,6 @@ pub struct Assembled {
     /// Concrete upstream HTTP executor. The pipeline also holds this as a trait
     /// object, but reload needs the concrete handle to replace timeout clients.
     pub upstream_executor: Arc<HttpExecutor>,
-    /// The live `policy_table:` transform, when one was wired. The built `App`
-    /// holds the same `Arc` as a `dyn PromptTransform`; reload needs the
-    /// concrete handle to swap a freshly built spec into it, because the
-    /// transform itself cannot be re-registered on a built `App`.
-    pub policy_table_router: Option<Arc<crate::policy_table_router::PolicyTableRouter>>,
     /// Snapshot provider for `bro observe status`. When the OTel
     /// exporter is wired, this reports its live state; when not, it
     /// reports `compiled_in` truthfully and everything else blank.
@@ -765,15 +760,6 @@ async fn assemble_app(
     let server_tool_loop =
         build_server_tool_loop(config, &mcp_routing, &mcp_executor, nested_runner);
 
-    // Legacy inline policy tables remain declarative and lock-only. Process
-    // mode controls publication, never request-time learned-state reads.
-    let mut effective_policy_table_config = config.policy_table.clone();
-    effective_policy_table_config.adequacy = config
-        .policy
-        .mode
-        .apply_to_adequacy(&config.policy_table.adequacy);
-    let policy_table =
-        crate::policy_table_router::PolicyTable::from_config(&effective_policy_table_config);
     let policy_decision_recorder =
         crate::workflow_state::decision::PolicyDecisionJsonlRecorder::from_env()
             .map_err(anyhow::Error::from)?
@@ -850,7 +836,6 @@ async fn assemble_app(
     let policy_runtime = crate::policy_lock::PolicyRuntime::new(
         config,
         config_path,
-        db.clone(),
         policy_decision_recorder.clone(),
         pending_eval_decisions.clone(),
         trajectory_runtime,
@@ -985,28 +970,6 @@ async fn assemble_app(
     let app = app.prompt_transform(Arc::new(crate::codex_router::CodexRouter::new(Arc::clone(
         &routing_table_for_reload,
     ))) as Arc<dyn PromptTransform>);
-    // Config-driven per-request model routing (`policy_table:`): an ingress
-    // transform that fingerprints the agent-loop step and rewrites `prompt.model`
-    // to the tier the policy table assigns, enforcing the tool-use guardrail.
-    // Wired only when `policy_table.tiers` is non-empty. Registered LAST, after
-    // the fusion alias and the Claude Code router, so the routes they own win:
-    // the transform skips any already-`provider:`-routed model (the `claude-code:`
-    // subscription route) and any request carrying a bitrouter server-tool
-    // declaration (the `bitrouter/fusion` alias's injected tool).
-    let (app, policy_table_router) = match policy_table {
-        Some(table) => {
-            let mut router = crate::policy_table_router::PolicyTableRouter::new(table);
-            if let Some(recorder) = policy_decision_recorder {
-                router = router.with_shared_decision_recorder(recorder);
-            }
-            let router = Arc::new(router);
-            (
-                app.prompt_transform(Arc::clone(&router) as Arc<dyn PromptTransform>),
-                Some(router),
-            )
-        }
-        None => (app, None),
-    };
     // Apply the optional MCP pipeline configuration in a second builder step
     // so the language_model configuration above stays the same shape it has
     // had since v0.
@@ -1043,7 +1006,6 @@ async fn assemble_app(
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
-        policy_table_router,
         observe: observe_provider,
         otel_exporter: otel_for_assembled,
         otel_init_error,
@@ -2527,7 +2489,7 @@ presets:
         );
         let config = bitrouter_sdk::config::parse_with(&yaml, |_| None)?;
         let guarded = progress_guard.is_some();
-        const ROUTE_KEY: &str = "agent_route/v1|unknown|unknown|normal";
+        const ROUTE_KEY: &str = "semantic_route/v1|unknown|unknown|guarded";
         const TEST_DIGEST: &str =
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let policy = PolicyDefinition {
@@ -2554,6 +2516,7 @@ presets:
                 BTreeMap::from([(
                     ROUTE_KEY.into(),
                     PolicyCertificate {
+                        classifier_digest: None,
                         owner: RouteOwner::Operator,
                         selected_tier: "economy".into(),
                         baseline_tier: Some("strong".into()),
@@ -2568,7 +2531,6 @@ presets:
                         evaluator_config_digest: None,
                         compiler_config_digest: TEST_DIGEST.into(),
                         evidence_digest: TEST_DIGEST.into(),
-                        legacy: None,
                     },
                 )]),
             );
@@ -2904,6 +2866,7 @@ presets:
             sequence: 2,
             kind: TrajectoryEventKind::RouteIntentRecorded,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: BTreeMap::new(),
                 categorical: BTreeMap::from([
                     (
@@ -2933,6 +2896,7 @@ presets:
             sequence: 3,
             kind: TrajectoryEventKind::RequestSettled,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: BTreeMap::new(),
                 categorical: BTreeMap::new(),
                 digests: BTreeMap::new(),

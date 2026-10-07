@@ -124,6 +124,18 @@ pub(crate) fn build_operational_evaluation(
     if let Some(prediction_evidence) = prediction_observation_evidence(settlement)? {
         evidence.push(prediction_evidence);
     }
+    let mut routing = BTreeMap::new();
+    for item in events
+        .iter()
+        .flat_map(|event| &event.evidence.routing_evidence)
+    {
+        if let Some(previous) = routing.insert(item.evidence_id.clone(), item.clone())
+            && previous != *item
+        {
+            anyhow::bail!("routing receipt identity has conflicting evidence");
+        }
+    }
+    evidence.extend(routing.into_values());
     let evidence_digest = evidence_digest(&evidence)?;
     let evidence_refs = evidence
         .iter()
@@ -575,11 +587,11 @@ mod tests {
         assert_eq!(envelope.subject.decisions[0].policy, "auto:cost");
         assert_eq!(
             envelope.subject.decisions[0].route_projection,
-            "agent_route/v1|unknown|orchestrate|normal"
+            "semantic_route/v1|unknown|orchestrate|normal"
         );
         assert_eq!(
             envelope.subject.decisions[0].request_key,
-            "agent_route/v1|unknown|orchestrate|normal"
+            "semantic_route/v1|unknown|orchestrate|normal"
         );
         assert_eq!(
             envelope.subject.requested_dimensions,
@@ -909,12 +921,14 @@ mod tests {
             None,
             vec![
                 RouteActionCandidate {
+                    context: Default::default(),
                     tier: "economy".into(),
                     model: "vendor/economy".into(),
                     effort: None,
                     logging_probability_ppm: 1_000_000,
                 },
                 RouteActionCandidate {
+                    context: Default::default(),
                     tier: "strong".into(),
                     model: "vendor/strong".into(),
                     effort: None,
@@ -1017,11 +1031,11 @@ mod tests {
                 ("route.policy".to_owned(), "auto:cost".to_owned()),
                 (
                     "route.request_key".to_owned(),
-                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
+                    "semantic_route/v1|unknown|orchestrate|normal".to_owned(),
                 ),
                 (
                     "route.route_projection".to_owned(),
-                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
+                    "semantic_route/v1|unknown|orchestrate|normal".to_owned(),
                 ),
                 ("route.baseline_tier".to_owned(), "reference".to_owned()),
                 ("route.preset".to_owned(), "auto:cost".to_owned()),
@@ -1118,11 +1132,11 @@ mod tests {
                 ("route.policy".to_owned(), "auto:cost".to_owned()),
                 (
                     "route.request_key".to_owned(),
-                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
+                    "semantic_route/v1|unknown|orchestrate|normal".to_owned(),
                 ),
                 (
                     "route.route_projection".to_owned(),
-                    "agent_route/v1|unknown|orchestrate|normal".to_owned(),
+                    "semantic_route/v1|unknown|orchestrate|normal".to_owned(),
                 ),
                 ("route.baseline_tier".to_owned(), "reference".to_owned()),
                 ("route.preset".to_owned(), "auto:cost".to_owned()),
@@ -1222,6 +1236,7 @@ mod tests {
             sequence,
             kind,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural,
                 categorical,
                 digests,

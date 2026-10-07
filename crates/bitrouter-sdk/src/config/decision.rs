@@ -1,13 +1,13 @@
 //! Host configuration for a typed decision backend. Credentials are read by
 //! the host, never serialized into runtime decisions or checkpoint state.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::decision_model::policy::{DecisionPolicy, DecisionPricing};
 use crate::error::{BitrouterError, Result};
 
 /// An optional `decision_model:` block enables native context decisions.
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DecisionModelConfig {
     /// Decision model name or alias from TypeSafe's authenticated model list.

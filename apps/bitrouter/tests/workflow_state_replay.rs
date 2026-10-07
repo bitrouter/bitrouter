@@ -26,7 +26,7 @@ use bitrouter::workflow_state::decision::{
 use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
 use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
 use bitrouter::workflow_state::online::OnlineWorkflowState;
-use bitrouter::workflow_state::predictive::{NextActionClass, NextStepRole};
+use bitrouter::workflow_state::predictive::NextActionClass;
 use bitrouter::workflow_state::real_trace::{
     CapturedIngressTrace, RealTraceCapture, RealTraceOutcome, TraceCaptureOptions, TraceSanitizer,
 };
@@ -39,6 +39,7 @@ use bitrouter_sdk::language_model::types::ReasoningEffort;
 use bitrouter_sdk::language_model::{
     ApiProtocol, NormalizedUsage, UsageOrigin, inbound_adapter_for,
 };
+use bitrouter_sdk::routing::signals::NextStepRole;
 use http::HeaderValue;
 use serde::Deserialize;
 use serde_json::json;
@@ -254,41 +255,45 @@ fn general_progress_fixture_replays_without_routing_headers() -> anyhow::Result<
     assert_eq!(
         projections,
         [
-            "agent_route/v1|unknown|unknown|normal",
-            "agent_route/v1|unknown|implement|guarded",
-            "agent_route/v1|unknown|implement|guarded",
-            "agent_route/v1|unknown|implement|guarded",
-            "agent_route/v1|unknown|implement|normal",
-            "agent_route/v1|unknown|implement|normal",
-            "agent_route/v1|unknown|implement|normal",
+            "semantic_route/v1|unknown|unknown|normal",
+            "semantic_route/v1|unknown|implement|guarded",
+            "semantic_route/v1|unknown|implement|guarded",
+            "semantic_route/v1|unknown|implement|guarded",
+            "semantic_route/v1|unknown|implement|normal",
+            "semantic_route/v1|unknown|implement|normal",
+            "semantic_route/v1|unknown|implement|normal",
         ]
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn reliability_report_cli_replays_persisted_events_without_mutating_database() {
+async fn reliability_report_cli_replays_persisted_events_without_mutating_database()
+-> anyhow::Result<()> {
     let root = temp_path("reliability-report");
-    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&root)?;
     let database_path = root.join("bitrouter.db");
     let database_url = format!("sqlite://{}", database_path.display());
     let config_path = root.join("bitrouter.yaml");
     let first_output = root.join("reliability-first.json");
     let second_output = root.join("reliability-second.json");
+    std::fs::write(&config_path, "policy:\n  path: './policy-lock.yaml'\n")?;
+    let mut lock = bitrouter::policy_lock::PolicyLock::default();
+    let mut policy = bitrouter::policy_lock::PolicyDefinition::default();
+    policy.tiers.insert("strong".into(), "mock:strong".into());
+    policy.default_tier = Some("strong".into());
+    policy.adequacy.enabled = true;
+    policy.adequacy.reliability_window_size = 23;
+    policy.adequacy.reliability_consecutive_failures = 2;
+    policy.adequacy.reliability_error_rate_percent = 35;
+    policy.adequacy.reliability_cooldown_secs = 300;
+    lock.policies.insert("auto".into(), policy);
     std::fs::write(
-        &config_path,
-        r#"policy_table:
-  adequacy:
-    enabled: true
-    reliability_window_size: 23
-    reliability_consecutive_failures: 2
-    reliability_error_rate_percent: 35
-    reliability_cooldown_secs: 300
-"#,
-    )
-    .unwrap();
-    let db = bitrouter::db::connect(&database_url).await.unwrap();
-    bitrouter::db::run_migrations(&db).await.unwrap();
+        root.join("policy-lock.yaml"),
+        bitrouter::policy_lock::deterministic_yaml(&lock)?,
+    )?;
+    let db = bitrouter::db::connect(&database_url).await?;
+    bitrouter::db::run_migrations(&db).await?;
     let store = AdequacyStore::new(db.clone());
     store
         .append_reliability_event(&ReliabilityEvent {
@@ -305,8 +310,7 @@ async fn reliability_report_cli_replays_persisted_events_without_mutating_databa
             half_open_probe: false,
             observed_at_unix: 100,
         })
-        .await
-        .unwrap();
+        .await?;
 
     for output_path in [&first_output, &second_output] {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_bro"))
@@ -316,12 +320,15 @@ async fn reliability_report_cli_replays_persisted_events_without_mutating_databa
                 "--database-url",
                 &database_url,
                 "--config",
-                config_path.to_str().unwrap(),
+                config_path
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("fixture path is not UTF-8"))?,
                 "--output",
-                output_path.to_str().unwrap(),
+                output_path
+                    .to_str()
+                    .ok_or_else(|| anyhow::anyhow!("fixture path is not UTF-8"))?,
             ])
-            .output()
-            .unwrap();
+            .output()?;
         assert!(
             output.status.success(),
             "reliability report failed: {}",
@@ -329,19 +336,20 @@ async fn reliability_report_cli_replays_persisted_events_without_mutating_databa
         );
     }
 
-    let first = std::fs::read(&first_output).unwrap();
-    let second = std::fs::read(&second_output).unwrap();
+    let first = std::fs::read(&first_output)?;
+    let second = std::fs::read(&second_output)?;
     assert_eq!(first, second);
-    let report: serde_json::Value = serde_json::from_slice(&first).unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&first)?;
     assert_eq!(report["event_count"], 1);
     assert_eq!(report["events"][0]["request_id"], "request-1");
-    assert_eq!(store.load_reliability_events().await.unwrap().len(), 1);
+    assert_eq!(store.load_reliability_events().await?.len(), 1);
 
     // Windows keeps the SQLite file locked while the pool is alive. Release all
     // references and explicitly close the pool before deleting the temp directory.
     drop(store);
-    db.close().await.unwrap();
-    std::fs::remove_dir_all(root).unwrap();
+    db.close().await?;
+    std::fs::remove_dir_all(root)?;
+    Ok(())
 }
 
 fn computed_usage(
@@ -608,7 +616,7 @@ fn reward_feedback_integrity_accepts_terminus_without_private_identity_headers()
 
 #[tokio::test]
 async fn equivalent_generic_and_terminus_rewards_enter_generic_eval_without_private_headers() {
-    let canonical_key = "agent_route/v1|unknown|implement|normal";
+    let canonical_key = "semantic_route/v1|unknown|implement|normal";
     let ledger_key = format!("coding\0{canonical_key}");
     let mut generic = benchmark_trace("req-reward-generic-merge");
     generic.headers.insert(
@@ -1184,35 +1192,35 @@ fn replay_keeps_observed_and_predictive_projections_separate_and_exact() {
             (
                 "predictive-near-done-finalize-001",
                 "agent_trace/v2|test|normal".to_string(),
-                "agent_route/v1|unknown|finalize|normal".to_string(),
+                "semantic_route/v1|unknown|finalize|normal".to_string(),
                 NextActionClass::AnswerOrSummarize,
                 Some(true),
             ),
             (
                 "predictive-opening-plan-001",
                 "agent_trace/v2|opening|normal".to_string(),
-                "agent_route/v1|agent:multi_step_planning|orchestrate|normal".to_string(),
+                "semantic_route/v1|agent:multi_step_planning|orchestrate|normal".to_string(),
                 NextActionClass::ReasonOrPlan,
                 Some(true),
             ),
             (
                 "predictive-post-edit-verify-001",
                 "agent_trace/v2|edit|normal".to_string(),
-                "agent_route/v1|code:debugging|verify|normal".to_string(),
+                "semantic_route/v1|code:debugging|verify|normal".to_string(),
                 NextActionClass::ExecuteOrTest,
                 Some(true),
             ),
             (
                 "predictive-post-read-implement-001",
                 "agent_trace/v2|tool_followup|normal".to_string(),
-                "agent_route/v1|unknown|implement|normal".to_string(),
+                "semantic_route/v1|unknown|implement|normal".to_string(),
                 NextActionClass::Mutate,
                 Some(true),
             ),
             (
                 "predictive-repeated-failure-replan-001",
                 "agent_trace/v2|test|guarded".to_string(),
-                "agent_route/v1|unknown|orchestrate|guarded".to_string(),
+                "semantic_route/v1|unknown|orchestrate|guarded".to_string(),
                 NextActionClass::ReasonOrPlan,
                 Some(true),
             ),
@@ -1254,7 +1262,7 @@ fn old_fixture_without_prediction_remains_readable_and_replays_both_routes() {
     );
     assert_eq!(
         summary.records[0].predictive_route_key.as_str(),
-        "agent_route/v1|unknown|orchestrate|normal"
+        "semantic_route/v1|unknown|orchestrate|normal"
     );
     assert_eq!(summary.records[0].prediction_matches_expected, None);
 }
@@ -1293,7 +1301,7 @@ fn new_fixture_prediction_is_compared_exactly() {
     assert_eq!(summary.records[0].prediction_matches_expected, Some(false));
     assert_eq!(
         summary.records[0].predictive_route_key,
-        "agent_route/v1|unknown|orchestrate|normal"
+        "semantic_route/v1|unknown|orchestrate|normal"
     );
 }
 
@@ -2186,8 +2194,8 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
         key_strategy: "agent_trace".to_string(),
-        route_projection: Some("agent_route/v1|code:generation|implement|normal".to_string()),
-        request_key: "agent_route/v1|unknown|implement|normal".to_string(),
+        route_projection: Some("semantic_route/v1|code:generation|implement|normal".to_string()),
+        request_key: "semantic_route/v1|unknown|implement|normal".to_string(),
         ledger_key: None,
         policy: None,
         policy_digest: None,
@@ -2436,8 +2444,8 @@ fn run_artifact_attributes_failed_task_to_policy_transition() {
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
         key_strategy: "agent_trace".to_string(),
-        route_projection: Some("agent_route/v1|code:generation|implement|normal".to_string()),
-        request_key: "agent_route/v1|unknown|implement|normal".to_string(),
+        route_projection: Some("semantic_route/v1|code:generation|implement|normal".to_string()),
+        request_key: "semantic_route/v1|unknown|implement|normal".to_string(),
         ledger_key: None,
         policy: None,
         policy_digest: None,
@@ -2573,9 +2581,9 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
         input_model: "gpt-5.5".to_string(),
         input_effort: None,
         key_strategy: "agent_trace".to_string(),
-        route_projection: Some("agent_route/v1|code:generation|implement|normal".to_string()),
-        request_key: "agent_route/v1|unknown|implement|normal".to_string(),
-        ledger_key: Some("coding\0agent_route/v1|unknown|implement|normal".to_string()),
+        route_projection: Some("semantic_route/v1|code:generation|implement|normal".to_string()),
+        request_key: "semantic_route/v1|unknown|implement|normal".to_string(),
+        ledger_key: Some("coding\0semantic_route/v1|unknown|implement|normal".to_string()),
         policy: Some("coding".to_string()),
         policy_digest: Some(
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
@@ -2655,15 +2663,15 @@ fn run_artifact_attributes_successful_task_to_policy_transition() -> anyhow::Res
     );
     assert_eq!(
         candidate.route_projection,
-        "agent_route/v1|code:generation|implement|normal"
+        "semantic_route/v1|code:generation|implement|normal"
     );
     assert_eq!(
         candidate.request_key,
-        "agent_route/v1|unknown|implement|normal"
+        "semantic_route/v1|unknown|implement|normal"
     );
     assert_eq!(
         candidate.ledger_key.as_deref(),
-        Some("coding\0agent_route/v1|unknown|implement|normal")
+        Some("coding\0semantic_route/v1|unknown|implement|normal")
     );
     assert_eq!(
         candidate.tier_transition.as_deref(),

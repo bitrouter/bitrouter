@@ -2187,3 +2187,5 @@ identified approval policy; `--read-only` does not connect to MCP. Configuration
 is fixed at daemon startup: restart to replace native MCP transport/credentials.
 Skills discovery supplies metadata and versions without prompt injection.
 See [BRO harness resources](BRO_HARNESS_RESOURCES.md).
+
+`bro workflow-state reliability-report --database-url <URL> --config <PATH> --policy <NAME> --output <PATH>` reads reliability thresholds from the named policy in the version 4 lock (`--policy` defaults to `auto`).

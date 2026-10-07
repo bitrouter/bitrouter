@@ -1327,6 +1327,7 @@ mod tests {
             sequence: 3,
             kind: TrajectoryEventKind::RequestSettled,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: Default::default(),
                 categorical: Default::default(),
                 digests: Default::default(),
@@ -1454,6 +1455,7 @@ mod tests {
                 sequence: settle_sequence,
                 kind: TrajectoryEventKind::RequestSettled,
                 evidence: TrajectoryEvidence {
+                    routing_evidence: Vec::new(),
                     structural: Default::default(),
                     categorical: Default::default(),
                     digests: Default::default(),
@@ -1919,6 +1921,7 @@ mod tests {
             sequence: 3,
             kind: TrajectoryEventKind::RequestSettled,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: BTreeMap::new(),
                 categorical: BTreeMap::new(),
                 digests: BTreeMap::new(),
@@ -1997,6 +2000,7 @@ mod tests {
             sequence,
             kind: TrajectoryEventKind::RouteIntentRecorded,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: Default::default(),
                 categorical: BTreeMap::from([
                     (

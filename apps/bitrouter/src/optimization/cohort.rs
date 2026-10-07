@@ -15,6 +15,7 @@ pub enum CohortGateVerdict {
     QualityFailed,
     HardViolation,
     AmbiguousEvaluator,
+    AmbiguousClassifier,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -36,6 +37,7 @@ pub struct CohortAssessment {
     pub challenger: ArmAssessment,
     pub excluded_requests: u32,
     pub evaluator_config_digest: Option<String>,
+    pub classifier_digest: Option<String>,
     pub cost_delta_micro_usd: Option<i64>,
     pub verdict: CohortGateVerdict,
 }
@@ -55,10 +57,8 @@ struct NormalizedReference {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct UnitKey {
-    subject_scope: EvalScope,
     unit: ExperimentAssignmentUnit,
     digest: String,
-    subject_id: String,
 }
 
 #[derive(Default)]
@@ -167,27 +167,38 @@ pub fn assess_cohort(
     }
     let excluded_requests = u32::try_from(excluded_request_subjects.len())
         .context("counting excluded request eval subjects")?;
+    let mut conflicting_units = BTreeSet::new();
     let mut groups = BTreeMap::<UnitKey, UnitGroup<'_>>::new();
-    for (subject, group) in subjects {
+    for (_, group) in subjects {
         if group.malformed || group.references.len() != 1 {
             continue;
         }
         let Some(reference) = group.references.into_iter().next() else {
             continue;
         };
-        groups.insert(
-            UnitKey {
-                subject_scope: subject.scope,
-                unit: reference.unit,
-                digest: reference.digest,
-                subject_id: subject.subject_id,
-            },
-            UnitGroup {
-                arm: reference.arm,
-                records: group.records,
-            },
-        );
+        let key = UnitKey {
+            unit: reference.unit,
+            digest: reference.digest,
+        };
+        let unit = groups.entry(key.clone()).or_insert_with(|| UnitGroup {
+            arm: reference.arm,
+            records: Vec::new(),
+        });
+        // One assignment unit cannot supply two independent task counts. Keep
+        // all observations so contradictory outcomes remain inconclusive.
+        if unit.arm != reference.arm {
+            conflicting_units.insert(key);
+            continue;
+        }
+        unit.records.extend(group.records);
     }
+    groups.retain(|key, _| !conflicting_units.contains(key));
+    let classifier_cohorts = groups
+        .values()
+        .flat_map(|group| &group.records)
+        .flat_map(|record| crate::eval::types::classifier_cohorts(&record.subject))
+        .collect::<BTreeSet<_>>();
+    let ambiguous_classifier = classifier_cohorts.len() > 1;
 
     let inferred_configs = groups
         .values()
@@ -243,7 +254,7 @@ pub fn assess_cohort(
             .checked_add(hard_violation_count)
             .context("counting hard violations")?;
 
-        if ambiguous_evaluator {
+        if ambiguous_evaluator || ambiguous_classifier {
             assessment.excluded = assessment
                 .excluded
                 .checked_add(1)
@@ -311,6 +322,8 @@ pub fn assess_cohort(
     let minimum = exploration.gate.minimum_tasks_per_arm;
     let verdict = if challenger.hard_violations > 0 {
         CohortGateVerdict::HardViolation
+    } else if ambiguous_classifier {
+        CohortGateVerdict::AmbiguousClassifier
     } else if ambiguous_evaluator {
         CohortGateVerdict::AmbiguousEvaluator
     } else if control.eligible < minimum || challenger.eligible < minimum {
@@ -328,6 +341,9 @@ pub fn assess_cohort(
         challenger,
         excluded_requests,
         evaluator_config_digest,
+        classifier_digest: (!ambiguous_classifier)
+            .then(|| classifier_cohorts.first().cloned())
+            .flatten(),
         cost_delta_micro_usd,
         verdict,
     })
@@ -416,20 +432,33 @@ fn pass_rate(assessment: &ArmAssessment) -> Result<Option<u32>> {
 }
 
 fn latest_complete_cost(records: &[&EvalEvidenceRecord]) -> Option<i64> {
-    let trajectory = records.iter().rev().find_map(|record| {
-        let complete = record
-            .result
-            .metrics
-            .get("trajectory.history_complete")
-            .is_some_and(|metric| metric.unit == MetricUnit::Boolean && metric.value == 1);
-        complete.then(|| metric_cost(record, "trajectory.cost.usd_micros"))?
-    });
-    trajectory.or_else(|| {
-        records
+    // A task total covers its overlapping episode. Prefer the complete task
+    // observation even when an episode evaluator submitted a later result.
+    for scope in [EvalScope::Task, EvalScope::Episode] {
+        let trajectory = records
             .iter()
             .rev()
-            .find_map(|record| metric_cost(record, "cost.usd_micros"))
-    })
+            .filter(|record| record.subject.scope == scope)
+            .find_map(|record| {
+                let complete = record
+                    .result
+                    .metrics
+                    .get("trajectory.history_complete")
+                    .is_some_and(|metric| metric.unit == MetricUnit::Boolean && metric.value == 1);
+                complete.then(|| metric_cost(record, "trajectory.cost.usd_micros"))?
+            });
+        let cost = trajectory.or_else(|| {
+            records
+                .iter()
+                .rev()
+                .filter(|record| record.subject.scope == scope)
+                .find_map(|record| metric_cost(record, "cost.usd_micros"))
+        });
+        if cost.is_some() {
+            return cost;
+        }
+    }
+    None
 }
 
 fn metric_cost(record: &EvalEvidenceRecord, metric_id: &str) -> Option<i64> {
@@ -492,7 +521,7 @@ mod tests {
     fn exploration(evaluator_config_digest: Option<&str>) -> RouteExploration {
         RouteExploration {
             experiment_id: EXPERIMENT_ID.into(),
-            target_request_key: "agent_route/v1|unknown|verify|normal".into(),
+            target_request_key: "semantic_route/v1|unknown|verify|normal".into(),
             champion_tier: "strong".into(),
             challenger_tier: "economy".into(),
             challenger_exposure_ppm: 500_000,
@@ -608,8 +637,8 @@ mod tests {
         EvalDecisionRef {
             decision_id: id.into(),
             policy: "auto".into(),
-            route_projection: "agent_route/v1|unknown|verify|normal".into(),
-            request_key: "agent_route/v1|unknown|verify|normal".into(),
+            route_projection: "semantic_route/v1|unknown|verify|normal".into(),
+            request_key: "semantic_route/v1|unknown|verify|normal".into(),
             selected_tier: match arm {
                 ExperimentArm::Control => "strong",
                 ExperimentArm::Challenger => "economy",
@@ -729,7 +758,7 @@ mod tests {
 
     #[test]
     fn cohort_matches_primary_route_projection_over_matched_fallback() -> Result<()> {
-        let route_projection = "agent_route/v1|code:debugging|implement|normal";
+        let route_projection = "semantic_route/v1|code:debugging|implement|normal";
         let mut projected = record(spec(
             "projected-challenger",
             ExperimentArm::Challenger,
@@ -738,7 +767,7 @@ mod tests {
         ));
         projected.subject.decisions[0].route_projection = route_projection.into();
         projected.subject.decisions[0].request_key =
-            "agent_route/v1|unknown|implement|normal".into();
+            "semantic_route/v1|unknown|implement|normal".into();
         let mut active = exploration(Some(EVALUATOR_A));
         active.target_request_key = route_projection.into();
 
@@ -1027,7 +1056,7 @@ mod tests {
     }
 
     #[test]
-    fn assignment_digest_collision_keeps_distinct_subjects_independent() -> Result<()> {
+    fn one_assignment_unit_is_counted_once_across_subjects() -> Result<()> {
         let mut first = spec(
             "collision-subject-a",
             ExperimentArm::Challenger,
@@ -1049,15 +1078,15 @@ mod tests {
             &exploration(Some(EVALUATOR_A)),
         )?;
 
-        assert_eq!(assessment.challenger.observed, 2);
-        assert_eq!(assessment.challenger.eligible, 2);
-        assert_eq!(assessment.challenger.pass, 2);
+        assert_eq!(assessment.challenger.observed, 1);
+        assert_eq!(assessment.challenger.eligible, 1);
+        assert_eq!(assessment.challenger.pass, 1);
         assert_eq!(assessment.challenger.excluded, 0);
         Ok(())
     }
 
     #[test]
-    fn identical_subject_ids_in_different_scopes_remain_independent() -> Result<()> {
+    fn one_assignment_unit_is_counted_once_across_scopes() -> Result<()> {
         let task = spec(
             "cross-scope-subject",
             ExperimentArm::Challenger,
@@ -1067,6 +1096,7 @@ mod tests {
         let mut episode = task.clone();
         episode.scope = EvalScope::Episode;
         episode.result_suffix = "episode";
+        episode.submitted_at = "2026-08-17T00:00:03Z";
         episode.trajectory_cost = Some(600);
 
         let assessment = assess_cohort(
@@ -1075,10 +1105,10 @@ mod tests {
             &exploration(Some(EVALUATOR_A)),
         )?;
 
-        assert_eq!(assessment.challenger.observed, 2);
-        assert_eq!(assessment.challenger.eligible, 2);
-        assert_eq!(assessment.challenger.pass, 2);
-        assert_eq!(assessment.challenger.mean_cost_micro_usd, Some(650));
+        assert_eq!(assessment.challenger.observed, 1);
+        assert_eq!(assessment.challenger.eligible, 1);
+        assert_eq!(assessment.challenger.pass, 1);
+        assert_eq!(assessment.challenger.mean_cost_micro_usd, Some(700));
         Ok(())
     }
 
@@ -1140,6 +1170,53 @@ mod tests {
         )?;
 
         assert_eq!(assessment.challenger.mean_cost_micro_usd, Some(600));
+        Ok(())
+    }
+
+    #[test]
+    fn different_semantic_backends_cannot_justify_one_promotion() -> Result<()> {
+        let mut records = vec![
+            record(spec(
+                "backend-a-task",
+                ExperimentArm::Control,
+                EvalVerdict::Pass,
+                1000,
+            )),
+            record(spec(
+                "backend-b-task",
+                ExperimentArm::Challenger,
+                EvalVerdict::Pass,
+                600,
+            )),
+        ];
+        for (index, record) in records.iter_mut().enumerate() {
+            record
+                .subject
+                .evidence
+                .push(crate::eval::types::EvidenceItem {
+                    evidence_id: "semantic-receipt".into(),
+                    kind: "routing.assessment".into(),
+                    digest: EVIDENCE_DIGEST.into(),
+                    redacted: true,
+                    attributes: BTreeMap::from([(
+                        "classifier_digest".into(),
+                        crate::eval::types::canonical_digest(&index)?,
+                    )]),
+                });
+            record.subject.evidence_digest =
+                crate::eval::types::evidence_digest(&record.subject.evidence)?;
+            record.result.evidence_digest = record.subject.evidence_digest.clone();
+        }
+        let assessment = assess_cohort(
+            &snapshot(records),
+            POLICY_DIGEST,
+            &exploration(Some(EVALUATOR_A)),
+        )?;
+        assert_eq!(assessment.verdict, CohortGateVerdict::AmbiguousClassifier);
+        assert_eq!(
+            assessment.control.eligible + assessment.challenger.eligible,
+            0
+        );
         Ok(())
     }
 

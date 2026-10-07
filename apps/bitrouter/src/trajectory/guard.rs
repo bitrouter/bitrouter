@@ -1109,6 +1109,7 @@ mod tests {
 
         let legacy_guard = TrajectoryEvent {
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: BTreeMap::from([("guard.hold_for_requests".into(), 2)]),
                 categorical: BTreeMap::new(),
                 digests: BTreeMap::new(),
@@ -1148,6 +1149,7 @@ mod tests {
             sequence: 1,
             kind: TrajectoryEventKind::RequestStarted,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: BTreeMap::from([("request.canonical_input_bytes".into(), 10)]),
                 categorical: BTreeMap::from([
                     ("correlation.source".into(), "explicit_root".into()),
@@ -1196,6 +1198,7 @@ mod tests {
             sequence: 2,
             kind: TrajectoryEventKind::RouteIntentRecorded,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: BTreeMap::from([(
                     "route.applied_clause_count".into(),
                     u64::from(applied_index.is_some()),
@@ -1224,6 +1227,7 @@ mod tests {
             sequence: 3,
             kind: TrajectoryEventKind::GuardActivated,
             evidence: TrajectoryEvidence {
+                routing_evidence: Vec::new(),
                 structural: BTreeMap::from([("guard.hold_for_requests".into(), 2)]),
                 categorical: BTreeMap::new(),
                 digests: BTreeMap::from([

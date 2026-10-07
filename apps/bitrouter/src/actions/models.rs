@@ -711,12 +711,19 @@ routers:
         )?;
         std::fs::write(
             dir.path().join("policy-lock.yaml"),
-            r#"lockfileVersion: 1
+            r#"lockfileVersion: 4
+artifact:
+  evidence_root: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  source_snapshot_time_unix_ms: 0
+  compiler:
+    id: bitrouter-policy-compiler
+    version: 1
+    config_digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 policies:
   coding:
     key_strategy: agent_trace
     tiers:
-      strong: unavailable-model
+      strong: { model: unavailable-model, context: evidence }
     routes: {}
     default_tier: strong
     tool_use_tier: strong

@@ -431,7 +431,7 @@ mod tests {
                 ("strong".to_string(), "vendor:strong".into()),
             ]),
             routes: BTreeMap::from([(
-                "agent_route/v1|unknown|verify|normal".to_string(),
+                "semantic_route/v1|unknown|verify|normal".to_string(),
                 "economy".to_string(),
             )]),
             default_tier: Some("strong".to_string()),
@@ -469,7 +469,7 @@ mod tests {
         assert_eq!(report.uncovered_routes.len(), 1);
         assert_eq!(
             report.uncovered_routes[0].request_key,
-            "agent_route/v1|unknown|unknown|normal"
+            "semantic_route/v1|unknown|unknown|normal"
         );
         assert_eq!(report.uncovered_routes[0].baseline_cost_micro_usd, 1_000);
         assert_eq!(report.ranked_uncovered_requests[0].request_id, "opening");

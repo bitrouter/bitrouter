@@ -18,9 +18,9 @@ use super::types::{
     RouteDecisionMeasurement, canonical_digest, evidence_digest,
 };
 use crate::metering::{PricingTable, calculate_charge_micro_usd};
-use crate::workflow_state::predictive::TaskFamily;
 use crate::workflow_state::predictive::is_task_family_reason_code;
 use crate::workflow_state::response_observer::{ObservedActionClass, PredictionObservation};
+use bitrouter_sdk::routing::signals::TaskFamily;
 
 /// Opaque, process-local identity for one pipeline invocation that produced an
 /// evaluable policy decision. Its token and owner never enter serialized event
@@ -603,13 +603,14 @@ impl EvalSettlementRecorder {
         {
             attributes.insert("cost_micro_usd".into(), cost.to_string());
         }
-        let evidence = vec![EvidenceItem {
+        let mut evidence = vec![EvidenceItem {
             evidence_id: "request-outcome".into(),
             kind: "request.outcome".into(),
             digest: canonical_digest(&attributes)?,
             redacted: true,
             attributes,
         }];
+        evidence.extend(routing_evidence(context)?);
         let evidence_digest = evidence_digest(&evidence)?;
         Ok(EvalSubject {
             schema_version: EVAL_SCHEMA_VERSION,
@@ -643,6 +644,64 @@ impl EvalSettlementRecorder {
             observed_at: decision.observed_at.clone(),
         })
     }
+}
+
+/// The same bounded, content-free routing receipts enter request and trajectory
+/// evaluation. Stable receipt IDs deduplicate acknowledged decision reuse.
+pub(crate) fn routing_evidence(context: &SettlementContext) -> anyhow::Result<Vec<EvidenceItem>> {
+    let mut evidence = Vec::new();
+    if let Some(receipt) = context.get_event::<bitrouter_sdk::routing::preparation::Receipt>() {
+        let mut attributes = BTreeMap::from([("decision_receipt_id".into(), receipt.id.clone())]);
+        if let Some(assessment) = &receipt.assessment {
+            attributes.insert("input_digest".into(), assessment.input_digest.clone());
+            attributes.insert("contract_digest".into(), assessment.contract_digest.clone());
+            attributes.insert(
+                "classifier_digest".into(),
+                assessment.classifier_digest.clone(),
+            );
+            attributes.insert("model".into(), assessment.model.clone());
+            attributes.insert("requested_model".into(), assessment.requested_model.clone());
+            attributes.insert(
+                "confidence_threshold".into(),
+                assessment.confidence_threshold.to_string(),
+            );
+            attributes.insert(
+                "judgments".into(),
+                serde_json::to_string(&assessment.judgments)?,
+            );
+            attributes.insert("confidence_kind".into(), "provider_probability".into());
+        }
+        if let Some(usage) = receipt.usage {
+            attributes.insert("input_tokens".into(), usage.input_tokens.to_string());
+            attributes.insert("output_tokens".into(), usage.output_tokens.to_string());
+        }
+        evidence.push(EvidenceItem {
+            evidence_id: format!("semantic-assessment:{}", canonical_digest(&receipt.id)?),
+            kind: "routing.assessment".into(),
+            digest: canonical_digest(receipt)?,
+            redacted: true,
+            attributes,
+        });
+    }
+    if let Some(selection) = context.get_event::<bitrouter_sdk::routing::plan::Selection>() {
+        evidence.push(EvidenceItem {
+            evidence_id: format!("route-plan:{}", canonical_digest(&context.request_id)?),
+            kind: "routing.plan".into(),
+            digest: canonical_digest(selection)?,
+            redacted: true,
+            attributes: BTreeMap::from([
+                ("model".into(), selection.selected_model.clone()),
+                ("context_view".into(), selection.selected_context.clone()),
+                ("prompt_digest".into(), selection.prompt_digest.clone()),
+                (
+                    "context_strategy".into(),
+                    serde_json::to_string(&selection.strategy)?,
+                ),
+                ("reason".into(), selection.reason.clone()),
+            ]),
+        });
+    }
+    Ok(evidence)
 }
 
 #[async_trait]

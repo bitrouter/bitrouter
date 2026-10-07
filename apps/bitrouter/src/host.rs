@@ -259,8 +259,7 @@ async fn serve_with_options(
             reload_source,
         )
         .with_startup_configuration(startup_configuration)
-        .with_policy_runtime(assembled.policy_runtime)
-        .with_policy_table_router(assembled.policy_table_router);
+        .with_policy_runtime(assembled.policy_runtime);
         let server_instance_id = daemon::DaemonReloader::reload_state(&reloader)
             .ok_or_else(|| anyhow::anyhow!("daemon reload state is unavailable at startup"))?
             .server_instance_id;

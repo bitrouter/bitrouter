@@ -456,6 +456,20 @@ pub struct NativeOutputUsage {
 /// Per-request durable controls supplied by a native embedding runtime.
 #[async_trait]
 pub trait NativeExecutionControl: Send + Sync {
+    /// Supply acknowledged semantic evidence and authorized context candidates
+    /// after entry authentication and checks, before the shared policy planner.
+    async fn prepare_routing(
+        &self,
+        _prompt: &Prompt,
+    ) -> Result<Option<crate::routing::preparation::Prepared>> {
+        Ok(None)
+    }
+
+    /// Acknowledge the exact shared model/context plan before dispatch proceeds.
+    async fn commit_routing(&self, _plan: &crate::routing::plan::Plan) -> Result<()> {
+        Ok(())
+    }
+
     /// Collect the admitted attempt from provider streaming while retaining the
     /// same durable plan and complete-result barrier. Display observations do
     /// not authorize actions. Once a stream opens it is never retried.
