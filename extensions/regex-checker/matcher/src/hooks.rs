@@ -36,8 +36,8 @@ fn plugin_id() -> PluginId {
 
 /// Collect every text-bearing fragment of a request prompt into one string for
 /// scanning (system instruction + each message's text / reasoning content).
-fn request_text(ctx: &PipelineContext) -> String {
-    let prompt = ctx.prompt();
+fn request_text(ctx: &PipelineContext) -> Result<String> {
+    let prompt = ctx.require_generation_prompt()?;
     let mut buf = String::new();
     if let Some(system) = &prompt.system {
         buf.push_str(system);
@@ -86,7 +86,7 @@ fn request_text(ctx: &PipelineContext) -> String {
             }
         }
     }
-    buf
+    Ok(buf)
 }
 
 /// Upstream hook that deposits a shared [`RuleSet`] into the request's typed
@@ -137,7 +137,7 @@ impl PreRequestHook for GuardrailPreHook {
         if rules.is_empty() {
             return Ok(HookDecision::Allow);
         }
-        let text = request_text(ctx);
+        let text = request_text(ctx)?;
         if let Some(rule_name) = rules.first_block(&text) {
             return Ok(HookDecision::Deny(DenyReason::GuardrailViolation(format!(
                 "request blocked by guardrail rule '{rule_name}'"

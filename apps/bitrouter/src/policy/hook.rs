@@ -67,7 +67,11 @@ impl PreRequestHook for PolicyHook {
 
         // 3. tool-access rules — checked against the request's declared tools
         if effective.has_tool_restriction() {
-            let tools = ctx.prompt().tools.iter().map(|t| t.name());
+            let tools = ctx
+                .generation_prompt()
+                .into_iter()
+                .flat_map(|prompt| &prompt.tools)
+                .map(|tool| tool.name());
             if let Err(violation) = effective.check_tools(tools) {
                 return Ok(HookDecision::Deny(DenyReason::Forbidden(
                     violation.to_string(),

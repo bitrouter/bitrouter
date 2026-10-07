@@ -31,6 +31,7 @@ async fn pool() -> DatabaseConnection {
 
 fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
     SettlementContext {
+        operation: bitrouter_ai::types::ModelOperation::Generation,
         request_id: format!("r-{api_key}-{prompt}-{completion}"),
         caller: CallerContext::new(api_key, format!("u-{api_key}")),
         target: None,

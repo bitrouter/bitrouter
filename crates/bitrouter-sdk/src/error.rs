@@ -436,6 +436,9 @@ impl From<bitrouter_ai::error::ModelError> for BitrouterError {
             ModelError::Incompatible { report } => Self::Incompatible { report },
             ModelError::InvalidRequest { message } => Self::bad_request(message),
             ModelError::InvalidResponse { message } => Self::UpstreamInvalidResponse { message },
+            ModelError::DecisionResponse { failure } => Self::UpstreamInvalidResponse {
+                message: failure.message,
+            },
             ModelError::Provider { status, message } => Self::Upstream { status, message },
             ModelError::PolicyViolation { message } => Self::UpstreamPolicyViolation { message },
             ModelError::InvalidCredential { message } | ModelError::Configuration { message } => {

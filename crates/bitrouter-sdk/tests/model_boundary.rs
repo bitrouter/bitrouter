@@ -106,7 +106,7 @@ fn rate_limit_presentation_survives_all_sse_codecs() -> bitrouter_sdk::Result<()
                 assert!(wire.contains("RESOURCE_EXHAUSTED"), "{wire}");
                 assert!(wire.contains("429"), "{wire}");
             }
-            ApiProtocol::Custom(_) => {}
+            ApiProtocol::Decisions | ApiProtocol::Custom(_) => {}
         }
     }
     Ok(())

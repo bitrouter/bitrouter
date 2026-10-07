@@ -155,7 +155,7 @@ impl OtelMetrics {
                 attributes.push(KeyValue::new("bitrouter.account_label", label.clone()));
             }
 
-            if let Some(usage) = &result.result.usage {
+            if let Some(usage) = result.result.usage() {
                 let mut input_attrs = attributes.clone();
                 input_attrs.push(KeyValue::new("gen_ai.token.type", "input"));
                 self.token_usage.record(usage.prompt_tokens, &input_attrs);
@@ -256,14 +256,15 @@ mod tests {
             provider_id: "openai".into(),
             model_id: "test-model".into(),
             account_label: None,
-            result: GenerateResult {
+            result: (GenerateResult {
                 content: Vec::new(),
                 usage: None,
                 finish_reason: None,
                 response_id: None,
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            })
+            .into(),
             request_duration_ms: 42,
             upstream_duration_ms: Some(40),
             server_tool_calls: Vec::new(),
@@ -402,7 +403,7 @@ mod tests {
             provider_id: "openai".into(),
             model_id: "test-model".into(),
             account_label: Some("primary".into()),
-            result: GenerateResult {
+            result: (GenerateResult {
                 content: Vec::new(),
                 usage: Some(bitrouter_ai::types::Usage {
                     prompt_tokens: 11,
@@ -413,7 +414,8 @@ mod tests {
                 response_id: None,
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            })
+            .into(),
             request_duration_ms: 42,
             upstream_duration_ms: Some(40),
             server_tool_calls: Vec::new(),

@@ -96,8 +96,11 @@ impl NestedRunner for PipelineNestedRunner {
             .execute(req)
             .await
             .map_err(|e| e.to_string())?;
-        let text = resp
+        let generation = resp
             .result
+            .generation()
+            .ok_or_else(|| "nested tool runner requires a generation result".to_owned())?;
+        let text = generation
             .content
             .iter()
             .filter_map(|c| match c {
@@ -109,7 +112,7 @@ impl NestedRunner for PipelineNestedRunner {
         Ok(NestedOutcome {
             model: request.model,
             text,
-            usage: resp.result.usage.unwrap_or_default(),
+            usage: generation.usage.clone().unwrap_or_default(),
         })
     }
 }

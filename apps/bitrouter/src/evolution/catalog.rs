@@ -28,9 +28,9 @@ pub(super) async fn request_compatible(
     let mut preview = PipelineContext::new(PipelineRequest::new(
         route,
         ctx.caller().clone(),
-        ctx.prompt().clone(),
+        ctx.require_generation_prompt()?.clone(),
     ));
-    preview.apply_preset_overrides(&resolution.overrides);
+    preview.apply_preset_overrides(&resolution.overrides)?;
     let mut models = vec![resolution.clean_model.clone()];
     if let Some(policy) = &resolution.policy {
         let document = policies
@@ -57,7 +57,7 @@ pub(super) async fn request_compatible(
     }
     let table = ConfigRoutingTable::from_config(stable);
     let mut prefs = resolution.prefs;
-    prefs.require_capabilities = preview.prompt().required_capabilities();
+    prefs.require_capabilities = preview.require_generation_prompt()?.required_capabilities();
     prefs.inbound_protocol = ctx.inbound_protocol();
     for model in models {
         match table.route_resolved(&model, &prefs, ctx.caller()).await {

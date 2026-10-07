@@ -406,7 +406,7 @@ fn chat_prompt() -> Prompt {
 }
 
 #[tokio::test]
-async fn e2e_assembled_pipeline_routes_to_mock_provider() {
+async fn e2e_assembled_pipeline_routes_to_mock_provider() -> anyhow::Result<()> {
     let upstream = mock_chat_completions_upstream().await;
     let cfg = config_for(&upstream.uri());
 
@@ -426,6 +426,8 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() {
     // the mock upstream's content made it all the way back through conversion
     let text: String = resp
         .result
+        .generation()
+        .ok_or_else(|| anyhow::anyhow!("generation result missing"))?
         .content
         .iter()
         .filter_map(|c| match c {
@@ -450,6 +452,7 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() {
         row.estimated_charge_micro_usd, 92,
         "estimated charge derived from pricing × tokens"
     );
+    Ok(())
 }
 
 #[tokio::test]
@@ -1768,7 +1771,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
                 provider_id: target.provider_name.clone(),
                 model_id: target.service_id.clone(),
                 account_label: target.account_label.clone(),
-                result: GenerateResult {
+                result: (GenerateResult {
                     content: vec![Content::Text {
                         text: "ok".to_string(),
                         provider_metadata: ProviderMetadata::new(),
@@ -1785,7 +1788,8 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
                     response_id: Some("provider-resp-001".to_string()),
                     stop_details: None,
                     provider_metadata: ProviderMetadata::new(),
-                },
+                })
+                .into(),
                 request_duration_ms: 1,
                 upstream_duration_ms: Some(1),
                 server_tool_calls: Vec::new(),

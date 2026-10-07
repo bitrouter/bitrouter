@@ -19,9 +19,10 @@ use crate::language_model::hooks::{
     ExecutionHook, FallbackDecision, HookDecision, HopOutcome, ObserveHook, Phase, PreRequestHook,
     RequestOutcome, RouteHook, StreamHook, StreamHopOutcome,
 };
+use crate::language_model::operations::{HookRegistration, OperationScope, applicable};
 use crate::language_model::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, MAX_REQUEST_CHECKS_PER_ROUTER,
-    RequestCheckBinding, RequestCheckerRunner, content_fragments,
+    RequestCheckBinding, RequestCheckerRunner, content_fragments, decision_content_fragments,
 };
 use crate::language_model::routing::ModelResolution;
 use crate::language_model::routing::{FallbackPolicy, RoutingTable};
@@ -34,12 +35,17 @@ use crate::language_model::settlement::{
 };
 use crate::language_model::stream::{StreamOutcome, StreamProcessor};
 use crate::language_model::types::{
-    ExecutionResult, PipelineRequest, PipelineResponse, RoutingTarget,
+    ExecutionResult, PipelineInput, PipelineRequest, PipelineResponse, RoutingTarget,
 };
-use bitrouter_ai::types::{Prompt, ReasoningEffortSource, StreamPart};
+use bitrouter_ai::types::{ModelOperation, Prompt, ReasoningEffortSource, StreamPart};
 
 /// The default SSE keepalive interval.
 pub const DEFAULT_KEEPALIVE: Duration = Duration::from_secs(30);
+
+enum ExecutionInput<'a> {
+    Generation(&'a Prompt),
+    Decisions(&'a bitrouter_ai::decisions::DecisionRequest),
+}
 
 struct StreamingExecution {
     stream: StreamPartStream,
@@ -281,16 +287,17 @@ struct StreamAttempt {
 /// stage plus the routing table, fallback policy and executor. Built via
 /// [`crate::language_model::PipelineBuilder`].
 pub struct Pipeline {
-    pub(crate) pre_resolution_hooks: Vec<Arc<dyn PreRequestHook>>,
-    pub(crate) router_preparation_hooks: Vec<Arc<dyn PreRequestHook>>,
-    pub(crate) pre_request_hooks: Vec<Arc<dyn PreRequestHook>>,
-    pub(crate) route_hooks: Vec<Arc<dyn RouteHook>>,
-    pub(crate) model_selectors: Vec<Arc<dyn crate::language_model::routing::ModelSelector>>,
-    pub(crate) execution_hooks: Vec<Arc<dyn ExecutionHook>>,
+    pub(crate) pre_resolution_hooks: Vec<HookRegistration<dyn PreRequestHook>>,
+    pub(crate) router_preparation_hooks: Vec<HookRegistration<dyn PreRequestHook>>,
+    pub(crate) pre_request_hooks: Vec<HookRegistration<dyn PreRequestHook>>,
+    pub(crate) route_hooks: Vec<HookRegistration<dyn RouteHook>>,
+    pub(crate) model_selectors:
+        Vec<HookRegistration<dyn crate::language_model::routing::ModelSelector>>,
+    pub(crate) execution_hooks: Vec<HookRegistration<dyn ExecutionHook>>,
     pub(crate) stream_hooks: Vec<Arc<dyn StreamHook>>,
-    pub(crate) settlement_recorders: Vec<Arc<dyn SettlementRecorder>>,
-    pub(crate) required_finalizers: Vec<Arc<dyn RequiredFinalizer>>,
-    pub(crate) observe_hooks: Vec<Arc<dyn ObserveHook>>,
+    pub(crate) settlement_recorders: Vec<HookRegistration<dyn SettlementRecorder>>,
+    pub(crate) required_finalizers: Vec<HookRegistration<dyn RequiredFinalizer>>,
+    pub(crate) observe_hooks: Vec<HookRegistration<dyn ObserveHook>>,
     pub(crate) routing_table: Arc<dyn RoutingTable>,
     pub(crate) fallback_policy: Arc<dyn FallbackPolicy>,
     pub(crate) executor: Arc<dyn Executor>,
@@ -318,6 +325,7 @@ pub struct Pipeline {
     /// billing us for.
     pub(crate) detached_executions: tokio_util::task::TaskTracker,
     pub(crate) request_checker_runner: Option<Arc<dyn RequestCheckerRunner>>,
+    pub(crate) served_operations: OperationScope,
 }
 
 /// Adapts the pipeline's fallback execution into an [`UpstreamTurn`] so the
@@ -332,7 +340,7 @@ struct PipelineUpstream<'a> {
 impl UpstreamTurn for PipelineUpstream<'_> {
     async fn run(&self, prompt: &Prompt) -> Result<ExecutionResult> {
         self.pipeline
-            .execute_with_fallback(self.chain, prompt, self.ctx)
+            .execute_with_fallback(self.chain, ExecutionInput::Generation(prompt), self.ctx)
             .await
     }
 }
@@ -555,8 +563,8 @@ impl Pipeline {
         let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, false).await?;
 
         // ---- Stage 3: execution (with the server-side tool loop when configured) ----
-        let exec_outcome = match &self.server_tool_loop {
-            Some(server_loop) => {
+        let exec_outcome = match (ctx.input(), &self.server_tool_loop) {
+            (PipelineInput::Generation(prompt), Some(server_loop)) => {
                 let tool_ctx = ToolContext::from_pipeline(&ctx);
                 let upstream = PipelineUpstream {
                     pipeline: self,
@@ -564,12 +572,16 @@ impl Pipeline {
                     ctx: &ctx,
                 };
                 server_loop
-                    .run_with_provenance(ctx.prompt(), &tool_ctx, &upstream)
+                    .run_with_provenance(prompt, &tool_ctx, &upstream)
                     .await
                     .map(|outcome| (outcome.result, outcome.provider_terminal_exposed))
             }
-            None => self
-                .execute_with_fallback(&chain, ctx.prompt(), &ctx)
+            (PipelineInput::Generation(prompt), None) => self
+                .execute_with_fallback(&chain, ExecutionInput::Generation(prompt), &ctx)
+                .await
+                .map(|result| (result, true)),
+            (PipelineInput::Decisions(request), _) => self
+                .execute_with_fallback(&chain, ExecutionInput::Decisions(request), &ctx)
                 .await
                 .map(|result| (result, true)),
         };
@@ -581,11 +593,14 @@ impl Pipeline {
                     })
                     && (result
                         .result
-                        .response_id
-                        .as_deref()
+                        .generation()
+                        .and_then(|result| result.response_id.as_deref())
                         .is_none_or(str::is_empty)
                         || !matches!(
-                            result.result.finish_reason.as_ref(),
+                            result
+                                .result
+                                .generation()
+                                .and_then(|result| result.finish_reason.as_ref()),
                             Some(
                                 bitrouter_ai::types::FinishReason::Stop
                                     | bitrouter_ai::types::FinishReason::Length
@@ -610,11 +625,14 @@ impl Pipeline {
                     })
                     && result
                         .result
-                        .response_id
-                        .as_deref()
+                        .generation()
+                        .and_then(|result| result.response_id.as_deref())
                         .is_some_and(|id| !id.is_empty())
                     && matches!(
-                        result.result.finish_reason.as_ref(),
+                        result
+                            .result
+                            .generation()
+                            .and_then(|result| result.finish_reason.as_ref()),
                         Some(
                             bitrouter_ai::types::FinishReason::Stop
                                 | bitrouter_ai::types::FinishReason::Length
@@ -648,14 +666,14 @@ impl Pipeline {
         };
         self.run_settlement(&mut ctx, false, None).await;
         self.observe_after(Phase::Settlement, &ctx).await;
-        let response = ctx.response();
+        let response = ctx.response()?;
         #[cfg(feature = "server")]
         let model_id = ctx
             .successful_target()
             .and_then(|target| self.routing_table.canonical_model_id(ctx.model(), &target))
             .unwrap_or_else(|| ctx.model().to_owned());
         let (delivery, authorization) = finalization.begin_delivery();
-        let observe_hooks = self.observe_hooks.clone();
+        let observe_hooks = applicable(&self.observe_hooks, ctx.operation());
         self.spawn_stream_finalization(async move {
             let outcome = match authorization.await {
                 Ok(DeliveryAuthorizationOutcome::Delivered) => RequestOutcome::Completed,
@@ -713,12 +731,12 @@ impl Pipeline {
                 let upstream_impl: Arc<dyn UpstreamStream> = Arc::new(PipelineStreamUpstream {
                     pipeline: self.clone(),
                     chain: chain.clone(),
-                    context: ctx.fork_for_prompt(ctx.prompt().clone()),
+                    context: ctx.fork_for_prompt(ctx.require_generation_prompt()?.clone()),
                     latest_attempt: latest_attempt.clone(),
                 });
                 match server_loop
                     .clone()
-                    .run_stream(ctx.prompt(), &tool_ctx, upstream_impl)
+                    .run_stream(ctx.require_generation_prompt()?, &tool_ctx, upstream_impl)
                     .await
                 {
                     Ok(stream) => load_stream_attempt(&latest_attempt)
@@ -774,7 +792,8 @@ impl Pipeline {
                 response_id: None,
                 stop_details: None,
                 provider_metadata: Default::default(),
-            },
+            }
+            .into(),
             request_duration_ms: 0,
             upstream_duration_ms: None,
             server_tool_calls: Vec::new(),
@@ -788,7 +807,7 @@ impl Pipeline {
         );
         let processor = StreamProcessor::new(
             self.stream_hooks.clone(),
-            self.observe_hooks.clone(),
+            applicable(&self.observe_hooks, ModelOperation::Generation),
             stream_context,
         );
 
@@ -889,6 +908,25 @@ impl Pipeline {
     // ===== stage helpers =====
 
     async fn prepare_entry(&self, req: PipelineRequest, streamed: bool) -> Result<PreparedEntry> {
+        if !self.served_operations.contains(req.input.operation()) {
+            return Err(BitrouterError::bad_request(
+                "pipeline does not serve this model operation",
+            ));
+        }
+        if streamed && req.input.operation() != ModelOperation::Generation {
+            return Err(BitrouterError::bad_request(
+                "Decisions does not support streaming",
+            ));
+        }
+        if req
+            .inbound_protocol
+            .as_ref()
+            .is_some_and(|protocol| protocol.operation() != req.input.operation())
+        {
+            return Err(BitrouterError::bad_request(
+                "endpoint protocol does not match model operation",
+            ));
+        }
         let mut ctx = PipelineContext::new(req);
         self.observe_start(&ctx).await;
 
@@ -928,6 +966,8 @@ impl Pipeline {
             .resolve_binding(ctx)
             .await
             .map_err(EntryPreparationFailure::route)?;
+        self.validate_binding_operation(ctx, &binding)
+            .map_err(EntryPreparationFailure::pre_request)?;
         self.run_router_preparation(ctx)
             .await
             .map_err(EntryPreparationFailure::pre_request)?;
@@ -971,7 +1011,12 @@ impl Pipeline {
     }
 
     async fn run_pre_resolution(&self, ctx: &mut PipelineContext) -> Result<()> {
-        for hook in &self.pre_resolution_hooks {
+        let operation = ctx.operation();
+        for hook in self
+            .pre_resolution_hooks
+            .iter()
+            .filter(|hook| hook.supports(operation))
+        {
             match hook.check(ctx).await? {
                 HookDecision::Allow => continue,
                 HookDecision::Deny(reason) => return Err(reason.into()),
@@ -997,10 +1042,11 @@ impl Pipeline {
     async fn run_admitted_hooks(
         &self,
         ctx: &mut PipelineContext,
-        hooks: &[Arc<dyn PreRequestHook>],
+        hooks: &[HookRegistration<dyn PreRequestHook>],
         checked_selector: Option<&str>,
     ) -> Result<()> {
-        for hook in hooks {
+        let operation = ctx.operation();
+        for hook in hooks.iter().filter(|hook| hook.supports(operation)) {
             let decision = hook.check(ctx).await?;
             match decision {
                 HookDecision::Allow => {
@@ -1059,8 +1105,46 @@ impl Pipeline {
             binding.resolution = effective;
             binding.resolved_selector = ctx.model().to_owned();
         }
-        ctx.apply_preset_overrides(&binding.resolution.overrides);
+        self.validate_binding_operation(ctx, &binding)?;
+        ctx.apply_preset_overrides(&binding.resolution.overrides)?;
         Ok(binding)
+    }
+
+    fn validate_binding_operation(
+        &self,
+        ctx: &PipelineContext,
+        binding: &ResolvedRequestBinding,
+    ) -> Result<()> {
+        let operation = ctx.operation();
+        if operation == ModelOperation::Decisions && !binding.resolution.overrides.is_empty() {
+            return Err(BitrouterError::bad_request(
+                "configured generation defaults do not support Decisions",
+            ));
+        }
+        if operation == ModelOperation::Decisions
+            && binding.resolution.policy.is_some()
+            && !self
+                .model_selectors
+                .iter()
+                .any(|hook| hook.supports(operation))
+        {
+            return Err(BitrouterError::bad_request(
+                "configured model policy does not support Decisions",
+            ));
+        }
+        for check in &binding.request_checks {
+            if operation == ModelOperation::Decisions
+                && !self
+                    .request_checker_runner
+                    .as_ref()
+                    .is_some_and(|runner| runner.supports_operation(check, operation))
+            {
+                return Err(BitrouterError::bad_request(
+                    "configured request checker does not support this model operation",
+                ));
+            }
+        }
+        Ok(())
     }
 
     async fn run_request_checks(
@@ -1081,12 +1165,26 @@ impl Pipeline {
             ));
         };
         for binding in bindings {
-            let (content, coverage) = content_fragments(ctx.prompt(), binding.max_input_bytes)
-                .map_err(|_| BitrouterError::BadRequest {
-                    message: "request exceeds the configured checker input limit".to_string(),
-                })?;
+            let projection = match ctx.input() {
+                PipelineInput::Generation(prompt) => {
+                    content_fragments(prompt, binding.max_input_bytes)
+                }
+                PipelineInput::Decisions(request) => {
+                    decision_content_fragments(request, binding.max_input_bytes)
+                }
+            };
+            let (content, coverage) = projection.map_err(|_| BitrouterError::BadRequest {
+                message: "request exceeds the configured checker input limit".to_string(),
+            })?;
             let result = runner
-                .check(binding.clone(), Input { content, coverage })
+                .check(
+                    binding.clone(),
+                    Input {
+                        operation: ctx.operation(),
+                        content,
+                        coverage,
+                    },
+                )
                 .await
                 .and_then(|result| {
                     result.decision.validate().map_err(|_| CheckerFailure {
@@ -1125,7 +1223,7 @@ impl Pipeline {
     ) -> Result<RequiredFinalizationGuard> {
         let finalization = ctx.required_finalization_context(streamed);
         let mut guard = RequiredFinalizationGuard::new(
-            self.required_finalizers.clone(),
+            applicable(&self.required_finalizers, ctx.operation()),
             finalization.clone(),
             self.pending_settlements.clone(),
         );
@@ -1143,7 +1241,12 @@ impl Pipeline {
         &self,
         finalization: &RequiredFinalizationContext,
     ) -> Result<Option<RequiredFinalizationReceipt>> {
-        let Some(finalizer) = self.required_finalizers.first().cloned() else {
+        let Some(finalizer) = self
+            .required_finalizers
+            .iter()
+            .find(|hook| hook.supports(finalization.operation))
+            .map(|hook| hook.hook.clone())
+        else {
             return Ok(None);
         };
         let task_finalization = finalization.clone();
@@ -1199,7 +1302,12 @@ impl Pipeline {
         let resolution = binding.resolution;
         ctx.set_model(resolution.clean_model);
         if let Some(policy) = resolution.policy.as_deref() {
-            for selector in &self.model_selectors {
+            let operation = ctx.operation();
+            for selector in self
+                .model_selectors
+                .iter()
+                .filter(|hook| hook.supports(operation))
+            {
                 selector
                     .select_variant(policy, resolution.variant.as_deref(), ctx)
                     .await?;
@@ -1210,7 +1318,11 @@ impl Pipeline {
         // request actually uses (e.g. structured outputs). Empty for plain
         // requests, so those route unchanged.
         let mut prefs = resolution.prefs;
-        prefs.require_capabilities = ctx.prompt().required_capabilities();
+        prefs.require_capabilities = ctx
+            .generation_prompt()
+            .map(Prompt::required_capabilities)
+            .unwrap_or_default();
+        prefs.operation = ctx.operation();
         // Carry the inbound protocol so the table can prefer a native,
         // same-protocol upstream for each chosen target.
         prefs.inbound_protocol = ctx.inbound_protocol();
@@ -1218,11 +1330,24 @@ impl Pipeline {
             .routing_table
             .route_resolved(ctx.model(), &prefs, ctx.caller())
             .await?;
-        for hook in &self.route_hooks {
+        let operation = ctx.operation();
+        for hook in self
+            .route_hooks
+            .iter()
+            .filter(|hook| hook.supports(operation))
+        {
             hook.resolve(&mut chain, ctx).await?;
         }
-        filter_reasoning_effort_targets(&mut chain, ctx.prompt())?;
+        chain.retain(|target| target.api_protocol.operation() == ctx.operation());
+        if let Some(prompt) = ctx.generation_prompt() {
+            filter_reasoning_effort_targets(&mut chain, prompt)?;
+        }
         if chain.is_empty() {
+            if ctx.operation() == ModelOperation::Decisions {
+                return Err(BitrouterError::bad_request(
+                    "no compatible Decisions target for the selected model",
+                ));
+            }
             return Err(BitrouterError::NotFound(format!(
                 "no route for model '{}'",
                 ctx.model()
@@ -1235,21 +1360,53 @@ impl Pipeline {
     async fn execute_with_fallback(
         &self,
         chain: &[RoutingTarget],
-        prompt: &Prompt,
+        input: ExecutionInput<'_>,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
         let mut errors = Vec::new();
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
         for target in chain {
-            if !self
-                .admit_candidate(target, prompt, false, ctx, &mut excluded)
-                .await?
-            {
+            if target.api_protocol.operation() != ctx.operation() {
                 continue;
+            }
+            match input {
+                ExecutionInput::Generation(prompt) => {
+                    if !self
+                        .admit_candidate(target, prompt, false, ctx, &mut excluded)
+                        .await?
+                    {
+                        continue;
+                    }
+                }
+                ExecutionInput::Decisions(request) => {
+                    self.executor.preflight_decisions(target, request)?;
+                }
             }
             self.wait_before_fallback(errors.len()).await;
             self.observe_hop_start(ctx, target).await;
-            let outcome = self.executor.execute(target, prompt, ctx).await;
+            let outcome = match input {
+                ExecutionInput::Generation(prompt) => {
+                    self.executor.execute(target, prompt, ctx).await
+                }
+                ExecutionInput::Decisions(request) => {
+                    self.executor.execute_decisions(target, request, ctx).await
+                }
+            }
+            .and_then(|result| {
+                let matches = match input {
+                    ExecutionInput::Generation(_) => result.result.generation().is_some(),
+                    ExecutionInput::Decisions(_) => result.result.decisions().is_some(),
+                };
+                if !matches {
+                    if ctx.operation() == ModelOperation::Decisions {
+                        ctx.record_decision_failure_usage(result.result.usage().cloned());
+                    }
+                    return Err(BitrouterError::UpstreamInvalidResponse {
+                        message: "executor result operation mismatch".into(),
+                    });
+                }
+                Ok(result)
+            });
             match &outcome {
                 Ok(result) => {
                     self.observe_hop_end(ctx, target, HopOutcome::Generated(result))
@@ -1262,7 +1419,11 @@ impl Pipeline {
             }
             match outcome {
                 Ok(result) => {
-                    for hook in &self.execution_hooks {
+                    for hook in self
+                        .execution_hooks
+                        .iter()
+                        .filter(|hook| hook.supports(ctx.operation()))
+                    {
                         hook.on_success(ctx, &result).await?;
                     }
                     ctx.set_successful_target(target.clone());
@@ -1298,7 +1459,13 @@ impl Pipeline {
         let mut excluded = bitrouter_ai::conversion::ConversionReport::default();
         for target in chain {
             if !self
-                .admit_candidate(target, ctx.prompt(), true, ctx, &mut excluded)
+                .admit_candidate(
+                    target,
+                    ctx.require_generation_prompt()?,
+                    true,
+                    ctx,
+                    &mut excluded,
+                )
                 .await?
             {
                 continue;
@@ -1308,7 +1475,7 @@ impl Pipeline {
             self.observe_hop_start(ctx, target).await;
             let outcome = self
                 .executor
-                .execute_stream(target, ctx.prompt(), ctx)
+                .execute_stream(target, ctx.require_generation_prompt()?, ctx)
                 .await;
             match &outcome {
                 Ok(_) => {
@@ -1327,7 +1494,7 @@ impl Pipeline {
                     ctx.set_successful_target(target.clone());
                     let stream = Box::pin(ObservedUpstreamStream {
                         inner: stream,
-                        hooks: self.observe_hooks.clone(),
+                        hooks: applicable(&self.observe_hooks, ModelOperation::Generation),
                         request_id: ctx.request_id().to_string(),
                         target: target.clone(),
                         provider_started_at,
@@ -1380,7 +1547,11 @@ impl Pipeline {
         match assessment {
             Ok(report) => {
                 if !report.admitted.is_empty() {
-                    for hook in &self.observe_hooks {
+                    for hook in self
+                        .observe_hooks
+                        .iter()
+                        .filter(|hook| hook.supports(ctx.operation()))
+                    {
                         let fut = std::panic::AssertUnwindSafe(
                             hook.on_conversion_admitted(ctx, target, &report),
                         );
@@ -1394,7 +1565,11 @@ impl Pipeline {
                 Ok(true)
             }
             Err(BitrouterError::Incompatible { report }) if !report.is_output_failure() => {
-                for hook in &self.observe_hooks {
+                for hook in self
+                    .observe_hooks
+                    .iter()
+                    .filter(|hook| hook.supports(ctx.operation()))
+                {
                     let fut = std::panic::AssertUnwindSafe(
                         hook.on_conversion_excluded(ctx, target, &report),
                     );
@@ -1439,7 +1614,17 @@ impl Pipeline {
         err: &BitrouterError,
         target: &RoutingTarget,
     ) -> FallbackDecision {
-        for hook in &self.execution_hooks {
+        if ctx.has_completed_decision_failure()
+            || (ctx.operation() == ModelOperation::Decisions
+                && matches!(err, BitrouterError::UpstreamInvalidResponse { .. }))
+        {
+            return FallbackDecision::Fail(err.clone());
+        }
+        for hook in self
+            .execution_hooks
+            .iter()
+            .filter(|hook| hook.supports(ctx.operation()))
+        {
             if let FallbackDecision::Fail(e) = hook.on_failure(ctx, err).await {
                 return FallbackDecision::Fail(e);
             }
@@ -1468,7 +1653,11 @@ impl Pipeline {
         // compatibility.
         log_request_finished(&settle);
 
-        for recorder in &self.settlement_recorders {
+        for recorder in self
+            .settlement_recorders
+            .iter()
+            .filter(|hook| hook.supports(ctx.operation()))
+        {
             if let Err(e) = recorder.record(&mut settle).await {
                 tracing::error!(error = %e, "SettlementRecorder failed");
             }
@@ -1480,7 +1669,11 @@ impl Pipeline {
     // ===== observe helpers (read-only, swallow errors AND panics) =====
 
     async fn observe_start(&self, ctx: &PipelineContext) {
-        for hook in &self.observe_hooks {
+        for hook in self
+            .observe_hooks
+            .iter()
+            .filter(|hook| hook.supports(ctx.operation()))
+        {
             let fut = std::panic::AssertUnwindSafe(hook.on_request_start(ctx));
             if fut.catch_unwind().await.is_err() {
                 tracing::warn!("ObserveHook::on_request_start panicked; swallowed");
@@ -1489,7 +1682,11 @@ impl Pipeline {
     }
 
     async fn observe_after(&self, phase: Phase, ctx: &PipelineContext) {
-        for hook in &self.observe_hooks {
+        for hook in self
+            .observe_hooks
+            .iter()
+            .filter(|hook| hook.supports(ctx.operation()))
+        {
             let fut = std::panic::AssertUnwindSafe(hook.after_phase(phase, ctx));
             if fut.catch_unwind().await.is_err() {
                 tracing::warn!(?phase, "ObserveHook::after_phase panicked; swallowed");
@@ -1512,7 +1709,11 @@ impl Pipeline {
     }
 
     async fn observe_end(&self, ctx: &PipelineContext, outcome: RequestOutcome) {
-        for hook in &self.observe_hooks {
+        for hook in self
+            .observe_hooks
+            .iter()
+            .filter(|hook| hook.supports(ctx.operation()))
+        {
             let fut = std::panic::AssertUnwindSafe(hook.on_request_end(ctx, &outcome));
             if fut.catch_unwind().await.is_err() {
                 tracing::warn!("ObserveHook::on_request_end panicked; swallowed");
@@ -1539,11 +1740,11 @@ fn filter_reasoning_effort_targets(chain: &mut Vec<RoutingTarget>, prompt: &Prom
 }
 
 async fn observe_hop_start_with(
-    hooks: &[Arc<dyn ObserveHook>],
+    hooks: &[HookRegistration<dyn ObserveHook>],
     ctx: &PipelineContext,
     target: &RoutingTarget,
 ) {
-    for hook in hooks {
+    for hook in hooks.iter().filter(|hook| hook.supports(ctx.operation())) {
         let fut = std::panic::AssertUnwindSafe(hook.on_hop_start(ctx, target));
         if fut.catch_unwind().await.is_err() {
             tracing::warn!("ObserveHook::on_hop_start panicked; swallowed");
@@ -1552,12 +1753,12 @@ async fn observe_hop_start_with(
 }
 
 async fn observe_hop_end_with(
-    hooks: &[Arc<dyn ObserveHook>],
+    hooks: &[HookRegistration<dyn ObserveHook>],
     ctx: &PipelineContext,
     target: &RoutingTarget,
     outcome: HopOutcome<'_>,
 ) {
-    for hook in hooks {
+    for hook in hooks.iter().filter(|hook| hook.supports(ctx.operation())) {
         let fut = std::panic::AssertUnwindSafe(hook.on_hop_end(ctx, target, outcome));
         if fut.catch_unwind().await.is_err() {
             tracing::warn!("ObserveHook::on_hop_end panicked; swallowed");

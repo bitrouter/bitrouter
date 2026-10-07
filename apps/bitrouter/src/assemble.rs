@@ -16,6 +16,7 @@ use bitrouter_sdk::App;
 use bitrouter_sdk::PromptTransform;
 use bitrouter_sdk::config::{Config, ConfigRoutingTable};
 use bitrouter_sdk::invocation;
+use bitrouter_sdk::language_model::operations::{HookStage, OperationScope};
 use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
 use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
 use bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig;
@@ -853,6 +854,19 @@ async fn assemble_app(
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
             lm.routing_table(routing_table).executor(executor);
+            lm.served_operations(OperationScope::Both);
+            lm.require_hook::<AuthHook>(HookStage::PreResolution, OperationScope::Both);
+            lm.require_hook::<SessionContextHook>(HookStage::PreResolution, OperationScope::Both);
+            lm.require_hook::<crate::evolution::costs::JudgeCosts>(
+                HookStage::PreResolution,
+                OperationScope::Both,
+            );
+            lm.require_hook::<PolicyHook>(HookStage::PreRequest, OperationScope::Both);
+            lm.require_hook::<MeteringRecorder>(HookStage::Settlement, OperationScope::Both);
+            lm.require_hook::<ContinuationRuntime>(
+                HookStage::Finalization,
+                OperationScope::Generation,
+            );
             lm.request_checker_runner(request_checks_for_pipeline);
             lm.fallback_backoff(
                 config
@@ -877,27 +891,30 @@ async fn assemble_app(
             }
             // Reserved judge IDs are checked even before auth, so an early
             // rejection cannot overwrite an existing attempt's metering row.
-            lm.pre_resolution_hook(judge_costs.clone());
+            lm.pre_resolution_hook_for(judge_costs.clone(), OperationScope::Both);
             // Authenticate and normalize the selector before freezing the router
             // binding and applying its defaults. Session normalization may apply a
             // API-principal-scoped route lease before Stage 2 model selection;
             // explicit routes and provider continuations retain precedence.
             // The pipeline runs bound external checks after these local hooks.
-            lm.pre_resolution_hook(AuthHook::new(db_for_hooks.clone()));
-            lm.pre_resolution_hook(SessionContextHook::new(acp_runtime_for_session));
+            lm.pre_resolution_hook_for(AuthHook::new(db_for_hooks.clone()), OperationScope::Both);
+            lm.pre_resolution_hook_for(
+                SessionContextHook::new(acp_runtime_for_session),
+                OperationScope::Both,
+            );
             lm.pre_resolution_hook(continuation_for_pre_request);
             // Candidate recipe selection may replace defaults and the policy,
             // but cannot replace the ingress router's frozen checker bindings.
             lm.router_preparation_hook(evolution_for_hooks.clone());
-            lm.pre_request_hook(PolicyHook::new(
-                policy_store.clone(),
-                Some(metering_store_for_policy),
-            ));
+            lm.pre_request_hook_for(
+                PolicyHook::new(policy_store.clone(), Some(metering_store_for_policy)),
+                OperationScope::Both,
+            );
             // OpenTelemetry exporter — register the *same* Arc as a hook
             // here. Construction happened above so `Assembled.observe`
             // can hold a query handle on it.
             if let Some(exporter) = otel_for_hook {
-                lm.observe_hook(OtelObserveHook::new(exporter));
+                lm.observe_hook_for(OtelObserveHook::new(exporter), OperationScope::Both);
             }
             lm.observe_hook(response_observer);
             lm.observe_hook(evolution_for_hooks.clone());
@@ -906,9 +923,10 @@ async fn assemble_app(
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
             // for spend caps.
-            lm.settlement_recorder(
+            lm.settlement_recorder_for(
                 MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
                     .with_reconciliation_provider("bitrouter"),
+                OperationScope::Both,
             );
             lm.settlement_recorder(evolution_for_hooks);
             lm.settlement_recorder(judge_costs);
@@ -921,7 +939,7 @@ async fn assemble_app(
                 Some(trajectory) => eval_recorder.with_trajectory(trajectory),
                 None => eval_recorder,
             };
-            lm.settlement_recorder(eval_recorder);
+            lm.settlement_recorder_for(eval_recorder, OperationScope::Both);
             // Server-side tool loop (router-executed MCP tools), when configured.
             if let Some(server_loop) = server_tool_loop {
                 lm.server_tool_loop(server_loop);

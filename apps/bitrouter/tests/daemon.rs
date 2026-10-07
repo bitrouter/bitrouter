@@ -936,6 +936,7 @@ async fn settle_attributed_request(metering: MeteringStore, controller: &str, ro
     let recorder = MeteringRecorder::new(metering, Arc::new(pricing));
     let request_id = format!("spend-{controller}-{root}");
     let mut settled = SettlementContext {
+        operation: bitrouter_ai::types::ModelOperation::Generation,
         request_id: request_id.clone(),
         caller: CallerContext::local(),
         target: None,

@@ -2794,6 +2794,7 @@ mod tests {
         let recorder =
             EvalSettlementRecorder::new(store.clone(), pending, Arc::new(PricingTable::new()));
         let mut settlement = SettlementContext {
+            operation: bitrouter_ai::types::ModelOperation::Generation,
             request_id: "request-unified-v1".into(),
             caller: CallerContext::local(),
             target: None,

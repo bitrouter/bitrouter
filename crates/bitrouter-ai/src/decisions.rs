@@ -26,6 +26,115 @@ pub struct DecisionRequest {
     pub safety_identifier: Option<Option<String>>,
 }
 
+/// Model-visible text categories for operation-aware admission and estimation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecisionTextKind {
+    /// Shared evidence text.
+    Evidence,
+    /// Caller-supplied question name.
+    QuestionName,
+    /// Question criteria.
+    Instructions,
+    /// A string-valued choice, distinct from a boolean spelling.
+    StringChoice,
+    /// A boolean-valued choice.
+    BooleanChoice,
+    /// Choice criteria.
+    ChoiceDescription,
+    /// Rubric label.
+    LevelLabel,
+    /// Rubric criteria.
+    LevelDescription,
+}
+
+impl DecisionRequest {
+    /// Visit covered text in evidence/question order, excluding identity/images.
+    pub fn visit_text(&self, mut visitor: impl FnMut(DecisionTextKind, Option<usize>, &str)) {
+        match &self.input {
+            DecisionInput::Text(text) => visitor(DecisionTextKind::Evidence, None, text),
+            DecisionInput::Messages(messages) => {
+                for message in messages {
+                    match &message.content {
+                        DecisionContent::Text(text) => {
+                            visitor(DecisionTextKind::Evidence, None, text)
+                        }
+                        DecisionContent::Parts(parts) => {
+                            for part in parts {
+                                if let DecisionInputPart::InputText { text } = part {
+                                    visitor(DecisionTextKind::Evidence, None, text);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (index, question) in self.questions.iter().enumerate() {
+            let index = Some(index);
+            if let Some(name) = question.name() {
+                visitor(DecisionTextKind::QuestionName, index, name);
+            }
+            visitor(
+                DecisionTextKind::Instructions,
+                index,
+                question.instructions(),
+            );
+            match question {
+                DecisionQuestion::Predicate { .. } => {}
+                DecisionQuestion::Choice { choices, .. } => {
+                    for choice in choices {
+                        match &choice.value {
+                            DecisionChoiceValue::String(value) => {
+                                visitor(DecisionTextKind::StringChoice, index, value)
+                            }
+                            DecisionChoiceValue::Boolean(value) => visitor(
+                                DecisionTextKind::BooleanChoice,
+                                index,
+                                if *value { "true" } else { "false" },
+                            ),
+                        }
+                        if let Some(description) = &choice.description {
+                            visitor(DecisionTextKind::ChoiceDescription, index, description);
+                        }
+                    }
+                }
+                DecisionQuestion::Score { levels, .. } => {
+                    for level in levels {
+                        visitor(DecisionTextKind::LevelLabel, index, &level.label);
+                        if let Some(description) = &level.description {
+                            visitor(DecisionTextKind::LevelDescription, index, description);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Inline image count, separate from covered text.
+    pub fn image_count(&self) -> u64 {
+        let DecisionInput::Messages(messages) = &self.input else {
+            return 0;
+        };
+        messages
+            .iter()
+            .map(|message| match &message.content {
+                DecisionContent::Text(_) => 0,
+                DecisionContent::Parts(parts) => parts
+                    .iter()
+                    .filter(|part| matches!(part, DecisionInputPart::InputImage { .. }))
+                    .count() as u64,
+            })
+            .fold(0, u64::saturating_add)
+    }
+
+    /// Rough text count for host estimates; it is never provider usage proof.
+    pub fn text_chars(&self) -> u64 {
+        let mut chars = 0_u64;
+        self.visit_text(|_, _, text| chars = chars.saturating_add(text.chars().count() as u64));
+        chars
+    }
+}
+
 /// Shared decision evidence.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]

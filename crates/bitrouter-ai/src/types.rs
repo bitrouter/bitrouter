@@ -161,10 +161,13 @@ impl<'de> Deserialize<'de> for ApiProtocol {
 }
 
 /// The two supported model-call operations, independent of caller wire format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelOperation {
     /// Generative text/tool/media invocation.
+    #[default]
     Generation,
     /// Native typed decision invocation.
     Decisions,

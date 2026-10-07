@@ -139,8 +139,10 @@ impl PredictiveResponseObserver {
         if invocation.owner_user_id() != context.caller().user_id() {
             return;
         }
-        let definitions = context
-            .prompt()
+        let Some(prompt) = context.generation_prompt() else {
+            return;
+        };
+        let definitions = prompt
             .tools
             .iter()
             .take(MAX_TOOL_DEFINITIONS)
@@ -220,8 +222,10 @@ impl ObserveHook for PredictiveResponseObserver {
         if let HopOutcome::Generated(result) = outcome
             && let Some(invocation) = context.extension::<EvalInvocation>()
             && invocation.owner_user_id() == context.caller().user_id()
+            && let Some(generation) = result.result.generation()
+            && let Some(prompt) = context.generation_prompt()
         {
-            let observation = classify_content(&result.result.content, &context.prompt().tools);
+            let observation = classify_content(&generation.content, &prompt.tools);
             self.pending
                 .observe(&invocation, context.caller().user_id(), observation);
             self.clear_stream(&invocation);
@@ -1188,7 +1192,7 @@ mod tests {
         let original_prompt = prompt.clone();
         let context = pipeline_context("stream-fragments", prompt, &invocation);
         observer.after_phase(Phase::Route, &context).await;
-        assert_eq!(context.prompt(), &original_prompt);
+        assert_eq!(context.require_generation_prompt()?, &original_prompt);
         let mut processor = StreamProcessor::new(
             Vec::new(),
             vec![Arc::new(observer.clone())],
@@ -2004,14 +2008,15 @@ mod tests {
             provider_id: "provider".into(),
             model_id: "model".into(),
             account_label: None,
-            result: GenerateResult {
+            result: (GenerateResult {
                 content,
                 usage: None,
                 finish_reason: Some(FinishReason::Stop),
                 response_id: None,
                 stop_details: None,
                 provider_metadata: BTreeMap::new(),
-            },
+            })
+            .into(),
             request_duration_ms: 1,
             upstream_duration_ms: Some(1),
             server_tool_calls: Vec::new(),
@@ -2202,7 +2207,9 @@ mod tests {
             model: "model".into(),
             caller,
             headers: http::HeaderMap::new(),
-            prompt,
+            input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(
+                prompt,
+            )),
             inbound_protocol: Some(ApiProtocol::Responses),
         });
         context.emit(invocation.clone());

@@ -92,6 +92,16 @@ impl RequestCheckRuntime {
             .checkers
             .get(&binding.checker_id)
             .ok_or_else(|| failure(CheckerFailureKind::NotConfigured, "not_configured"))?;
+        if !checker
+            .registration
+            .supported_operations
+            .contains(input.operation)
+        {
+            return Err(failure(
+                CheckerFailureKind::NotConfigured,
+                "unsupported_operation",
+            ));
+        }
         let active = checker
             .bindings
             .iter()
@@ -151,6 +161,25 @@ fn failure(kind: CheckerFailureKind, detail: &str) -> CheckerFailure {
 
 #[async_trait]
 impl RequestCheckerRunner for RequestCheckRuntime {
+    fn supports_operation(
+        &self,
+        binding: &RequestCheckBinding,
+        operation: bitrouter_ai::types::ModelOperation,
+    ) -> bool {
+        self.checkers
+            .get(&binding.checker_id)
+            .is_some_and(|checker| {
+                checker
+                    .registration
+                    .supported_operations
+                    .contains(operation)
+                    && checker
+                        .bindings
+                        .iter()
+                        .any(|active| active.binding == *binding)
+            })
+    }
+
     async fn check(
         &self,
         binding: RequestCheckBinding,
@@ -233,6 +262,7 @@ mod tests {
     fn input() -> Input {
         const TEXT: &str = "inspect this text";
         Input {
+            operation: bitrouter_ai::types::ModelOperation::Generation,
             content: vec![ContentFragment {
                 role: ContentRole::User,
                 kind: ContentFragmentKind::Text,

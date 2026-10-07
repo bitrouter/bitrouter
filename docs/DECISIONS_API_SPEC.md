@@ -147,7 +147,7 @@ Use these SDK-owned variants under `language_model::types`:
 
 ```rust
 pub enum PipelineInput {
-    Generation(Prompt),
+    Generation(Box<Prompt>),
     Decisions(DecisionRequest),
 }
 
@@ -156,6 +156,11 @@ pub enum PipelineOutput {
     Decisions(DecisionResult),
 }
 ```
+
+Box the generation payload so the envelope does not carry a 608-byte enum
+variant. Borrowing accessors still return `&Prompt`; the used generation
+constructor accepts `Prompt` and owns this allocation. This implementation
+refinement satisfies the repository's Clippy requirement without suppressing it.
 
 Replace `PipelineRequest.prompt` with `input`. Keep the gateway/provider/account
 and timing fields in the surrounding envelopes. Keep `PipelineResponse.result`

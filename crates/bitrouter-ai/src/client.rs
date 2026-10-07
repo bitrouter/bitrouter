@@ -222,13 +222,21 @@ impl ModelClient {
                 retry_after,
             }));
         }
-        let body = serde_json::from_str(&text).map_err(|_| ModelError::DecisionResponse {
+        Self::parse_decision_response(&text, request).map_err(|error| redactor.scrub_error(error))
+    }
+
+    /// Decode a completed native response, retaining usable usage on failure.
+    pub fn parse_decision_response(
+        text: &str,
+        request: &DecisionRequest,
+    ) -> Result<DecisionResult> {
+        let body = serde_json::from_str(text).map_err(|_| ModelError::DecisionResponse {
             failure: crate::decisions::DecisionResponseFailure {
                 message: "invalid Decisions response JSON".into(),
                 usage: None,
             },
         })?;
-        DecisionsCodec::parse_response(body, request).map_err(|error| redactor.scrub_error(error))
+        DecisionsCodec::parse_response(body, request)
     }
 
     /// Build one JSON POST with the selected overall request deadline.

@@ -1088,6 +1088,7 @@ mod tests {
 
     fn settlement_context() -> SettlementContext {
         SettlementContext {
+            operation: bitrouter_ai::types::ModelOperation::Generation,
             request_id: "request-1".into(),
             caller: CallerContext::local(),
             target: None,

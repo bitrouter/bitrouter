@@ -173,9 +173,11 @@ impl JudgeCosts {
             && ctx.caller().is_local()
             && ctx.headers().is_empty()
             && ctx.original_model() == reserved.model
-            && ctx.prompt().tools.is_empty()
-            && ctx.prompt().tool_choice == Some(ToolChoice::None)
-            && !ctx.prompt().stream;
+            && ctx.generation_prompt().is_some_and(|prompt| {
+                prompt.tools.is_empty()
+                    && prompt.tool_choice == Some(ToolChoice::None)
+                    && !prompt.stream
+            });
         if !valid_request {
             ctx.emit(JudgeAttemptReplayRejected);
             anyhow::bail!("judge request does not match its reserved purpose");

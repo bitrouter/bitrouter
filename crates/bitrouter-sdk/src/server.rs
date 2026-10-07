@@ -30,9 +30,10 @@ use crate::caller::CallerContext;
 use crate::error::{BitrouterError, Result};
 use crate::language_model::Pipeline;
 use crate::language_model::stream::SseKeepaliveStream;
-use crate::language_model::types::PipelineRequest;
+use crate::language_model::types::{PipelineInput, PipelineRequest};
 use crate::mcp;
 use crate::metrics::MetricsRenderer;
+use bitrouter_ai::protocol::decisions::DecisionsCodec;
 use bitrouter_ai::protocol::responses::encode_gateway_continuation_id;
 use bitrouter_ai::protocol::{inbound_adapter_for, sanitize_model_name};
 use bitrouter_ai::stream::SseFrame;
@@ -303,6 +304,7 @@ pub fn build_router_with_options(state: AppState, options: RouterOptions) -> Rou
         .route("/v1/messages", post(messages))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(responses))
+        .route("/v1/decisions", post(decisions))
         .route("/v1beta/models/{*model_action}", post(generate_content));
     if !options.omit_v1_models {
         router = router.route("/v1/models", get(list_models));
@@ -1304,6 +1306,14 @@ async fn responses(
     handle(state, headers, ApiProtocol::Responses, body, None).await
 }
 
+async fn decisions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    handle(state, headers, ApiProtocol::Decisions, body, None).await
+}
+
 /// Generate Content encodes the model and streaming verb in the path. The
 /// catch-all also admits slash selectors such as `bitrouter/coding`; Axum
 /// decodes a percent-escaped slash before this handler validates the selector.
@@ -1361,32 +1371,41 @@ async fn handle(
     {
         return BitrouterError::from(error).into_response();
     }
-    let adapter = match inbound_adapter_for(&inbound) {
-        Some(a) => a,
-        None => {
-            return BitrouterError::internal(format!(
-                "no inbound adapter for protocol '{inbound}' — Custom protocols are \
-                 outbound-only by design"
-            ))
-            .into_response();
+    let adapter = if inbound == ApiProtocol::Decisions {
+        None
+    } else {
+        match inbound_adapter_for(&inbound) {
+            Some(adapter) => Some(adapter),
+            None => {
+                return BitrouterError::bad_request("unsupported inbound model protocol")
+                    .into_response();
+            }
         }
     };
-    let (prompt, original_model) = match adapter.parse_request(body).map_err(BitrouterError::from) {
-        Ok(mut p) => {
-            if let Some(model) = model_override {
-                p.model = model;
+    let (input, original_model) = if let Some(adapter) = &adapter {
+        match adapter.parse_request(body).map_err(BitrouterError::from) {
+            Ok(mut prompt) => {
+                if let Some(model) = model_override {
+                    prompt.model = model;
+                }
+                prompt.model = sanitize_model_name(&prompt.model);
+                let original_model = prompt.model.clone();
+                for transform in &state.prompt_transforms {
+                    transform.apply_with_headers(&mut prompt, &headers);
+                }
+                (PipelineInput::Generation(Box::new(prompt)), original_model)
             }
-            p.model = sanitize_model_name(&p.model);
-            let original_model = p.model.clone();
-            // Ingress-time prompt transforms (e.g. the bitrouter/fusion model
-            // alias): the prompt body is freely mutable here, before it enters
-            // the pipeline that exposes it read-only downstream.
-            for transform in &state.prompt_transforms {
-                transform.apply_with_headers(&mut p, &headers);
-            }
-            (p, original_model)
+            Err(error) => return error.into_response(),
         }
-        Err(e) => return e.into_response(),
+    } else {
+        match DecisionsCodec::parse_request(body).map_err(BitrouterError::from) {
+            Ok(mut request) => {
+                request.model = sanitize_model_name(&request.model);
+                let original_model = request.model.clone();
+                (PipelineInput::Decisions(request), original_model)
+            }
+            Err(error) => return error.into_response(),
+        }
     };
 
     // `skip_auth` decides the starting caller: a synthesised local caller when
@@ -1409,7 +1428,14 @@ async fn handle(
     } else {
         CallerContext::anonymous()
     };
-    let mut req = PipelineRequest::new(prompt.model.clone(), caller, prompt.clone());
+    let mut req = match &input {
+        PipelineInput::Generation(prompt) => {
+            PipelineRequest::new(prompt.model.clone(), caller, prompt.as_ref().clone())
+        }
+        PipelineInput::Decisions(request) => {
+            PipelineRequest::new_decisions(request.model.clone(), caller, request.clone())
+        }
+    };
     req.request_id = request_id.clone();
     req.original_model = original_model;
     req.headers = headers;
@@ -1418,7 +1444,10 @@ async fn handle(
     // cross-protocol translation.
     req.inbound_protocol = Some(inbound.clone());
 
-    let mut response = if prompt.stream {
+    let mut response = if input
+        .generation_prompt()
+        .is_some_and(|prompt| prompt.stream)
+    {
         stream_response(state.language_model.clone(), req, inbound.clone()).await
     } else {
         // `execute_detached`, not `execute`: a non-streaming request must run to
@@ -1432,16 +1461,43 @@ async fn handle(
             .await
         {
             Ok(prepared) => {
-                let mut response_prompt = prompt.clone();
-                response_prompt.model = prepared.model_id.clone();
-                match adapter
-                    .render_response(
-                        &prepared.response.result,
-                        &response_prompt,
-                        &prepared.response.request_id,
-                    )
-                    .map_err(BitrouterError::from)
-                {
+                let rendered = match &input {
+                    PipelineInput::Generation(prompt) => {
+                        let mut response_prompt = prompt.clone();
+                        response_prompt.model = prepared.model_id.clone();
+                        prepared
+                            .response
+                            .result
+                            .generation()
+                            .zip(adapter.as_ref())
+                            .ok_or_else(|| {
+                                BitrouterError::internal(
+                                    "generation endpoint result operation mismatch",
+                                )
+                            })
+                            .and_then(|(result, adapter)| {
+                                adapter
+                                    .render_response(
+                                        result,
+                                        &response_prompt,
+                                        &prepared.response.request_id,
+                                    )
+                                    .map_err(BitrouterError::from)
+                            })
+                    }
+                    PipelineInput::Decisions(request) => prepared
+                        .response
+                        .result
+                        .decisions()
+                        .ok_or_else(|| {
+                            BitrouterError::internal("Decisions endpoint result operation mismatch")
+                        })
+                        .and_then(|result| {
+                            DecisionsCodec::render_response(result, request)
+                                .map_err(BitrouterError::from)
+                        }),
+                };
+                match rendered {
                     Ok(json) => match prepared.delivery.deliver().await {
                         Ok(()) => Json(json).into_response(),
                         Err(error) => error.into_response(),

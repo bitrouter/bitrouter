@@ -26,7 +26,9 @@ use bitrouter_ai::auth::{
     normalize_auth_extension_error,
 };
 use bitrouter_ai::client::{HttpTimeouts, ModelClient, parse_retry_after};
+use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
 use bitrouter_ai::protocol::OutboundDispatch;
+use bitrouter_ai::protocol::decisions::{DecisionsCodec, DecisionsTransport};
 use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
 use tokio_util::sync::CancellationToken;
 
@@ -57,7 +59,30 @@ pub trait Executor: Send + Sync {
         Ok(report)
     }
 
-    /// Execute a non-streaming request against `target`.
+    /// Validate native Decisions support without authentication or I/O.
+    fn preflight_decisions(
+        &self,
+        _target: &RoutingTarget,
+        _request: &DecisionRequest,
+    ) -> Result<()> {
+        Err(BitrouterError::bad_request(
+            "executor does not support Decisions",
+        ))
+    }
+
+    /// Execute a native Decisions request. Custom executors opt in explicitly.
+    async fn execute_decisions(
+        &self,
+        _target: &RoutingTarget,
+        _request: &DecisionRequest,
+        _ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        Err(BitrouterError::bad_request(
+            "executor does not support Decisions",
+        ))
+    }
+
+    /// Execute a non-streaming generation request against `target`.
     async fn execute(
         &self,
         target: &RoutingTarget,
@@ -78,6 +103,8 @@ pub trait Executor: Send + Sync {
 pub enum MockResponse {
     /// A successful non-streaming result.
     Generate(GenerateResult),
+    /// A successful native Decisions result.
+    Decisions(DecisionResult),
     /// A successful streaming result (the part list, each emitted in order).
     Stream(Vec<StreamPart>),
     /// An error (drives fallback testing).
@@ -123,7 +150,7 @@ impl MockExecutor {
     fn next(&self) -> Result<MockResponse> {
         self.queue
             .lock()
-            .expect("mock executor lock poisoned")
+            .map_err(|_| BitrouterError::internal("mock executor lock poisoned"))?
             .pop()
             .ok_or_else(|| BitrouterError::internal("MockExecutor: no scripted response left"))
     }
@@ -142,12 +169,12 @@ impl Executor for MockExecutor {
                 provider_id: target.provider_name.clone(),
                 model_id: target.service_id.clone(),
                 account_label: target.account_label.clone(),
-                result,
+                result: result.into(),
                 request_duration_ms: 1,
                 upstream_duration_ms: Some(1),
                 server_tool_calls: Vec::new(),
             }),
-            MockResponse::Stream(_) => Err(BitrouterError::internal(
+            MockResponse::Stream(_) | MockResponse::Decisions(_) => Err(BitrouterError::internal(
                 "MockExecutor: scripted a stream response for a non-streaming call",
             )),
             MockResponse::Error(e) => Err(e),
@@ -165,10 +192,46 @@ impl Executor for MockExecutor {
                 let stream = futures::stream::iter(parts.into_iter().map(Ok));
                 Ok(Box::pin(stream))
             }
-            MockResponse::Generate(_) => Err(BitrouterError::internal(
-                "MockExecutor: scripted a non-streaming response for a streaming call",
-            )),
+            MockResponse::Generate(_) | MockResponse::Decisions(_) => {
+                Err(BitrouterError::internal(
+                    "MockExecutor: scripted a non-streaming response for a streaming call",
+                ))
+            }
             MockResponse::Error(e) => Err(e),
+        }
+    }
+
+    fn preflight_decisions(&self, target: &RoutingTarget, request: &DecisionRequest) -> Result<()> {
+        if target.api_protocol != ApiProtocol::Decisions {
+            return Err(BitrouterError::bad_request(
+                "Decisions requires a Decisions target",
+            ));
+        }
+        DecisionsCodec::render_request(request)?;
+        Ok(())
+    }
+
+    async fn execute_decisions(
+        &self,
+        target: &RoutingTarget,
+        request: &DecisionRequest,
+        _ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        self.preflight_decisions(target, request)?;
+        match self.next()? {
+            MockResponse::Decisions(result) => Ok(ExecutionResult {
+                provider_id: target.provider_name.clone(),
+                model_id: target.service_id.clone(),
+                account_label: target.account_label.clone(),
+                result: result.into(),
+                request_duration_ms: 1,
+                upstream_duration_ms: Some(1),
+                server_tool_calls: Vec::new(),
+            }),
+            MockResponse::Error(error) => Err(error),
+            MockResponse::Generate(_) | MockResponse::Stream(_) => Err(BitrouterError::internal(
+                "mock response operation does not match Decisions",
+            )),
         }
     }
 }
@@ -491,6 +554,11 @@ struct HttpClientSet {
 /// subsystem.
 pub struct PreparedProviderTimeouts(HttpClientSet);
 
+enum SelectedRequest<'a> {
+    Generation(&'a Prompt),
+    Decisions(&'a DecisionRequest),
+}
+
 /// Immutable inputs reused each time an authenticated upstream request is
 /// rebuilt, including after a provider refreshes an expired credential.
 struct RequestBuildInput<'a> {
@@ -730,6 +798,96 @@ impl HttpExecutor {
         ))
     }
 
+    /// Send either native JSON operation through the same selected-target policy.
+    /// Every authentication recovery renders and shapes a fresh body.
+    async fn execute_json(
+        &self,
+        target: &RoutingTarget,
+        input: SelectedRequest<'_>,
+        transport: &Arc<dyn bitrouter_ai::protocol::Transport>,
+        ctx: &PipelineContext,
+    ) -> Result<(String, UpstreamErrorScrubber, u64)> {
+        let (client, _) = self.client_for(target);
+        let cancellation = CancellationToken::new();
+        let url = transport.endpoint_url(&target.model_target(), false);
+        let trace_headers = ctx.take_outbound_trace_headers();
+        let mut scrubber = UpstreamErrorScrubber::new(None);
+        scrubber.capture_effective_target_key(target);
+        let started = Instant::now();
+        let mut refreshed = false;
+        loop {
+            let mut body = match input {
+                SelectedRequest::Generation(prompt) => {
+                    client.render_request(&target.model_target(), prompt, false)?
+                }
+                SelectedRequest::Decisions(request) => {
+                    client.render_decision_request(&target.model_target(), request)?
+                }
+            };
+            self.shape_request_body(&mut body, target)
+                .await
+                .map_err(|error| scrubber.scrub_error(error))?;
+            match input {
+                SelectedRequest::Generation(_) => {
+                    if let Some(continuation) = apply_provider_continuation(&mut body, target, ctx)?
+                    {
+                        scrubber
+                            .redactor
+                            .add_replacement(continuation.native, continuation.public_or_redacted);
+                    }
+                }
+                SelectedRequest::Decisions(_) => {
+                    DecisionsCodec::parse_request(body.clone())?;
+                }
+            }
+            let request = self
+                .build_authenticated_request(&RequestBuildInput {
+                    client: &client,
+                    url: &url,
+                    body: &body,
+                    target,
+                    transport,
+                    ctx,
+                    trace_headers: trace_headers.as_ref(),
+                })
+                .await
+                .map_err(|error| scrubber.scrub_error(error))?;
+            scrubber.capture_request_credentials(&request, target);
+            let rejected_authorization = request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .cloned();
+            let response = client
+                .send(request, &cancellation)
+                .await
+                .map_err(|error| scrubber.scrub_error(error.into()))?;
+            let status = response.status();
+            let retry_after =
+                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
+            let text = ModelClient::read_body(response, &cancellation)
+                .await
+                .map_err(|error| scrubber.scrub_error(error.into()))?;
+            if status.is_success() {
+                return Ok((text, scrubber, started.elapsed().as_millis() as u64));
+            }
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                && !refreshed
+                && self
+                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref())
+                    .await
+                    .map_err(|error| scrubber.scrub_error(error))?
+            {
+                refreshed = true;
+                continue;
+            }
+            return Err(classify_upstream_error(
+                status.as_u16(),
+                &scrubber.scrub_body(&text),
+                retry_after,
+            ));
+        }
+    }
+
     /// The ChatGPT/Codex backend accepts only streaming Responses requests,
     /// while compatibility callers may require one non-streaming result.
     /// AI selects the SSE requirement and owns canonical result collection.
@@ -750,7 +908,7 @@ impl HttpExecutor {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
-            result,
+            result: result.into(),
             request_duration_ms: elapsed,
             upstream_duration_ms: Some(elapsed),
             server_tool_calls: Vec::new(),
@@ -885,79 +1043,52 @@ impl Executor for HttpExecutor {
             .lookup(&target.api_protocol)
             .ok_or_else(|| Self::no_dispatch_error(target))?;
 
-        let (client, _) = self.client_for(target);
-        let cancellation = CancellationToken::new();
-        let mut body = client.render_request(&target.model_target(), prompt, false)?;
-        self.shape_request_body(&mut body, target).await?;
-        let continuation_substitution = apply_provider_continuation(&mut body, target, ctx)?;
-        let mut error_scrubber = UpstreamErrorScrubber::new(continuation_substitution);
-        error_scrubber.capture_effective_target_key(target);
-        let url = transport.endpoint_url(&target.model_target(), false);
-        let trace_headers = ctx.take_outbound_trace_headers();
-
-        let request_input = RequestBuildInput {
-            client: &client,
-            url: &url,
-            body: &body,
-            target,
-            transport,
-            ctx,
-            trace_headers: trace_headers.as_ref(),
-        };
-        let started = Instant::now();
-        let mut attempted_auth_refresh = false;
-        let text = loop {
-            let request = self
-                .build_authenticated_request(&request_input)
-                .await
-                .map_err(|error| error_scrubber.scrub_error(error))?;
-            error_scrubber.capture_request_credentials(&request, target);
-            let rejected_authorization = request
-                .headers()
-                .get(reqwest::header::AUTHORIZATION)
-                .cloned();
-            let response = client
-                .send(request, &cancellation)
-                .await
-                .map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))?;
-
-            let status = response.status();
-            let retry_after =
-                parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
-            let text = ModelClient::read_body(response, &cancellation)
-                .await
-                .map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))?;
-
-            if status.is_success() {
-                break text;
-            }
-            if status == reqwest::StatusCode::UNAUTHORIZED
-                && !attempted_auth_refresh
-                && self
-                    .refresh_auth_after_unauthorized(target, rejected_authorization.as_ref())
-                    .await
-                    .map_err(|error| error_scrubber.scrub_error(error))?
-            {
-                attempted_auth_refresh = true;
-                continue;
-            }
-            let scrubbed = error_scrubber.scrub_body(&text);
-            return Err(classify_upstream_error(
-                status.as_u16(),
-                &scrubbed,
-                retry_after,
-            ));
-        };
+        let (text, error_scrubber, elapsed) = self
+            .execute_json(target, SelectedRequest::Generation(prompt), transport, ctx)
+            .await?;
 
         let result = ModelClient::parse_response(adapter.as_ref(), &target.api_protocol, &text)
             .map_err(|error| error_scrubber.scrub_error(BitrouterError::from(error)))?;
-        let elapsed = started.elapsed().as_millis() as u64;
-
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
             account_label: target.account_label.clone(),
-            result,
+            result: result.into(),
+            request_duration_ms: elapsed,
+            upstream_duration_ms: Some(elapsed),
+            server_tool_calls: Vec::new(),
+        })
+    }
+
+    fn preflight_decisions(&self, target: &RoutingTarget, request: &DecisionRequest) -> Result<()> {
+        let (client, _) = self.client_for(target);
+        client.render_decision_request(&target.model_target(), request)?;
+        Ok(())
+    }
+
+    async fn execute_decisions(
+        &self,
+        target: &RoutingTarget,
+        request: &DecisionRequest,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        self.preflight_decisions(target, request)?;
+        let transport: Arc<dyn bitrouter_ai::protocol::Transport> = Arc::new(DecisionsTransport);
+        let (text, scrubber, elapsed) = self
+            .execute_json(target, SelectedRequest::Decisions(request), &transport, ctx)
+            .await?;
+        let result = ModelClient::parse_decision_response(&text, request).map_err(|error| {
+            let error = scrubber.redactor.scrub_error(error);
+            if error.is_completed_decision_failure() {
+                ctx.record_decision_failure_usage(error.decision_usage().cloned());
+            }
+            BitrouterError::from(error)
+        })?;
+        Ok(ExecutionResult {
+            provider_id: target.provider_name.clone(),
+            model_id: target.service_id.clone(),
+            account_label: target.account_label.clone(),
+            result: result.into(),
             request_duration_ms: elapsed,
             upstream_duration_ms: Some(elapsed),
             server_tool_calls: Vec::new(),
@@ -1148,6 +1279,26 @@ impl Executor for DispatchExecutor {
             .get(&target.api_protocol)
             .unwrap_or(&self.default);
         executor.preflight(target, prompt, stream)
+    }
+
+    fn preflight_decisions(&self, target: &RoutingTarget, request: &DecisionRequest) -> Result<()> {
+        self.by_protocol
+            .get(&target.api_protocol)
+            .unwrap_or(&self.default)
+            .preflight_decisions(target, request)
+    }
+
+    async fn execute_decisions(
+        &self,
+        target: &RoutingTarget,
+        request: &DecisionRequest,
+        ctx: &PipelineContext,
+    ) -> Result<ExecutionResult> {
+        self.by_protocol
+            .get(&target.api_protocol)
+            .unwrap_or(&self.default)
+            .execute_decisions(target, request, ctx)
+            .await
     }
 
     async fn execute(
@@ -1426,7 +1577,7 @@ mod beta_forward_tests {
             model: "claude".into(),
             caller: CallerContext::local(),
             headers,
-            prompt,
+            input: crate::language_model::types::PipelineInput::Generation(Box::new(prompt)),
             inbound_protocol: None,
         })
     }
@@ -2103,7 +2254,8 @@ mod openai_codex_stream_bridge_tests {
     }
 
     #[tokio::test]
-    async fn non_streaming_codex_request_uses_streaming_upstream_and_aggregates() {
+    async fn non_streaming_codex_request_uses_streaming_upstream_and_aggregates()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test server");
@@ -2184,20 +2336,53 @@ mod openai_codex_stream_bridge_tests {
         server.await.expect("test server");
 
         assert_eq!(
-            result.result.content,
+            result
+                .result
+                .generation()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .content,
             vec![Content::Text {
                 text: "bridge ok".into(),
                 provider_metadata: Default::default(),
             }]
         );
-        assert_eq!(result.result.finish_reason, Some(FinishReason::Stop));
-        assert_eq!(result.result.response_id.as_deref(), Some("resp_bridge"));
-        let usage = result.result.usage.expect("provider usage");
+        assert_eq!(
+            result
+                .result
+                .generation()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .finish_reason,
+            Some(FinishReason::Stop)
+        );
+        assert_eq!(
+            result
+                .result
+                .generation()
+                .ok_or_else(|| crate::error::BitrouterError::internal(
+                    "expected generation fixture"
+                ))?
+                .response_id
+                .as_deref(),
+            Some("resp_bridge")
+        );
+        let usage = result
+            .result
+            .generation()
+            .ok_or_else(|| crate::error::BitrouterError::internal("expected generation fixture"))?
+            .usage
+            .as_ref()
+            .expect("provider usage");
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(usage.cache_read_tokens, 5);
         assert_eq!(usage.cache_write_tokens, 0);
         assert_eq!(usage.completion_tokens, 4);
         assert_eq!(usage.reasoning_tokens, 1);
         assert_eq!(usage.origin, UsageOrigin::ProviderReported);
+
+        Ok(())
     }
 }
