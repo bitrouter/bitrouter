@@ -346,22 +346,14 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn refusing_http_endpoint_is_a_typed_error()
+    #[test]
+    fn refusing_http_endpoint_is_a_typed_error()
     -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // `refresh` checks the scheme before touching the network, so no
-        // server is needed — we just confirm the typed error variant.
-        let client = reqwest::Client::new();
-        let token = token_with_refresh("RT");
-        let err = refresh(
-            &client,
-            "http://insecure.example.com/oauth/token",
-            "client-1",
-            &token,
-        )
-        .await
-        .err()
-        .ok_or("operation unexpectedly succeeded")?;
+        // Exercise the same endpoint guard used before refresh sends credentials.
+        // A rejected endpoint never needs to enter the HTTP request builder.
+        let err = require_secure_endpoint("http://insecure.example.com/oauth/token")
+            .err()
+            .ok_or("operation unexpectedly succeeded")?;
         assert!(
             matches!(err, OAuthError::InsecureEndpoint(ref u) if u == "http://insecure.example.com/oauth/token"),
             "expected InsecureEndpoint, got: {err:?}"
